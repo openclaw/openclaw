@@ -1,3 +1,4 @@
+// Memory Core plugin module implements tools.shared behavior.
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
@@ -19,6 +20,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
@@ -56,20 +58,6 @@ function resolveMemoryToolContext(options: MemoryToolOptions) {
     return null;
   }
   return { cfg, agentId };
-}
-
-export async function getMemoryManagerContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<
-  | {
-      manager: NonNullable<MemorySearchManagerResult["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
 }
 
 export async function getMemoryManagerContextWithPurpose(params: {
@@ -117,15 +105,33 @@ export function createMemoryTool(params: {
   };
 }
 
-export function buildMemorySearchUnavailableResult(error: string | undefined) {
+export function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  overrides?: {
+    warning?: string;
+    action?: string;
+  },
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
+    normalizedReason,
+  );
+  const warning =
+    overrides?.warning ??
+    (isQuotaError
+      ? "Memory search is unavailable because the embedding provider quota is exhausted."
+      : isMissingNodeSqlite
+        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+        : "Memory search is unavailable due to an embedding/provider error.");
+  const action =
+    overrides?.action ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : isMissingNodeSqlite
+        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+        : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

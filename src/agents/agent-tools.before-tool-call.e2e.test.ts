@@ -1,13 +1,22 @@
+import fs from "node:fs/promises";
+/**
+ * Integration-style tests for before_tool_call behavior.
+ * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * around wrapped tool execution.
+ */
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
+import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -15,9 +24,11 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -28,7 +39,7 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(actual.getGlobalHookRunner),
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -36,6 +47,37 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+    hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+      hookRunner: null,
+      registry: null,
+    };
+  }
+  hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+}
+
+function getGlobalHookRunnerForTest(): unknown {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
+}
+
+afterEach(() => {
+  setGlobalHookRunnerForTest(null);
+  mockGetGlobalHookRunner.mockReset();
+  mockGetGlobalHookRunner.mockImplementation(
+    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
+  );
+});
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: {
@@ -102,7 +144,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -117,7 +162,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -259,8 +307,35 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "CRITICAL");
+    await withDiagnosticEvents(async (emitted, flush) => {
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      await flush();
+      expectToolLoopBlockedResult(result, "CRITICAL");
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        reason: "tool-loop",
+        policy: {
+          id: "tool-loop-detection",
+          decision: "deny",
+          reason: "tool-loop",
+        },
+        control: {
+          id: "tool-loop-detection",
+          family: "authorization",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+    });
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -742,7 +817,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "blocked by policy",
@@ -775,6 +850,59 @@ describe("before_tool_call loop detection behavior", () => {
         deniedReason: "plugin-before-tool-call",
         reason: "blocked by policy",
       });
+    });
+  });
+
+  it("emits a security event for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        severity: "medium",
+        reason: "plugin-before-tool-call",
+        actor: { kind: "agent" },
+        target: {
+          kind: "tool",
+          name: "read",
+        },
+        policy: {
+          id: "plugin-before-tool-call",
+          decision: "deny",
+          reason: "plugin-before-tool-call",
+        },
+        control: {
+          id: "before-tool-call",
+          family: "approval",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+      expect(securityEvent?.eventId).toBeTypeOf("string");
+      expect(JSON.stringify(securityEvent)).not.toContain("/tmp/file");
+      expect(emitted.some((event) => event.type === "tool.execution.blocked")).toBe(true);
     });
   });
 
@@ -867,6 +995,8 @@ describe("before_tool_call loop detection behavior", () => {
         type: "tool.execution.started",
       });
       expect(started.paramsSummary).toEqual({ kind: "object" });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[1]).toBe(params);
     });
   });
 });
@@ -916,29 +1046,21 @@ describe("before_tool_call requireApproval handling", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
       runBeforeToolCall: vi.fn(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
-    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-    const hookRunnerGlobalState = globalThis as Record<
-      symbol,
-      { hookRunner: unknown; registry?: unknown } | undefined
-    >;
-    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
-      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
-        hookRunner: null,
-        registry: null,
-      };
-    }
-    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+    setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+  async function runAbortDuringApprovalWait(options?: {
+    abortReason?: unknown;
+    onResolution?: ReturnType<typeof vi.fn>;
+  }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -950,7 +1072,7 @@ describe("before_tool_call requireApproval handling", () => {
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
     mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -1167,6 +1289,63 @@ describe("before_tool_call requireApproval handling", () => {
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
   });
 
+  it("reports trusted policy diagnostics through guarded readers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    const unreadableIdPolicy: Record<string, unknown> = {
+      description: "synthetic trusted policy",
+      evaluate: () => undefined,
+    };
+    Object.defineProperty(unreadableIdPolicy, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy id is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: unreadableIdPolicy as never,
+      },
+      {
+        pluginId: "mockplugin",
+        pluginName: "Mock Plugin",
+        source: "test",
+        policy: {
+          id: "mockpolicy",
+          description: "mock policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
+    try {
+      state = getBeforeToolCallPolicyDiagnosticState();
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(state).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        {
+          id: "fuzzplugin",
+          pluginId: "fuzzplugin",
+          pluginName: "Fuzz Plugin",
+        },
+        {
+          id: "mockpolicy",
+          pluginId: "mockplugin",
+          pluginName: "Mock Plugin",
+        },
+      ],
+    });
+  });
+
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const originalPatch = [
@@ -1258,6 +1437,38 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall[1], "approval wait gateway client");
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
+  });
+
+  it("caps oversized plugin approval timeouts before calling gateway", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Oversized timeout",
+        description: "Still valid gateway payload",
+        pluginId: "sage",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(false);
+    const requestCall = requireGatewayCall(0);
+    expect(requireRecord(requestCall[1], "approval request gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
+    expect(requireRecord(requestCall[2], "approval request params").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+    );
+    const waitCall = requireGatewayCall(1);
+    expect(requireRecord(waitCall[1], "approval wait gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
   });
 
   it("blocks on deny decision", async () => {
@@ -1401,6 +1612,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies non-Error abort reasons as run abort cancellation", async () => {
+    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
   it("removes abort listener after waitDecision resolves", async () => {
@@ -1627,5 +1845,244 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Channel-routed approval",
+        description: "Must route to telegram",
+        pluginId: "my-plugin",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "fetch",
+      params: { url: "https://example.com" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "acct-42",
+        turnSourceThreadId: 9001,
+      },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBe("telegram");
+    expect(requestParams.turnSourceTo).toBe("-100123456789");
+    expect(requestParams.turnSourceAccountId).toBe("acct-42");
+    expect(requestParams.turnSourceThreadId).toBe(9001);
+  });
+
+  it("uses the transport channel when tool policy provider differs", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Transport routed approval",
+        description: "Must use the transport channel",
+        pluginId: "my-plugin",
+      },
+    });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-route-"));
+    await fs.writeFile(path.join(tempDir, "note.txt"), "hello");
+    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "transport-route-id",
+      decision: "allow-once",
+    });
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tempDir,
+      messageProvider: "discord-voice",
+      messageChannel: "discord",
+      currentChannelId: "native-channel-1",
+      currentMessagingTarget: "channel:deliverable-1",
+      agentAccountId: "acct-1",
+      currentThreadTs: "thread-1",
+    });
+    const readTool = tools.find((tool) => tool.name === "read");
+    if (!readTool) {
+      throw new Error("missing read tool");
+    }
+    await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
+
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBe("discord");
+    expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
+    expect(requestParams.turnSourceAccountId).toBe("acct-1");
+    expect(requestParams.turnSourceThreadId).toBe("thread-1");
+  });
+
+  it("omits turn source routing fields when ctx does not carry them", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route ctx",
+        description: "Local-only approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBeUndefined();
+    expect(requestParams.turnSourceTo).toBeUndefined();
+    expect(requestParams.turnSourceAccountId).toBeUndefined();
+    expect(requestParams.turnSourceThreadId).toBeUndefined();
+  });
+});
+
+describe("before_tool_call tool content private-data capture", () => {
+  type TrustedToolEvent = {
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  };
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  async function withTrustedToolEvents(
+    run: (emitted: TrustedToolEvent[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: TrustedToolEvent[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type.startsWith("tool.execution.")) {
+        emitted.push({ event, privateData });
+      }
+    });
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    try {
+      await run(emitted, flush);
+    } finally {
+      stop();
+    }
+  }
+
+  function configWithToolContent(
+    fields: { toolInputs?: boolean; toolOutputs?: boolean } = {
+      toolInputs: true,
+      toolOutputs: true,
+    },
+  ) {
+    return {
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          traces: true,
+          captureContent: { enabled: true, ...fields },
+        },
+      },
+    } as unknown as import("../config/types.openclaw.js").OpenClawConfig;
+  }
+
+  it("attaches tool input/output to private data when opted in", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "file body" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toEqual({
+        content: [{ type: "text", text: "file body" }],
+      });
+      // Public event payload must never carry raw params/results.
+      expect(JSON.stringify(completed?.event)).not.toContain("/etc/secret");
+      expect(JSON.stringify(completed?.event)).not.toContain("file body");
+    });
+  });
+
+  it("omits tool content from private data when capture is not configured", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed).toBeDefined();
+      expect(completed?.privateData.toolContent).toBeUndefined();
+    });
+  });
+
+  it("captures only opted-in fields and clones away from live params", async () => {
+    const liveParams = { path: "/etc/secret" };
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "out" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent({ toolInputs: true, toolOutputs: false }),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", liveParams, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toBeUndefined();
+      // Captured snapshot is a clone, not the live params object.
+      expect(completed?.privateData.toolContent?.toolInput).not.toBe(liveParams);
+    });
+  });
+
+  it("attaches tool input but not output on execution errors", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("boom"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined),
+      ).rejects.toThrow("boom");
+      await flush();
+
+      const errored = emitted.find((e) => e.event.type === "tool.execution.error");
+      expect(errored?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(errored?.privateData.toolContent?.toolOutput).toBeUndefined();
+    });
   });
 });

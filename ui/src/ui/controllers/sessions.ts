@@ -1,10 +1,23 @@
+// Control UI controller manages sessions gateway state.
 import {
   reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../session-key.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type {
+  FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionsCompactionBranchResult,
@@ -30,6 +43,8 @@ export type SessionsState = SessionsChatRunState & {
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
+  chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -45,7 +60,7 @@ export type SessionsState = SessionsChatRunState & {
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscriptionAgentId?: string | null;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
   hello?: GatewayHelloOk | null;
 };
 
@@ -95,34 +110,22 @@ function normalizeSubscriptionKey(value: string | null | undefined): string | nu
   return normalized ? normalized : null;
 }
 
-function isGlobalSessionKey(value: string | null | undefined): boolean {
-  return (value ?? "").trim().toLowerCase() === "global";
-}
-
 function resolveSelectedGlobalAliasAgentId(
   state: SessionsState,
   key: string | null | undefined,
 ): string | null {
-  const parsed = parseAgentSessionKey(key);
-  if (!parsed?.agentId) {
-    return null;
-  }
-  const rest = parsed.rest.toLowerCase();
-  if (rest === "global") {
-    return normalizeAgentId(parsed.agentId);
-  }
-  if (rest !== "main") {
-    return null;
-  }
   const row = state.sessionsResult?.sessions.find((session) => session.key === key);
-  return row?.kind === "global" ? normalizeAgentId(parsed.agentId) : null;
+  return resolveUiGlobalAliasAgentId(state, key, {
+    rowKind: row?.kind,
+    requireGlobalRowForMainAlias: true,
+  });
 }
 
 function resolveSelectedSessionMessageSubscriptionAgentId(
   state: SessionsState,
   key: string,
 ): string | null {
-  if (isGlobalSessionKey(key)) {
+  if (isUiGlobalSessionKey(key)) {
     return resolveSelectedGlobalAgentId(state);
   }
   return resolveSelectedGlobalAliasAgentId(state, key);
@@ -133,37 +136,22 @@ function resolveSelectedGlobalAgentId(state: SessionsState): string {
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const assistantAgentId =
-    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
-      ? state.assistantAgentId
-      : undefined;
-  const defaultAgentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : undefined;
-  const helloDefaultAgentId =
-    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-    snapshot.sessionDefaults.defaultAgentId.trim()
-      ? snapshot.sessionDefaults.defaultAgentId
-      : undefined;
-  return normalizeAgentId(assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId ?? "main");
+  return resolveUiSelectedGlobalAgentId(state);
+}
+
+function resolveChatHistorySessionResultAgentId(
+  state: SessionsState,
+  row: GatewaySessionRow,
+): string | null {
+  const parsed = parseAgentSessionKey(row.key);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return isUiGlobalSessionKey(row.key) ? resolveSelectedGlobalAgentId(state) : null;
 }
 
 function resolveDefaultGlobalAgentId(state: SessionsState): string {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const defaultAgentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-          snapshot.sessionDefaults.defaultAgentId.trim()
-        ? snapshot.sessionDefaults.defaultAgentId
-        : "main";
-  return normalizeAgentId(defaultAgentId);
+  return resolveUiDefaultAgentId(state);
 }
 
 function sessionsChangedGlobalAgentMatches(
@@ -171,19 +159,51 @@ function sessionsChangedGlobalAgentMatches(
   payload: Record<string, unknown>,
   key: string,
 ): boolean {
-  if (!isGlobalSessionKey(key)) {
+  if (!isUiGlobalSessionKey(key)) {
     return true;
   }
   const eventSession = isRecord(payload.session) ? payload.session : null;
-  const rawAgentId =
-    (typeof payload.agentId === "string" && payload.agentId.trim()) ||
-    (typeof eventSession?.agentId === "string" && eventSession.agentId.trim());
-  const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+  const eventAgentId = readSessionsChangedEventAgentId(payload, eventSession);
   const selectedAgentId = resolveSelectedGlobalAgentId(state);
   if (eventAgentId) {
     return eventAgentId === selectedAgentId;
   }
   return selectedAgentId === resolveDefaultGlobalAgentId(state);
+}
+
+function readSessionsChangedEventAgentId(
+  payload: Record<string, unknown>,
+  eventSession: Record<string, unknown> | null,
+): string | null {
+  const rawAgentId =
+    (typeof payload.agentId === "string" && payload.agentId.trim()) ||
+    (typeof eventSession?.agentId === "string" && eventSession.agentId.trim());
+  return rawAgentId ? normalizeAgentId(rawAgentId) : null;
+}
+
+function sessionsChangedResultScopeMatches(
+  state: SessionsState,
+  payload: Record<string, unknown>,
+  eventSession: Record<string, unknown> | null,
+  key: string,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  const resultAgentId =
+    typeof state.sessionsResultAgentId === "string" && state.sessionsResultAgentId.trim()
+      ? normalizeAgentId(state.sessionsResultAgentId)
+      : null;
+  if (!resultAgentId) {
+    return true;
+  }
+  const eventAgentId = readSessionsChangedEventAgentId(payload, eventSession);
+  if (eventAgentId) {
+    return eventAgentId === resultAgentId;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId) === resultAgentId;
+  }
+  return Boolean(existing);
 }
 
 function buildSelectedSessionMessageSubscriptionParams(state: SessionsState, key: string) {
@@ -244,7 +264,7 @@ async function unsubscribeSelectedSessionMessageBestEffort(
   try {
     await client.request("sessions.messages.unsubscribe", {
       key,
-      ...(isGlobalSessionKey(key) && agentId ? { agentId } : {}),
+      ...(isUiGlobalSessionKey(key) && agentId ? { agentId } : {}),
     });
   } catch {
     // Best-effort cleanup for stale async subscription completions.
@@ -279,7 +299,10 @@ const SESSION_EVENT_ROW_FIELDS = [
   "displayName",
   "endedAt",
   "elevatedLevel",
+  "effectiveFastMode",
+  "effectiveFastModeSource",
   "fastMode",
+  "fastAutoOnSeconds",
   "goal",
   "hasActiveRun",
   "inputTokens",
@@ -301,6 +324,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "systemSent",
   "thinkingDefault",
   "thinkingLevel",
+  "thinkingLevels",
   "thinkingOptions",
   "totalTokens",
   "totalTokensFresh",
@@ -331,7 +355,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
+}
+
+function sanitizeChatHistorySessionRow(row: GatewaySessionRow): GatewaySessionRow {
+  const next: Partial<GatewaySessionRow> = {};
+  for (const [key, value] of Object.entries(row) as Array<[keyof GatewaySessionRow, unknown]>) {
+    if (value === undefined) {
+      continue;
+    }
+    if (key === "totalTokensFresh" && value === false && row.totalTokens === undefined) {
+      continue;
+    }
+    next[key] = value as never;
+  }
+  return next as GatewaySessionRow;
 }
 
 export function parseSessionsFilterInteger(value: string): number {
@@ -418,6 +456,89 @@ function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRo
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
+type ThinkingMetadataCarrier = {
+  modelProvider?: string | null;
+  model?: string | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+};
+
+function thinkingMetadataModelMatches(
+  incoming: ThinkingMetadataCarrier,
+  existing: ThinkingMetadataCarrier,
+): boolean {
+  const incomingProvider = incoming.modelProvider;
+  const existingProvider = existing.modelProvider;
+  if (incomingProvider && existingProvider && incomingProvider !== existingProvider) {
+    return false;
+  }
+  const incomingModel = incoming.model;
+  const existingModel = existing.model;
+  return !(incomingModel && existingModel && incomingModel !== existingModel);
+}
+
+function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
+  incoming: T,
+  existing: ThinkingMetadataCarrier | undefined,
+): T {
+  if (existing && !thinkingMetadataModelMatches(incoming, existing)) {
+    return incoming;
+  }
+  const existingLevels = existing?.thinkingLevels;
+  if (!existingLevels?.length) {
+    return incoming;
+  }
+  const incomingLevels = incoming.thinkingLevels;
+  if (incomingLevels && incomingLevels.length >= existingLevels.length) {
+    return incoming;
+  }
+  const existingThinkingDefault = existing?.thinkingDefault;
+  return {
+    ...incoming,
+    thinkingLevels: existingLevels,
+    ...(existing?.thinkingOptions ? { thinkingOptions: existing.thinkingOptions } : {}),
+    ...(incoming.thinkingDefault === undefined && existingThinkingDefault !== undefined
+      ? { thinkingDefault: existingThinkingDefault }
+      : {}),
+  };
+}
+
+function historyRowIsStaleForActiveSession(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+    return false;
+  }
+  const existingUpdatedAt = existing.updatedAt ?? 0;
+  const incomingUpdatedAt = incoming.updatedAt ?? 0;
+  if (existingUpdatedAt >= incomingUpdatedAt) {
+    return true;
+  }
+  const existingStartedAt = typeof existing.startedAt === "number" ? existing.startedAt : 0;
+  return existingStartedAt >= incomingUpdatedAt;
+}
+
+function isPersistedChatHistorySessionRow(row: GatewaySessionRow): boolean {
+  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
+  return Boolean(sessionId || typeof row.updatedAt === "number");
+}
+
+function sessionRowMatchesChatHistoryRow(
+  state: SessionsState,
+  existing: GatewaySessionRow,
+  incoming: GatewaySessionRow,
+): boolean {
+  if (areUiSessionKeysEquivalent(existing.key, incoming.key)) {
+    return true;
+  }
+  return (
+    isUiGlobalSessionKey(incoming.key) &&
+    resolveSelectedGlobalAliasAgentId(state, existing.key) === resolveSelectedGlobalAgentId(state)
+  );
+}
+
 function checkpointSummarySignature(
   row:
     | {
@@ -444,6 +565,54 @@ function invalidateCheckpointCacheForKey(state: SessionsState, key: string) {
   delete nextErrors[key];
   state.sessionsCheckpointItemsByKey = nextItems;
   state.sessionsCheckpointErrorByKey = nextErrors;
+}
+
+function invalidateCachedChatAgentSessionRow(state: SessionsState, key: string): boolean {
+  const rowsByAgent = state.chatAgentSessionRowsByAgent;
+  if (!rowsByAgent) {
+    return false;
+  }
+  let removed = false;
+  for (const [agentId, rows] of Object.entries(rowsByAgent)) {
+    const nextRows = rows.filter((row) => row.key !== key);
+    if (nextRows.length === rows.length) {
+      continue;
+    }
+    rowsByAgent[agentId] = nextRows;
+    removed = true;
+  }
+  return removed;
+}
+
+function resolveCachedChatAgentSessionRowAgentId(
+  state: SessionsState,
+  row: GatewaySessionRow,
+): string | null {
+  if (row.kind === "global" || row.kind === "unknown" || row.kind === "cron") {
+    return null;
+  }
+  if (isSubagentSessionKey(row.key) || row.spawnedBy) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
+}
+
+function upsertCachedChatAgentSessionRow(state: SessionsState, row: GatewaySessionRow): boolean {
+  if (!state.sessionsShowArchived && isArchivedSessionRow(row)) {
+    return invalidateCachedChatAgentSessionRow(state, row.key);
+  }
+  const agentId = resolveCachedChatAgentSessionRowAgentId(state, row);
+  if (!agentId) {
+    return false;
+  }
+  state.chatAgentSessionRowsByAgent ??= {};
+  const existingRows = state.chatAgentSessionRowsByAgent[agentId] ?? [];
+  state.chatAgentSessionRowsByAgent[agentId] = [
+    row,
+    ...existingRows.filter((r) => r.key !== row.key),
+  ].toSorted(compareSessionRowsByUpdatedAt);
+  return true;
 }
 
 async function fetchSessionCompactionCheckpoints(state: SessionsState, key: string) {
@@ -518,7 +687,7 @@ async function runCompactionMutation<T>(
     });
     await loadSessions(
       state,
-      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
     return result;
   } catch (err) {
@@ -563,9 +732,17 @@ export function applySessionsChangedEvent(
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
+  const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
   if (payload.reason === "delete") {
+    const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
+    if (
+      !sessionsChangedGlobalAgentMatches(state, payload, key) ||
+      !sessionsChangedResultScopeMatches(state, payload, eventSession, key, existing)
+    ) {
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
+    }
     if (existingIndex < 0) {
-      return { applied: false };
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,
@@ -575,7 +752,9 @@ export function applySessionsChangedEvent(
     invalidateCheckpointCacheForKey(state, key);
     return { applied: true, change: "deleted" };
   }
-  const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
+  const matchesResultScope =
+    sessionsChangedGlobalAgentMatches(state, payload, key) &&
+    sessionsChangedResultScopeMatches(state, payload, eventSession, key, existing);
   const hasReliableSource =
     existingIndex >= 0 || eventSession !== null || typeof source.sessionId === "string";
   if (!hasReliableSource) {
@@ -615,9 +794,15 @@ export function applySessionsChangedEvent(
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
   }
+  if (!matchesResultScope) {
+    return upsertCachedChatAgentSessionRow(state, nextRow)
+      ? { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" }
+      : { applied: false };
+  }
   if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+    const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
     if (existingIndex < 0) {
-      return { applied: false };
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,
@@ -679,6 +864,109 @@ export function applySessionsChangedEvent(
   };
 }
 
+export function applyChatHistorySessionInfo(
+  state: SessionsState,
+  row: GatewaySessionRow | undefined,
+  defaults?: SessionsListResult["defaults"],
+): boolean {
+  if (!row?.key) {
+    return false;
+  }
+  const session = sanitizeChatHistorySessionRow(row);
+  if (!state.sessionsResult) {
+    if (!isPersistedChatHistorySessionRow(session)) {
+      if (!defaults) {
+        return false;
+      }
+      state.sessionsResult = {
+        ts: Date.now(),
+        path: "",
+        count: 0,
+        defaults,
+        sessions: [],
+      };
+      return true;
+    }
+    const sessions = state.sessionsShowArchived || !isArchivedSessionRow(session) ? [session] : [];
+    state.sessionsResult = {
+      ts: Date.now(),
+      path: "",
+      count: sessions.length,
+      defaults: defaults ?? {
+        modelProvider: null,
+        model: null,
+        contextTokens: null,
+      },
+      sessions,
+    };
+    state.sessionsResultAgentId = resolveChatHistorySessionResultAgentId(state, session);
+    upsertCachedChatAgentSessionRow(state, session);
+    if (hasCurrentChatSession(state)) {
+      const reconciled = reconcileChatRunFromSessionRow(state, session, { publishRunStatus: true });
+      if (!reconciled) {
+        reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+      }
+    }
+    return true;
+  }
+  const existingVisibleSession = state.sessionsResult.sessions.find((existing) =>
+    sessionRowMatchesChatHistoryRow(state, existing, session),
+  );
+  if (!existingVisibleSession && !isPersistedChatHistorySessionRow(session)) {
+    if (defaults) {
+      state.sessionsResult = {
+        ...state.sessionsResult,
+        defaults: preserveRicherThinkingMetadata(defaults, state.sessionsResult.defaults),
+      };
+      return true;
+    }
+    return false;
+  }
+  if (defaults) {
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      defaults: preserveRicherThinkingMetadata(defaults, state.sessionsResult.defaults),
+    };
+  }
+  const visibleKey = existingVisibleSession?.key ?? session.key;
+  const keyedVisibleSession =
+    visibleKey === session.key ? session : { ...session, key: visibleKey };
+  const visibleSession = preserveRicherThinkingMetadata(
+    keyedVisibleSession,
+    existingVisibleSession,
+  );
+  if (historyRowIsStaleForActiveSession(visibleSession, existingVisibleSession)) {
+    return true;
+  }
+  const applied = applySessionsChangedEvent(state, {
+    session: visibleSession,
+    sessionKey: visibleSession.key,
+    ...(isUiGlobalSessionKey(visibleSession.key)
+      ? { agentId: resolveSelectedGlobalAgentId(state) }
+      : {}),
+  });
+  if (applied.applied) {
+    upsertCachedChatAgentSessionRow(state, visibleSession);
+    if (hasCurrentChatSession(state)) {
+      const reconciled = reconcileChatRunFromSessionRow(state, visibleSession, {
+        publishRunStatus: true,
+      });
+      if (!reconciled) {
+        reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+      }
+    }
+    return true;
+  }
+  const cached = upsertCachedChatAgentSessionRow(state, visibleSession);
+  if (hasCurrentChatSession(state)) {
+    const reconciled =
+      reconcileChatRunFromSessionRow(state, visibleSession, { publishRunStatus: true }) ||
+      (cached && reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true }));
+    return cached || reconciled;
+  }
+  return cached;
+}
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -736,7 +1024,8 @@ export async function syncSelectedSessionMessageSubscription(
     if (shouldUnsubscribePrevious && previousCanonicalKey) {
       await client.request("sessions.messages.unsubscribe", {
         key: previousCanonicalKey,
-        ...(isGlobalSessionKey(previousCanonicalKey) && state.chatSessionMessageSubscriptionAgentId
+        ...(isUiGlobalSessionKey(previousCanonicalKey) &&
+        state.chatSessionMessageSubscriptionAgentId
           ? { agentId: state.chatSessionMessageSubscriptionAgentId }
           : {}),
       });
@@ -757,7 +1046,7 @@ export async function syncSelectedSessionMessageSubscription(
       const staleKeyChanged =
         normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey;
       const staleAgentChanged =
-        isGlobalSessionKey(subscribedKey) &&
+        isUiGlobalSessionKey(subscribedKey) &&
         (state.chatSessionMessageSubscriptionAgentId ?? null) !== subscribedAgentId;
       if (staleKeyChanged || staleAgentChanged) {
         await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey, subscribedAgentId);
@@ -839,6 +1128,7 @@ async function loadSessionsOnce(
       configuredAgentsOnly,
     };
     const agentId = overrides?.agentId?.trim();
+    const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
       params.agentId = agentId;
     }
@@ -866,6 +1156,7 @@ async function loadSessionsOnce(
         overrides?.append === true && offset > 0 && state.sessionsResult
           ? appendSessionsResult(state.sessionsResult, projected)
           : projected;
+      state.sessionsResultAgentId = resultAgentId;
       if (hasCurrentChatSession(state)) {
         reconcileChatRunFromCurrentSessionRow(state, {
           publishRunStatus: overrides?.publishChatRunStatus !== false,
@@ -912,7 +1203,7 @@ export async function patchSession(
   patch: {
     label?: string | null;
     thinkingLevel?: string | null;
-    fastMode?: boolean | null;
+    fastMode?: FastMode | null;
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
@@ -922,7 +1213,7 @@ export async function patchSession(
   }
   const params: Record<string, unknown> = {
     key,
-    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+    ...(isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
   };
   for (const field of [
     "label",
@@ -939,7 +1230,7 @@ export async function patchSession(
     await state.client.request("sessions.patch", params);
     await loadSessions(
       state,
-      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
   } catch (err) {
     state.sessionsError = String(err);
@@ -997,7 +1288,7 @@ export async function deleteSessionsAndRefresh(
       try {
         await client.request("sessions.delete", {
           key,
-          ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+          ...(isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
           deleteTranscript: true,
         });
         deleted.push(key);
@@ -1007,7 +1298,7 @@ export async function deleteSessionsAndRefresh(
     }
   });
   if (deleted.length > 0 && !refreshedDuringDelete) {
-    const selectedGlobalDeleted = deleted.some((key) => isGlobalSessionKey(key));
+    const selectedGlobalDeleted = deleted.some((key) => isUiGlobalSessionKey(key));
     await loadSessions(
       state,
       selectedGlobalDeleted ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,

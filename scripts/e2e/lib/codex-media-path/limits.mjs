@@ -1,3 +1,4 @@
+// Limits shared by Codex media-path E2E fixtures.
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const text = String(env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {
@@ -5,6 +6,15 @@ export function readPositiveIntEnv(name, fallback, env = process.env) {
   }
   const value = Number(text);
   if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+export function readTcpPortEnv(name, fallback, env = process.env) {
+  const value = readPositiveIntEnv(name, fallback, env);
+  if (value > 65_535) {
+    const text = String(env[name] ?? fallback).trim();
     throw new Error(`invalid ${name}: ${text}`);
   }
   return value;

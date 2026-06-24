@@ -1,3 +1,4 @@
+// Message program helper tests cover message command helper behavior and mocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -22,7 +23,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -58,6 +59,8 @@ vi.mock("../../deps.js", () => ({
 }));
 
 const { createMessageCliHelpers } = await import("./helpers.js");
+
+const NON_NEGATIVE_INTEGER_FLAGS = new Set(["--delete-days", "--duration-min"]);
 
 const baseSendOptions = {
   channel: "discord",
@@ -364,7 +367,7 @@ describe("runMessageAction", () => {
 
     await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
 
-    const kind = flag === "--delete-days" ? "non-negative" : "positive";
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
     expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
@@ -389,7 +392,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    const kind = flag === "--delete-days" ? "non-negative" : "positive";
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
     expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
@@ -412,6 +415,27 @@ describe("runMessageAction", () => {
       guildId: "g",
       userId: "u",
       deleteDays: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("allows zero duration-min for clearing Discord timeouts", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("timeout", {
+        guildId: "g",
+        userId: "u",
+        durationMin: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "timeout",
+      guildId: "g",
+      userId: "u",
+      durationMin: "0",
     });
     expect(exitMock).toHaveBeenCalledWith(0);
   });
@@ -445,7 +469,7 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       hasHooksMock.mockReturnValueOnce(true);
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");

@@ -1,7 +1,8 @@
+// Covers reported host-env security baseline parity.
 import fs from "node:fs";
 import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -45,6 +46,11 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   NO_PROXY: "Trusted inherited proxy bypass list from operator runtime.",
   PAGER: "Trusted inherited default pager preference.",
   REQUESTS_CA_BUNDLE: "Trusted inherited Python requests CA bundle path.",
+  RUSTUP_DIST_ROOT: "Trusted inherited deprecated Rust static download mirror.",
+  RUSTUP_DIST_SERVER: "Trusted inherited Rust static download mirror.",
+  RUSTUP_HOME: "Trusted inherited Rust toolchain root selected by operator runtime.",
+  RUSTUP_TOOLCHAIN: "Trusted inherited Rust toolchain selector selected by operator.",
+  RUSTUP_UPDATE_ROOT: "Trusted inherited Rust self-update download mirror.",
   SSH_AUTH_SOCK: "Trusted inherited SSH agent socket from operator runtime.",
   SSL_CERT_DIR: "Trusted inherited OpenSSL certificate directory path.",
   SSL_CERT_FILE: "Trusted inherited OpenSSL certificate file path.",
@@ -91,7 +97,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(243);
+    expect(baseline.expectedTotalReportedEntries).toBe(262);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );
@@ -113,6 +119,14 @@ describe("host env reported baseline coverage", () => {
     for (const key of baseline.reportedDangerousEverywhereKeys) {
       expect(isDangerousHostEnvVarName(key)).toBe(true);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(true);
+      if (key === "GIT_ALLOW_PROTOCOL") {
+        expect(inheritedSanitized[key]).toBe("");
+        continue;
+      }
+      if (key === "GIT_PROTOCOL_FROM_USER") {
+        expect(inheritedSanitized[key]).toBe(`${key.toLowerCase()}-from-inherited`);
+        continue;
+      }
       expect(inheritedSanitized[key]).toBeUndefined();
     }
 

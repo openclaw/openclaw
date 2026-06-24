@@ -1,3 +1,4 @@
+// Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
@@ -830,6 +831,36 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips internal tool trace warning lines on the delivery path", () => {
+    const input = [
+      "Visible intro.",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
+      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
+      "🛠️ run git status",
+      "Visible outro.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro.\nVisible outro.");
+  });
+
+  it("preserves internal tool trace examples inside fenced code", () => {
+    const input = [
+      "Example:",
+      "```",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves ordinary analysis headings", () => {
+    const input = ["Analysis:", "This is user-visible reasoning about the result."].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("drops malformed reasoning before orphan close tags when final text follows", () => {
     expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
       "Visible answer",
@@ -874,6 +905,18 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
       "[Tool Call: read (ID: toolu_1)]",
+    );
+  });
+
+  it("uses the tool-progress profile to strip scaffolding while preserving progress lines", () => {
+    const input = [
+      "<think>private reasoning</think>",
+      '<tool_call>{"name":"x"}</tool_call>',
+      "🛠️ run git status",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
+      "🛠️ run git status",
     );
   });
 });

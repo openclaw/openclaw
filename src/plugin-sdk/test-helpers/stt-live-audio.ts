@@ -1,3 +1,4 @@
+// STT live audio test helpers provide audio fixtures and expectations for speech plugins.
 import { expect } from "vitest";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -29,7 +30,9 @@ export async function waitForLiveExpectation(expectation: () => void, timeoutMs 
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
     }
   }
   throw lastError;
@@ -86,7 +89,9 @@ export async function streamAudioForLiveTest(params: {
   const delayMs = params.delayMs ?? 5;
   for (let offset = 0; offset < params.audio.byteLength; offset += chunkSize) {
     params.sendAudio(params.audio.subarray(offset, offset + chunkSize));
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
   }
 }
 

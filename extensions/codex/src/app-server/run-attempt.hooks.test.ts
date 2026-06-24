@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
 import {
   abortAgentHarnessRun,
@@ -40,6 +41,64 @@ function flushDiagnosticEvents() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it.each([
+    { label: "completed", status: "completed" as const, error: undefined, legacy: false },
+    { label: "failed", status: "failed" as const, error: "codex exploded", legacy: false },
+    {
+      label: "completed legacy alias",
+      status: "completed" as const,
+      error: undefined,
+      legacy: true,
+    },
+  ])("defers $label lifecycle terminal ownership", async ({ status, error, legacy }) => {
+    const onRunAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, `deferred-${status}.jsonl`);
+    const workspaceDir = path.join(tempDir, `workspace-${status}`);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    if (legacy) {
+      params.deferTerminalLifecycleEnd = true;
+    } else {
+      params.deferTerminalLifecycle = true;
+    }
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    if (status === "completed") {
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "msg-1",
+          delta: "hello back",
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    } else {
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status,
+            error: { message: error },
+          },
+        },
+      });
+    }
+    await run;
+
+    const lifecycleEvents = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual(["start", "finishing"]);
+    expect(lifecycleEvents[1]?.data.error).toBe(error);
+  });
+
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
@@ -66,7 +125,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     expect(llmInput).toHaveBeenCalled();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
       {
@@ -87,7 +148,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmInputPayload.model).toBe("gpt-5.4-codex");
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
-    expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
+    expect(llmInputPayload.historyMessages).toEqual([]);
     expect(llmInputPayload.systemPrompt).toContain(
       "You are a personal agent running inside OpenClaw.",
     );
@@ -124,8 +185,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
     expect(typeof lifecycleStart?.data.startedAt).toBe("number");
-    const assistantEvent = agentEvents.find((event) => event.stream === "assistant");
-    expect(assistantEvent?.data).toEqual({ text: "hello back" });
+    const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
+    expect(assistantEvents).toHaveLength(2);
+    expect(assistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
     const lifecycleEnd = agentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
@@ -141,10 +208,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(assistantIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(assistantIndex);
-    const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");
-    expect(globalAssistantEvent?.runId).toBe("run-1");
-    expect(globalAssistantEvent?.sessionKey).toBe("agent:main:session-1");
-    expect(globalAssistantEvent?.data).toEqual({ text: "hello back" });
+    const globalAssistantEvents = globalAgentEvents.filter((event) => event.stream === "assistant");
+    expect(globalAssistantEvents).toHaveLength(2);
+    expect(globalAssistantEvents[0]?.runId).toBe("run-1");
+    expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
+    expect(globalAssistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
     const globalEndEvent = globalAgentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
@@ -241,6 +314,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
+      const sessionManager = SessionManager.open(sessionFile);
+      sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         diagnostics: {
@@ -283,6 +358,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(JSON.stringify(startedEvent)).not.toContain("hello");
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
+      expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );

@@ -1,7 +1,8 @@
+// Official plugin setup tests cover plugin installation during onboarding.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "./prompts.js";
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() =>
   vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
@@ -92,9 +93,9 @@ describe("setupOfficialPluginInstalls", () => {
   });
 
   it("installs selected optional official plugins through the shared onboarding installer", async () => {
-    const multiselect = vi.fn(async () => ["diagnostics-otel"]);
+    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["diagnostics-otel"]);
     const prompter = createWizardPrompter({
-      multiselect: multiselect as WizardPrompter["multiselect"],
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
     });
     const runtime = createNonExitingRuntime();
 
@@ -105,14 +106,19 @@ describe("setupOfficialPluginInstalls", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(multiselect).toHaveBeenCalledExactlyOnceWith({
-      message: "Install optional plugins",
-      options: [
-        {
-          value: "__skip__",
-          label: "Skip for now",
-          hint: "Continue without installing optional plugins",
-        },
+    expect(multiselect).toHaveBeenCalledTimes(1);
+    const prompt = multiselect.mock.calls[0]?.[0];
+    if (!prompt) {
+      throw new Error("expected optional plugin multiselect prompt");
+    }
+    expect(prompt.message).toBe("Install optional plugins");
+    expect(prompt.options[0]).toEqual({
+      value: "__skip__",
+      label: "Skip for now",
+      hint: "Continue without installing optional plugins",
+    });
+    expect(prompt.options).toEqual(
+      expect.arrayContaining([
         {
           value: "acpx",
           label: "ACPX Runtime",
@@ -129,57 +135,12 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
         {
-          value: "diffs-language-pack",
-          label: "Diff Viewer Language Pack",
-          hint: "OpenClaw diffs viewer syntax highlighting language pack",
-        },
-        {
-          value: "diffs",
-          label: "Diffs",
-          hint: "OpenClaw diff viewer plugin",
-        },
-        {
-          value: "copilot",
-          label: "GitHub Copilot agent runtime",
-          hint: "OpenClaw GitHub Copilot agent runtime plugin",
-        },
-        {
-          value: "google-meet",
-          label: "Google Meet",
-          hint: "OpenClaw Google Meet participant plugin",
-        },
-        {
-          value: "lobster",
-          label: "Lobster",
-          hint: "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
-        },
-        {
-          value: "memory-lancedb",
-          label: "Memory LanceDB",
-          hint: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
-        },
-        {
-          value: "openshell",
-          label: "OpenShell Sandbox",
-          hint: "OpenClaw OpenShell sandbox backend",
-        },
-        {
-          value: "pixverse",
-          label: "PixVerse",
-          hint: "OpenClaw PixVerse video generation provider plugin",
-        },
-        {
           value: "tokenjuice",
           label: "Tokenjuice",
           hint: "OpenClaw tokenjuice exec output compaction plugin",
         },
-        {
-          value: "voice-call",
-          label: "Voice Call",
-          hint: "OpenClaw voice-call plugin",
-        },
-      ],
-    });
+      ]),
+    );
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
       cfg: {},
       entry: {

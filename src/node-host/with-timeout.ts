@@ -1,5 +1,14 @@
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+/** Timeout wrapper for node-host operations using AbortSignal cancellation. */
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { toErrorObject } from "../infra/errors.js";
 
+/**
+ * AbortSignal-based timeout wrapper for node-host operations.
+ *
+ * The wrapper races work against an abort promise, clears timers/listeners on
+ * completion, and preserves object-shaped abort reasons as Error properties.
+ */
+/** Run work with an optional timeout and AbortSignal. */
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
@@ -17,9 +26,10 @@ export async function withTimeout<T>(
 
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = abortCtrl.signal.aborted
-    ? Promise.reject(abortCtrl.signal.reason ?? timeoutError)
+    ? Promise.reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"))
     : new Promise((_, reject) => {
-        abortListener = () => reject(abortCtrl.signal.reason ?? timeoutError);
+        abortListener = () =>
+          reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"));
         abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
       });
 
@@ -28,6 +38,7 @@ export async function withTimeout<T>(
   } finally {
     clearTimeout(timer);
     if (abortListener) {
+      // Remove the listener even when work wins the race to avoid retaining closures.
       abortCtrl.signal.removeEventListener("abort", abortListener);
     }
   }

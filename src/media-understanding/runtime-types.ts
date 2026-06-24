@@ -1,6 +1,8 @@
+// Public media-understanding runtime API types for file-based image/audio/video
+// helpers and direct structured extraction.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -19,6 +21,13 @@ export type RunMediaUnderstandingFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
+};
+
+export type MediaUnderstandingScopeContext = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -39,6 +48,7 @@ export type DescribeImageFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type DescribeImageFileWithModelParams = {

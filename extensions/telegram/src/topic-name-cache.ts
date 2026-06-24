@@ -1,3 +1,4 @@
+// Telegram plugin module implements topic name cache behavior.
 import { createHash } from "node:crypto";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { getTelegramRuntime } from "./runtime.js";
@@ -162,12 +163,6 @@ async function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void>
   await state.hydratePromise;
 }
 
-async function getTopicStore(scope?: string): Promise<TopicNameStore> {
-  const state = getTopicStoreState(scope);
-  await hydrateTopicStoreState(state);
-  return state.store;
-}
-
 function nextUpdatedAt(scope?: string): number {
   const state = getTopicStoreState(scope);
   const now = Date.now();
@@ -222,14 +217,6 @@ export async function getTopicName(
   return entry?.name;
 }
 
-export async function getTopicEntry(
-  chatId: number | string,
-  threadId: number | string,
-  scope?: string,
-): Promise<TopicEntry | undefined> {
-  return (await getTopicStore(scope)).get(cacheKey(chatId, threadId));
-}
-
 export async function listTelegramLegacyTopicNameCacheEntries(params: {
   persistedPath: string;
   maxEntries?: number;
@@ -243,18 +230,6 @@ export async function listTelegramLegacyTopicNameCacheEntries(params: {
     .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
     .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
     .map(([key, entry]) => ({ key, value: entry }));
-}
-
-export async function clearTopicNameCache(): Promise<void> {
-  const state = getTopicNameCacheState();
-  await Promise.all(
-    [...state.stores.values()].map((storeState) => storeState.persistentStore.clear()),
-  );
-  state.stores.clear();
-}
-
-export function topicNameCacheSize(scope?: string): number {
-  return getTopicStoreState(scope).store.size;
 }
 
 export function resetTopicNameCacheForTest(): void {

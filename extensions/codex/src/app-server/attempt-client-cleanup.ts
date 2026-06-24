@@ -1,10 +1,64 @@
+/**
+ * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  clearSharedCodexAppServerClientIfCurrent,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 
+/** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
+/** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 
+async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
+  const closeable = client as {
+    close?: CodexAppServerClient["close"];
+    closeAndWait?: CodexAppServerClient["closeAndWait"];
+  };
+  if (typeof closeable.closeAndWait === "function") {
+    await closeable.closeAndWait();
+    return;
+  }
+  closeable.close?.();
+}
+
+export async function closeCodexStartupClientBestEffort(
+  client: CodexAppServerClient | undefined,
+): Promise<void> {
+  if (!client) {
+    return;
+  }
+  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
+  if (unclaimedSharedClient.closed) {
+    await closeClientAndWaitIfAvailable(client);
+    return;
+  }
+  if (unclaimedSharedClient.found) {
+    const retired = retireSharedCodexAppServerClientIfCurrent(client);
+    if (retired?.closed) {
+      await closeClientAndWaitIfAvailable(client);
+    }
+    return;
+  }
+  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retiredSharedClient) {
+    if (retiredSharedClient.closed) {
+      await closeClientAndWaitIfAvailable(client);
+    }
+    return;
+  }
+  if (clearSharedCodexAppServerClientIfCurrent(client)) {
+    await closeClientAndWaitIfAvailable(client);
+    return;
+  }
+  await closeClientAndWaitIfAvailable(client);
+}
+
+/** Sends a turn interrupt without blocking abort cleanup on app-server errors. */
 export function interruptCodexTurnBestEffort(
   client: CodexAppServerClient,
   params: {
@@ -30,6 +84,7 @@ export function interruptCodexTurnBestEffort(
   }
 }
 
+/** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
@@ -51,6 +106,10 @@ export async function unsubscribeCodexThreadBestEffort(
   }
 }
 
+/**
+ * Retires the shared client after a timed-out turn so later runs do not reuse a
+ * potentially wedged app-server connection.
+ */
 export async function retireCodexAppServerClientAfterTimedOutTurn(
   client: CodexAppServerClient,
   params: {

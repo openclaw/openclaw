@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for CLI session persistence helpers.
+ * Verifies provider-keyed bindings, legacy Claude state, and reuse invalidation.
+ */
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -23,6 +27,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
+      messageToolPolicyHash: "message-policy-hash",
       promptToolNamesHash: "prompt-tools-hash",
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
@@ -38,6 +43,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
+      messageToolPolicyHash: "message-policy-hash",
       promptToolNamesHash: "prompt-tools-hash",
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
@@ -180,6 +186,29 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-b",
       }),
     ).toEqual({ invalidatedReason: "mcp" });
+  });
+
+  it("invalidates reuse when message-tool prompt policy changes", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      messageToolPolicyHash: "message-policy-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authEpochVersion: 2,
+        messageToolPolicyHash: "message-policy-b",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authEpochVersion: 2,
+        messageToolPolicyHash: "message-policy-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
   });
 
   it("invalidates reuse when the task cwd changes", () => {

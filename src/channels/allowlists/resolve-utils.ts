@@ -1,9 +1,14 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { RuntimeEnv } from "../../runtime.js";
+/**
+ * Channel allowlist resolution helpers.
+ *
+ * Dedupes allowFrom entries and canonicalizes user lookups into stable id additions.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -37,6 +42,7 @@ export function mergeAllowlist(params: {
   return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
 }
 
+/** Splits lookup results into resolved mappings, unresolved display text, and id additions. */
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
   opts?: { formatResolved?: (entry: T) => string; formatUnresolved?: (entry: T) => string },
@@ -74,6 +80,7 @@ function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(para
   return additions;
 }
 
+/** Replaces resolvable user entries with canonical ids while preserving unresolved entries and `*`. */
 export function canonicalizeAllowlistWithResolvedIds<
   T extends AllowlistUserResolutionLike,
 >(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
@@ -84,6 +91,7 @@ export function canonicalizeAllowlistWithResolvedIds<
       continue;
     }
     if (trimmed === "*") {
+      // Wildcard allowlists are a policy value, not a lookup target.
       canonicalized.push(trimmed);
       continue;
     }
@@ -93,6 +101,7 @@ export function canonicalizeAllowlistWithResolvedIds<
   return dedupeAllowlistEntries(canonicalized);
 }
 
+/** Updates nested `{ users }` allowlist entries using merge or canonicalize semantics. */
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
@@ -110,6 +119,7 @@ export function patchAllowlistUsersInConfigEntries<
     if (!Array.isArray(users) || users.length === 0) {
       continue;
     }
+    // `merge` keeps original user text and appends resolved ids; `canonicalize` replaces it.
     const resolvedUsers =
       params.strategy === "canonicalize"
         ? canonicalizeAllowlistWithResolvedIds({
@@ -131,6 +141,7 @@ export function patchAllowlistUsersInConfigEntries<
   return nextEntries as TEntries;
 }
 
+/** Collects concrete user lookup targets from one config entry, excluding wildcard policy entries. */
 export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
   if (!entry || typeof entry !== "object") {
     return;
@@ -147,6 +158,7 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
   }
 }
 
+/** Logs a compact resolved/unresolved allowlist lookup summary when there is anything to report. */
 export function summarizeMapping(
   label: string,
   mapping: string[],

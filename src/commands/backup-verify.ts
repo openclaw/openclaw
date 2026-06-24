@@ -1,7 +1,8 @@
+// Verifies backup archives by validating their manifest, payload entries, and hardlink targets.
 import path from "node:path";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
@@ -38,12 +39,12 @@ type BackupManifest = {
   }>;
 };
 
-export type BackupVerifyOptions = {
+type BackupVerifyOptions = {
   archive: string;
   json?: boolean;
 };
 
-export type BackupVerifyResult = {
+type BackupVerifyResult = {
   ok: true;
   archivePath: string;
   archiveRoot: string;
@@ -301,14 +302,20 @@ function verifyHardlinkTargetsAgainstArchiveRoot(
 ): void {
   const normalizedRoot = normalizeArchiveRoot(archiveRoot);
   for (const target of hardlinkTargets) {
-    if (!isArchivePathWithin(target.normalized, normalizedRoot)) {
+    // Older backup archives may store hardlink linkpath values relative to the
+    // archive root instead of including the root segment. Accept that form only
+    // when it resolves to a real entry inside this archive.
+    const normalizedTarget = isArchivePathWithin(target.normalized, normalizedRoot)
+      ? target.normalized
+      : path.posix.join(normalizedRoot, target.normalized);
+    if (!isArchivePathWithin(normalizedTarget, normalizedRoot)) {
       throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${target.normalized}`,
+        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${normalizedTarget}`,
       );
     }
-    if (!entries.has(target.normalized)) {
+    if (!entries.has(normalizedTarget)) {
       throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
+        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${normalizedTarget}`,
       );
     }
   }
@@ -338,6 +345,7 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+/** Verify a backup archive without extracting payload files to disk. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,

@@ -1,3 +1,4 @@
+// Feishu tests cover app registration plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration } from "./app-registration.js";
@@ -55,7 +56,7 @@ describe("Feishu app registration", () => {
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
-    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await vi.runOnlyPendingTimersAsync();
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 });

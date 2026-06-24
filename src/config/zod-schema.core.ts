@@ -1,13 +1,14 @@
+// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
@@ -20,6 +21,8 @@ const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 function isAbsolutePath(value: string): boolean {
+  // `path.isAbsolute` follows the host OS, but config files can be authored for Windows from
+  // macOS/Linux. Accept Windows forms explicitly so cross-platform config validation stays stable.
   return (
     path.isAbsolute(value) ||
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
@@ -76,12 +79,14 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
 ]);
 
+/** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
 const SecretsEnvProviderSchema = z
@@ -161,17 +166,19 @@ const SecretsExecProviderSchema = z.union([
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
+/** Schema for one configured env/file/exec secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
 ]);
 
+/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
     providers: z
       .object({
-        // Keep this as a record so users can define multiple providers per source.
+        // Keep this as a record so users can define multiple named providers per source.
       })
       .catchall(SecretProviderSchema)
       .optional(),
@@ -223,6 +230,7 @@ const ModelCompatSchema = z
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
@@ -340,6 +348,21 @@ const ModelMediaInputSchema = z
   })
   .strict();
 
+// Mirrors the runtime ThinkingLevelMap contract (model-registry TypeBox schema). Persisted model
+// entries carry thinkingLevelMap, so the strict config schema must accept it or updateConfig rolls back.
+const ThinkingLevelMapValueSchema = z.string().nullable();
+const ThinkingLevelMapSchema = z
+  .object({
+    off: ThinkingLevelMapValueSchema.optional(),
+    minimal: ThinkingLevelMapValueSchema.optional(),
+    low: ThinkingLevelMapValueSchema.optional(),
+    medium: ThinkingLevelMapValueSchema.optional(),
+    high: ThinkingLevelMapValueSchema.optional(),
+    xhigh: ThinkingLevelMapValueSchema.optional(),
+    max: ThinkingLevelMapValueSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -377,6 +400,7 @@ const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
@@ -439,7 +463,6 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "nvidia",
   "ollama",
   "openai",
-  "openai-codex",
   "opencode",
   "opencode-go",
   "openrouter",
@@ -460,6 +483,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ]);
 
@@ -547,6 +571,16 @@ export const VisibleRepliesSchema = z
     }
     return value;
   });
+
+export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+
+export const MentionPatternsPolicySchema = z
+  .object({
+    mode: MentionPatternsModeSchema.optional(),
+    allowIn: z.array(z.string()).optional(),
+    denyIn: z.array(z.string()).optional(),
+  })
+  .strict();
 
 export const GroupChatSchema = z
   .object({
@@ -750,7 +784,9 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z.literal("claude-stream-json").optional(),
+    jsonlDialect: z
+      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
+      .optional(),
     liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
@@ -797,6 +833,31 @@ export const CliBackendSchema = z
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   normalizeStringEntries(values);
 
+/**
+ * Closed set of sender-policy/allowFrom dependency violations. Both cases drop
+ * every inbound DM at runtime, so callers surface them as config problems.
+ */
+export type DmPolicyAllowFromViolation = "open_requires_wildcard" | "allowlist_requires_entries";
+
+/**
+ * Canonical cross-field check for dmPolicy vs allowFrom. This is the single
+ * source of truth shared by the Zod schema refinements and the CLI config
+ * validator so the rule cannot drift between the two surfaces.
+ */
+export const evaluateDmPolicyAllowFromDependency = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+}): DmPolicyAllowFromViolation | null => {
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (params.policy === "open" && !allow.includes("*")) {
+    return "open_requires_wildcard";
+  }
+  if (params.policy === "allowlist" && allow.length === 0) {
+    return "allowlist_requires_entries";
+  }
+  return null;
+};
+
 export const requireOpenAllowFrom = (params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -804,11 +865,10 @@ export const requireOpenAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "open") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "open_requires_wildcard"
+  ) {
     return;
   }
   params.ctx.addIssue({
@@ -830,11 +890,10 @@ export const requireAllowlistAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "allowlist") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.length > 0) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "allowlist_requires_entries"
+  ) {
     return;
   }
   params.ctx.addIssue({

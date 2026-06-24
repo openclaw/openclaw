@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+// Phone Control plugin entrypoint registers its OpenClaw integration.
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -34,9 +35,18 @@ type ArmStateFileV2 = {
 };
 
 type ArmStateFile = ArmStateFileV1 | ArmStateFileV2;
+type PhoneControlConfigView = {
+  readonly gateway?: {
+    readonly nodes?: {
+      readonly allowCommands?: readonly string[];
+      readonly denyCommands?: readonly string[];
+    };
+  };
+};
 
 const STATE_VERSION = 2;
-const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
+const ARM_STATE_NAMESPACE = "armed";
+const ARM_STATE_KEY = "current";
 const PHONE_ADMIN_SCOPE = "operator.admin";
 
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
@@ -44,6 +54,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   screen: ["screen.record"],
   writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
+const PHONE_CONTROL_COMMANDS = Object.values(GROUP_COMMANDS).flat();
 
 function uniqSorted(values: string[]): string[] {
   return sortUniqueStrings(normalizeStringEntries(values));
@@ -96,85 +107,37 @@ function formatDuration(ms: number): string {
   return `${d}d`;
 }
 
-function resolveStatePath(stateDir: string): string {
-  return path.join(stateDir, ...STATE_REL_PATH);
-}
-
-async function readArmState(statePath: string): Promise<ArmStateFile | null> {
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    // Type as unknown record first to allow property access during validation
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed.version !== 1 && parsed.version !== 2) {
-      return null;
-    }
-    if (typeof parsed.armedAtMs !== "number") {
-      return null;
-    }
-    if (!(parsed.expiresAtMs === null || typeof parsed.expiresAtMs === "number")) {
-      return null;
-    }
-
-    if (parsed.version === 1) {
-      if (
-        !Array.isArray(parsed.removedFromDeny) ||
-        !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
-      ) {
-        return null;
-      }
-      return parsed as unknown as ArmStateFile;
-    }
-
-    const group = typeof parsed.group === "string" ? parsed.group : "";
-    if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "all") {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.armedCommands) ||
-      !parsed.armedCommands.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.addedToAllow) ||
-      !parsed.addedToAllow.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.removedFromDeny) ||
-      !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    return parsed as unknown as ArmStateFile;
-  } catch {
-    return null;
-  }
-}
-
-async function writeArmState(statePath: string, state: ArmStateFile | null): Promise<void> {
-  if (!state) {
-    try {
-      await fs.unlink(statePath);
-    } catch {
-      // ignore
-    }
-    return;
-  }
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(state, null, 2)}\n`,
-    tempPrefix: ".phone-control-arm",
+function openArmStateStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStore<ArmStateFile>({
+    namespace: ARM_STATE_NAMESPACE,
+    maxEntries: 1,
   });
 }
 
-function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {
+async function readArmState(api: OpenClawPluginApi): Promise<ArmStateFile | null> {
+  return (await openArmStateStore(api).lookup(ARM_STATE_KEY)) ?? null;
+}
+
+async function writeArmState(api: OpenClawPluginApi, state: ArmStateFile | null): Promise<void> {
+  const store = openArmStateStore(api);
+  if (!state) {
+    await store.delete(ARM_STATE_KEY);
+    return;
+  }
+  await store.register(ARM_STATE_KEY, state);
+}
+
+function normalizeDenyList(cfg: PhoneControlConfigView): string[] {
   return uniqSorted([...(cfg.gateway?.nodes?.denyCommands ?? [])]);
 }
 
-function normalizeAllowList(cfg: OpenClawPluginApi["config"]): string[] {
+function normalizeAllowList(cfg: PhoneControlConfigView): string[] {
   return uniqSorted([...(cfg.gateway?.nodes?.allowCommands ?? [])]);
+}
+
+function hasPhoneControlAllowOverride(cfg: PhoneControlConfigView): boolean {
+  const allow = new Set(normalizeAllowList(cfg));
+  return PHONE_CONTROL_COMMANDS.some((cmd) => allow.has(cmd));
 }
 
 function patchConfigNodeLists(
@@ -196,16 +159,14 @@ function patchConfigNodeLists(
 
 async function disarmNow(params: {
   api: OpenClawPluginApi;
-  stateDir: string;
-  statePath: string;
   reason: string;
 }): Promise<{ changed: boolean; restored: string[]; removed: string[] }> {
-  const { api, stateDir, statePath, reason } = params;
-  const state = await readArmState(statePath);
+  const { api, reason } = params;
+  const state = await readArmState(api);
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
-  const cfg = api.runtime.config.current() as OpenClawConfig;
+  const cfg = api.runtime.config.current();
   const allow = new Set(normalizeAllowList(cfg));
   const deny = new Set(normalizeDenyList(cfg));
   const removed: string[] = [];
@@ -244,8 +205,8 @@ async function disarmNow(params: {
       },
     });
   }
-  await writeArmState(statePath, null);
-  api.logger.info(`phone-control: disarmed (${reason}) stateDir=${stateDir}`);
+  await writeArmState(api, null);
+  api.logger.info(`phone-control: disarmed (${reason})`);
   return {
     changed: removed.length > 0 || restored.length > 0,
     removed: uniqSorted(removed),
@@ -294,14 +255,38 @@ function lacksAdminToMutatePhoneControl(params: {
   return senderIsOwner !== true;
 }
 
+function resolveArmExpiryStatus(state: ArmStateFile, nowRaw = Date.now()): string {
+  if (state.expiresAtMs == null) {
+    return "manual disarm required";
+  }
+  const now = asDateTimestampMs(nowRaw);
+  if (now === undefined) {
+    return "expiry unavailable";
+  }
+  const expiresAt = asDateTimestampMs(state.expiresAtMs);
+  if (expiresAt === undefined || expiresAt <= now) {
+    return "expired";
+  }
+  return `expires in ${formatDuration(expiresAt - now)}`;
+}
+
+function isArmStateExpired(state: ArmStateFile, nowRaw = Date.now()): boolean {
+  if (state.expiresAtMs == null) {
+    return false;
+  }
+  const now = asDateTimestampMs(nowRaw);
+  if (now === undefined) {
+    return false;
+  }
+  const expiresAt = asDateTimestampMs(state.expiresAtMs);
+  return expiresAt === undefined || expiresAt <= now;
+}
+
 function formatStatus(state: ArmStateFile | null): string {
   if (!state) {
     return "Phone control: disarmed.";
   }
-  const until =
-    state.expiresAtMs == null
-      ? "manual disarm required"
-      : `expires in ${formatDuration(Math.max(0, state.expiresAtMs - Date.now()))}`;
+  const until = resolveArmExpiryStatus(state);
   const cmds = uniqSorted(
     state.version === 1
       ? state.removedFromDeny
@@ -319,43 +304,53 @@ export default definePluginEntry({
   description: "Temporary allowlist control for phone automation commands",
   register(api: OpenClawPluginApi) {
     let expiryInterval: ReturnType<typeof setInterval> | null = null;
+    let initialExpiryTick: ReturnType<typeof setImmediate> | null = null;
 
     const timerService: OpenClawPluginService = {
       id: "phone-control-expiry",
       start: async (ctx) => {
-        const statePath = resolveStatePath(ctx.stateDir);
         const tick = async () => {
-          const state = await readArmState(statePath);
+          const state = await readArmState(api);
           if (!state || state.expiresAtMs == null) {
             return;
           }
-          if (Date.now() < state.expiresAtMs) {
+          if (!isArmStateExpired(state)) {
             return;
           }
           await disarmNow({
             api,
-            stateDir: ctx.stateDir,
-            statePath,
             reason: "expired",
           });
         };
-
-        // Best effort; don't crash the gateway if state is corrupt.
-        await tick().catch(() => {});
 
         expiryInterval = setInterval(() => {
           tick().catch(() => {});
         }, 15_000);
         expiryInterval.unref?.();
 
-        return;
+        if (hasPhoneControlAllowOverride(ctx.config)) {
+          // Active dangerous command allows must be reconciled before gateway
+          // readiness; otherwise an expired phone-control window can survive.
+          await tick().catch(() => {});
+        } else {
+          // With no active phone-control allowlist, startup can avoid opening
+          // plugin state before readiness; cleanup still runs before the interval.
+          initialExpiryTick = setImmediate(() => {
+            initialExpiryTick = null;
+            tick().catch(() => {});
+          });
+          initialExpiryTick.unref?.();
+        }
       },
       stop: async () => {
+        if (initialExpiryTick) {
+          clearImmediate(initialExpiryTick);
+          initialExpiryTick = null;
+        }
         if (expiryInterval) {
           clearInterval(expiryInterval);
           expiryInterval = null;
         }
-        return;
       },
     };
 
@@ -371,16 +366,13 @@ export default definePluginEntry({
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0]);
 
-        const stateDir = api.runtime.state.resolveStateDir();
-        const statePath = resolveStatePath(stateDir);
-
         if (!action || action === "help") {
-          const state = await readArmState(statePath);
+          const state = await readArmState(api);
           return { text: `${formatStatus(state)}\n\n${formatHelp()}` };
         }
 
         if (action === "status") {
-          const state = await readArmState(statePath);
+          const state = await readArmState(api);
           return { text: formatStatus(state) };
         }
 
@@ -397,8 +389,6 @@ export default definePluginEntry({
           }
           const res = await disarmNow({
             api,
-            stateDir,
-            statePath,
             reason: "manual",
           });
           if (!res.changed) {
@@ -430,10 +420,17 @@ export default definePluginEntry({
           if (durationMs === null) {
             return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
           }
-          const expiresAtMs = Date.now() + durationMs;
+          const armedAtMs = asDateTimestampMs(Date.now());
+          const expiresAtMs =
+            armedAtMs === undefined
+              ? undefined
+              : resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: armedAtMs });
+          if (armedAtMs === undefined || expiresAtMs === undefined) {
+            return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
+          }
 
           const commands = resolveCommandsForGroup(group);
-          const cfg = api.runtime.config.current() as OpenClawConfig;
+          const cfg = api.runtime.config.current();
           const allowSet = new Set(normalizeAllowList(cfg));
           const denySet = new Set(normalizeDenyList(cfg));
 
@@ -459,9 +456,9 @@ export default definePluginEntry({
             },
           });
 
-          await writeArmState(statePath, {
+          await writeArmState(api, {
             version: STATE_VERSION,
-            armedAtMs: Date.now(),
+            armedAtMs,
             expiresAtMs,
             group,
             armedCommands: uniqSorted(commands),

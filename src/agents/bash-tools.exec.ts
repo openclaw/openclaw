@@ -1,8 +1,17 @@
+/**
+ * Exec tool factory and request pipeline.
+ * Resolves host/sandbox/node target, policy, approval, env, script preflight,
+ * process launch, foreground result, and background session handoff.
+ */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
-import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -10,31 +19,41 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  normalizeExecAsk,
   requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import {
+  parseOpenClawChannelsLoginShellCommand,
+  rejectUnsafeExecControlShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeHostOverrideEnvVarKey,
+  sanitizeHostExecEnvWithDiagnostics,
+} from "../infra/host-env-security.js";
+import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
+import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -47,7 +66,6 @@ import {
   type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
-  normalizeExecAsk,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -75,6 +93,99 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+type ExecToolArgs = Record<string, unknown> & {
+  command: string;
+  workdir?: string;
+  env?: Record<string, string>;
+  yieldMs?: number;
+  background?: boolean;
+  timeout?: number;
+  pty?: boolean;
+  elevated?: boolean;
+  host?: string;
+  security?: string;
+  ask?: string;
+  node?: string;
+};
+
+const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+
+function buildSubprocessChannelContext(
+  channelContext: PluginHookChannelContext | undefined,
+): PluginHookChannelContext | undefined {
+  const senderId = normalizeOptionalString(channelContext?.sender?.id);
+  const chatId = normalizeOptionalString(channelContext?.chat?.id);
+  const subprocessContext: PluginHookChannelContext = {
+    ...(senderId ? { sender: { id: senderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+  return subprocessContext.sender || subprocessContext.chat ? subprocessContext : undefined;
+}
+
+function buildChannelContextEnv(
+  channelContext: PluginHookChannelContext | undefined,
+): Record<string, string> | undefined {
+  const subprocessContext = buildSubprocessChannelContext(channelContext);
+  if (!subprocessContext) {
+    return undefined;
+  }
+  const serialized = safeJsonStringify(subprocessContext);
+  return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
+}
+type ResolvedExecEnvPreparedState = {
+  host?: ExecHost;
+  pluginEnv?: Record<string, string>;
+};
+const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
+
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
+  "command",
+  "workdir",
+  "host",
+  "security",
+  "ask",
+  "node",
+] as const;
+
+function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
+  const env: Record<string, string> = {};
+  for (const [rawKey, value] of Object.entries(rawEnv)) {
+    const key = normalizeHostOverrideEnvVarKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    const upperKey = key.toUpperCase();
+    if (
+      upperKey === "PATH" ||
+      upperKey === OPENCLAW_CLI_ENV_VAR ||
+      isDangerousHostEnvVarName(upperKey) ||
+      isDangerousHostEnvOverrideVarName(upperKey)
+    ) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function markResolveExecEnvPrepared<T extends ExecToolArgs>(
+  params: T,
+  state: ResolvedExecEnvPreparedState = {},
+): T {
+  resolvedExecEnvPreparedStates.set(params, state);
+  return params;
+}
+
+function getResolvedExecEnvPreparedState(
+  params: ExecToolArgs,
+): ResolvedExecEnvPreparedState | undefined {
+  return resolvedExecEnvPreparedStates.get(params);
+}
+
+function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
+  return Boolean(getResolvedExecEnvPreparedState(params));
+}
 
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
@@ -156,7 +267,7 @@ function shouldSkipScriptPreflightPathError(
     return true;
   }
   const errorCode = getNodeErrorCode(error);
-  return !!(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
+  return Boolean(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
 }
 
 function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
@@ -422,8 +533,7 @@ function extractScriptTargetFromCommand(
       }
     };
 
-    for (let i = 0; i < value.length; i += 1) {
-      const ch = value[i];
+    for (const ch of value) {
       if (inSingle) {
         if (ch === "'") {
           inSingle = false;
@@ -669,8 +779,7 @@ function hasUnquotedScriptHint(raw: string): boolean {
     return false;
   };
 
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+  for (const ch of raw) {
     if (escaped) {
       if (!inSingle && !inDouble) {
         token += ch;
@@ -865,37 +974,39 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasInterpreterInvocationInSegment = (rawSegment: string): boolean =>
     isInterpreterExecutable(resolveLeadingShellSegmentExecutable(rawSegment));
   const isScriptExecutingInterpreterCommand = (rawCommand: string): boolean => {
-    const argv = splitShellArgs(rawCommand.trim());
-    if (!argv || argv.length === 0) {
+    const argvLocal = splitShellArgs(rawCommand.trim());
+    if (!argvLocal || argvLocal.length === 0) {
       return false;
     }
-    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
-      ? argv.slice(1)
-      : argv;
+    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(
+      argvLocal[0] ?? "",
+    )
+      ? argvLocal.slice(1)
+      : argvLocal;
     if (withoutLeadingKeyword.length === 0) {
       return false;
     }
     const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
-    let commandIdx = 0;
+    let commandIdxLocal = 0;
     while (
-      commandIdx < normalizedArgv.length &&
-      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
+      commandIdxLocal < normalizedArgv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdxLocal] ?? "")
     ) {
-      commandIdx += 1;
+      commandIdxLocal += 1;
     }
-    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
+    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdxLocal]);
     if (!executable) {
       return false;
     }
-    const args = normalizedArgv.slice(commandIdx + 1);
+    const argsLocal = normalizedArgv.slice(commandIdxLocal + 1);
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
-      if (args.some((arg) => pythonInfoOnlyFlags.has(arg))) {
+      if (argsLocal.some((arg) => pythonInfoOnlyFlags.has(arg))) {
         return false;
       }
       if (
-        args.some(
+        argsLocal.some(
           (arg) =>
             arg === "-c" ||
             arg === "-m" ||
@@ -911,11 +1022,11 @@ function shouldFailClosedInterpreterPreflight(command: string): {
 
     if (executable === "node") {
       const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
-      if (args.some((arg) => nodeInfoOnlyFlags.has(arg))) {
+      if (argsLocal.some((arg) => nodeInfoOnlyFlags.has(arg))) {
         return false;
       }
       if (
-        args.some(
+        argsLocal.some(
           (arg) =>
             arg === "-e" ||
             arg === "-p" ||
@@ -1110,119 +1221,6 @@ function shouldSkipExecScriptPreflight(params: {
   return params.host === "gateway" && params.security === "full" && params.ask === "off";
 }
 
-type ParsedExecApprovalCommand = {
-  approvalId: string;
-  decision: "allow-once" | "allow-always" | "deny";
-};
-
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
-    return null;
-  }
-  return {
-    approvalId: match[1],
-    decision:
-      normalizeLowercaseStringOrEmpty(match[2]) === "always"
-        ? "allow-always"
-        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
-  };
-}
-
-function normalizeCommandBaseName(token: string | undefined): string {
-  if (!token) {
-    return "";
-  }
-  const base = normalizeLowercaseStringOrEmpty(token.split(/[\\/]/u).at(-1));
-  return base.replace(/\.(?:cmd|exe)$/u, "");
-}
-
-function stripOpenClawPackageRunner(argv: string[]): string[] {
-  const commandName = normalizeCommandBaseName(argv[0]);
-  if (commandName === "openclaw") {
-    return argv;
-  }
-  if (
-    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
-    normalizeCommandBaseName(argv[1]) === "openclaw"
-  ) {
-    return argv.slice(1);
-  }
-  if (
-    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
-    (argv[1] === "exec" || argv[1] === "dlx" || argv[1] === "run") &&
-    normalizeCommandBaseName(argv[2]) === "openclaw"
-  ) {
-    return argv.slice(2);
-  }
-  if (commandName === "npx" || commandName === "bunx") {
-    let idx = 1;
-    while (idx < argv.length) {
-      const token = argv[idx];
-      if (token === "--") {
-        idx += 1;
-        break;
-      }
-      if (!token.startsWith("-") || token === "-") {
-        break;
-      }
-      idx += 1;
-      if ((token === "-p" || token === "--package") && idx < argv.length) {
-        idx += 1;
-      }
-    }
-    if (normalizeCommandBaseName(argv[idx]) === "openclaw") {
-      return argv.slice(idx);
-    }
-  }
-  return argv;
-}
-
-function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
-  const argv = splitShellArgs(raw);
-  if (!argv) {
-    return false;
-  }
-  const openclawArgv = stripOpenClawPackageRunner(argv);
-  return (
-    normalizeCommandBaseName(openclawArgv[0]) === "openclaw" &&
-    (openclawArgv[1] === "channels" || openclawArgv[1] === "channel") &&
-    openclawArgv[2] === "login"
-  );
-}
-
-function rejectUnsafeControlShellCommand(command: string): void {
-  const rawCommand = command.trim();
-  const analysis = analyzeShellCommand({ command: rawCommand });
-  const candidates = analysis.ok
-    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
-        const argv = splitShellArgs(line);
-        return argv ? buildCommandPayloadCandidates(argv) : [line];
-      });
-  for (const candidate of candidates) {
-    if (parseExecApprovalShellCommand(candidate)) {
-      throw new Error(
-        [
-          "exec cannot run /approve commands.",
-          "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
-        ].join(" "),
-      );
-    }
-    if (parseOpenClawChannelsLoginShellCommand(candidate)) {
-      throw new Error(
-        [
-          "exec cannot run interactive OpenClaw channel login commands.",
-          "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
-        ].join(" "),
-      );
-    }
-  }
-}
-
 function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agentId?: string }) {
   if (params.defaults?.reviewer) {
     return params.defaults.reviewer;
@@ -1235,6 +1233,14 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
+  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
+    return defaults.notifyOnExitEmptySuccess;
+  }
+  return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
+/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1277,7 +1283,7 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1291,6 +1297,78 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
+    const elevatedDefaults = defaults?.elevated;
+    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
+    const elevatedDefaultMode =
+      elevatedDefaults?.defaultLevel === "full"
+        ? "full"
+        : elevatedDefaults?.defaultLevel === "ask"
+          ? "ask"
+          : elevatedDefaults?.defaultLevel === "on"
+            ? "ask"
+            : "off";
+    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+    const elevatedMode =
+      typeof params.elevated === "boolean"
+        ? params.elevated
+          ? elevatedDefaultMode === "full"
+            ? "full"
+            : "ask"
+          : "off"
+        : effectiveDefaultMode;
+    const requestedTarget = requireValidExecTarget(params.host);
+    return resolveExecTarget({
+      configuredTarget: defaults?.host,
+      requestedTarget,
+      elevatedRequested: elevatedMode !== "off",
+      sandboxAvailable: Boolean(defaults?.sandbox),
+    }).effectiveHost;
+  };
+  const prepareParamsWithResolvedExecEnv = async (
+    rawArgs: unknown,
+    context?: { hookContext?: HookContext },
+  ): Promise<ExecToolArgs> => {
+    const params = stripMalformedXmlArgValueSuffixFromKeys(
+      rawArgs as ExecToolArgs,
+      XML_ARG_VALUE_EXEC_PARAM_KEYS,
+    );
+    if (!params.command) {
+      return params;
+    }
+    if (isResolveExecEnvPrepared(params)) {
+      return markResolveExecEnvPrepared(params);
+    }
+    const hookRunner = getGlobalHookRunner();
+    if (
+      !hookRunner?.hasHooks("resolve_exec_env") ||
+      typeof hookRunner.runResolveExecEnv !== "function"
+    ) {
+      return markResolveExecEnvPrepared(params);
+    }
+    let host: ExecHost;
+    try {
+      host = resolveHostForParams(params);
+    } catch {
+      return params;
+    }
+    const rawPluginEnv = await hookRunner.runResolveExecEnv(
+      {
+        sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        toolName: "exec",
+        host,
+      },
+      {
+        agentId: agentId ?? context?.hookContext?.agentId,
+        sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        messageProvider: defaults?.messageProvider,
+        channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+        ...(defaults?.channelContext ? { channelContext: defaults.channelContext } : {}),
+      },
+    );
+    const pluginEnv = filterPluginExecEnv(rawPluginEnv);
+    return markResolveExecEnvPrepared(params, { host, ...(pluginEnv ? { pluginEnv } : {}) });
+  };
   const autoReviewer =
     defaults?.autoReviewer ??
     createModelExecAutoReviewer({
@@ -1307,21 +1385,29 @@ export function createExecTool(
       return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
+    prepareBeforeToolCallParams: async (args, context) =>
+      prepareParamsWithResolvedExecEnv(args, {
+        hookContext: context.hookContext as HookContext | undefined,
+      }),
+    finalizeBeforeToolCallParams: (params, preparedParams) =>
+      (() => {
+        const state = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
+        if (!state) {
+          return params;
+        }
+        const execParams = params as ExecToolArgs;
+        if (state.host && execParams.command && resolveHostForParams(execParams) !== state.host) {
+          return { ...execParams };
+        }
+        return markResolveExecEnvPrepared(execParams, state);
+      })(),
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const params = args as {
-        command: string;
-        workdir?: string;
-        env?: Record<string, string>;
-        yieldMs?: number;
-        background?: boolean;
-        timeout?: number;
-        pty?: boolean;
-        elevated?: boolean;
-        host?: string;
-        security?: string;
-        ask?: string;
-        node?: string;
-      };
+      const params = isResolveExecEnvPrepared(args as ExecToolArgs)
+        ? stripMalformedXmlArgValueSuffixFromKeys(
+            args as ExecToolArgs,
+            XML_ARG_VALUE_EXEC_PARAM_KEYS,
+          )
+        : await prepareParamsWithResolvedExecEnv(args);
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
@@ -1460,7 +1546,8 @@ export function createExecTool(
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const requestedAsk = normalizeExecAsk(params.ask);
       const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
-      let ask = maxAsk(hostAsk, requestedAsk ?? hostAsk);
+      const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
+      let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
         elevatedRequested &&
         elevatedMode === "full" &&
@@ -1508,20 +1595,28 @@ export function createExecTool(
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
-      rejectUnsafeControlShellCommand(params.command);
+      await rejectUnsafeExecControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
+      const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
+      const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+      const requestedEnv: Record<string, string> | undefined =
+        params.env !== undefined ||
+        resolvedExecEnvState?.pluginEnv !== undefined ||
+        channelContextEnv !== undefined
+          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+          : undefined;
       const hostEnvResult =
         host === "sandbox"
           ? null
           : sanitizeHostExecEnvWithDiagnostics({
               baseEnv: inheritedBaseEnv,
-              overrides: params.env,
+              overrides: requestedEnv,
               blockPathOverrides: true,
             });
       if (
         hostEnvResult &&
-        params.env &&
+        requestedEnv &&
         (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
           hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
       ) {
@@ -1558,13 +1653,13 @@ export function createExecTool(
         sandbox && host === "sandbox"
           ? buildSandboxEnv({
               defaultPath: DEFAULT_PATH,
-              paramsEnv: params.env,
+              paramsEnv: requestedEnv,
               sandboxEnv: sandbox.env,
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -1587,11 +1682,14 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1624,7 +1722,7 @@ export function createExecTool(
           workdir,
           env,
           pathPrepend: defaultPathPrepend,
-          requestedEnv: params.env,
+          requestedEnv,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
@@ -1639,7 +1737,10 @@ export function createExecTool(
           trigger: defaults?.trigger,
           agentId,
           sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1801,7 +1902,7 @@ export function createExecTool(
               }),
             );
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;
@@ -1813,8 +1914,10 @@ export function createExecTool(
   };
 }
 
+/** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
 
+/** Test-only seams for parser/preflight helpers. */
 export const testing = {
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,

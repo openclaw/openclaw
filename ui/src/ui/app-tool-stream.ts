@@ -1,3 +1,4 @@
+// Control UI module implements app tool stream behavior.
 import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
@@ -60,7 +61,7 @@ type ToolStreamHost = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -791,7 +792,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      host.chatStreamSegments = [
+        ...host.chatStreamSegments,
+        { text: host.chatStream, ts: now, toolCallId },
+      ];
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }

@@ -1,3 +1,4 @@
+// Openai tests cover media understanding provider plugin behavior.
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
@@ -5,22 +6,21 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
-  openaiCodexMediaUnderstandingProvider,
+  openaiMediaUnderstandingProvider,
   transcribeOpenAiAudio,
-  transcribeOpenAiCodexAudio,
 } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
-describe("openaiCodexMediaUnderstandingProvider", () => {
+describe("openaiMediaUnderstandingProvider", () => {
   it("declares audio support with the transcription default", () => {
-    expect(openaiCodexMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
-    expect(openaiCodexMediaUnderstandingProvider.defaultModels).toEqual({
+    expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
+    expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
       image: "gpt-5.5",
       audio: "gpt-4o-transcribe",
     });
-    expect(openaiCodexMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
-    expect(openaiCodexMediaUnderstandingProvider.transcribeAudio).toBe(transcribeOpenAiCodexAudio);
+    expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
+    expect(openaiMediaUnderstandingProvider.transcribeAudio).toBe(transcribeOpenAiAudio);
   });
 });
 
@@ -96,24 +96,5 @@ describe("transcribeOpenAiAudio", () => {
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing text");
-  });
-});
-
-describe("transcribeOpenAiCodexAudio", () => {
-  it("uses the OpenAI transcription default through the Codex provider id", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
-
-    const result = await transcribeOpenAiCodexAudio({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "voice.wav",
-      apiKey: "test-key",
-      timeoutMs: 1234,
-      model: " ",
-      fetchFn,
-    });
-
-    const form = getRequest().init?.body as FormData;
-    expect(result.model).toBe("gpt-4o-transcribe");
-    expect(form.get("model")).toBe("gpt-4o-transcribe");
   });
 });

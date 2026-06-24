@@ -1,5 +1,6 @@
+// Covers transport readiness polling.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const transportReadyMocks = vi.hoisted(() => ({
   injectedSleepError: null as Error | null,
@@ -109,6 +110,7 @@ describe("waitForTransportReady", () => {
 
   it("caps oversized timeout values before computing the deadline", async () => {
     vi.setSystemTime(1_000);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const runtime = createRuntime();
     const waitPromise = waitForTransportReady({
       label: "test transport",
@@ -122,8 +124,9 @@ describe("waitForTransportReady", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
-    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
+    await vi.runOnlyPendingTimersAsync();
     await asserted;
     expect(latestRuntimeErrorMessage(runtime)).toContain(
       `not ready after ${MAX_TIMER_TIMEOUT_MS}ms`,

@@ -1,6 +1,7 @@
+// Devices CLI tests cover device command registration and output behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
 const mocks = vi.hoisted(() => ({

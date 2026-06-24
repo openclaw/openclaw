@@ -1,3 +1,8 @@
+/**
+ * Tool binary manager for agent-side helper commands.
+ *
+ * Locates or downloads pinned helper binaries such as fd and ripgrep.
+ */
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -16,11 +21,21 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../../infra/windows-install-roots.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
 
 function isOfflineModeEnabled(): boolean {
   const value = process.env.OPENCLAW_OFFLINE;
@@ -132,6 +147,7 @@ async function getLatestVersion(repo: string): Promise<string> {
 
   try {
     if (!response.ok) {
+      await cancelUnreadResponseBody(response);
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
@@ -153,6 +169,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 
   try {
     if (!response.ok) {
+      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to download: ${response.status}`);
     }
 
@@ -222,14 +239,7 @@ function extractTarGzArchive(archivePath: string, extractDir: string, assetName:
 }
 
 function getWindowsTarCommand(): string {
-  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (systemRoot) {
-    const systemTar = join(systemRoot, "System32", "tar.exe");
-    if (existsSync(systemTar)) {
-      return systemTar;
-    }
-  }
-  return "tar.exe";
+  return getWindowsSystem32ExePath("tar.exe");
 }
 
 function extractZipArchive(archivePath: string, extractDir: string, assetName: string): void {
@@ -251,7 +261,7 @@ function extractZipArchive(archivePath: string, extractDir: string, assetName: s
 
     const script =
       "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-    const powershellFailure = runExtractionCommand("powershell.exe", [
+    const powershellFailure = runExtractionCommand(getWindowsPowerShellExePath(), [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
@@ -376,10 +386,7 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(
-  tool: "fd" | "rg",
-  silent: boolean = false,
-): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
   const existingPath = getToolPath(tool);
   if (existingPath) {
     return existingPath;

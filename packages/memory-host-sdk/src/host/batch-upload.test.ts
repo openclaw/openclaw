@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch upload behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
@@ -28,6 +29,23 @@ function streamingTextResponse(params: {
     },
   });
   return new Response(stream, { status: params.status, headers: params.headers });
+}
+
+function stallingResponse(params: { status: number; onCancel: () => void }): Response {
+  const reader = {
+    read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+    cancel: async () => {
+      params.onCancel();
+    },
+    releaseLock: () => undefined,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    status: params.status,
+    ok: params.status >= 200 && params.status < 300,
+    headers: new Headers(),
+    body: { getReader: () => reader },
+  } as Response;
 }
 
 describe("uploadBatchJsonlFile", () => {
@@ -106,5 +124,71 @@ describe("uploadBatchJsonlFile", () => {
       }),
     ).rejects.toThrow("file upload failed: response body too large: 64 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
+  });
+
+  it("passes caller abort signals through non-ok file-upload response snippets", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        stallingResponse({
+          status: 500,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+    const controller = new AbortController();
+    const upload = uploadBatchJsonlFile({
+      client: {
+        baseUrl: "https://memory.example/v1",
+        headers: { Authorization: "Bearer test" },
+      },
+      requests: [{ input: "one" }],
+      errorPrefix: "file upload failed",
+      signal: controller.signal,
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    controller.abort(new Error("upload aborted"));
+
+    await expect(upload).rejects.toThrow("upload aborted");
+    expect(canceled).toBe(true);
+    expect(remoteHttpMock.mock.calls[0]?.[0].signal).toBe(controller.signal);
+  });
+
+  it("passes caller abort signals through successful file-upload JSON reads", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        stallingResponse({
+          status: 200,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+    const controller = new AbortController();
+    const upload = uploadBatchJsonlFile({
+      client: {
+        baseUrl: "https://memory.example/v1",
+        headers: { Authorization: "Bearer test" },
+      },
+      requests: [{ input: "one" }],
+      errorPrefix: "file upload failed",
+      signal: controller.signal,
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    controller.abort(new Error("upload json aborted"));
+
+    await expect(upload).rejects.toThrow("upload json aborted");
+    expect(canceled).toBe(true);
+    expect(remoteHttpMock.mock.calls[0]?.[0].signal).toBe(controller.signal);
   });
 });

@@ -1,5 +1,7 @@
+// Codex tests cover sandbox exec server plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
   closeCodexSandboxExecServersForTests,
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -188,6 +190,22 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       expect.arrayContaining(["process/output", "process/exited", "process/closed"]),
     );
     socket.close();
+  });
+
+  it("closes oversized sandbox exec-server frames before JSON-RPC parsing", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    await expect(closed).resolves.toEqual({ code: 1009 });
   });
 
   it("rejects unsupported arg0 overrides instead of dropping them", async () => {
@@ -438,6 +456,26 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     const socket = await openSocket(unauthorizedUrl);
 
     await expect(waitForSocketClose(socket)).resolves.toEqual({ code: 1008 });
+  });
+
+  it("handles oversized frames from unauthorized WebSocket clients", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const unauthorizedUrl = execServerUrlFromClient(client).replace(
+      /\/openclaw-[^/?#]+/u,
+      "/wrong",
+    );
+    const socket = await openSocket(unauthorizedUrl);
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    const closeResult = await closed;
+    expect([1008, 1009]).toContain(closeResult.code);
   });
 
   it("closes the exec-server when its sandbox environment is released", async () => {

@@ -1,13 +1,14 @@
+// Browser tests cover cdp.helpers plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
-import {
-  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-  PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
-  PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS,
-  resolveCdpReachabilityTimeouts,
-} from "./cdp-timeouts.js";
+import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
+
+const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
+const PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS = 200;
+const PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS = 2000;
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -246,6 +247,20 @@ describe("resolveCdpReachabilityTimeouts", () => {
     ).toEqual({
       httpTimeoutMs: 1750,
       wsTimeoutMs: 3250,
+    });
+  });
+
+  it("caps remote reachability timeouts to timer-safe values", () => {
+    expect(
+      resolveCdpReachabilityTimeouts({
+        profileIsLoopback: false,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHttpTimeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHandshakeTimeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      httpTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      wsTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
 });

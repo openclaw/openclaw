@@ -1,3 +1,4 @@
+// Slack tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SlackConfigSchema } from "../config-api.js";
 
@@ -108,6 +109,36 @@ describe("slack config schema", () => {
         },
       },
     });
+  });
+
+  it("accepts relay mode with a SecretInput auth token", () => {
+    expectSlackConfigValid({
+      mode: "relay",
+      botToken: "xoxb-any",
+      relay: {
+        url: "wss://router.example.com/gateway/ws",
+        authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
+        gatewayId: "team-gateway",
+      },
+    });
+  });
+
+  it("requires every relay connection field", () => {
+    expectSlackConfigIssue({ mode: "relay" }, "relay.url");
+    expectSlackConfigIssue(
+      { mode: "relay", relay: { url: "wss://router.example.com/gateway/ws" } },
+      "relay.authToken",
+    );
+    expectSlackConfigIssue(
+      {
+        mode: "relay",
+        relay: {
+          url: "wss://router.example.com/gateway/ws",
+          authToken: "secret",
+        },
+      },
+      "relay.gatewayId",
+    );
   });
 
   it("rejects invalid Socket Mode ping/pong transport tuning", () => {

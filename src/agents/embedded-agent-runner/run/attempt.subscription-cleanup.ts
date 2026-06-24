@@ -1,7 +1,12 @@
+/**
+ * Builds subscription params and cleans up embedded attempt resources.
+ */
+import { toErrorObject } from "../../../infra/errors.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
+/** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
 export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
 type IdleAwareAgent = {
@@ -23,10 +28,12 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 
   let timeout: NodeJS.Timeout | undefined;
+  // Abort settlement is advisory cleanup; timeout or errors are logged but do
+  // not block releasing the session write-lock.
   const outcome = await Promise.race([
     params.promise
       .then(() => "settled" as const)
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.warn(
           `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
@@ -46,12 +53,23 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 }
 
+/**
+ * Identity helper that preserves the concrete subscription params type at call
+ * sites. Keeping this as a named helper lets tests assert the exact shape passed
+ * into the subscription layer without widening the object inline.
+ */
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedAgentSessionParams,
 ): SubscribeEmbeddedAgentSessionParams {
   return params;
 }
 
+/**
+ * Tears down per-attempt resources in lock-safe order: remove guards, settle
+ * aborted prompts, flush tool results, release the session lock, then dispose
+ * runtimes. Lock release errors are reported after best-effort disposal so a
+ * failed lock does not leak spawned runtimes.
+ */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {
@@ -100,6 +118,8 @@ export async function cleanupEmbeddedAttemptResources(params: {
     }
   } finally {
     try {
+      // Release the write-lock before disposing runtimes so another attempt can
+      // recover even if runtime disposal stalls or throws.
       await params.sessionLock.release();
     } catch (err) {
       sessionLockReleaseError = err;
@@ -123,6 +143,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
   }
 
   if (sessionLockReleaseError) {
-    throw sessionLockReleaseError;
+    throw toErrorObject(sessionLockReleaseError, "Non-Error thrown");
   }
 }

@@ -1,3 +1,4 @@
+// Loads documented plugin public surfaces while preserving lazy boundaries.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -165,6 +166,31 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     publicSurfaceModuleCache.delete(validatedPath);
     throw error;
   }
+}
+
+/** Loads the first resolvable bundled public artifact from an ordered candidate list. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
+export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
+  dirName: string;
+  artifactCandidates: readonly string[];
+}): T | null {
+  for (const artifactBasename of params.artifactCandidates) {
+    try {
+      return loadBundledPluginPublicArtifactModuleSync<T>({
+        dirName: params.dirName,
+        artifactBasename,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Unable to resolve bundled plugin public surface ")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return null;
 }
 
 export function resolveBundledPluginPublicArtifactPath(params: {

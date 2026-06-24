@@ -1,3 +1,4 @@
+// Covers stale gateway process detection and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // This file primarily tests lsof-based Unix port polling. On Windows,
@@ -795,6 +796,32 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
       expect(result).toContain(stalePid);
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+    });
+
+    it("does not kill a protected gateway pid after reparenting", () => {
+      const protectedPid = process.pid + 4001;
+      const stalePid = process.pid + 4002;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation(() => {
+        lsofCall += 1;
+        return lsofCall === 1
+          ? createLsofResult({
+              stdout: lsofOutput([
+                { pid: protectedPid, cmd: "openclaw-gateway" },
+                { pid: stalePid, cmd: "openclaw-gateway" },
+              ]),
+            })
+          : createLsofResult({ status: 1 });
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(1, () =>
+        cleanStaleGatewayProcessesSync(18789, { protectedPid }),
+      );
+
+      expect(result).toEqual([stalePid]);
+      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
     });
 
     it("escalates to SIGKILL when process survives the SIGTERM window", () => {

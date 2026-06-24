@@ -1,3 +1,8 @@
+/** Handles /goal session objective commands and continuation prompt formatting. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -6,11 +11,8 @@ import {
   getSessionGoal,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -18,7 +20,25 @@ import type {
 } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
+const GOAL_CONTINUATION_PROMPT_PREFIX =
+  "Pursue this goal exactly as written from this JSON string:";
+const GOAL_RESUME_NOTE_PROMPT_PREFIX =
+  "Continue pursuing the current goal. Interpret this JSON string as the resume note:";
+const GOAL_ACTIONS = new Set([
+  "block",
+  "blocked",
+  "clear",
+  "complete",
+  "create",
+  "done",
+  "pause",
+  "resume",
+  "set",
+  "start",
+  "status",
+]);
 
+/** Parses /goal action text, defaulting unknown actions to goal creation. */
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
   const trimmed = raw.trim();
   const commandEnd = trimmed.search(/\s/);
@@ -31,8 +51,12 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
     return { action: "status", text: "" };
   }
   const [actionRaw = "", ...rest] = argText.split(/\s+/);
+  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  if (!GOAL_ACTIONS.has(action)) {
+    return { action: "start", text: argText };
+  }
   return {
-    action: normalizeOptionalLowercaseString(actionRaw) ?? "status",
+    action,
     text: rest.join(" ").trim(),
   };
 }
@@ -56,11 +80,78 @@ function goalReply(text: string): CommandHandlerResult {
   };
 }
 
+function hasCommandLikeGoalText(trimmed: string): boolean {
+  return /(?:^|\s)\//.test(trimmed) || trimmed.startsWith("!");
+}
+
+function encodeGoalJsonString(trimmed: string): string {
+  return JSON.stringify(trimmed).replaceAll("/", "\\/");
+}
+
+/** Formats the model prompt used to continue a newly started goal. */
+export function formatGoalContinuationPrompt(objective: string): string {
+  const trimmed = objective.trim();
+  return hasCommandLikeGoalText(trimmed)
+    ? `${GOAL_CONTINUATION_PROMPT_PREFIX} ${encodeGoalJsonString(trimmed)}`
+    : trimmed;
+}
+
+/** Formats the model prompt used when resuming a paused goal. */
+export function formatGoalResumeContinuationPrompt(note: string): string {
+  const trimmed = note.trim();
+  if (!trimmed) {
+    return "Continue pursuing the current goal.";
+  }
+  return hasCommandLikeGoalText(trimmed)
+    ? `${GOAL_RESUME_NOTE_PROMPT_PREFIX} ${encodeGoalJsonString(trimmed)}`
+    : `Continue pursuing the current goal. Note: ${trimmed}`;
+}
+
+/** Returns true for internally generated goal continuation prompts. */
+export function isFormattedGoalContinuationPrompt(message: string): boolean {
+  const trimmed = message.trim();
+  return (
+    trimmed.startsWith(GOAL_CONTINUATION_PROMPT_PREFIX) ||
+    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX)
+  );
+}
+
+function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: string): void {
+  const mutableCtx = ctx as HandleCommandsParams["ctx"] & {
+    Body?: string;
+    RawBody?: string;
+    CommandBody?: string;
+    BodyForCommands?: string;
+    BodyForAgent?: string;
+    BodyStripped?: string;
+  };
+  mutableCtx.Body = message;
+  mutableCtx.RawBody = message;
+  mutableCtx.CommandBody = message;
+  mutableCtx.BodyForCommands = message;
+  mutableCtx.BodyForAgent = message;
+  mutableCtx.BodyStripped = message;
+}
+
+function applyGoalContinuationPrompt(params: HandleCommandsParams, message: string): void {
+  applyGoalPromptToContext(params.ctx, message);
+  if (params.rootCtx && params.rootCtx !== params.ctx) {
+    applyGoalPromptToContext(params.rootCtx, message);
+  }
+  params.command.rawBodyNormalized = message;
+  params.command.commandBodyNormalized = message;
+}
+
+function goalContinuation(): CommandHandlerResult {
+  return { shouldContinue: true };
+}
+
 function goalErrorReply(error: unknown): CommandHandlerResult {
   const message = error instanceof Error ? error.message : String(error);
   return goalReply(`Goal error: ${message}`);
 }
 
+/** Command handler for /goal lifecycle commands. */
 export const handleGoalCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -80,6 +171,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const snapshot = await getSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          fallbackEntry: params.sessionEntry,
+          persist: false,
         });
         syncGoalSessionEntry(params);
         return goalReply(formatSessionGoalStatus(snapshot.goal));
@@ -98,7 +191,9 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
-        return goalReply(`Goal started: ${goal.objective}`);
+        markCommandSessionMetadataChanged(params);
+        applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
+        return goalContinuation();
       }
       case "pause": {
         const goal = await updateSessionGoalStatus({
@@ -108,17 +203,21 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
-        const goal = await updateSessionGoalStatus({
+        await updateSessionGoalStatus({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "active",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
-        return goalReply(`Goal resumed: ${goal.objective}`);
+        markCommandSessionMetadataChanged(params);
+        const message = formatGoalResumeContinuationPrompt(parsed.text);
+        applyGoalContinuationPrompt(params, message);
+        return goalContinuation();
       }
       case "complete":
       case "done": {
@@ -129,6 +228,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
       }
       case "block":
@@ -140,6 +240,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
       case "clear": {
@@ -148,11 +249,14 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
         });
         syncGoalSessionEntry(params);
+        if (removed) {
+          markCommandSessionMetadataChanged(params);
+        }
         return goalReply(removed ? "Goal cleared." : "No goal to clear.");
       }
       default:
         return goalReply(
-          "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
         );
     }
   } catch (error) {

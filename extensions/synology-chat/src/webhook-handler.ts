@@ -276,7 +276,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
 function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
   const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
 
-  let bodyFields: Record<string, unknown> = {};
+  let bodyFields: Record<string, unknown>;
   if (contentType.includes("application/json")) {
     bodyFields = parseJsonBody(body);
   } else if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -390,7 +390,7 @@ async function parseWebhookPayloadRequest(params: {
     return { ok: false };
   }
 
-  let payload: SynologyWebhookPayload | null = null;
+  let payload: SynologyWebhookPayload | null;
   try {
     payload = parsePayload(params.req, bodyResult.body);
   } catch (err) {
@@ -554,7 +554,7 @@ async function processAuthorizedSynologyWebhook(params: {
       log: params.log,
     });
 
-    const deliverPromise = params.deliver({
+    const reply = await params.deliver({
       body: params.message.body,
       from: authorizedWebhookUserId,
       senderName: params.message.payload.username,
@@ -564,10 +564,6 @@ async function processAuthorizedSynologyWebhook(params: {
       commandAuthorized: params.message.commandAuthorized,
       chatUserId: deliveryUserId,
     });
-    const timeoutPromise = new Promise<null>((_, reject) =>
-      setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
-    );
-    const reply = await Promise.race([deliverPromise, timeoutPromise]);
     if (!reply) {
       return;
     }

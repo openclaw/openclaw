@@ -1,3 +1,4 @@
+/** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
@@ -85,10 +86,30 @@ async function configureSelfHostedTestProvider(params: {
   });
 }
 
+function cancelTrackedResponse(init?: ResponseInit): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("ignored"));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
     const release = vi.fn(async () => undefined);
     const propsRelease = vi.fn(async () => undefined);
+    const propsResponse = cancelTrackedResponse({ status: 404 });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
         status: 200,
@@ -97,7 +118,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       release,
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("{}", { status: 404 }),
+      response: propsResponse.response,
       finalUrl: "http://127.0.0.1:8000/props",
       release: propsRelease,
     });
@@ -140,6 +161,28 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
+    expect(propsResponse.wasCanceled()).toBe(true);
+  });
+
+  it("cancels model discovery error bodies before falling back", async () => {
+    const release = vi.fn(async () => undefined);
+    const response = cancelTrackedResponse({ status: 503, statusText: "Service Unavailable" });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: response.response,
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1/",
+      apiKey: "self-hosted-test-key",
+      label: "vLLM",
+      env: {},
+    });
+
+    expect(models).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+    expect(response.wasCanceled()).toBe(true);
   });
 
   it("uses llama.cpp nested /props n_ctx as the runtime context cap", async () => {

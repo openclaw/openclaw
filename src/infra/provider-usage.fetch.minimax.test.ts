@@ -1,3 +1,4 @@
+// Tests MiniMax provider usage fetch normalization.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchMinimaxUsage } from "./provider-usage.fetch.minimax.js";
@@ -191,6 +192,21 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Payload Plan",
         windows: [{ label: "2h", usedPercent: 40, resetAt: 1_700_000_100_000 }],
+      },
+    },
+    {
+      name: "drops Date-invalid reset timestamps",
+      payload: {
+        data: {
+          plan_name: "Overflow Plan",
+          reset_at: 8_640_000_000_000_001,
+          current_interval_total_count: 100,
+          current_interval_usage_count: 25,
+        },
+      },
+      expected: {
+        plan: "Overflow Plan",
+        windows: [{ label: "5h", usedPercent: 75, resetAt: undefined }],
       },
     },
     {

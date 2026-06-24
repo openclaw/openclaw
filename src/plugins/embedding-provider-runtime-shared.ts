@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+/** Shared runtime helpers for embedding provider lookup across core and plugin capabilities. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
@@ -9,45 +10,8 @@ type EmbeddingProviderCapabilityKey = "embeddingProviders" | "memoryEmbeddingPro
 type RegisteredAdapterEntry<TAdapter> = {
   adapter: TAdapter;
 };
-type ConfiguredModelProvider = NonNullable<
-  NonNullable<OpenClawConfig["models"]>["providers"]
->[string];
 
-function resolveConfiguredProviderConfig(
-  providerId: string,
-  cfg?: OpenClawConfig,
-): ConfiguredModelProvider | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const normalized = normalizeProviderId(providerId);
-  return (
-    providers[providerId] ??
-    Object.entries(providers).find(
-      ([candidateId]) => normalizeProviderId(candidateId) === normalized,
-    )?.[1]
-  );
-}
-
-export function readConfiguredProviderApiId(params: {
-  providerId: string;
-  cfg?: OpenClawConfig;
-  resolveApiProviderId?: (normalizedApiId: string) => string | undefined;
-  resolveMissingApiProviderId?: (providerConfig: ConfiguredModelProvider) => string | undefined;
-}): string | undefined {
-  const providerConfig = resolveConfiguredProviderConfig(params.providerId, params.cfg);
-  if (!providerConfig) {
-    return undefined;
-  }
-  const normalized = normalizeProviderId(params.providerId);
-  const api = providerConfig.api?.trim();
-  const resolvedProviderId = api
-    ? (params.resolveApiProviderId?.(normalizeProviderId(api)) ?? normalizeProviderId(api))
-    : params.resolveMissingApiProviderId?.(providerConfig);
-  return resolvedProviderId && resolvedProviderId !== normalized ? resolvedProviderId : undefined;
-}
-
+/** Builds lookup ids for embedding providers, including configured API aliases. */
 export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   id: string;
   cfg?: OpenClawConfig;
@@ -64,6 +28,7 @@ export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   return ids;
 }
 
+/** Lists registered and plugin-contributed embedding provider adapters for a capability key. */
 export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;
@@ -82,6 +47,7 @@ export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: stri
   return [...merged.values()];
 }
 
+/** Resolves one embedding provider adapter from registered providers before plugin capabilities. */
 export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;

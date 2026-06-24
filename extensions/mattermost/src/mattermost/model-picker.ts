@@ -1,3 +1,4 @@
+// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
 import {
   resolveStoredModelOverride,
@@ -342,7 +343,7 @@ export function renderMattermostModelsPickerView(params: {
 
   const page = paginateItems(models, params.page);
   const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current.model === model;
+    const isCurrent = current?.provider === provider && current?.model === model;
     return [
       buildButton({
         action: "select",

@@ -1,3 +1,5 @@
+// Subagent registry steer-restart tests cover replacing child runs after steer
+// commands while preserving lifecycle hooks and completion delivery.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 
@@ -15,6 +17,21 @@ let lifecycleHandler:
       };
     }) => void)
   | undefined;
+
+const sessionStore = vi.hoisted(
+  () =>
+    new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+      {},
+      {
+        get(target, prop, receiver) {
+          if (typeof prop !== "string" || prop in target) {
+            return Reflect.get(target, prop, receiver);
+          }
+          return { sessionId: `sess-${prop}`, updatedAt: 1 };
+        },
+      },
+    ),
+);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (opts: unknown) => {
@@ -40,18 +57,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => {
-  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
-    {},
-    {
-      get(target, prop, receiver) {
-        if (typeof prop !== "string" || prop in target) {
-          return Reflect.get(target, prop, receiver);
-        }
-        return { sessionId: `sess-${prop}`, updatedAt: 1 };
-      },
-    },
-  );
-
   return {
     loadSessionStore: vi.fn(() => sessionStore),
     resolveAgentIdFromSessionKey: (key: string) => {
@@ -64,8 +69,13 @@ vi.mock("../config/sessions.js", () => {
   };
 });
 
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  patchSessionEntry: async () => null,
+}));
+
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (eventValue?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
 
@@ -186,13 +196,17 @@ describe("subagent registry steer restarts", () => {
   });
 
   const flushAnnounce = async () => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   };
   const waitForRegistrySideEffect = async (assertion: () => void) => {
     await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
+    // Deferred announce lets tests observe registry state while delivery is
+    // still in flight, then release the promise deterministically.
     let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>

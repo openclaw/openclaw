@@ -1,20 +1,11 @@
+// Shared fixtures for session-history sanitization tests.
 import { expect, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
-import type { TranscriptPolicy } from "./transcript-policy.js";
 
 type SessionEntry = { type: string; customType: string; data: unknown };
-export type SanitizeSessionHistoryFn = (params: {
-  messages: AgentMessage[];
-  modelApi: string;
-  provider: string;
-  allowedToolNames?: Iterable<string>;
-  sessionManager: SessionManager;
-  sessionId: string;
-  modelId?: string;
-  policy?: TranscriptPolicy;
-  preserveLatestAssistantThinking?: boolean;
-}) => Promise<AgentMessage[]>;
+export type SanitizeSessionHistoryFn =
+  typeof import("./embedded-agent-runner/replay-history.js").sanitizeSessionHistory;
 type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
@@ -77,6 +68,8 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
   );
   return {
     ...actual,
+    // Default to no provider plugin participation; individual tests opt in to
+    // hooks so ownership boundaries stay explicit.
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
@@ -107,6 +100,8 @@ export async function createSanitizeSessionHistoryProviderHookRuntimeMock(
 export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<SanitizeSessionHistoryHarness> {
   vi.resetModules();
   vi.resetAllMocks();
+  // Reload replay-history after mocks reset so each suite sees the same module
+  // graph the production runner would import.
   const mockedHelpers = await import("./embedded-agent-helpers.js");
   vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
   const mod = await import("./embedded-agent-runner/replay-history.js");
@@ -167,6 +162,8 @@ export function expectOpenAIResponsesStrictSanitizeCall(
   sanitizeSessionMessagesImagesMock: unknown,
   messages: AgentMessage[],
 ) {
+  // OpenAI Responses replay preserves strict tool-call ids; downgrading ids here
+  // would make later assistant/tool turns impossible to correlate.
   const mock = sanitizeSessionMessagesImagesMock as {
     mock?: { calls: Array<[AgentMessage[], string, Record<string, unknown>]> };
   };

@@ -1,3 +1,4 @@
+// Voice Call plugin module implements tailscale behavior.
 import { spawn } from "node:child_process";
 import type { VoiceCallConfig } from "../config.js";
 
@@ -41,7 +42,6 @@ function runTailscaleCommand(
 
     let stdout: TailscaleCommandStdout = { bytes: 0, exceeded: false, text: "" };
     let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
     const finish = (result: { code: number; stdout: string }) => {
       if (settled) {
         return;
@@ -59,7 +59,7 @@ function runTailscaleCommand(
       }
     });
 
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       proc.kill("SIGKILL");
       finish({ code: -1, stdout: "" });
     }, timeoutMs);

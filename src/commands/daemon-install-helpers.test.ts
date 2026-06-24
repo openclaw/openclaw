@@ -1,8 +1,10 @@
+// Daemon install helper tests cover install plan construction, tokens, and platform-specific service setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -101,6 +103,16 @@ function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<s
     throw new Error(`Expected ${label} first argument`);
   }
   return arg as Record<string, any>;
+}
+
+function writeSecurePluginEntrypoint(pathname: string): void {
+  fs.writeFileSync(pathname, "");
+  fs.chmodSync(pathname, 0o644);
+}
+
+function createSecurePluginRoot(pathname: string): void {
+  fs.mkdirSync(pathname);
+  fs.chmodSync(pathname, 0o755);
 }
 
 describe("resolveGatewayDevMode", () => {
@@ -469,8 +481,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -529,8 +541,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -657,8 +669,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -1134,6 +1146,79 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("retains .env values for macOS LaunchAgent env SecretRefs", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
+  });
+
+  it("retains .env values when config env has an unresolved self reference", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            MINIMAX_API_KEY: "${MINIMAX_API_KEY}",
+          },
+        },
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
+  });
+
   it("does not retain config env values for macOS LaunchAgent env files", async () => {
     await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
@@ -1486,5 +1571,48 @@ describe("gatewayInstallErrorHint", () => {
     expect(gatewayInstallErrorHint("linux")).toMatch(
       /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
     );
+  });
+});
+
+describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
+  const managedKeys = new Set<string>();
+
+  it("continues to drop stale OPENCLAW_ALLOW_ROOT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      { OPENCLAW_ALLOW_ROOT: "1" },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
+  });
+
+  it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+  });
+
+  it("still drops arbitrary OPENCLAW_FOO", () => {
+    const result = collectPreservedExistingServiceEnvVars({ OPENCLAW_FOO: "bar" }, managedKeys);
+    expect(result.OPENCLAW_FOO).toBeUndefined();
+  });
+
+  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+        OPENCLAW_BAZ: "qux",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+    expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });

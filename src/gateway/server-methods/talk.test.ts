@@ -1,3 +1,6 @@
+/**
+ * Tests for talk gateway methods that coordinate speech and audio providers.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -739,6 +742,58 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("returns classified talk issue details when realtime relay creation fails", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "bad-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockImplementation(() => {
+      throw new Error("OpenAI API key rejected with 401");
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        model: "gpt-realtime-2",
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "bad-key" } },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    const error = expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: OpenAI API key rejected with 401",
+    });
+    expectRecordFields((error.details as Record<string, unknown>).talkIssue, {
+      code: "realtime_unavailable",
+      message: "Error: OpenAI API key rejected with 401",
+      phase: "request",
+    });
+  });
+
   it("creates transcription gateway-relay sessions through the unified API", async () => {
     const provider = {
       id: "openai",
@@ -1352,6 +1407,49 @@ describe("talk.client.toolCall handler", () => {
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
+
+  it.each([
+    ["timeout", "Realtime agent consult ended before the run started."],
+    ["error", "Realtime agent consult failed before the run started."],
+    ["ok", "Realtime agent consult completed before the tool result subscription started."],
+  ] as const)(
+    "rejects terminal agent consult chat.send ACKs with status %s",
+    async (status, message) => {
+      mocks.chatSend.mockImplementationOnce(
+        async ({
+          respond,
+        }: {
+          respond: (ok: boolean, result?: unknown, error?: unknown) => void;
+        }) => {
+          respond(true, { runId: `run-${status}`, status }, undefined);
+        },
+      );
+      const respond = vi.fn();
+
+      await talkHandlers["talk.client.toolCall"]({
+        req: { type: "req", id: "1", method: "talk.client.toolCall" },
+        params: {
+          sessionKey: "main",
+          relaySessionId: "relay-1",
+          callId: "call-1",
+          name: "openclaw_agent_consult",
+          args: { question: "What now?" },
+        },
+        client: { connId: "conn-1" } as never,
+        isWebchatConnect: () => false,
+        respond: respond as never,
+        context: {
+          getRuntimeConfig: () => ({}) as OpenClawConfig,
+        } as never,
+      });
+
+      expect(mocks.registerTalkRealtimeRelayAgentRun).not.toHaveBeenCalled();
+      expectRespondError(respond, {
+        code: ErrorCodes.UNAVAILABLE,
+        message,
+      });
+    },
+  );
 
   it("rejects client tool calls that are not the agent consult tool", async () => {
     const respond = vi.fn();

@@ -1,17 +1,22 @@
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { classifySessionKind } from "../sessions/classify-session-kind.js";
+// Runtime helpers for building status summaries.
+// Kept behind a lazy surface because status summary imports model/session/runtime metadata helpers.
+
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
+import { resolveContextTokensForModelFromCache as resolveContextTokensForModel } from "../agents/context-resolution.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
+import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 
 function resolveStatusModelRefFromRaw(params: {
@@ -25,6 +30,7 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
+    // Bare model names may be aliases from agents.defaults.models before falling back to default provider.
     const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
@@ -58,6 +64,7 @@ function resolveConfiguredStatusModelRef(params: {
       )
     : undefined;
   if (agentRawModel) {
+    // Agent-specific primary model wins over global defaults for session status rows.
     const parsed = resolveStatusModelRefFromRaw({
       cfg: params.cfg,
       rawModel: agentRawModel,
@@ -91,40 +98,6 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveConfiguredProviderContextTokens(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-  model: string,
-): number | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return undefined;
-  }
-  const providerKey = normalizeProviderId(provider);
-  for (const [id, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(id) !== providerKey || !Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
-      const contextTokens =
-        typeof entry?.contextTokens === "number"
-          ? entry.contextTokens
-          : typeof entry?.contextWindow === "number"
-            ? entry.contextWindow
-            : undefined;
-      if (
-        typeof entry?.id === "string" &&
-        entry.id === model &&
-        typeof contextTokens === "number" &&
-        contextTokens > 0
-      ) {
-        return contextTokens;
-      }
-    }
-  }
-  return undefined;
-}
-
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -139,6 +112,7 @@ function resolveSessionModelRef(
     agentId,
   });
   return (
+    // Persisted selected model or overrides describe the active session, not just current config.
     resolvePersistedSelectedModelRef({
       defaultProvider: resolved.provider || DEFAULT_PROVIDER,
       runtimeProvider: entry?.modelProvider,
@@ -158,16 +132,25 @@ function resolveSessionRuntimeLabel(params: {
   agentId?: string;
   sessionKey: string;
 }): string {
+  const acpSessionKey = params.agentId
+    ? resolveStoredSessionKeyForAgentStore({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      })
+    : params.sessionKey;
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
   const runtime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",
     provider: params.provider,
     model: params.model,
-    sessionKey: params.sessionKey,
-    acpRuntime: params.entry?.acp != null,
-    acpBackend: params.entry?.acp?.backend,
+    sessionKey: acpSessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
   });
   const id = normalizeOptionalLowercaseString(runtime.id);
+  // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return resolveAgentRuntimeLabel({
     config: params.cfg,
@@ -175,31 +158,6 @@ function resolveSessionRuntimeLabel(params: {
     resolvedHarness,
     fallbackProvider: params.provider,
   });
-}
-
-function resolveContextTokensForModel(params: {
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  contextTokensOverride?: number;
-  fallbackContextTokens?: number;
-  allowAsyncLoad?: boolean;
-}): number | undefined {
-  void params.allowAsyncLoad;
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
-  }
-  if (params.provider && params.model) {
-    const configuredContextTokens = resolveConfiguredProviderContextTokens(
-      params.cfg,
-      params.provider,
-      params.model,
-    );
-    if (configuredContextTokens !== undefined) {
-      return configuredContextTokens;
-    }
-  }
-  return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }
 
 export const statusSummaryRuntime = {

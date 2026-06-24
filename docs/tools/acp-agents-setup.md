@@ -286,8 +286,9 @@ different operation limit:
 openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
-Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout` and
-`sessions_spawn.timeoutSeconds`. Restart the gateway after changing this value.
+Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+`sessions_spawn` does not accept per-call timeout overrides. Restart the
+gateway after changing this value.
 
 ### Health probe agent configuration
 
@@ -307,6 +308,10 @@ Restart the gateway after changing this value.
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
+
+For the broader comparison between OpenClaw `tools.exec.mode`, Codex Guardian
+approvals, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
 
 ### `permissionMode`
 

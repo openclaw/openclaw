@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// Memory Core tests cover manager embedding timeout plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -40,6 +42,30 @@ describe("memory embedding timeout resolution", () => {
       }),
     ).toBe(45_000);
   });
+
+  it("caps configured and runtime embedding timeouts to timer-safe values", () => {
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: "openai",
+        configuredBatchTimeoutSeconds: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "query",
+        providerId: "openai",
+        providerRuntime: { inlineQueryTimeoutMs: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: "openai",
+        providerRuntime: { inlineBatchTimeoutMs: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
 });
 
 describe("local embedding worker failure detection", () => {
@@ -71,38 +97,104 @@ describe("local embedding worker failure detection", () => {
 });
 
 describe("memory embedding timeout abort", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   it("aborts the provider operation when the timeout fires", async () => {
+    vi.useFakeTimers();
     let signalSeen: AbortSignal | undefined;
 
-    await expect(
-      runEmbeddingOperationWithTimeout({
-        timeoutMs: 1,
-        message: "memory embeddings query timed out after 0s",
-        run: async (signal) => {
-          signalSeen = signal;
-          return await new Promise<number[]>((resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-          });
-        },
-      }),
-    ).rejects.toThrow("memory embeddings query timed out after 0s");
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 1,
+      message: "memory embeddings query timed out after 0s",
+      run: async (signal) => {
+        signalSeen = signal;
+        return await new Promise<number[]>((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const rejection = expect(resultPromise).rejects.toThrow(
+      "memory embeddings query timed out after 0s",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
 
     expect(signalSeen?.aborted).toBe(true);
   });
 
+  it("aborts the provider operation when the caller signal aborts before the watchdog", async () => {
+    const external = new AbortController();
+    let signalSeen: AbortSignal | undefined;
+
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 60_000,
+      message: "memory embeddings query timed out after 60s",
+      signal: external.signal,
+      run: async (signal) => {
+        signalSeen = signal;
+        return await new Promise<number[]>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    external.abort(new Error("memory_search timed out after 15s"));
+    await expect(resultPromise).rejects.toThrow("memory_search timed out after 15s");
+    expect(signalSeen?.aborted).toBe(true);
+  });
+
   it("keeps the timeout error when a provider abort listener rejects generically", async () => {
-    await expect(
-      runEmbeddingOperationWithTimeout({
-        timeoutMs: 1,
-        message: "memory embeddings batch timed out after 0s",
-        run: async (signal) =>
-          await new Promise<number[]>((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
-              once: true,
-            });
-          }),
-      }),
-    ).rejects.toThrow("memory embeddings batch timed out after 0s");
+    vi.useFakeTimers();
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 1,
+      message: "memory embeddings batch timed out after 0s",
+      run: async (signal) =>
+        await new Promise<number[]>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
+            once: true,
+          });
+        }),
+    });
+
+    const rejection = expect(resultPromise).rejects.toThrow(
+      "memory embeddings batch timed out after 0s",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+  });
+
+  it("caps operation watchdog timers before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+
+    try {
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        message: "memory embeddings query timed out",
+        run: async () => [1, 2, 3],
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 
@@ -156,3 +248,17 @@ describe("memory index concurrency resolution", () => {
     ).toBe(3);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

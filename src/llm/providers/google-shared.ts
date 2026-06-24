@@ -12,6 +12,7 @@ import {
   type Part,
   type ThinkingConfig,
 } from "@google/genai";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -170,7 +171,20 @@ export function convertMessages<T extends GoogleApiType>(
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
+  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
+  // live inside functionResponse, so hold them until the consecutive result run ends.
+  const pendingToolResultImageTurns: Content[] = [];
+  let activeToolResultParts: Part[] | undefined;
+  const flushToolResultRun = (): void => {
+    contents.push(...pendingToolResultImageTurns);
+    pendingToolResultImageTurns.length = 0;
+    activeToolResultParts = undefined;
+  };
+
   for (const msg of transformedMessages) {
+    if (msg.role !== "toolResult") {
+      flushToolResultRun();
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         contents.push({
@@ -303,20 +317,19 @@ export function convertMessages<T extends GoogleApiType>(
       };
 
       // Cloud Code Assist API requires all function responses to be in a single user turn.
-      // Check if the last content is already a user turn with function responses and merge.
-      const lastContent = contents[contents.length - 1];
-      if (lastContent?.role === "user" && lastContent.parts?.some((p) => p.functionResponse)) {
-        lastContent.parts.push(functionResponsePart);
+      if (activeToolResultParts) {
+        activeToolResultParts.push(functionResponsePart);
       } else {
+        activeToolResultParts = [functionResponsePart];
         contents.push({
           role: "user",
-          parts: [functionResponsePart],
+          parts: activeToolResultParts,
         });
       }
 
       // For Gemini < 3, add images in a separate user message
       if (hasImages && !modelSupportsMultimodalFunctionResponse) {
-        contents.push({
+        pendingToolResultImageTurns.push({
           role: "user",
           parts: [{ text: "Tool result image:" }, ...imageParts],
         });
@@ -324,6 +337,7 @@ export function convertMessages<T extends GoogleApiType>(
     }
   }
 
+  flushToolResultRun();
   return contents;
 }
 
@@ -481,10 +495,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   if (options.maxTokens !== undefined) {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
+  if (options.stop !== undefined && options.stop.length > 0) {
+    generationConfig.stopSequences = options.stop;
+  }
 
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
-    ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
+    ...(context.systemPrompt && {
+      systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+    }),
     ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
   };
 
@@ -731,6 +750,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   params.stream.push({ type: "start", partial: params.output });
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = params.output.content;
+  const toolCallIds = new Set<string>();
+  for (const block of blocks) {
+    if (block.type === "toolCall") {
+      toolCallIds.add(block.id);
+    }
+  }
   const blockIndex = () => blocks.length - 1;
 
   const endCurrentBlock = () => {
@@ -816,11 +841,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
         if (part.functionCall) {
           endCurrentBlock();
           const providedId = part.functionCall.id;
-          const needsNewId =
-            !providedId ||
-            params.output.content.some(
-              (block) => block.type === "toolCall" && block.id === providedId,
-            );
+          const needsNewId = !providedId || toolCallIds.has(providedId);
           const toolCall: ToolCall = {
             type: "toolCall",
             id: needsNewId ? params.nextToolCallId(part.functionCall.name) : providedId,
@@ -830,6 +851,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
           };
 
           params.output.content.push(toolCall);
+          toolCallIds.add(toolCall.id);
           params.stream.push({
             type: "toolcall_start",
             contentIndex: blockIndex(),
@@ -897,18 +919,4 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     message: params.output,
   });
   params.stream.end();
-}
-
-/**
- * Map string finish reason to our StopReason (for raw API responses).
- */
-export function mapStopReasonString(reason: string): StopReason {
-  switch (reason) {
-    case "STOP":
-      return "stop";
-    case "MAX_TOKENS":
-      return "length";
-    default:
-      return "error";
-  }
 }

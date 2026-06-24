@@ -1,3 +1,4 @@
+// Voice Call plugin module implements tunnel behavior.
 import { spawn } from "node:child_process";
 import {
   appendBoundedChildOutput,
@@ -197,25 +198,6 @@ async function runNgrokCommand(args: string[]): Promise<string> {
     });
 
     proc.on("error", reject);
-  });
-}
-
-/**
- * Check if ngrok is installed and available.
- */
-export async function isNgrokAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn("ngrok", ["version"], {
-      stdio: "ignore",
-    });
-
-    proc.on("close", (code) => {
-      resolve(code === 0);
-    });
-
-    proc.on("error", () => {
-      resolve(false);
-    });
   });
 }
 

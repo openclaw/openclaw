@@ -1,3 +1,4 @@
+/** Tests node-host system.run policy, approval, allowlist, and execution behavior. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,6 +27,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -316,18 +318,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     run: (ctx: { tempHome: string }) => Promise<T>;
   }): Promise<T> {
     const tempHome = sharedOpenClawHome;
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = tempHome;
-    saveExecApprovals(params.approvals);
-    try {
+    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      saveExecApprovals(params.approvals);
       return await params.run({ tempHome });
-    } finally {
-      if (previousOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previousOpenClawHome;
-      }
-    }
+    });
   }
 
   async function withPathTokenCommand<T>(params: {
@@ -340,17 +334,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const link = path.join(binDir, "poccmd");
     fs.symlinkSync("/bin/echo", link);
     const expected = fs.realpathSync(link);
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-    try {
-      return await params.run({ link, expected });
-    } finally {
-      if (oldPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = oldPath;
-      }
-    }
+    return await withEnvAsync({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, () =>
+      params.run({ link, expected }),
+    );
   }
 
   async function withFakeRuntimeOnPath<T>(params: {
@@ -370,17 +356,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }
       sharedRuntimeBins.add(params.runtime);
     }
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
-    try {
-      return await params.run();
-    } finally {
-      if (oldPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = oldPath;
-      }
-    }
+    return await withEnvAsync(
+      { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
+      () => params.run(),
+    );
   }
 
   function expectCommandPinnedToCanonicalPath(params: {
@@ -988,7 +967,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(requireFirstRunCommandArgs(runCommand)).toEqual([
           "/bin/sh",
           "-lc",
-          `'${expectedHeadPath}' '-c' '16'`,
+          `${expectedHeadPath} -c 16`,
         ]);
         expectInvokeOk(sendInvokeResult);
       } finally {
@@ -1143,7 +1122,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const sendInvokeResult = vi.fn(async () => {});
       await withPathTokenCommand({
         tmpPrefix: "openclaw-allowlist-path-pin-",
-        run: async ({ link, expected }) => {
+        run: async ({ link: _link, expected }) => {
           await withTempApprovalsHome({
             approvals: {
               version: 1,
@@ -1746,8 +1725,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(benign.runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
           const allowlist = loadExecApprovals().agents?.main?.allowlist ?? [];
-          expect(allowlist).toHaveLength(1);
+          expect(allowlist).toHaveLength(2);
           expect(allowlist[0]?.pattern).toBe(fs.realpathSync(executablePath));
+          expect(allowlist[0]?.lastUsedCommand).toBeUndefined();
+          expect(allowlist[1]?.pattern).toMatch(/^=node-command:[0-9a-f]{16}$/);
+          expect(allowlist[1]?.lastUsedCommand).toBeUndefined();
 
           const malicious = await runSystemInvoke({
             preferMacAppExecHost: false,

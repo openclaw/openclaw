@@ -51,7 +51,8 @@ jobs:
   # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -86,7 +87,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -222,9 +223,24 @@ jobs:
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
           npm pack --json 2>&1 | tee "$PACK_OUTPUT"
-          PACK_PATH="$(node - "$PACK_OUTPUT" <<'NODE'
+          PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'
           const fs = require("node:fs");
+          const path = require("node:path");
           const input = fs.readFileSync(process.argv[2], "utf8");
+
+          function resolveTarballFileName(value) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              console.error(`npm pack reported unsafe tarball filename ${JSON.stringify(fileName)}.`);
+              process.exit(1);
+            }
+            return fileName;
+          }
 
           function arrayEndFrom(start) {
             let depth = 0;
@@ -256,7 +272,8 @@ jobs:
             return -1;
           }
 
-          for (let start = input.indexOf("["); start !== -1; start = input.indexOf("[", start + 1)) {
+          for (const match of input.matchAll(/\[/g)) {
+            const start = match.index;
             const end = arrayEndFrom(start);
             if (end === -1) {
               continue;
@@ -264,8 +281,8 @@ jobs:
             try {
               const parsed = JSON.parse(input.slice(start, end));
               const first = Array.isArray(parsed) ? parsed[0] : null;
-              if (first && typeof first.filename === "string" && first.filename) {
-                process.stdout.write(first.filename);
+              if (first && Object.prototype.hasOwnProperty.call(first, "filename")) {
+                process.stdout.write(resolveTarballFileName(first.filename));
                 process.exit(0);
               }
             } catch {
@@ -277,6 +294,7 @@ jobs:
           process.exit(1);
           NODE
           )"
+          PACK_PATH="$PWD/$PACK_NAME"
           if [[ -z "$PACK_PATH" || ! -f "$PACK_PATH" ]]; then
             echo "npm pack did not produce a tarball file." >&2
             exit 1
@@ -288,7 +306,7 @@ jobs:
           else
             RELEASE_TAG="${RELEASE_REF}"
           fi
-          TARBALL_NAME="$(basename "$PACK_PATH")"
+          TARBALL_NAME="$PACK_NAME"
           TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"
@@ -336,7 +354,7 @@ jobs:
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
 
       - name: Upload dependency release evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
@@ -344,14 +362,14 @@ jobs:
 
       - name: Upload dependency release evidence tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
 
       - name: Upload prepared npm publish bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -359,7 +377,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -372,6 +390,11 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
       - name: Require trusted workflow ref for publish
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -384,7 +407,7 @@ jobs:
             tideclaw_alpha_publish=true
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]]; then
-            echo "Real publish runs must be dispatched from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
+            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
 
@@ -429,12 +452,13 @@ jobs:
             echo "Direct OpenClaw npm publish; relying on this workflow's npm-release environment approval."
             exit 0
           fi
+          direct_recovery=false
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
-            echo "OpenClaw npm publish must be dispatched by the OpenClaw Release Publish workflow, not directly by ${GITHUB_ACTOR}." >&2
-            exit 1
+            direct_recovery=true
+            echo "Direct OpenClaw npm recovery with release_publish_run_id; relying on this workflow's npm-release environment approval."
           fi
           RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw Release Publish"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } if (run.status !== "in_progress") { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must still be in_progress, got ${run.status ?? "<missing>"}.`); process.exit(1); } if (run.conclusion) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} already concluded ${run.conclusion}.`); process.exit(1); } console.log(`Using release publish approval run ${process.env.RELEASE_PUBLISH_RUN_ID}: ${run.url}`);'
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   publish_openclaw_npm:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
@@ -468,7 +492,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -587,7 +611,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
           path: full-release-validation
@@ -653,6 +677,8 @@ jobs:
 
       - name: Verify full release validation target
         if: ${{ inputs.full_release_validation_run_id != '' }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -665,6 +691,8 @@ jobs:
           WORKFLOW_NAME="$(jq -r '.workflowName // ""' "$MANIFEST_FILE")"
           TARGET_SHA="$(jq -r '.targetSha // ""' "$MANIFEST_FILE")"
           RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
+          RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
+          PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
           if [[ "$WORKFLOW_NAME" != "Full Release Validation" ]]; then
             echo "Full release validation manifest workflow mismatch: $WORKFLOW_NAME" >&2
             exit 1
@@ -675,6 +703,14 @@ jobs:
           fi
           if [[ "$RERUN_GROUP" != "all" ]]; then
             echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
+            exit 1
+          fi
+          if [[ "$PERFORMANCE_BLOCKING" != "true" ]]; then
+            echo "Full release validation manifest does not record blocking product performance evidence." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$RUN_RELEASE_SOAK" != "true" ]]; then
+            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
             exit 1
           fi
 

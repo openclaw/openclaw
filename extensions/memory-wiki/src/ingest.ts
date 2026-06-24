@@ -1,10 +1,17 @@
+// Memory Wiki plugin module implements ingest behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  preserveHumanNotesBlock,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 type IngestMemoryWikiSourceResult = {
@@ -48,7 +55,7 @@ export async function ingestMemoryWikiSource(params: {
   const pageRelativePath = path.join("sources", `${slug}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
-  const timestamp = new Date(params.nowMs ?? Date.now()).toISOString();
+  const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
 
   const markdown = renderWikiMarkdown({
     frontmatter: {
@@ -80,7 +87,12 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  await fs.writeFile(pagePath, markdown, "utf8");
+  const existing = created ? "" : await fs.readFile(pagePath, "utf8").catch(() => "");
+  await fs.writeFile(
+    pagePath,
+    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
+    "utf8",
+  );
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
     timestamp,

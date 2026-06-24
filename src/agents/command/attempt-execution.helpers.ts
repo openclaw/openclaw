@@ -1,3 +1,7 @@
+/**
+ * Helper functions for agent attempt execution, Claude CLI transcript probing,
+ * fallback prompts, and ACP visible-text accumulation.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -8,6 +12,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
+import { resolveToolUseId, type ToolContentBlock } from "../../chat/tool-content.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -82,6 +87,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
+/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 export function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -105,7 +111,9 @@ export function claudeCliSessionTranscriptPath(params: {
 }
 
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
+const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
+/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -137,6 +145,128 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   return false;
 }
 
+function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content.filter((item): item is ToolContentBlock =>
+    Boolean(item && typeof item === "object"),
+  );
+}
+
+function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
+  const type = block.type;
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
+  const type = block.type;
+  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
+}
+
+async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+
+    const fh = await fs.open(filePath, "r");
+    try {
+      const tailBytes = Math.min(stat.size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
+      const start = stat.size - tailBytes;
+      const buffer = Buffer.alloc(tailBytes);
+      const { bytesRead } = await fh.read(buffer, 0, tailBytes, start);
+      let tailText = buffer.toString("utf-8", 0, bytesRead);
+      if (start > 0) {
+        const firstNewline = tailText.indexOf("\n");
+        tailText = firstNewline === -1 ? "" : tailText.slice(firstNewline + 1);
+      }
+      let lastAssistantToolUseIds: Set<string> = new Set();
+      let answeredToolResultIds: Set<string> = new Set();
+      for (const line of tailText.split(/\r?\n/)) {
+        if (!line.trim()) {
+          continue;
+        }
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const rec = obj as Record<string, unknown> | null;
+        if (rec?.isSidechain === true) {
+          continue;
+        }
+        const message = rec?.message as Record<string, unknown> | undefined;
+        const role = message?.role;
+        if (role === "assistant") {
+          lastAssistantToolUseIds = new Set();
+          answeredToolResultIds = new Set();
+          const blocks = toToolContentBlocks(message?.content);
+          if (!blocks) {
+            continue;
+          }
+          for (const block of blocks) {
+            if (isClaudeTranscriptToolUseBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                lastAssistantToolUseIds.add(id);
+              }
+            } else if (isClaudeTranscriptToolResultBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                answeredToolResultIds.add(id);
+              }
+            }
+          }
+        } else if (role === "user") {
+          const blocks = toToolContentBlocks(message?.content);
+          if (!blocks) {
+            continue;
+          }
+          for (const block of blocks) {
+            if (isClaudeTranscriptToolResultBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                answeredToolResultIds.add(id);
+              }
+            }
+          }
+        }
+      }
+      for (const id of lastAssistantToolUseIds) {
+        if (!answeredToolResultIds.has(id)) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
+  sessionId: string | undefined;
+  workspaceDir: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath({
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    homeDir: params.homeDir,
+  });
+  if (!expectedPath) {
+    return false;
+  }
+  return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
+}
+
+/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -313,6 +443,7 @@ export function buildClaudeCliFallbackContextPrelude(params: {
   return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
 }
 
+/** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
 export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";

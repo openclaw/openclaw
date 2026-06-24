@@ -1,3 +1,9 @@
+/**
+ * Subagent announcement origin resolver.
+ *
+ * Merges requester and session delivery context while avoiding stale thread ids after retargeting.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
@@ -5,7 +11,6 @@ import {
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -53,6 +58,7 @@ function shouldStripThreadFromAnnounceEntry(
   return false;
 }
 
+/** Resolve the delivery origin for a subagent completion announcement. */
 export function resolveAnnounceOrigin(
   entry?: DeliveryContextSessionSource,
   requesterOrigin?: DeliveryContext,
@@ -71,6 +77,7 @@ export function resolveAnnounceOrigin(
   const entryForMerge =
     normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
+          // A stored thread only applies to the same normalized route target.
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
         })()

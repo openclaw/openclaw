@@ -1,3 +1,9 @@
+/**
+ * Browser permission routes.
+ *
+ * Grants required and optional browser permissions for an origin, preferring
+ * Playwright context APIs when available and falling back to raw CDP.
+ */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -6,7 +12,7 @@ import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
@@ -14,6 +20,7 @@ const permissionRouteDeps = {
   getPwAiModule,
 };
 
+/** Test hook for replacing optional Playwright permission dependencies. */
 export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
@@ -138,6 +145,7 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
+/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -163,7 +171,7 @@ export function registerBrowserPermissionRoutes(
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       let timeoutMs: number;
       try {
-        timeoutMs = Math.max(1_000, readRoutePositiveInteger(body.timeoutMs, "timeoutMs") ?? 5_000);
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }

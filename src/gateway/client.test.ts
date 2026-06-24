@@ -1,3 +1,5 @@
+// Gateway client tests cover WebSocket protocol negotiation, auth persistence,
+// proxy bypass setup, command dispatch, reconnect, and error handling.
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,13 +31,13 @@ const {
   proxylineStopMock,
   proxylineUnregisterBypassMock,
 } = vi.hoisted(() => {
-  const proxylineStopMock = vi.fn();
-  const proxylineUnregisterBypassMock = vi.fn();
-  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
+  const proxylineStopMockLocal = vi.fn();
+  const proxylineUnregisterBypassMockLocal = vi.fn();
+  const proxylineRegisterBypassMockLocal = vi.fn(() => proxylineUnregisterBypassMockLocal);
   return {
-    proxylineRegisterBypassMock,
-    proxylineStopMock,
-    proxylineUnregisterBypassMock,
+    proxylineRegisterBypassMock: proxylineRegisterBypassMockLocal,
+    proxylineStopMock: proxylineStopMockLocal,
+    proxylineUnregisterBypassMock: proxylineUnregisterBypassMockLocal,
     installGlobalProxyMock: vi.fn(() => ({
       active: true,
       createNodeAgent: vi.fn(),
@@ -43,8 +45,8 @@ const {
       createWebSocketAgent: vi.fn(),
       explain: vi.fn(),
       mode: "managed",
-      registerBypass: proxylineRegisterBypassMock,
-      stop: proxylineStopMock,
+      registerBypass: proxylineRegisterBypassMockLocal,
+      stop: proxylineStopMockLocal,
       withBypass: vi.fn(),
     })),
   };
@@ -74,6 +76,7 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
+  _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -81,6 +84,13 @@ class MockWebSocket {
     for (const observer of wsConstructorObservers) {
       observer(_url, options);
     }
+  }
+
+  setPeerFingerprint(fingerprint256: string): void {
+    Object.defineProperty(this, "_socket", {
+      configurable: true,
+      value: { getPeerCertificate: () => ({ fingerprint256 }) },
+    });
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -100,9 +110,7 @@ class MockWebSocket {
         return;
       case "error":
         this.errorHandlers.push(handler as WsEventHandlers["error"]);
-        return;
       default:
-        return;
     }
   }
 
@@ -233,21 +241,6 @@ function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
   }
   return arg;
 }
-
-async function expectGatewayRequestError(
-  promise: Promise<unknown>,
-  expected: Record<string, unknown>,
-): Promise<void> {
-  let rejected: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    rejected = error;
-  }
-  const error = expectRecordFields(rejected, expected, "gateway request error");
-  expectRecordFields(error.details, { method: "chat.history" }, "gateway request error details");
-}
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -730,6 +723,12 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
+      {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        transientPreHelloCleanClose: false,
+      },
     );
     client.stop();
   });
@@ -747,7 +746,12 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
     client.stop();
   });
 
@@ -759,7 +763,60 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: signature invalid");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
+    client.stop();
+  });
+
+  it("marks an opened TLS transport unvalidated when fingerprint verification fails", () => {
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "wss://127.0.0.1:18789",
+      tlsFingerprint: "expected",
+      onClose,
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.setPeerFingerprint("different");
+    ws.emitOpen();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
+    client.stop();
+  });
+
+  it("keeps close callback errors inside websocket dispatch", () => {
+    const onClose = vi.fn(() => {
+      throw new Error("close callback failed");
+    });
+    const client = createClientWithIdentity("dev-4", onClose);
+
+    client.start();
+    expect(() => getLatestWs().emitClose(1008, "unauthorized: signature invalid")).not.toThrow();
+
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client close handler error: Error: close callback failed",
+    );
     client.stop();
   });
 
@@ -782,6 +839,148 @@ describe("GatewayClient close handling", () => {
       expect(wsInstances).toHaveLength(2);
       client.stop();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects quietly after one clean pre-hello close with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+      onHelloOk,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      expect(firstWs.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(true);
+
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+      expect(onClose).toHaveBeenCalledWith(1000, "", {
+        phase: "pre-hello",
+        socketOpened: true,
+        transportValidated: true,
+        transientPreHelloCleanClose: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(wsInstances).toHaveLength(2);
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        secondWs.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHelloOk).toHaveBeenCalledOnce();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces repeated clean pre-hello closes with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      secondWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
+        phase: "pre-hello",
+        socketOpened: true,
+        transportValidated: true,
+        transientPreHelloCleanClose: true,
+      });
+      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "", {
+        phase: "pre-hello",
+        socketOpened: true,
+        transportValidated: true,
+        transientPreHelloCleanClose: true,
+      });
+      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
+        message: "gateway closed (1000): ",
+      });
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    } finally {
+      client.stop();
       vi.useRealTimers();
     }
   });
@@ -814,6 +1013,7 @@ describe("GatewayClient close handling", () => {
 
       client.start();
       const ws = getLatestWs();
+      ws.autoCloseOnClose = false;
 
       client.stop();
 
@@ -823,6 +1023,27 @@ describe("GatewayClient close handling", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not force-terminate a socket that closes during stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+
+      client.stop();
+
+      expect(ws.closeCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(ws.terminateCalls).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -879,7 +1100,12 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
     client.stop();
   });
 });
@@ -1016,7 +1242,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("surfaces connect assembly errors instead of waiting for the wrapper timeout", async () => {
     vi.useFakeTimers();
-    let client: GatewayClientInstance | null = null;
+    let client: GatewayClientInstance | null | undefined;
     try {
       const onClose = vi.fn();
       const onConnectError = vi.fn();
@@ -1078,6 +1304,35 @@ describe("GatewayClient connect auth payload", () => {
       });
       expect(logDebugMock).toHaveBeenCalledWith(
         "gateway client connect error handler error: Error: connect callback failed",
+      );
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const onHelloOk = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onHelloOk,
+      onConnectError,
+    });
+
+    try {
+      const { ws, connect } = startClientAndConnect({ client });
+
+      expect(() => emitHelloOk(ws, connect.id)).not.toThrow();
+      await vi.waitFor(() => {
+        expect(onHelloOk).toHaveBeenCalledOnce();
+      });
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(ws.lastClose).toBeNull();
+      expect(logDebugMock).toHaveBeenCalledWith(
+        "gateway client hello-ok handler error: Error: hello callback failed",
       );
     } finally {
       client.stop();
@@ -1585,6 +1840,42 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("keeps reconnect paused callback errors inside close dispatch", async () => {
+    const onReconnectPaused = vi.fn(() => {
+      throw new Error("paused callback failed");
+    });
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onReconnectPaused,
+      onClose,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISSING",
+    });
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client reconnect paused handler error: Error: paused callback failed",
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "connect failed", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: true,
+      transientPreHelloCleanClose: false,
     });
   });
 

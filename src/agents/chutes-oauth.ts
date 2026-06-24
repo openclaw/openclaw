@@ -1,7 +1,11 @@
+/**
+ * Implements Chutes OAuth PKCE, callback parsing, token exchange, and refresh
+ * for agent model authentication.
+ */
 import { createHash, randomBytes } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -18,6 +22,7 @@ type ChutesUserInfo = {
   created_at?: string;
 };
 
+/** OAuth client settings for the Chutes authorization-code flow. */
 export type ChutesOAuthAppConfig = {
   clientId: string;
   clientSecret?: string;
@@ -29,12 +34,14 @@ type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
 
+/** Generates a PKCE verifier/challenge pair for Chutes login. */
 export function generateChutesPkce(): ChutesPkce {
   const verifier = randomBytes(32).toString("hex");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
 
+/** Parses pasted Chutes redirect input and enforces the expected OAuth state. */
 export function parseOAuthCallbackInput(
   input: string,
   expectedState: string,
@@ -90,6 +97,12 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
   });
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
@@ -99,6 +112,7 @@ async function fetchChutesUserInfo(params: {
     headers: { Authorization: `Bearer ${params.accessToken}` },
   });
   if (!response.ok) {
+    await cancelUnreadResponseBody(response);
     return null;
   }
   const data = (await response.json()) as unknown;
@@ -109,6 +123,7 @@ async function fetchChutesUserInfo(params: {
   return typed;
 }
 
+/** Exchanges an authorization code for stored Chutes OAuth credentials. */
 export async function exchangeChutesCodeForTokens(params: {
   app: ChutesOAuthAppConfig;
   code: string;
@@ -172,6 +187,7 @@ export async function exchangeChutesCodeForTokens(params: {
   } as unknown as ChutesStoredOAuth;
 }
 
+/** Refreshes stored Chutes OAuth credentials, preserving refresh tokens when absent. */
 export async function refreshChutesTokens(params: {
   credential: ChutesStoredOAuth;
   fetchFn?: typeof fetch;
@@ -229,7 +245,8 @@ export async function refreshChutesTokens(params: {
   return {
     ...params.credential,
     access,
-    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
+    // RFC 6749 section 6 makes new refresh tokens optional; Chutes may omit one
+    // on refresh, so preserve the old token unless a replacement is returned.
     refresh: newRefresh || refreshToken,
     expires,
     clientId,

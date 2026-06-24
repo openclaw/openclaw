@@ -1,5 +1,10 @@
+// Shared provider helper tests cover deadlines, guarded fetch policy, HTTP
+// config, and multipart transcription.
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { VERSION } from "../version.js";
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
@@ -35,7 +40,6 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
-  readErrorResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -51,6 +55,8 @@ afterEach(() => {
 });
 
 function getFirstGuardedFetchCall() {
+  // Guarded fetch options carry SSRF and proxy policy, so assertions inspect the
+  // structured request passed to the network guard.
   const [mockCall] = fetchWithSsrFGuardMock.mock.calls;
   if (!mockCall) {
     throw new Error("Expected fetchWithSsrFGuard to be called");
@@ -88,6 +94,21 @@ describe("provider operation deadlines", () => {
         defaultTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
       }),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("keeps operation deadlines inside the Date timestamp range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 1,
+    });
+
+    expect(deadline.deadlineAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
+      "video generation timed out after 1ms",
+    );
   });
 
   it("clamps per-call timeouts to the remaining operation deadline", () => {
@@ -142,6 +163,20 @@ describe("provider operation deadlines", () => {
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("caps oversized provider poll waits without an operation deadline", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const wait = waitProviderOperationPollInterval({
+      deadline: createProviderOperationDeadline({ label: "video generation" }),
+      pollIntervalMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(wait).resolves.toBeUndefined();
   });
 
@@ -543,32 +578,6 @@ describe("resolveProviderHttpRequestConfig", () => {
         defaultBaseUrl: "   ",
       }),
     ).toThrow("Missing baseUrl");
-  });
-});
-
-describe("readErrorResponse", () => {
-  it("caps streamed error bodies instead of buffering the whole response", async () => {
-    const encoder = new TextEncoder();
-    let reads = 0;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          reads += 1;
-          controller.enqueue(encoder.encode("a".repeat(2048)));
-          if (reads >= 10) {
-            controller.close();
-          }
-        },
-      }),
-      {
-        status: 500,
-      },
-    );
-
-    const detail = await readErrorResponse(response);
-
-    expect(detail).toBe(`${"a".repeat(300)}…`);
-    expect(reads).toBe(2);
   });
 });
 

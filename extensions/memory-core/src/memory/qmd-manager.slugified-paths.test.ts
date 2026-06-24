@@ -1,3 +1,4 @@
+// Memory Core tests cover qmd manager.slugified paths plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -36,12 +37,7 @@ function createMockChild(params?: { autoClose?: boolean }): MockChild {
   return child;
 }
 
-function emitAndClose(
-  child: MockChild,
-  stream: "stdout" | "stderr",
-  data: string,
-  code: number = 0,
-) {
+function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: string, code = 0) {
   queueMicrotask(() => {
     child[stream].emit("data", data);
     child.closeWith(code);

@@ -1,11 +1,13 @@
+/** Detached macOS launchd restart handoff for restarting from inside the service. */
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
@@ -92,25 +94,12 @@ function resolveLaunchdRestartTarget(
   };
 }
 
-export function isCurrentProcessLaunchdServiceLabel(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const launchdLabel =
-    normalizeOptionalString(env.LAUNCH_JOB_LABEL) ||
-    normalizeOptionalString(env.LAUNCH_JOB_NAME) ||
-    normalizeOptionalString(env.XPC_SERVICE_NAME);
-  if (launchdLabel) {
-    return launchdLabel === label;
-  }
-  const configuredLabel = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
-  return Boolean(configuredLabel && configuredLabel === label);
-}
-
 function buildLaunchdRestartScript(
   mode: LaunchdRestartHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
 ): string {
+  // The detached shell waits for the caller before touching launchd so the
+  // current gateway process can exit cleanly after scheduling the handoff.
   const waitForCallerPid = `wait_pid="$4"
 label="$5"
 ${renderPosixRestartLogSetup(restartLogEnv)}

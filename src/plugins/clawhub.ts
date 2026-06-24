@@ -1,5 +1,7 @@
+// Resolves ClawHub plugin catalog entries and install metadata.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import JSZip from "jszip";
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
@@ -16,9 +18,11 @@ import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
+  isDefaultClawHubBaseUrl,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  resolveClawHubBaseUrl,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
@@ -31,31 +35,15 @@ import {
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
-export const CLAWHUB_INSTALL_ERROR_CODE = {
-  INVALID_SPEC: "invalid_spec",
-  PACKAGE_NOT_FOUND: "package_not_found",
-  VERSION_NOT_FOUND: "version_not_found",
-  NO_INSTALLABLE_VERSION: "no_installable_version",
-  SKILL_PACKAGE: "skill_package",
-  UNSUPPORTED_FAMILY: "unsupported_family",
-  PRIVATE_PACKAGE: "private_package",
-  INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
-  INCOMPATIBLE_GATEWAY: "incompatible_gateway",
-  ARTIFACT_UNAVAILABLE: "artifact_unavailable",
-  MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",
-  ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
-  ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
-} as const;
-
-export type ClawHubInstallErrorCode =
-  (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+export { CLAWHUB_INSTALL_ERROR_CODE };
+export type { ClawHubInstallErrorCode };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -973,8 +961,9 @@ function validateClawHubPluginPackage(params: {
     );
   }
   if (pkg.family === "skill") {
+    const installRef = pkg.ownerHandle ? `@${pkg.ownerHandle}/${pkg.name}` : pkg.name;
     return buildClawHubInstallFailure(
-      `"${pkg.name}" is a skill. Use "openclaw skills install ${pkg.name}" instead.`,
+      `"${pkg.name}" is a skill. Use "openclaw skills install ${installRef}" instead.`,
       CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
     );
   }
@@ -1218,6 +1207,8 @@ export async function installPluginFromClawHub(
         `ClawHub package "${canonicalPackageName}@${versionState.version}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
       );
     }
+    const clawhubRegistry = resolveClawHubBaseUrl(params.baseUrl);
+    const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
     params.logger?.info?.(
       `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${parsed.name}@${versionState.version} from ClawHub…`,
     );
@@ -1225,12 +1216,18 @@ export async function installPluginFromClawHub(
       archivePath: archive.archivePath,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       trustedSourceLinkedOfficialInstall: isTrustedSourceLinkedOfficialPackage(detail.package!),
+      config: params.config,
       logger: params.logger,
       mode: params.mode,
       extensionsDir: params.extensionsDir,
       timeoutMs: params.timeoutMs,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      installPolicyRequest: {
+        kind: "plugin-archive",
+        requestedSpecifier: params.spec,
+        source: { kind: "clawhub", authority: clawhubAuthority, mutable: false, network: true },
+      },
     });
     if (!installResult.ok) {
       return installResult;
@@ -1265,10 +1262,7 @@ export async function installPluginFromClawHub(
       packageName: parsed.name,
       clawhub: {
         source: "clawhub",
-        clawhubUrl:
-          normalizeOptionalString(params.baseUrl) ||
-          normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-          "https://clawhub.ai",
+        clawhubUrl: clawhubRegistry,
         clawhubPackage: parsed.name,
         clawhubFamily,
         clawhubChannel: pkg.channel,

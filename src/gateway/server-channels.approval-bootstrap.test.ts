@@ -1,5 +1,8 @@
+/**
+ * Server channel approval bootstrap tests.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   runtimeForLogger,
@@ -129,9 +132,9 @@ describe("server-channels approval bootstrap", () => {
     const startAccount = vi.fn(
       async ({
         abortSignal,
-        channelRuntime,
+        channelRuntime: channelRuntimeLocal,
       }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
-        channelRuntime?.runtimeContexts.register({
+        channelRuntimeLocal?.runtimeContexts.register({
           channelId: "discord",
           accountId: DEFAULT_ACCOUNT_ID,
           capability: "approval.native",

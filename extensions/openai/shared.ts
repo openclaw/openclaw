@@ -1,3 +1,4 @@
+// Openai plugin module implements shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
@@ -87,6 +88,8 @@ const wrapOpenAIResponsesProviderStreamFn: NonNullable<
 > = (ctx) =>
   createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
     config: ctx.config,
+    agentId: ctx.agentId,
+    nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
   });
 
 export function buildOpenAIResponsesProviderHooks(options?: {

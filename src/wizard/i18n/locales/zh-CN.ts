@@ -1,3 +1,4 @@
+// Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_CN = {
@@ -29,14 +30,18 @@ export const zh_CN = {
       compatibilityAnthropicHint: "使用 /messages",
       compatibilityOpenAi: "兼容 OpenAI",
       compatibilityOpenAiHint: "使用 /chat/completions",
+      compatibilityOpenAiResponses: "兼容 OpenAI Responses",
+      compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自动检测）",
-      compatibilityUnknownHint: "先探测 OpenAI，再探测 Anthropic 端点",
+      compatibilityUnknownHint: "先探测 OpenAI Chat、OpenAI Responses，再探测 Anthropic 端点",
       detectionFailed: "无法检测端点类型。",
-      detectionFailedNote: "这个端点没有响应 OpenAI 或 Anthropic 风格的请求。",
+      detectionFailedNote:
+        "这个端点没有响应 OpenAI Chat、OpenAI Responses 或 Anthropic 风格的请求。",
       detectionNoteTitle: "端点检测",
       detectionProgress: "正在检测端点类型...",
       detectedAnthropic: "检测到兼容 Anthropic 的端点。",
       detectedOpenAi: "检测到兼容 OpenAI 的端点。",
+      detectedOpenAiResponses: "检测到兼容 OpenAI Responses 的端点。",
       endpointId: "端点 ID",
       endpointIdRequired: "端点 ID 必填。",
       endpointIdRenamed: '端点 ID "{from}" 已用于不同的基础 URL。将使用 "{to}"。',
@@ -957,6 +962,7 @@ export const zh_CN = {
       webSearchGetKey: "获取 key：{url}",
       webSearchAuthProfile: "凭据：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：通过 {env} 环境变量提供。",
+      webSearchKeyFree: "Web search 已就绪 —— 此 provider 无需 API key。",
       webSearchKeyRef: "API key：通过 secret reference 配置。",
       webSearchKeyStored: "API key：已存入配置。",
       webSearchNeedsKey: "添加 key 前 web_search 无法工作。",

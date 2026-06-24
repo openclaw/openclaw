@@ -1,12 +1,16 @@
 #!/usr/bin/env node
+// Builds config recipes for upgrade-survivor E2E scenarios.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildCmdExeCommandLine } from "../../../windows-cmd-helpers.mjs";
+import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift();
+export const CONFIG_COMMAND_TIMEOUT_MS = 120_000;
+export const CONFIG_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 function option(name, fallback) {
   const index = args.indexOf(name);
@@ -37,26 +41,37 @@ function readConfigSection(fileName) {
   return JSON.stringify(JSON.parse(fs.readFileSync(fileUrl, "utf8")));
 }
 
-function parseReleaseVersion(version) {
-  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(String(version ?? ""));
-  if (!match) {
-    return null;
-  }
-  return match.slice(1).map((part) => Number.parseInt(part, 10));
-}
-
-function isReleaseBefore(version, minimum) {
-  const parsed = parseReleaseVersion(version);
-  const minimumParsed = parseReleaseVersion(minimum);
+export function isReleaseBefore(version, minimum) {
+  const parsed = parseReleaseVersion(String(version ?? ""));
+  const minimumParsed = parseReleaseFloor(minimum);
   if (!parsed || !minimumParsed) {
     return false;
   }
-  for (let index = 0; index < parsed.length; index += 1) {
-    if (parsed[index] !== minimumParsed[index]) {
-      return parsed[index] < minimumParsed[index];
+  for (const key of ["year", "month", "patch"]) {
+    const delta = parsed[key] - minimumParsed[key];
+    if (delta !== 0) {
+      return delta < 0;
     }
   }
   return false;
+}
+
+function parseReleaseFloor(version) {
+  const match = /^([0-9]{4})\.([1-9][0-9]?)\.([0-9]+)$/u.exec(String(version ?? ""));
+  if (!match) {
+    return null;
+  }
+  const [year, month, patch] = match.slice(1).map((part) => Number(part));
+  if (
+    !Number.isSafeInteger(year) ||
+    !Number.isSafeInteger(month) ||
+    !Number.isSafeInteger(patch) ||
+    month < 1 ||
+    month > 12
+  ) {
+    return null;
+  }
+  return { year, month, patch };
 }
 
 function configSetJsonFile(id, intent, configPath, fileName) {
@@ -200,7 +215,7 @@ function adaptStepForBaseline(step, baselineVersion, summary) {
 export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
   const platform = params.platform ?? process.platform;
   if (platform === "win32") {
-    const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],
@@ -217,21 +232,34 @@ export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
   };
 }
 
-function runOpenClaw(step) {
+function errorCode(error) {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+}
+
+export function runUpgradeSurvivorOpenClawStep(step, params = {}) {
   const invocation = resolveUpgradeSurvivorOpenClawCommand(step.argv);
-  const result = spawnSync(invocation.command, invocation.args, {
+  const run = params.spawnSyncCommand ?? spawnSync;
+  const timeoutMs = params.timeoutMs ?? CONFIG_COMMAND_TIMEOUT_MS;
+  const maxBuffer = params.maxBufferBytes ?? CONFIG_COMMAND_MAX_BUFFER_BYTES;
+  const result = run(invocation.command, invocation.args, {
     encoding: "utf8",
     env: process.env,
+    killSignal: "SIGTERM",
+    maxBuffer,
     shell: invocation.shell,
+    timeout: timeoutMs,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
+  const code = errorCode(result.error);
   return {
     id: step.id,
     intent: step.intent,
     command: invocation.commandLabel,
     status: result.status,
     signal: result.signal,
-    ok: result.status === 0,
+    ok: result.status === 0 && !result.error,
+    errorCode: code,
+    errorMessage: result.error?.message ? tail(result.error.message) : undefined,
     stdout: tail(result.stdout),
     stderr: tail(result.stderr),
   };
@@ -268,11 +296,12 @@ function applyRecipe() {
     if (!adaptedStep) {
       continue;
     }
-    const outcome = runOpenClaw(adaptedStep);
+    const outcome = runUpgradeSurvivorOpenClawStep(adaptedStep);
     summary.steps.push(outcome);
     writeJson(summaryPath, summary);
     if (!outcome.ok) {
-      throw new Error(`baseline config recipe failed at ${step.id}`);
+      const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";
+      throw new Error(`baseline config recipe failed at ${step.id}: ${detail}`);
     }
   }
 }

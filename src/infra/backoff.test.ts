@@ -1,4 +1,6 @@
+// Covers retry backoff calculation and abortable sleep behavior.
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
 
 async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
@@ -68,6 +70,22 @@ describe("backoff helpers", () => {
     }
   });
 
+  it("clamps oversized sleep durations before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await expect(sleeper).resolves.toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects if the signal aborts during listener registration", async () => {
     let aborted = false;
     const signal = {
@@ -77,7 +95,7 @@ describe("backoff helpers", () => {
       get reason() {
         return new Error("listener-registration-race");
       },
-      addEventListener(eventValue: string, _listener: EventListenerOrEventListenerObject) {
+      addEventListener(_eventValue: string, _listener: EventListenerOrEventListenerObject) {
         aborted = true;
       },
       removeEventListener() {},

@@ -1,4 +1,13 @@
+// Config gateway methods expose config get/set/patch/apply/schema operations
+// with validation, redaction restoration, secret prep, and reload planning.
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -17,12 +26,11 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
-  validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+} from "../../config/io.js";
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import {
   redactConfigObject,
   redactConfigSnapshot,
@@ -31,14 +39,18 @@ import {
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "../../config/validation.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { isPlainObject } from "../../infra/plain-object.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -54,7 +66,7 @@ import {
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
 } from "./config-write-flow.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
@@ -69,6 +81,10 @@ type ConfigOpenCommand = {
   command: string;
   args: string[];
 };
+type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
+type ConfigWriteCommitResult = Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
+type ConfigRestartWriteKind = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["kind"];
+type ConfigRestartWriteMode = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["mode"];
 
 function requireConfigBaseHash(
   params: unknown,
@@ -116,6 +132,205 @@ function requireConfigBaseHash(
   return true;
 }
 
+function formatConfigPatchPath(parentPath: string, key: string): string {
+  return parentPath ? `${parentPath}.${key}` : key;
+}
+
+function readConfigPatchReplacePaths(params: unknown): Set<string> {
+  const rawPaths = (params as { replacePaths?: unknown }).replacePaths;
+  return normalizeConfigPatchReplacePaths(Array.isArray(rawPaths) ? rawPaths : undefined);
+}
+
+function collectDestructiveArrayPatchPaths(params: {
+  base: unknown;
+  patch: unknown;
+  merged: unknown;
+  path?: string;
+}): string[] {
+  if (!isPlainObject(params.patch) || !isPlainObject(params.base)) {
+    return [];
+  }
+
+  const merged = isPlainObject(params.merged) ? params.merged : {};
+  const paths: string[] = [];
+  for (const [key, patchValue] of Object.entries(params.patch)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    const path = formatConfigPatchPath(params.path ?? "", key);
+    const baseValue = params.base[key];
+    const mergedValue = merged[key];
+
+    if (Array.isArray(baseValue)) {
+      if (patchValue === null || !Array.isArray(patchValue)) {
+        paths.push(path);
+        continue;
+      }
+      if (Array.isArray(mergedValue)) {
+        if (isConfigPatchIdKeyedArray(baseValue)) {
+          if (!idKeyedArrayPreservesBaseIds(baseValue, mergedValue)) {
+            paths.push(path);
+            continue;
+          }
+          paths.push(
+            ...collectDestructiveIdKeyedArrayEntryPatchPaths({
+              base: baseValue,
+              patch: patchValue,
+              merged: mergedValue,
+              path,
+            }),
+          );
+        } else if (!arrayPreservesBaseEntries(baseValue, mergedValue)) {
+          paths.push(path);
+          continue;
+        }
+      }
+    } else if (isPlainObject(baseValue) && !isPlainObject(patchValue)) {
+      paths.push(...collectBaseArrayPaths(baseValue, path));
+      continue;
+    }
+
+    if (isPlainObject(patchValue)) {
+      paths.push(
+        ...collectDestructiveArrayPatchPaths({
+          base: baseValue,
+          patch: patchValue,
+          merged: mergedValue,
+          path,
+        }),
+      );
+    }
+  }
+  return paths;
+}
+
+function collectBaseArrayPaths(base: unknown, path: string): string[] {
+  if (Array.isArray(base)) {
+    return [path];
+  }
+  if (!isPlainObject(base)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(base)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    paths.push(...collectBaseArrayPaths(value, formatConfigPatchPath(path, key)));
+  }
+  return paths;
+}
+
+function isConfigPatchObjectWithStringId(
+  value: unknown,
+): value is Record<string, unknown> & { id: string } {
+  return isPlainObject(value) && typeof value.id === "string" && value.id.length > 0;
+}
+
+function isConfigPatchIdKeyedArray(
+  value: unknown[],
+): value is Array<Record<string, unknown> & { id: string }> {
+  return value.every(isConfigPatchObjectWithStringId);
+}
+
+function idKeyedArrayPreservesBaseIds(
+  base: Array<Record<string, unknown> & { id: string }>,
+  merged: unknown[],
+): boolean {
+  const mergedIds = new Set(
+    merged.filter(isConfigPatchObjectWithStringId).map((entry) => entry.id),
+  );
+  return base.every((entry) => mergedIds.has(entry.id));
+}
+
+function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean {
+  const unmatchedMerged = [...merged];
+  for (const baseEntry of base) {
+    const matchIndex = unmatchedMerged.findIndex((mergedEntry) =>
+      isDeepStrictEqual(mergedEntry, baseEntry),
+    );
+    if (matchIndex === -1) {
+      return false;
+    }
+    unmatchedMerged.splice(matchIndex, 1);
+  }
+  return true;
+}
+
+function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
+  base: unknown[];
+  patch: unknown[];
+  merged: unknown[];
+  path: string;
+}): string[] {
+  if (!isConfigPatchIdKeyedArray(params.base)) {
+    return [];
+  }
+  const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
+  const mergedById = new Map(
+    params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
+  );
+  const paths: string[] = [];
+  for (const patchEntry of params.patch) {
+    if (!isConfigPatchObjectWithStringId(patchEntry)) {
+      continue;
+    }
+    const baseEntry = baseById.get(patchEntry.id);
+    const mergedEntry = mergedById.get(patchEntry.id);
+    if (!baseEntry || !mergedEntry) {
+      continue;
+    }
+    paths.push(
+      ...collectDestructiveArrayPatchPaths({
+        base: baseEntry,
+        patch: patchEntry,
+        merged: mergedEntry,
+        path: `${params.path}[]`,
+      }),
+    );
+  }
+  return paths;
+}
+
+function rejectDestructiveArrayPatchWithoutIntent(params: {
+  currentConfig: OpenClawConfig;
+  mergedConfig: unknown;
+  patch: unknown;
+  replacePaths: Set<string>;
+  respond: RespondFn;
+}): boolean {
+  const destructivePaths = collectDestructiveArrayPatchPaths({
+    base: params.currentConfig,
+    patch: params.patch,
+    merged: params.mergedConfig,
+  });
+  const unconfirmedPaths = destructivePaths.filter((path) => !params.replacePaths.has(path));
+  if (unconfirmedPaths.length === 0) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `config.patch would remove entries from array path(s): ${unconfirmedPaths.join(", ")}. ` +
+        `Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.`,
+    ),
+  );
+  return true;
+}
+
+async function readConfigWriteSnapshotOrRespond(
+  params: unknown,
+  respond: RespondFn,
+): Promise<Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>> | null> {
+  const result = await readConfigFileSnapshotForWrite();
+  if (!requireConfigBaseHash(params, result.snapshot, respond)) {
+    return null;
+  }
+  return result;
+}
+
 function parseRawConfigOrRespond(
   params: unknown,
   requestName: string,
@@ -160,7 +375,7 @@ export function resolveConfigOpenCommand(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Start-Process -LiteralPath '${escapePowerShellSingleQuotedString(configPath)}'`,
+        `Start-Process -FilePath '${escapePowerShellSingleQuotedString(configPath)}'`,
       ],
     };
   }
@@ -174,7 +389,7 @@ function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(command.command, command.args, (error) => {
       if (error) {
-        reject(error);
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -195,7 +410,7 @@ function formatConfigOpenError(error: unknown): string {
 }
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
+  return isRecord(value) && Object.hasOwn(value, key);
 }
 
 function stripBundledProviderRuntimeDefaults(params: {
@@ -214,6 +429,7 @@ function stripBundledProviderRuntimeDefaults(params: {
 
   let nextProviders: Record<string, unknown> | undefined;
   for (const [providerId, provider] of Object.entries(models.providers)) {
+    // Runtime overlays can materialize empty defaults that should not become persisted config.
     if (!isBuiltInModelProviderOverlayId(providerId) || !isRecord(provider)) {
       continue;
     }
@@ -273,6 +489,7 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
+  // Validate against runtime shape, but write the source-shaped config the operator submitted.
   const projectedValidationCandidate = snapshot.valid
     ? applyMergePatch(
         projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
@@ -365,17 +582,109 @@ function clearConfigSchemaResponseCache() {
   configSchemaResponseCache = null;
 }
 
+async function respondWithConfigRestartWrite(params: {
+  requestParams: unknown;
+  kind: ConfigRestartWriteKind;
+  mode: ConfigRestartWriteMode;
+  writeResult: ConfigWriteCommitResult;
+  changedPaths: string[];
+  actor: ReturnType<typeof resolveControlPlaneActor>;
+  context: GatewayRequestContext | undefined;
+  respond: RespondFn;
+  uiHints: ConfigRedactionHints;
+}): Promise<void> {
+  clearConfigSchemaResponseCache();
+  const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
+    requestParams: params.requestParams,
+    kind: params.kind,
+    mode: params.mode,
+    configPath: params.writeResult.path,
+    changedPaths: params.changedPaths,
+    nextConfig: params.writeResult.config,
+    actor: params.actor,
+    context: params.context,
+  });
+  params.respond(
+    true,
+    {
+      ok: true,
+      path: params.writeResult.path,
+      config: redactConfigObject(params.writeResult.config, params.uiHints),
+      restart,
+      sentinel: {
+        persisted: sentinelPersisted,
+        payload,
+      },
+    },
+    undefined,
+  );
+  params.writeResult.queueFollowUp();
+}
+
+function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
+  prevConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
+}): boolean {
+  return (
+    didSharedGatewayAuthChange(params.prevConfig, params.nextConfig) ||
+    didActiveSharedGatewayAuthChange({
+      fallbackPrev: params.prevConfig,
+      next: params.preparedSecretsSnapshot.config,
+    })
+  );
+}
+
+function respondConfigPatchNoop(params: {
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  config: OpenClawConfig;
+  uiHints: ConfigRedactionHints;
+  actor: ReturnType<typeof resolveControlPlaneActor>;
+  context: GatewayRequestContext | undefined;
+  respond: RespondFn;
+}): void {
+  params.context?.logGateway?.info(
+    `config.patch noop ${formatControlPlaneActor(params.actor)} (no changed paths)`,
+  );
+  params.respond(
+    true,
+    {
+      ok: true,
+      noop: true,
+      path: resolveGatewayConfigPath(params.snapshot),
+      config: redactConfigObject(params.config, params.uiHints),
+    },
+    undefined,
+  );
+}
+
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = Date.now();
-  if (configSchemaResponseCache && configSchemaResponseCache.expiresAtMs > now) {
+  const now = asDateTimestampMs(Date.now());
+  const cachedExpiresAt =
+    configSchemaResponseCache === null
+      ? undefined
+      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  if (
+    configSchemaResponseCache &&
+    now !== undefined &&
+    cachedExpiresAt !== undefined &&
+    cachedExpiresAt > now
+  ) {
     return configSchemaResponseCache.response;
   }
+  if (configSchemaResponseCache) {
+    configSchemaResponseCache = null;
+  }
 
+  // Plugin schema loading is process-local; short caching avoids repeated UI lookups per render.
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = {
-    expiresAtMs: Date.now() + CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS,
-    response,
-  };
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
+  if (expiresAtMs !== undefined) {
+    configSchemaResponseCache = {
+      expiresAtMs,
+      response,
+    };
+  }
   return response;
 }
 
@@ -431,10 +740,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    if (!writeSnapshot) {
       return;
     }
+    const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
     if (!parsed) {
       return;
@@ -464,10 +774,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    if (!writeSnapshot) {
       return;
     }
+    const { snapshot, writeOptions } = writeSnapshot;
     if (!snapshot.valid) {
       respond(
         false,
@@ -505,8 +816,11 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const replacePaths = readConfigPatchReplacePaths(params);
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+      // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
+      replaceArrayPaths: replacePaths,
     });
     const schemaPatch = loadSchemaWithPlugins();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
@@ -521,22 +835,28 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (
+      rejectDestructiveArrayPatchWithoutIntent({
+        currentConfig: snapshot.config,
+        mergedConfig: restoredMerge.result,
+        patch: parsedRes.parsed,
+        replacePaths,
+        respond,
+      })
+    ) {
+      return;
+    }
     const restoredChangedPaths = diffConfigPaths(snapshot.config, restoredMerge.result);
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0) {
-      context?.logGateway?.info(
-        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
-      );
-      respond(
-        true,
-        {
-          ok: true,
-          noop: true,
-          path: resolveGatewayConfigPath(snapshot),
-          config: redactConfigObject(snapshot.config, schemaPatch.uiHints),
-        },
-        undefined,
-      );
+      respondConfigPatchNoop({
+        snapshot,
+        config: snapshot.config,
+        uiHints: schemaPatch.uiHints,
+        actor,
+        context,
+        respond,
+      });
       return;
     }
     const validated = validateConfigObjectWithPlugins(restoredMerge.result);
@@ -564,19 +884,14 @@ export const configHandlers: GatewayRequestHandlers = {
     // gateway restart (and the resulting connection drop) when a control-plane
     // client re-sends the same config (e.g. hot-apply with no actual changes).
     if (changedPaths.length === 0) {
-      context?.logGateway?.info(
-        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
-      );
-      respond(
-        true,
-        {
-          ok: true,
-          noop: true,
-          path: resolveGatewayConfigPath(snapshot),
-          config: redactConfigObject(validated.config, schemaPatch.uiHints),
-        },
-        undefined,
-      );
+      respondConfigPatchNoop({
+        snapshot,
+        config: validated.config,
+        uiHints: schemaPatch.uiHints,
+        actor,
+        context,
+        respond,
+      });
       return;
     }
 
@@ -585,12 +900,11 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients =
-      didSharedGatewayAuthChange(snapshot.config, validated.config) ||
-      didActiveSharedGatewayAuthChange({
-        fallbackPrev: snapshot.config,
-        next: preparedSecretsSnapshot.config,
-      });
+    const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
+      prevConfig: snapshot.config,
+      nextConfig: validated.config,
+      preparedSecretsSnapshot,
+    });
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
@@ -598,42 +912,27 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       disconnectSharedAuthClients,
     });
-    clearConfigSchemaResponseCache();
-
-    const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+    await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-patch",
       mode: "config.patch",
-      configPath: writeResult.path,
+      writeResult,
       changedPaths,
-      nextConfig: writeResult.config,
       actor,
       context,
+      respond,
+      uiHints: schemaPatch.uiHints,
     });
-    respond(
-      true,
-      {
-        ok: true,
-        path: writeResult.path,
-        config: redactConfigObject(writeResult.config, schemaPatch.uiHints),
-        restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
-        },
-      },
-      undefined,
-    );
-    writeResult.queueFollowUp();
   },
   "config.apply": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    if (!writeSnapshot) {
       return;
     }
+    const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
     if (!parsed) {
       return;
@@ -652,12 +951,11 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients =
-      didSharedGatewayAuthChange(snapshot.config, parsed.config) ||
-      didActiveSharedGatewayAuthChange({
-        fallbackPrev: snapshot.config,
-        next: preparedSecretsSnapshot.config,
-      });
+    const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
+      prevConfig: snapshot.config,
+      nextConfig: parsed.config,
+      preparedSecretsSnapshot,
+    });
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
@@ -665,33 +963,17 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       disconnectSharedAuthClients,
     });
-    clearConfigSchemaResponseCache();
-
-    const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+    await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-apply",
       mode: "config.apply",
-      configPath: writeResult.path,
+      writeResult,
       changedPaths,
-      nextConfig: writeResult.config,
       actor,
       context,
+      respond,
+      uiHints: parsed.schema.uiHints,
     });
-    respond(
-      true,
-      {
-        ok: true,
-        path: writeResult.path,
-        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
-        restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
-        },
-      },
-      undefined,
-    );
-    writeResult.queueFollowUp();
   },
   "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {

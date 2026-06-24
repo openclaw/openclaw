@@ -1,3 +1,4 @@
+// Search setup tests cover search provider setup and config changes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -172,8 +173,6 @@ describe("runSearchSetupFlow", () => {
   });
 
   it("localizes setup copy for web search provider selection", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const note = vi.fn(async () => {});
     const select = vi.fn().mockResolvedValueOnce("__skip__");
     const prompter = createWizardPrompter({
@@ -181,19 +180,13 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await runSearchSetupFlow(
         { plugins: { allow: ["xai"] } },
         createNonExitingRuntime(),
         prompter,
       );
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
 
     expect(note).toHaveBeenCalledWith(expect.stringContaining("在线查询资料"), "网页搜索");
     expect(select).toHaveBeenCalledWith(
@@ -401,6 +394,46 @@ describe("runSearchSetupFlow", () => {
     expect(next.tools?.web?.search?.enabled).toBe(false);
     expect(xaiConfig?.xSearch?.enabled).toBe(true);
     expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+  });
+
+  it("allows an explicit setup flow to reenable credential-ready web_search", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    const next = await runSearchSetupFlow(
+      {
+        plugins: {
+          allow: ["xai"],
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key",
+                },
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "grok",
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+      { preserveDisabledSearchState: false },
+    );
+
+    expect(next.tools?.web?.search).toMatchObject({
+      enabled: true,
+      provider: "grok",
+    });
   });
 
   it("installs an external catalog search provider before enabling it", async () => {

@@ -1,4 +1,7 @@
-import { isRecord } from "../../shared/record-coerce.js";
+/**
+ * Removes short-window duplicate user turns from compaction summaries.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
@@ -55,6 +58,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   };
 }
 
+/** Drop later duplicate user messages while preserving the first prompt. */
 export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   messages: readonly T[],
   options: DuplicateUserMessageOptions = {},
@@ -72,6 +76,8 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     const lastSeenAt = lastSeenAtByKey.get(signature.key);
     lastSeenAtByKey.set(signature.key, signature.timestamp);
     if (typeof lastSeenAt === "number" && signature.timestamp - lastSeenAt <= windowMs) {
+      // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
+      // branch while duplicate retries no longer inflate compaction context.
       removed += 1;
       continue;
     }
@@ -80,6 +86,7 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   return removed > 0 ? result : [...messages];
 }
 
+/** Collects session entry ids that should be skipped when building a compaction branch summary. */
 export function collectDuplicateUserMessageEntryIdsForCompaction(
   entries: readonly EntryLike[],
   options: DuplicateUserMessageOptions = {},

@@ -1,6 +1,12 @@
+// Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import OpenAI from "openai";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import {
+  classifyAssistantFailoverReason,
+  formatUserFacingAssistantErrorText,
+} from "./embedded-agent-helpers.js";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
@@ -24,7 +30,12 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
-type CapturedStreamEvent = { type?: string; delta?: string };
+type CapturedStreamEvent = {
+  type?: string;
+  delta?: string;
+  content?: string;
+  partial?: unknown;
+};
 
 function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
   return {
@@ -99,10 +110,11 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
 }
 
 function neverYieldsStream(): AsyncIterable<unknown> {
+  // Simulates an HTTP stream that opened but never delivered the first SSE event.
   return {
     [Symbol.asyncIterator]() {
       return {
-        next: async () => await new Promise<IteratorResult<unknown>>(() => undefined),
+        next: async () => await new Promise<IteratorResult<unknown>>(() => {}),
         return: async () => ({ done: true, value: undefined }),
       };
     },
@@ -116,6 +128,7 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Shared assertion helper for parsed transport payload/event records.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -141,6 +154,7 @@ describe("openai transport stream", () => {
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
+    // Observation should preserve hashes/metadata shape while dropping raw request ids.
     const model = createAzureResponsesModel();
     const event = {
       type: "response.failed",
@@ -281,15 +295,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
     const output: OpenAIResponsesOutput = {
       role: "assistant" as const,
       content: [],
@@ -324,11 +338,11 @@ describe("openai transport stream", () => {
       output,
       { push: vi.fn() },
       model,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-      authProfileId: "openai-codex:oauth",
+      authProfileId: "openai:oauth",
       sessionId: "session-123",
     });
     const thinkingBlock = output.content[0] as {
@@ -383,6 +397,294 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("backfills Azure Responses completed message output when item events are absent", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-azure-completed-message",
+            status: "completed",
+            output: [
+              { type: "reasoning", id: "rs_123", summary: [] },
+              {
+                type: "message",
+                id: "msg_123",
+                role: "assistant",
+                content: [{ type: "text", text: "AZURE_RESPONSES_CANARY_OK" }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "AZURE_RESPONSES_CANARY_OK",
+        textSignature: '{"v":1,"id":"msg_123"}',
+      },
+    ]);
+  });
+
+  it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const pushSpy = vi.fn();
+    const snapshot1 = "Scaled dot-product attention";
+    const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
+    const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
+    const messageItem = (id: string, text: string) => ({
+      type: "message",
+      id,
+      phase: "final_answer",
+      content: [{ type: "output_text", text }],
+    });
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        { type: "response.output_text.delta", delta: snapshot1 },
+        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
+        },
+        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
+        {
+          type: "response.completed",
+          response: { id: "resp-snapshots", status: "completed" },
+        },
+      ]),
+      output,
+      { push: pushSpy },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: snapshot3,
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
+      },
+    ]);
+    // Balanced lifecycle: one text_start, all events on index 0, and each
+    // collapsed snapshot re-ends the same block.
+    const textEvents = pushSpy.mock.calls
+      .map(([event]) => event as { type: string; contentIndex?: number })
+      .filter((event) => event.type.startsWith("text_"));
+    expect(textEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_delta", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+    ]);
+  });
+
+  it("keeps prefix-nested message items separated by a tool call as separate blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const messageEvents = (id: string, text: string) => [
+      { type: "response.output_item.added", item: { type: "message", id } },
+      {
+        type: "response.output_item.done",
+        item: { type: "message", id, content: [{ type: "output_text", text }] },
+      },
+    ];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        ...messageEvents("msg_1", "Done."),
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "write",
+            arguments: "{}",
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "write",
+            arguments: "{}",
+          },
+        },
+        ...messageEvents("msg_2", "Done."),
+        {
+          type: "response.completed",
+          response: { id: "resp-tool-boundary", status: "completed" },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // The post-tool message is a real reply, not a snapshot of the pre-tool one.
+    expect(output.content.map((block) => block.type)).toEqual(["text", "toolCall", "text"]);
+    expect(output.content[2]).toMatchObject({ type: "text", text: "Done." });
+  });
+
+  it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-backfill-snapshots",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_1",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer" }],
+              },
+              {
+                type: "message",
+                id: "msg_2",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer is 42." }],
+              },
+              {
+                type: "message",
+                id: "msg_3",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer" }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
+    // and is an independently identified message, so it stays a real block.
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "The answer is 42.",
+        textSignature: '{"v":1,"id":"msg_2"}',
+      },
+      {
+        type: "text",
+        text: "The answer",
+        textSignature: '{"v":1,"id":"msg_3"}',
+      },
+    ]);
+  });
+
+  it("keeps backfill message items separated by a reasoning item as distinct blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-backfill-reasoning-boundary",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_1",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one." }],
+              },
+              { type: "reasoning", id: "rs_1", summary: [] },
+              {
+                type: "message",
+                id: "msg_2",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one. Step two." }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // A reasoning item is a real boundary even in backfill: msg_2 must not
+    // collapse into msg_1 despite being a strict extension (mirrors streaming).
+    expect(output.content).toEqual([
+      { type: "text", text: "Step one.", textSignature: '{"v":1,"id":"msg_1"}' },
+      { type: "text", text: "Step one. Step two.", textSignature: '{"v":1,"id":"msg_2"}' },
+    ]);
+  });
+
+  it("backfills Azure Responses completed function calls when item events are absent", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-azure-completed-tool",
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                id: "fc_123",
+                call_id: "call_123",
+                name: "session_status",
+                arguments: '{"sessionKey":"current"}',
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_123|fc_123",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialJson: '{"sessionKey":"current"}',
+      },
+    ]);
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -393,6 +695,38 @@ describe("openai transport stream", () => {
           { type: "function", function: { name: "wait" } },
         ]),
       ).toBe("count=2 names=exec,wait");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("skips unreadable model payload tool names in debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
+    try {
+      expect(
+        testing.summarizeResponsesTools([
+          {
+            type: "function",
+            get function(): { name: string } {
+              throw new Error("responses debug tool function getter exploded");
+            },
+          },
+          {
+            type: "function",
+            function: {
+              get name(): string {
+                throw new Error("responses debug nested name getter exploded");
+              },
+            },
+          },
+          { type: "function", function: { name: "wait" } },
+        ]),
+      ).toBe("count=3 names=wait");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
@@ -437,6 +771,36 @@ describe("openai transport stream", () => {
     testing.enforceCodeModeResponsesToolSurface(payload);
     testing.assertCodeModeResponsesToolSurface(payload);
     expect(payload.tools).toHaveLength(2);
+  });
+
+  it("skips unreadable code mode response payload tool names", () => {
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        {
+          type: "function",
+          get function(): { name: string } {
+            throw new Error("responses code mode function getter exploded");
+          },
+        },
+        {
+          type: "function",
+          function: {
+            get name(): string {
+              throw new Error("responses code mode nested name getter exploded");
+            },
+          },
+        },
+        { type: "function", function: { name: "wait" } },
+      ],
+    };
+
+    testing.enforceCodeModeResponsesToolSurface(payload);
+    testing.assertCodeModeResponsesToolSurface(payload);
+    expect(payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", function: { name: "wait" } },
+    ]);
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
@@ -490,8 +854,8 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4-codex",
         name: "GPT-5.4 Codex",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
           originator: "openclaw",
@@ -502,7 +866,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       { systemPrompt: "", messages: [] } as never,
     );
 
@@ -511,6 +875,50 @@ describe("openai transport stream", () => {
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
+    expect(headers.Accept).toBeUndefined();
+    expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 128000,
+    } satisfies Model<"openai-chatgpt-responses">;
+    const transportAliasModel = {
+      ...codexModel,
+      api: "openclaw-openai-responses-transport" as Api,
+    } satisfies Model;
+    const nonNativeChatGPTModel = {
+      ...codexModel,
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-chatgpt-responses">;
+    const openAIModel = {
+      ...codexModel,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-responses">;
+
+    expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
+      headers: { Accept: "text/event-stream" },
+    });
+    expect(
+      testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
+    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
+    ).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
+    ).toBeUndefined();
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
@@ -583,7 +991,7 @@ describe("openai transport stream", () => {
 
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
+    expect(isTransportAwareApiSupported("openai-chatgpt-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
@@ -623,15 +1031,15 @@ describe("openai transport stream", () => {
       createBoundaryAwareStreamFnForModel({
         id: "codex-mini-latest",
         name: "Codex Mini Latest",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">),
+      } satisfies Model<"openai-chatgpt-responses">),
     ).toBeTypeOf("function");
     expect(
       createBoundaryAwareStreamFnForModel({
@@ -687,15 +1095,15 @@ describe("openai transport stream", () => {
       {
         id: "codex-mini-latest",
         name: "Codex Mini Latest",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         proxy: {
           mode: "explicit-proxy",
@@ -709,7 +1117,7 @@ describe("openai transport stream", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
     expectRecordFields(prepared, {
       api: "openclaw-openai-responses-transport",
-      provider: "openai-codex",
+      provider: "openai",
       id: "codex-mini-latest",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
@@ -853,6 +1261,30 @@ describe("openai transport stream", () => {
     );
   });
 
+  it("uses an OpenAI-compatible client for Foundry Azure Responses base URLs", () => {
+    const model = {
+      ...createAzureResponsesModel(),
+      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
+    };
+    const client = testing.createAzureOpenAIClient(
+      model,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      "test-key",
+    );
+
+    expect(client.constructor.name).toBe("OpenAI");
+  });
+
+  it("keeps traditional Azure Responses hosts on the AzureOpenAI client", () => {
+    const client = testing.createAzureOpenAIClient(
+      createAzureResponsesModel(),
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      "test-key",
+    );
+
+    expect(client.constructor.name).toBe("AzureOpenAI");
+  });
+
   it("passes provider request timeouts to OpenAI SDK clients", () => {
     const requestTimeoutMs = 900_000;
 
@@ -971,7 +1403,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1114,7 +1548,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1193,7 +1629,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1210,6 +1648,9 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 256_000,
         maxTokens: 16_384,
+        compat: {
+          supportsReasoningEffort: true,
+        },
       } satisfies Model<"openai-completions">;
       const stream = createOpenAICompletionsTransportStreamFn()(
         model,
@@ -1218,7 +1659,7 @@ describe("openai transport stream", () => {
           messages: [{ role: "user", content: "Reply live-ok", timestamp: Date.now() }],
           tools: [],
         } as never,
-        { apiKey: "test-key" } as never,
+        { apiKey: "test-key", reasoningEffort: "high" } as never,
       );
 
       let doneReason: string | undefined;
@@ -1251,6 +1692,140 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedPayload = JSON.parse(body) as Record<string, unknown>;
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-qwen-thinking",
+            object: "chat.completion",
+            model: "qwen3.5-32b",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  reasoning_content: "Need a Qwen answer.",
+                  content: "qwen-ok",
+                },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "qwen",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen",
+          supportsReasoningEffort: false,
+        },
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply qwen-ok", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key", reasoning: "medium" } as never,
+      );
+
+      let thinking = "";
+      let text = "";
+      for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+        if (event.type === "thinking_delta") {
+          thinking += event.delta ?? "";
+        }
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+      }
+
+      expect(capturedPayload?.enable_thinking).toBe(true);
+      expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+      expect(thinking).toBe("Need a Qwen answer.");
+      expect(text).toBe("qwen-ok");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("does not emit thinking streams when reasoning is disabled", () => {
+    const model = {
+      id: "grok-4.20-beta-latest-reasoning",
+      name: "Grok 4.20 Beta Latest (Reasoning)",
+      api: "openai-completions",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 2_000_000,
+      maxTokens: 30_000,
+    } satisfies Model<"openai-completions">;
+
+    expect(
+      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
+        apiKey: "test-key",
+        reasoning: "off",
+      } as never),
+    ).toBe(false);
+  });
+
+  it("emits Z.ai thinking streams when enabled without reasoning_effort support", () => {
+    const model = {
+      id: "glm-4.7",
+      name: "GLM 4.7",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    expect(
+      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
+        apiKey: "test-key",
+        reasoning: "medium",
+      } as never),
+    ).toBe(true);
+  });
+
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
     const server = createServer((req, res) => {
       req.resume();
@@ -1271,7 +1846,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1316,6 +1893,83 @@ describe("openai transport stream", () => {
       });
       expect(String(errorPayload?.errorBody)).toContain("Quota exceeded");
       expect(String(errorPayload?.errorBody)).not.toContain("sk-secret1234567890abcd");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("classifies OpenAI-compatible unsupported-model detail from failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(400, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_not_supported_model",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "400",
+              message: "Param Incorrect",
+              param: "Not supported model some-model-id",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "some-model-id",
+        name: "Some Model",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
+      expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
+      expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
+        "The selected model was not found by the provider. Check the model id or choose a different model.",
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -1462,6 +2116,125 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("emits reasoning activity for OpenAI-compatible usage-only reasoning chunks", async () => {
+    const model = {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      api: "openai-completions",
+      provider: "vertex-ai",
+      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 23,
+            total_tokens: 31,
+            completion_tokens_details: { reasoning_tokens: 23 },
+          },
+        },
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "Hi" },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "thinking_start",
+      "thinking_delta",
+      "text_start",
+      "text_delta",
+    ]);
+    expect(events[1]).toHaveProperty("delta", "");
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "" },
+      { type: "text", text: "Hi" },
+    ]);
+  });
+
+  it("does not add trailing reasoning activity after visible OpenAI-compatible text", async () => {
+    const model = {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      api: "openai-completions",
+      provider: "vertex-ai",
+      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "Hi" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 25,
+            total_tokens: 33,
+            completion_tokens_details: { reasoning_tokens: 23 },
+          },
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
+    expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
+  });
+
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {
     const model = {
       id: "deepseek-v4-flash",
@@ -1513,6 +2286,64 @@ describe("openai transport stream", () => {
     expect(stream.push.mock.calls.length).toBeLessThan(512);
   });
 
+  it("omits accumulated partial snapshots from OpenAI-compatible text deltas", async () => {
+    const model = {
+      id: "dense-local",
+      name: "Dense Local",
+      api: "openai-completions",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-dense",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "a" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-dense",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: "b" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas).toHaveLength(2);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
   it("yields to aborts during bursty Responses streams", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -1539,6 +2370,90 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Request was aborted");
     expect(yieldedToTimer).toBe(true);
     expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("omits accumulated partial snapshots from Responses text deltas", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.output_item.added", item: { type: "message" } },
+        { type: "response.output_text.delta", delta: "a" },
+        { type: "response.output_text.delta", delta: "b" },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas).toHaveLength(2);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
+  it("handles Azure Responses text content and text delta events", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            role: "assistant",
+            id: "msg_azure_text",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.text.delta", delta: "Hello" },
+        { type: "response.text.delta", delta: " from Azure!" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            role: "assistant",
+            id: "msg_azure_text",
+            content: [{ type: "text", text: "Hello from Azure!" }],
+            status: "completed",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_azure_text",
+            status: "completed",
+            usage: {
+              input_tokens: 4,
+              output_tokens: 3,
+              total_tokens: 7,
+            },
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(events).toMatchObject([
+      { type: "text_start" },
+      { type: "text_delta", delta: "Hello" },
+      { type: "text_delta", delta: " from Azure!" },
+      { type: "text_end", content: "Hello from Azure!" },
+    ]);
+    expect(output.content).toMatchObject([{ type: "text", text: "Hello from Azure!" }]);
+    expectRecordFields(output.usage, {
+      input: 4,
+      output: 3,
+      totalTokens: 7,
+    });
+    expect(output.responseId).toBe("resp_azure_text");
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
@@ -1844,6 +2759,195 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("recovers DeepSeek DSML parameter tool calls emitted as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("parses repeated DeepSeek DSML name attributes consistently", async () => {
+    // Guards the cached attribute matchers: repeated parses must stay identical
+    // (no stale RegExp lastIndex) across separate stream invocations.
+    const model = createDeepSeekCompletionsModel();
+    const content =
+      '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+
+    const runOnce = async () => {
+      const output = createAssistantOutput(model);
+      await testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-deepseek-dsml-repeat",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              {
+                index: 0,
+                delta: { content },
+                logprobs: null,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push() {} },
+      );
+      return output.content;
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(second).toEqual(first);
+    expect(first).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+  });
+
+  it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: '<|DSML|tool_calls><|DSML|invoke name="read">' },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: '{"path":"/tmp/native.md"}</|DSML|invoke>' },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: "</|DSML|tool_calls>" },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("does not recover malformed DeepSeek DSML tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-malformed-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([]);
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
@@ -1974,6 +3078,33 @@ describe("openai transport stream", () => {
     expect(params.seed).toBe(12345);
   });
 
+  it("forwards stop sequences to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        stop: ["User:", "Assistant:"],
+      },
+    );
+
+    expect(params.stop).toEqual(["User:", "Assistant:"]);
+  });
+
   it("forwards response_format to chat completions request params", () => {
     const model = {
       id: "gpt-5.4",
@@ -2065,6 +3196,29 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]?.role).toBe("system");
+  });
+
+  it("adds explicit message item types for Responses system and user input items", () => {
+    const params = buildOpenAIResponsesParams(
+      createAzureResponsesModel(),
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ type?: string; role?: string; content?: unknown }> };
+
+    expect(params.input?.[0]).toMatchObject({
+      type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: "system" }],
+    });
+    expect(params.input?.[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello" }],
+    });
   });
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
@@ -2183,6 +3337,42 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]?.role).toBe("developer");
   });
 
+  it("serializes Responses input messages with explicit message type and content parts", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: unknown };
+
+    expect(params.input).toEqual([
+      {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: "system" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
+
   it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -2298,15 +3488,45 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400000,
         maxTokens: 128000,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("treats canonical OpenAI Codex responses models as native Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "",
         messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
@@ -2328,15 +3548,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400000,
         maxTokens: 128000,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "",
         messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
@@ -2357,15 +3577,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -2410,7 +3630,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openclaw-openai-responses-transport" as Api,
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         input: ["text"],
@@ -2471,15 +3691,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       payload,
     );
 
@@ -2498,15 +3718,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -2598,15 +3818,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       payload,
     );
 
@@ -2618,22 +3838,22 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "system",
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2693,12 +3913,14 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
@@ -2719,19 +3941,332 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
+  it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "mycodex",
+        baseUrl: "http://127.0.0.1:8317/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "mycodex",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      store?: boolean;
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    expect(params.store).toBe(false);
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      summary: [],
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
+  });
+
+  it("preserves Responses replay item ids when a store-enabled wrapper requests replay", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      summary: [],
+    });
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
+  it("preserves Responses replay item ids for store-capable third-party opt-in routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "store-capable-model",
+        name: "Store-capable model",
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        baseUrl: "https://custom.example.com/v1",
+        compat: { supportsStore: true } as never,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "custom-openai-responses",
+            model: "store-capable-model",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  summary: [],
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      summary: [],
+    });
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
+  it("omits prior Responses replay item ids when store is disabled for custom Codex-compatible responses", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -2740,8 +4275,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2765,7 +4300,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:oauth",
+                    authProfileId: "openai:oauth",
                     sessionId: "session-123",
                   },
                 ),
@@ -2790,7 +4325,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -2799,15 +4334,17 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
       encrypted_content: "ciphertext",
+      summary: [],
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
@@ -2815,18 +4352,18 @@ describe("openai transport stream", () => {
     expectRecordFields(assistantMessage, {
       type: "message",
       role: "assistant",
-      id: "msg_prior",
       phase: "commentary",
     });
+    expect(assistantMessage?.id).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
-      id: "fc_prior",
       call_id: "call_abc",
     });
+    expect(functionCall?.id).toBeUndefined();
   });
 
-  it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
+  it("keeps GitHub Copilot Responses reasoning replay when store-disabled ids are omitted", () => {
     const model = {
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -2881,6 +4418,73 @@ describe("openai transport stream", () => {
       input?: Array<{
         type?: string;
         id?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      summary: [],
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+  });
+
+  it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const longReasoningId = `rs_${"x".repeat(380)}`;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: longReasoningId,
+                  summary: [],
+                }),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
       }>;
     };
 
@@ -2891,15 +4495,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -2908,8 +4512,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2933,7 +4537,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:oauth",
+                    authProfileId: "openai:oauth",
                     sessionId: "different-session",
                   },
                 ),
@@ -2943,20 +4547,22 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
+      summary: [],
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
@@ -2964,15 +4570,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -2981,8 +4587,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -3006,7 +4612,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:old-oauth",
+                    authProfileId: "openai:old-oauth",
                     sessionId: "session-123",
                   },
                 ),
@@ -3016,20 +4622,22 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:new-oauth", sessionId: "session-123" },
+      { authProfileId: "openai:new-oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
+      summary: [],
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
@@ -3037,15 +4645,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -3054,8 +4662,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -3080,7 +4688,7 @@ describe("openai transport stream", () => {
                     },
                     model,
                     {
-                      authProfileId: "openai-codex:oauth",
+                      authProfileId: "openai:oauth",
                       sessionId: "session-123",
                     },
                   ),
@@ -3091,21 +4699,23 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
       encrypted_content: "ciphertext",
+      summary: [],
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
@@ -3145,6 +4755,86 @@ describe("openai transport stream", () => {
     expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
     expect(stripped.input[0].nested).not.toHaveProperty("encrypted_content");
     expect(stripped.input[1]).toEqual(params.input[1]);
+  });
+
+  it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          summary: [],
+        },
+        {
+          type: "message",
+          id: "msg_prior",
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible answer" }],
+        },
+        {
+          type: "function_call",
+          id: "fc_prior",
+          call_id: "call_abc",
+          name: "price_lookup",
+          arguments: "{}",
+        },
+      ],
+    };
+    const recoveredStream = streamChunks([]);
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new OpenAI.BadRequestError(
+          400,
+          {
+            code: "thinking_signature_invalid",
+            message:
+              "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+            type: "invalid_request_error",
+          },
+          undefined,
+          new Headers(),
+        ),
+      )
+      .mockResolvedValueOnce(recoveredStream);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).resolves.toBe(recoveredStream);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0]).toBe(request);
+    expect(create.mock.calls[1]?.[0]).toEqual({
+      ...request,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          summary: [],
+        },
+        request.input[1],
+        request.input[2],
+      ],
+    });
   });
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
@@ -3212,8 +4902,7 @@ describe("openai transport stream", () => {
     const functionOutput = params.input?.find((item) => item.type === "function_call_output");
     expect(functionCall).toBeDefined();
     expect(functionOutput).toBeDefined();
-    expect(functionCall?.id).toMatch(/^fc_/);
-    expect(functionCall?.id?.length).toBeLessThanOrEqual(64);
+    expect(functionCall?.id).toBeUndefined();
     expect(functionCall?.call_id).toBe("call_ug6lFGKwZDjHfzW8H0PDQRwN");
     expect(functionOutput?.call_id).toBe(functionCall?.call_id);
     for (const item of params.input ?? []) {
@@ -3226,7 +4915,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("keeps distinct overlong Copilot Responses replay item ids distinct", () => {
+  it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {
     const sharedToolItemPrefix = "iVec" + "A".repeat(160);
     const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
     const secondToolCallId = `call_second|${sharedToolItemPrefix}BB`;
@@ -3296,14 +4985,7 @@ describe("openai transport stream", () => {
       params.input?.filter((item) => item.type === "function_call_output") ?? [];
     expect(functionCalls).toHaveLength(2);
     expect(functionOutputs).toHaveLength(2);
-    expect(functionCalls.map((item) => item.id)).toEqual([
-      expect.stringMatching(/^fc_/),
-      expect.stringMatching(/^fc_/),
-    ]);
-    expect(new Set(functionCalls.map((item) => item.id)).size).toBe(2);
-    for (const item of functionCalls) {
-      expect(item.id?.length).toBeLessThanOrEqual(64);
-    }
+    expect(functionCalls.map((item) => item.id)).toEqual([undefined, undefined]);
     expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
   });
 
@@ -3312,15 +4994,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [],
@@ -3335,6 +5017,7 @@ describe("openai transport stream", () => {
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
     expect(params.input).toEqual([
       {
+        type: "message",
         role: "user",
         content: [{ type: "input_text", text: " " }],
       },
@@ -3558,15 +5241,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.1-codex-mini",
         name: "gpt-5.1-codex-mini",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "system",
         messages: [],
@@ -3582,7 +5265,7 @@ describe("openai transport stream", () => {
 
   it.each([
     {
-      label: "openai",
+      label: "openai-platform",
       model: {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -3592,12 +5275,12 @@ describe("openai transport stream", () => {
       },
     },
     {
-      label: "openai-codex",
+      label: "openai-chatgpt",
       model: {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
       },
     },
@@ -3621,7 +5304,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://proxy.example.com/v1",
       },
     },
-  ])("replays assistant phase metadata for $label responses payloads", ({ label, model }) => {
+  ])("omits orphan phase-tagged ids for $label responses payloads", ({ label: _label, model }) => {
     const params = buildOpenAIResponsesParams(
       {
         ...model,
@@ -3679,11 +5362,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       phase: "commentary",
     });
-    if (label === "openai-codex") {
-      expect(assistantItem?.id).toBeUndefined();
-    } else {
-      expect(assistantItem?.id).toBe("msg_commentary");
-    }
+    expect(assistantItem?.id).toBeUndefined();
   });
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
@@ -3706,9 +5385,11 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: string }> };
+    ) as { input?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
 
-    expect(params.input?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.[0]?.content).toEqual([
+      { type: "input_text", text: "Stable prefix\nDynamic suffix" },
+    ]);
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
@@ -3779,6 +5460,247 @@ describe("openai transport stream", () => {
     ) as { tool_choice?: string };
 
     expect(params.tool_choice).toBe("required");
+  });
+
+  it("keeps healthy Responses tools when a sibling schema is unreadable", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      { toolChoice: { type: "function", name: "lookup" } },
+    ) as {
+      tools?: Array<{ name?: string; strict?: boolean }>;
+      tool_choice?: unknown;
+    };
+
+    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
+    expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
+  });
+
+  it("fails locally when a pinned Responses tool is unreadable", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-responses">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: { type: "function", name: "broken" } },
+      ),
+    ).toThrow('requested unavailable tool "broken"');
+  });
+
+  it("filters official Responses allowed_tools against projected functions", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      {
+        toolChoice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "function", name: "broken" },
+            { type: "function", name: "lookup" },
+          ],
+        },
+      },
+    ) as { tool_choice?: unknown };
+
+    expect(params.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "lookup" }],
+    });
+  });
+
+  it("fails locally when required Chat Completions has no usable tools", () => {
+    expect(() =>
+      buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: "required" },
+      ),
+    ).toThrow("no tools survived schema conversion");
+  });
+
+  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "done" }],
+            toolCallId: "call_abc",
+          },
+          { role: "user", content: "continue", timestamp: 1 },
+        ],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown[] };
+
+    expect(params.tools).toEqual([]);
+  });
+
+  it("does not reread an unreadable tool inventory length", () => {
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const responsesModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      tools,
+    } as never;
+
+    expect(buildOpenAIResponsesParams(responsesModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
+    expect(buildOpenAICompletionsParams(completionsModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
   });
 
   it("sorts Responses tools by name for stable prompt-cache payloads", () => {
@@ -3969,6 +5891,66 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
+  it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        name?: string;
+        strict?: boolean;
+        parameters?: Record<string, unknown>;
+      }>;
+    };
+
+    expect(params.tools).toEqual([
+      {
+        type: "function",
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("still normalizes responses tool parameters when strict is omitted", () => {
@@ -4372,6 +6354,150 @@ describe("openai transport stream", () => {
     expectRecordFields(tool, { type: "function" });
     expectRecordFields(tool.function, { name: "lookup_weather" });
     expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it.each([
+    ["implicit default", ""],
+    ["default", "https://api.openai.com/v1"],
+  ])(
+    "omits reasoning_effort for OpenAI %s gpt-5.5 Chat Completions tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each([
+    ["Azure OpenAI", "https://example.openai.azure.com/openai/v1"],
+    ["Foundry", "https://example.services.ai.azure.com/openai/v1"],
+    ["Cognitive Services", "https://example.cognitiveservices.azure.com/openai/v1"],
+  ])(
+    "omits reasoning_effort for %s gpt-5.5 deployment aliases with tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "prod-spud",
+          name: "GPT-5.5 (Azure)",
+          api: "openai-completions",
+          provider: "azure-openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it("keeps reasoning_effort for custom gpt-5.5 Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "custom-openai",
+        baseUrl: "https://models.example.com/v1",
+        compat: { supportsReasoningEffort: true },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(1);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("keeps reasoning_effort for gpt-5.5 Chat Completions payloads without tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(0);
+    expect(params.reasoning_effort).toBe("medium");
   });
 
   it("keeps reasoning_effort for gpt-5.4-mini Chat Completions payloads without tools", () => {
@@ -4842,6 +6968,41 @@ describe("openai transport stream", () => {
     expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
   });
 
+  it("keeps Mistral prompt cache keys without unsupported long retention", () => {
+    const model = {
+      id: "mistral-large-latest",
+      name: "Mistral Large",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      compat: {
+        supportsPromptCacheKey: true,
+        supportsLongCacheRetention: false,
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const params = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+  });
+
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
     const model = {
       id: "custom-model",
@@ -5123,6 +7284,32 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(16_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("clamps runtime maxTokens to the OpenAI completions model output cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi-token-plan",
+        baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 200_000 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(32_000);
     expect(params).not.toHaveProperty("max_tokens");
   });
 
@@ -5482,6 +7669,67 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        function?: {
+          name?: string;
+          strict?: boolean;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+    };
+
+    expect(params.tools?.map((tool) => tool.function)).toEqual([
+      {
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
@@ -6611,6 +8859,859 @@ describe("openai transport stream", () => {
       name: "read",
       arguments: { path: "/tmp" },
     });
+  });
+
+  it("keeps buffered visible text before following tool calls", async () => {
+    const model = {
+      id: "plain-openai-compatible",
+      name: "Plain OpenAI Compatible",
+      api: "openai-completions",
+      provider: "plain-openai-compatible",
+      baseUrl: "https://api.compat.test/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-buffered-text-tool",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: "Use <" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-buffered-text-tool",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_0",
+                    type: "function",
+                    function: { name: "exec", arguments: '{"command":"ls"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content[0]).toEqual({ type: "text", text: "Use <" });
+    expectRecordFields(output.content[1], {
+      type: "toolCall",
+      id: "call_0",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+  });
+
+  it("partitions inline reasoning tags out of OpenAI-compatible visible text", async () => {
+    const model = {
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "minimax",
+      baseUrl: "https://api.minimax.test/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-reasoning-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Before <thi",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-reasoning-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "nk>private reasoning</think> after",
+                reasoning_content: "private reasoning",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-reasoning-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const visibleText = output.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    const thinkingText = output.content
+      .filter((block): block is { type: "thinking"; thinking: string } => block.type === "thinking")
+      .map((block) => block.thinking)
+      .join("");
+
+    expect(visibleText).toBe("Before  after");
+    expect(visibleText).not.toContain("private reasoning");
+    expect(thinkingText).toBe("private reasoning");
+    expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
+  });
+
+  it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
+    const model = {
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "minimax",
+      baseUrl: "https://api.minimax.test/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-reasoning-disabled",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<think>private reasoning",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-reasoning-disabled",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                reasoning_content: "private reasoning",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      { emitReasoning: false },
+    );
+
+    const visibleText = output.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("");
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+  });
+
+  it("keeps literal reasoning tag examples visible without mirrored reasoning", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-literal-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Use `<think>private</think>` only as an example.",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Use `<think>private</think>` only as an example.",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-literal-unclosed-tag",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "The <reasoning> tag is deprecated in this example.",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "The <reasoning> tag is deprecated in this example.",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("keeps prose mentions of unmatched close tags visible without mirrored reasoning", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-literal-close-tag",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Use </think> to close the tag.",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Use </think> to close the tag.",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("strips content-only reasoning tags from OpenAI-compatible visible text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-content-only-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Before <think>private reasoning</think> after",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Before  after",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("recovers fully wrapped unclosed OpenAI-compatible reasoning text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-unclosed-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<think>Visible answer from a malformed local model",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Visible answer from a malformed local model",
+    });
+  });
+
+  it("does not recover buffered reasoning tags after structured thinking content", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-structured-thinking",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<think>private reasoning",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-structured-thinking",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: { type: "reasoning", text: "private reasoning" },
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    const visibleText = output.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    const thinkingText = output.content
+      .filter((block): block is { type: "thinking"; thinking: string } => block.type === "thinking")
+      .map((block) => block.thinking)
+      .join("");
+
+    expect(visibleText).toBe("");
+    expect(thinkingText).toBe("private reasoning");
+  });
+
+  it("keeps literal reasoning tag examples visible with mirrored reasoning", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-literal-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Use `<thi",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-literal-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "nk>private</think>` only as an example.",
+                reasoning_content: "Actual hidden reasoning.",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Use `<think>private</think>` only as an example.",
+    });
+    expect(output.content).toContainEqual({
+      type: "thinking",
+      thinking: "Actual hidden reasoning.",
+      thinkingSignature: "reasoning_content",
+    });
+  });
+
+  it("promotes silent tool calls when provider signals finish_reason stop", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_legit",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it("does not promote tool calls when provider omits final finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_unfinished",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("stop");
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
+  });
+
+  it("strips tool call blocks when provider signals finish_reason stop after visible text", async () => {
+    const model = {
+      id: "llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      provider: "llamacpp",
+      baseUrl: "http://localhost:8080/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Here is the answer." },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_spurious",
+                  function: { name: "bash", arguments: '{"cmd":"rm -rf /"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("stop");
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
+    expect(output.content.some((block) => (block as { type?: string }).type === "text")).toBe(true);
+  });
+
+  it("keeps tool call blocks when provider signals finish_reason tool_calls", async () => {
+    const model = {
+      id: "llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      provider: "llamacpp",
+      baseUrl: "http://localhost:8080/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_legit",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it("leaves content unchanged when no tool calls and finish_reason is stop", async () => {
+    const model = {
+      id: "llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      provider: "llamacpp",
+      baseUrl: "http://localhost:8080/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "llama-3.3-70b",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Just a text reply." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toHaveLength(1);
+    expect((output.content[0] as { type?: string }).type).toBe("text");
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
@@ -7956,6 +11057,41 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const staleKimiK27Model = {
+    ...customKimiProxyModel,
+    id: "kimi-k2.7-code",
+    name: "Kimi K2.7 Code",
+    provider: "moonshot",
+    baseUrl: "https://api.moonshot.ai/v1",
+    reasoning: false,
+  } satisfies Model<"openai-completions">;
+
+  const customQwenReasoningModel = {
+    id: "Qwen3.6-35B-A3B",
+    name: "Qwen3.6 35B",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  const gemma4Model = {
+    id: "google/gemma-4-12b",
+    name: "Gemma 4 12B",
+    api: "openai-completions",
+    provider: "vllm",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
   const kimiCodingProxyModel = {
     ...customKimiProxyModel,
     id: "kimi-for-coding",
@@ -8126,6 +11262,26 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant.reasoning).toBe("Need to answer politely.");
   });
 
+  it("preserves reasoning_content replay for custom reasoning model metadata", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customQwenReasoningModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
   it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
     const assistant = getAssistantMessage(buildReplayParams(xiaomiModel, "reasoning_content"));
 
@@ -8166,6 +11322,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves Kimi K2.7 reasoning_content replay with stale reasoning metadata", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(staleKimiK27Model, "reasoning_content"),
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
@@ -8300,5 +11467,38 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     const assistant = getAssistantMessage(params);
     expect(assistant.reasoning_details).toEqual([reasoningDetail]);
+  });
+
+  // issue #89660: a custom OpenAI-compatible proxy (not auto-detected as DeepSeek/
+  // Xiaomi/Kimi) can opt into the DeepSeek reasoning-content replay contract by
+  // setting compat.requiresReasoningContentOnAssistantMessages in config. getCompat
+  // must resolve `compat.X ?? detected.X` (matching every sibling field) instead of
+  // using `detected.X` alone, so the explicit config flag is honored in this transport.
+  const customReasoningProxyModel = {
+    id: "my-proxy/r1-pro",
+    name: "Custom Reasoning Proxy",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://my-proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  } satisfies Model<"openai-completions">;
+
+  it("honors compat.requiresReasoningContentOnAssistantMessages from config on a custom provider (#89660)", () => {
+    const resolved = testing.getCompat({
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    } as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
+    const resolved = testing.getCompat(customReasoningProxyModel as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });

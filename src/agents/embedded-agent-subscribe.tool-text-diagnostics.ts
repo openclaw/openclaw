@@ -1,10 +1,15 @@
+/**
+ * Warns when assistant text appears to expose raw tool-call syntax.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
+// Detect provider/model bugs where a reply serializes a tool call as plain
+// assistant text instead of emitting a structured invocation block.
 function hasStructuredToolInvocation(message: AssistantMessage): boolean {
   if (!Array.isArray(message.content)) {
     return false;
@@ -54,6 +59,7 @@ function isRegisteredToolName(
   return false;
 }
 
+/** Log a diagnostic when assistant text resembles a tool call but is not structured. */
 export function warnIfAssistantEmittedToolText(
   ctx: EmbeddedAgentSubscribeContext,
   assistantMessage: AssistantMessage,

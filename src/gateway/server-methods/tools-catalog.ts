@@ -1,3 +1,5 @@
+// Gateway RPC handler for the tool catalog shown by clients and Control UI.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -6,7 +8,6 @@ import {
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -18,6 +19,7 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
@@ -25,8 +27,8 @@ import {
   getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 type ToolCatalogEntry = {
   id: string;
@@ -48,26 +50,9 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function resolveAgentIdOrRespondError(
-  rawAgentId: unknown,
-  respond: RespondFn,
-  cfg: OpenClawConfig,
-) {
-  const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
-  const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
-  if (requestedAgentId && !knownAgents.includes(agentId)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-    );
-    return null;
-  }
-  return { cfg, agentId };
-}
-
 function buildCoreGroups(): ToolCatalogGroup[] {
+  // Core catalog rows come from static tool sections so profile chips remain
+  // stable even before any runtime agent session exists.
   return listCoreToolSections().map((section) => ({
     id: section.id,
     label: section.label,
@@ -95,30 +80,37 @@ function buildPluginGroups(params: {
     agentDir,
     agentId: params.agentId,
   };
-  ensureStandalonePluginToolRegistryLoaded({
+  const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
     context: toolContext,
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
   });
+  // Resolve tools through the same plugin registry path used at runtime so the
+  // catalog respects conflicts, optional tools, and subagent binding rules.
   const pluginTools = resolvePluginTools({
     context: toolContext,
     existingToolNames: params.existingToolNames,
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
     allowGatewaySubagentBinding: true,
+    runtimeRegistry: toolRegistry,
   });
-  const activeRegistry = getActivePluginRegistry();
+  const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map(
-    (activeRegistry?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
+  const pluginToolMetadata = new Map<
+    string,
+    NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
+  >();
+  if (catalogRegistry) {
+    for (const entry of catalogRegistry.toolMetadata ?? []) {
+      const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
+      pluginToolMetadata.set(metadataKey, entry.metadata);
+    }
+  }
   const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
@@ -158,13 +150,15 @@ function buildPluginGroups(params: {
     seenToolIds.add(tool.name);
     groups.set(groupId, existing);
   }
-  for (const entry of activeRegistry?.tools ?? []) {
+  for (const entry of catalogRegistry?.tools ?? []) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
     for (const name of names) {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
         continue;
       }
       const groupId = `plugin:${entry.pluginId}`;
+      // Declared-but-unresolved plugin tools still appear so operators can see
+      // optional capabilities that may need config before they bind at runtime.
       const existing =
         groups.get(groupId) ??
         ({
@@ -202,6 +196,7 @@ function buildPluginGroups(params: {
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
+/** Build the merged core/plugin tool catalog for one agent. */
 export function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -229,6 +224,7 @@ export function buildToolsCatalogResult(params: {
   };
 }
 
+/** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
     if (!validateToolsCatalogParams(params)) {
@@ -242,11 +238,12 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(
-      params.agentId,
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
       respond,
-      context.getRuntimeConfig(),
-    );
+      cfg: context.getRuntimeConfig(),
+      normalize: normalizeOptionalString,
+    });
     if (!resolved) {
       return;
     }

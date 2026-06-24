@@ -1,3 +1,7 @@
+/**
+ * Browser CLI state commands for cookies, storage, viewport, emulation, and
+ * HTTP context settings.
+ */
 import type { Command } from "commander";
 import {
   normalizeOptionalLowercaseString,
@@ -7,6 +11,7 @@ import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
 import { runCommandWithRuntime } from "../core-api.js";
 import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
@@ -83,6 +88,7 @@ async function runBrowserSetRequest(params: {
   });
 }
 
+/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -96,7 +102,7 @@ export function registerBrowserStateCommands(
     .description("Set viewport size (alias for resize)")
     .argument("<width>", "Viewport width")
     .argument("<height>", "Viewport height")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
       const width = parsePositiveInteger(widthRaw, "width");
       const height = parsePositiveInteger(heightRaw, "height");
@@ -122,7 +128,7 @@ export function registerBrowserStateCommands(
     .command("offline")
     .description("Toggle offline mode")
     .argument("<on|off>", "on/off")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const offline = parseOnOff(value);
@@ -147,7 +153,7 @@ export function registerBrowserStateCommands(
     .description("Set extra HTTP headers (JSON object)")
     .argument("[headersJson]", "JSON object of headers (alternative to --headers-json)")
     .option("--headers-json <json>", "JSON object of headers")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (headersJson: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
@@ -194,7 +200,7 @@ export function registerBrowserStateCommands(
     .option("--clear", "Clear credentials", false)
     .argument("[username]", "Username")
     .argument("[password]", "Password")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserSetRequest({
@@ -218,7 +224,7 @@ export function registerBrowserStateCommands(
     .argument("[longitude]", "Longitude")
     .option("--accuracy <m>", "Accuracy in meters")
     .option("--origin <origin>", "Origin to grant permissions for")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(
       async (latitudeRaw: string | undefined, longitudeRaw: string | undefined, opts, cmd) => {
         const parent = parentOpts(cmd);
@@ -252,7 +258,7 @@ export function registerBrowserStateCommands(
     .command("media")
     .description("Emulate prefers-color-scheme")
     .argument("<dark|light|none>", "dark/light/none")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const v = normalizeOptionalLowercaseString(value);
@@ -278,7 +284,7 @@ export function registerBrowserStateCommands(
     .command("timezone")
     .description("Override timezone (CDP)")
     .argument("<timezoneId>", "Timezone ID (e.g. America/New_York)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (timezoneId: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserSetRequest({
@@ -296,7 +302,7 @@ export function registerBrowserStateCommands(
     .command("locale")
     .description("Override locale (CDP)")
     .argument("<locale>", "Locale (e.g. en-US)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (locale: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserSetRequest({
@@ -314,7 +320,7 @@ export function registerBrowserStateCommands(
     .command("device")
     .description('Apply a Playwright device descriptor (e.g. "iPhone 14")')
     .argument("<name>", "Device name (Playwright devices)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (name: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserSetRequest({

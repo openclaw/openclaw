@@ -1,3 +1,4 @@
+// Msteams tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
@@ -214,15 +215,6 @@ function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-
-function continueConversationRef(mock: MockWithCalls): Record<string, unknown> {
-  const ref = mock.mock.calls[0]?.[1];
-  if (ref === undefined || ref === null || typeof ref !== "object" || Array.isArray(ref)) {
-    throw new Error("expected continueConversation ref object");
-  }
-  return ref as Record<string, unknown>;
-}
-
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
     mockState.loadOutboundMediaFromUrl.mockReset();

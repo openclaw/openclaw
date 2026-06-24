@@ -1,3 +1,4 @@
+// Mattermost plugin module implements slash commands behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostClient } from "./client.js";
 
@@ -171,6 +172,13 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
+  {
+    trigger: "oc_queue",
+    originalName: "queue",
+    description: "Adjust active-run queue behavior",
+    autoComplete: true,
+    autoCompleteHint: "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
+  },
 ];
 
 // ─── Command registration ────────────────────────────────────────────────────
@@ -261,7 +269,7 @@ export async function registerSlashCommands(params: {
   }
 
   // Fetch existing commands to avoid duplicates
-  let existing: MattermostCommandResponse[] = [];
+  let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {

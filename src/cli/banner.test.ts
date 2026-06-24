@@ -1,3 +1,4 @@
+// Banner tests cover CLI banner rendering and suppression behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
 
@@ -130,5 +131,30 @@ describe("emitCliBanner", () => {
 
     expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
     expect(hasEmittedCliBanner()).toBe(true);
+  });
+
+  it("can reset banner emission state for same-module tests", async () => {
+    const { emitCliBanner, hasEmittedCliBanner, testing } = await importFreshBannerModule();
+    setStdoutIsTty(true);
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    const options = {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      mode: "off" as const,
+      platform: "darwin" as const,
+      richTty: false,
+    };
+
+    emitCliBanner("2026.3.7", options);
+    expect(hasEmittedCliBanner()).toBe(true);
+
+    testing.resetBannerEmittedForTests();
+    expect(hasEmittedCliBanner()).toBe(false);
+
+    emitCliBanner("2026.3.7", options);
+    expect(writeSpy).toHaveBeenCalledTimes(2);
   });
 });

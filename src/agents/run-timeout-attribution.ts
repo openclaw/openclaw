@@ -1,4 +1,5 @@
-export const AGENT_RUN_TIMEOUT_PHASES = [
+/** Agent run phases used when attributing timeout/cancellation sources. */
+const AGENT_RUN_TIMEOUT_PHASES = [
   "queue",
   "preflight",
   "provider",
@@ -6,10 +7,12 @@ export const AGENT_RUN_TIMEOUT_PHASES = [
   "gateway_draining",
 ] as const;
 
+/** Timeout attribution phase for agent run lifecycle spans. */
 export type AgentRunTimeoutPhase = (typeof AGENT_RUN_TIMEOUT_PHASES)[number];
 
 const AGENT_RUN_TIMEOUT_PHASE_SET = new Set<string>(AGENT_RUN_TIMEOUT_PHASES);
 
+/** Normalizes raw timeout phase metadata into a known agent run phase. */
 export function normalizeAgentRunTimeoutPhase(value: unknown): AgentRunTimeoutPhase | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -20,4 +23,5 @@ export function normalizeAgentRunTimeoutPhase(value: unknown): AgentRunTimeoutPh
     : undefined;
 }
 
+/** Normalizes provider-started timeout attribution metadata. */
 export { asBoolean as normalizeProviderStarted } from "../utils/boolean.js";

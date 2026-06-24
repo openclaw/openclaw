@@ -1,17 +1,16 @@
+// Skill loading config helpers resolve configured skill sources and enablement.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillConfig } from "../../config/types.skills.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
-  resolveConfigPath,
-  resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
@@ -21,7 +20,8 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.evaluateEnabled": true,
 };
 
-export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
+/** Platform helpers re-exported for skill loading callers and tests. */
+export { hasBinary };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;

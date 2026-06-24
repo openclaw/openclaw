@@ -1,6 +1,7 @@
+// Copilot plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import { homedir as osHomedir } from "node:os";
-import { join, normalize, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 
 /**
  * Pure functional auth resolver for the copilot agent runtime.
@@ -305,17 +306,4 @@ export function tokenFingerprint(token: string): string {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-/**
- * Normalize a copilotHome path for cross-platform pool keying.
- * Re-exported so attempt.ts / runtime.ts can share the same
- * normalization without re-implementing.
- */
-export function normalizeCopilotHomePath(value: string): string {
-  return normalize(resolve(value)).replace(new RegExp(`${escapeForRegex(sep)}+$`), "");
-}
-
-function escapeForRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

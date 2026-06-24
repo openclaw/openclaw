@@ -1,3 +1,4 @@
+// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -169,14 +170,19 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            await new Promise((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
           }
         }
       }
     }
 
     if (!meRes) {
-      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
+      throw toLintErrorObject(
+        fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+        "Non-Error thrown",
+      );
     }
 
     const meJson = (await meRes.json()) as {
@@ -251,4 +257,18 @@ export async function probeTelegram(
       elapsedMs: Date.now() - started,
     };
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

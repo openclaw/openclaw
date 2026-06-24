@@ -1,9 +1,11 @@
+// Covers shared provider usage fetch parsing and error snapshots.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -106,15 +108,24 @@ describe("provider usage fetch shared helpers", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("cancels unread response bodies when discarding usage responses", async () => {
+    const response = new Response("not needed", { status: 429 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+
+    await discardUsageResponseBody(response);
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
+      provider: "openai",
       status: 401,
       tokenExpiredStatuses: [401, 403],
     });
 
     expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.provider).toBe("openai-codex");
+    expect(snapshot.provider).toBe("openai");
     expect(snapshot.windows).toHaveLength(0);
   });
 

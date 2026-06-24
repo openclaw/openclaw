@@ -1,3 +1,5 @@
+// Fal tests cover video generation provider plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
@@ -170,6 +172,42 @@ describe("fal video generation provider", () => {
     });
   });
 
+  it("parses raw fal queue result payloads with top-level video output", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-raw",
+          status_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw/status",
+          response_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
+      .mockResolvedValueOnce(
+        releasedJson({
+          video: { url: "https://fal.run/files/raw-output.mp4" },
+          prompt: "A calm harbor at sunrise",
+          seed: 443600358,
+        }),
+      )
+      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }));
+
+    const provider = buildFalVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "fal",
+      model: "fal-ai/wan/v2.2-a14b/image-to-video",
+      prompt: "A calm harbor at sunrise",
+      cfg: {},
+    });
+
+    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-output.mp4");
+    expect(result.metadata).toEqual({
+      requestId: "req-raw",
+      prompt: "A calm harbor at sunrise",
+      seed: 443600358,
+    });
+  });
+
   it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
     mockFalProviderRuntime();
     mockCompletedFalVideoJob({
@@ -281,6 +319,40 @@ describe("fal video generation provider", () => {
       }),
     ).rejects.toThrow("fal video generation response malformed");
     expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("caps oversized fal queue operation deadlines", async () => {
+    mockFalProviderRuntime();
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-123",
+          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "IN_PROGRESS" }));
+
+    try {
+      const provider = buildFalVideoGenerationProvider();
+      await expect(
+        provider.generateVideo({
+          provider: "fal",
+          model: "fal-ai/minimax/video-01-live",
+          prompt: "huge timeout",
+          cfg: {},
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        }),
+      ).rejects.toThrow("fal video generation did not finish in time (last status: IN_PROGRESS)");
+      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("rejects malformed fal completed result payloads", async () => {

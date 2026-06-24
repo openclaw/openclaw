@@ -1,3 +1,8 @@
+/** CLI entrypoint for channel message actions. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -15,10 +20,6 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
 function extractMessageId(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object") {
@@ -51,6 +52,7 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
+/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -93,6 +95,8 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
   const run = async () =>
     await runMessageAction({
       cfg,

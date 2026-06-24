@@ -15,11 +15,15 @@ safety interlock: commands are allowed only when policy + allowlist +
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
 
+For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
+Codex Guardian mapping, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 <Note>
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
-host-local `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps
+host-local `ask: "always"` in the execution host approvals file keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
 </Note>
 
@@ -69,11 +73,19 @@ Exec approvals are enforced locally on the execution host:
 
 ## Settings and storage
 
-Approvals live in a local JSON file on the execution host:
+Approvals live in a local JSON file on the execution host. When
+`OPENCLAW_STATE_DIR` is set, the file follows that state directory;
+otherwise it uses the default OpenClaw state directory:
 
 ```text
+$OPENCLAW_STATE_DIR/exec-approvals.json
+# otherwise
 ~/.openclaw/exec-approvals.json
 ```
+
+The default approval socket follows the same root:
+`$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
+`~/.openclaw/exec-approvals.sock` when the variable is unset.
 
 Example schema:
 
@@ -140,16 +152,23 @@ when set at the narrower session or agent scope.
 ### `exec.ask`
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
-  - `off` - never prompt.
-  - `on-miss` - prompt only when the allowlist does not match.
-  - `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
+  Configured ask policy for host exec. Controls the baseline approval
+  prompt behavior from `tools.exec.ask` and host approvals defaults. The
+  per-call `ask` tool parameter (see [Exec tool](/tools/exec#parameters))
+  can only harden that baseline, and channel-origin model calls ignore it
+  when the effective host ask is `off`.
+
+- `off` - never prompt.
+- `on-miss` - prompt only when the allowlist does not match.
+- `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
 
 </ParamField>
 
 ### `askFallback`
 
 <ParamField path="askFallback" type='"deny" | "allowlist" | "full"'>
-  Resolution when a prompt is required but no UI is reachable.
+  Resolution when a prompt is required but no UI is reachable. If this
+  field is omitted, OpenClaw defaults to `deny`.
 
 - `deny` - block.
 - `allowlist` - allow only if allowlist matches.
@@ -199,9 +218,11 @@ agent under `agents.list[].tools.exec.commandHighlighting`.
 If you want host exec to run without approval prompts, you must open
 **both** policy layers - requested exec policy in OpenClaw config
 (`tools.exec.*`) **and** host-local approvals policy in
-`~/.openclaw/exec-approvals.json`.
+the execution host approvals file.
 
-YOLO is the default host behavior unless you tighten it explicitly:
+OpenClaw defaults omitted `askFallback` to `deny`. Set host
+`askFallback` to `full` explicitly when a no-UI approval prompt should
+fall back to allow.
 
 | Layer                 | YOLO setting               |
 | --------------------- | -------------------------- |
@@ -268,7 +289,7 @@ openclaw exec-policy preset yolo
 That local shortcut updates both:
 
 - Local `tools.exec.host/security/ask`.
-- Local `~/.openclaw/exec-approvals.json` defaults.
+- Local approvals file defaults, including `askFallback: "full"`.
 
 It is intentionally local-only. To change gateway-host or node-host
 approvals remotely, use `openclaw approvals set --gateway` or
@@ -411,7 +432,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or
 headless node host). If a node does not advertise exec approvals yet,
-edit its local `~/.openclaw/exec-approvals.json` directly.
+edit its local approvals file directly.
 
 CLI: `openclaw approvals` supports gateway or node editing - see
 [Approvals CLI](/cli/approvals).
@@ -443,9 +464,13 @@ Exec lifecycle is surfaced as system messages:
 - `Exec finished`.
 
 These are posted to the agent's session after the node reports the event.
-Denied exec approvals are terminal: OpenClaw can report the denial to the
-operator or direct chat route, but it does not post `Exec denied` back into the
-agent session or wake agent work.
+Denied exec approvals are terminal for the host command itself: the command
+does not run. For main-agent async approvals with an originating session,
+OpenClaw posts the denial back into that session as an internal followup so the
+agent can stop waiting on the async command and avoid a missing-result repair.
+If there is no session or the session cannot be resumed, OpenClaw can still
+report a concise denial to the operator or direct chat route. Denials for
+subagent sessions are not posted back into the subagent.
 Gateway-host exec approvals emit the same lifecycle events when the
 command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these
@@ -453,11 +478,12 @@ messages for easy correlation.
 
 ## Denied approval behavior
 
-When an async exec approval is denied, OpenClaw treats the request as terminal.
-It can show a concise denial to the operator or direct chat route, but it does
-not send denial guidance back through the agent session. That keeps a denied
-command from becoming another model turn and prevents the agent from reusing
-output from an earlier run of the same command.
+When an async exec approval is denied, OpenClaw treats the host command as
+terminal and fail-closed. For main-agent sessions, the denial is delivered as an
+internal session followup that tells the agent the async command did not run.
+That preserves transcript continuity without exposing stale command output. If
+session delivery is unavailable, OpenClaw falls back to a concise operator or
+direct-chat denial when a safe route exists.
 
 ## Implications
 

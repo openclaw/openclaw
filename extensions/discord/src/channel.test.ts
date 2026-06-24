@@ -1,3 +1,4 @@
+// Discord tests cover channel plugin behavior.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ChannelType } from "discord-api-types/v10";
@@ -180,7 +181,7 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
-  it("routes read and search actions through the gateway", () => {
+  it("routes Discord message actions through the gateway", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
       "gateway",
     );
@@ -189,6 +190,15 @@ describe("discordPlugin outbound", () => {
     );
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
       "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "upload-file" as never })).toBe(
+      "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "thread-reply" as never })).toBe(
+      "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "channel-info" as never })).toBe(
+      "gateway",
     );
   });
 
@@ -472,6 +482,40 @@ describe("discordPlugin outbound", () => {
     }
   });
 
+  it("returns a timeout error when capabilities diagnostics exceed the timeout", async () => {
+    let diagnosticSignal: AbortSignal | undefined;
+    const fetchPermissionsSpy = vi
+      .spyOn(sendModule, "fetchChannelPermissionsDiscord")
+      .mockImplementation(
+        async (_channelId, opts) =>
+          await new Promise<never>((_, reject) => {
+            diagnosticSignal = opts.signal;
+            opts.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("permission lookup aborted")),
+              { once: true },
+            );
+          }),
+      );
+    try {
+      const cfg = createCfg();
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg),
+        timeoutMs: 10,
+        cfg,
+        target: "channel:222",
+      });
+
+      const timeoutPerms = recordField(diagnostics?.details?.permissions, "permissions");
+      expect(String(timeoutPerms.error)).toContain("timed out");
+      expect(diagnostics?.lines?.[0]?.tone).toBe("error");
+      expect(objectArgAt(fetchPermissionsSpy, 0, 1).timeoutMs).toBe(10);
+      expect(diagnosticSignal?.aborted).toBe(true);
+    } finally {
+      fetchPermissionsSpy.mockRestore();
+    }
+  });
+
   it("uses direct Discord startup helpers for async startup enrichment", async () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");
@@ -539,8 +583,8 @@ describe("discordPlugin outbound", () => {
         }) => void)
       | undefined;
     probeDiscordMock.mockReturnValue(
-      new Promise((resolve) => {
-        resolveProbe = resolve;
+      new Promise((resolveLocal) => {
+        resolveProbe = resolveLocal;
       }),
     );
     monitorDiscordProviderMock.mockResolvedValue(undefined);

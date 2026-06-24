@@ -1,5 +1,6 @@
+// Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelCatalogProvider } from "../model-catalog/types.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
@@ -88,6 +89,92 @@ describe("provider-catalog-shared live catalog cache", () => {
         load,
       }),
     ).resolves.toBe("ok");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("empty")
+      .mockResolvedValueOnce("usable");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("empty");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the oldest live catalog cache entry when the cache is full", async () => {
+    const load = vi.fn(async (id: number) => `value-${id}`);
+
+    for (let i = 0; i < 100; i += 1) {
+      await expect(
+        getCachedLiveCatalogValue({
+          keyParts: ["provider", "models", i],
+          load: () => load(i),
+          ttlMs: 60_000,
+        }),
+      ).resolves.toBe(`value-${i}`);
+    }
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 100],
+        load: () => load(100),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-100");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 0],
+        load: () => load(0),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-0");
+
+    expect(load).toHaveBeenCalledTimes(102);
+  });
+
+  it("does not cache live catalog loads when the expiry would exceed Date range", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("first")
+      .mockResolvedValueOnce("second");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("first");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("second");
     expect(load).toHaveBeenCalledTimes(2);
   });
 });
@@ -221,6 +308,9 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           cost: {
             input: 1,
             output: 2,
@@ -269,6 +359,9 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           compat: { supportsUsageInStreaming: true },
         },
       ],

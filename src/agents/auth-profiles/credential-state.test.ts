@@ -1,3 +1,8 @@
+/**
+ * Tests credential eligibility and expiry classification.
+ * Protects missing, expired, near-expiry, and SecretRef credential handling for
+ * auth profile selection.
+ */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
@@ -18,6 +23,10 @@ describe("resolveTokenExpiryState", () => {
     expect(resolveTokenExpiryState(-1, now)).toBe("invalid_expires");
     expect(resolveTokenExpiryState(Number.NaN, now)).toBe("invalid_expires");
     expect(resolveTokenExpiryState(Number.POSITIVE_INFINITY, now)).toBe("invalid_expires");
+  });
+
+  it("treats Date-invalid future timestamps as invalid_expires", () => {
+    expect(resolveTokenExpiryState(8_700_000_000_000_000, now)).toBe("invalid_expires");
   });
 
   it("returns expired when expires is in the past", () => {
@@ -45,7 +54,7 @@ describe("hasUsableOAuthCredential", () => {
       hasUsableOAuthCredential(
         {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1,
@@ -108,7 +117,7 @@ describe("evaluateStoredCredentialEligibility", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "",
         refresh: "",
         expires: now + 60_000,

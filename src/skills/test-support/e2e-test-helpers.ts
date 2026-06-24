@@ -1,6 +1,8 @@
+// Skill E2E test helpers build isolated skill environments for integration tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 
+/** Writes a SKILL.md fixture for skills E2E tests. */
 export async function writeSkill(params: {
   dir: string;
   name: string;

@@ -1,18 +1,49 @@
+// Telegram plugin module implements message dispatch dedupe behavior.
 import path from "node:path";
 import type { Message } from "grammy/types";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const TELEGRAM_MESSAGE_DISPATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const TELEGRAM_MESSAGE_DISPATCH_MEMORY_MAX = 5000;
-const TELEGRAM_MESSAGE_DISPATCH_FILE_MAX = 50_000;
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "global";
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
+export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
-export type TelegramMessageDispatchReplayGuard = ClaimableDedupe;
+export type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
+  Required<Pick<ClaimableDedupe, "forget">>;
 
 export type TelegramMessageDispatchClaim =
   | { kind: "claimed"; key: string }
   | { kind: "duplicate" }
   | { kind: "invalid" };
+
+export type TelegramMessageDispatchReplayForgetFailure = {
+  key: string;
+  error?: unknown;
+};
+
+export class TelegramMessageDispatchReplayForgetError extends Error {
+  readonly failures: TelegramMessageDispatchReplayForgetFailure[];
+  override readonly cause: unknown;
+
+  constructor(failures: readonly TelegramMessageDispatchReplayForgetFailure[]) {
+    const count = failures.length;
+    super(`telegram message dispatch dedupe rollback failed for ${count} key(s)`, {
+      cause: failures.find((failure) => failure.error !== undefined)?.error,
+    });
+    this.name = "TelegramMessageDispatchReplayForgetError";
+    this.failures = [...failures];
+    this.cause = failures.find((failure) => failure.error !== undefined)?.error;
+  }
+}
+
+export function isTelegramMessageDispatchReplayForgetError(
+  error: unknown,
+): error is TelegramMessageDispatchReplayForgetError {
+  return error instanceof TelegramMessageDispatchReplayForgetError;
+}
 
 function sanitizeFileSegment(value: string): string {
   const trimmed = value.trim();
@@ -20,6 +51,18 @@ function sanitizeFileSegment(value: string): string {
     return "default";
   }
   return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+export function resolveTelegramMessageDispatchLegacyPath(params: {
+  storePath: string;
+  namespace: string;
+}): string {
+  return path.join(
+    path.dirname(params.storePath),
+    `${path.basename(params.storePath)}.telegram-message-dispatch-${sanitizeFileSegment(
+      params.namespace,
+    )}.json`,
+  );
 }
 
 export function buildTelegramMessageDispatchReplayKey(msg: Message): string | null {
@@ -31,22 +74,35 @@ export function buildTelegramMessageDispatchReplayKey(msg: Message): string | nu
   return JSON.stringify(["message", String(chatId), messageId]);
 }
 
-export function createTelegramMessageDispatchReplayGuard(params: {
-  storePath: string;
-  onDiskError?: (error: unknown) => void;
-}): TelegramMessageDispatchReplayGuard {
+export function buildTelegramMessageDispatchAccountReplayKey(params: {
+  accountId: string;
+  key: string;
+}): string {
+  return JSON.stringify(["account", params.accountId, params.key]);
+}
+
+function buildTelegramMessageDispatchStoredReplayKey(params: {
+  accountId: string;
+  msg: Message;
+}): string | null {
+  const key = buildTelegramMessageDispatchReplayKey(params.msg);
+  return key
+    ? buildTelegramMessageDispatchAccountReplayKey({ accountId: params.accountId, key })
+    : null;
+}
+
+export function createTelegramMessageDispatchReplayGuard(
+  params: {
+    onDiskError?: (error: unknown) => void;
+  } = {},
+): TelegramMessageDispatchReplayGuard {
   return createClaimableDedupe({
-    ttlMs: TELEGRAM_MESSAGE_DISPATCH_TTL_MS,
-    memoryMaxSize: TELEGRAM_MESSAGE_DISPATCH_MEMORY_MAX,
-    fileMaxEntries: TELEGRAM_MESSAGE_DISPATCH_FILE_MAX,
-    resolveFilePath: (namespace) =>
-      path.join(
-        path.dirname(params.storePath),
-        `${path.basename(params.storePath)}.telegram-message-dispatch-${sanitizeFileSegment(
-          namespace,
-        )}.json`,
-      ),
-    onDiskError: params.onDiskError,
+    ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+    memoryMaxSize: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES,
+    pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+    namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+    stateMaxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+    ...(params.onDiskError ? { onDiskError: params.onDiskError } : {}),
   });
 }
 
@@ -55,14 +111,19 @@ export async function claimTelegramMessageDispatchReplay(params: {
   accountId: string;
   msg: Message;
 }): Promise<TelegramMessageDispatchClaim> {
-  const key = buildTelegramMessageDispatchReplayKey(params.msg);
+  const key = buildTelegramMessageDispatchStoredReplayKey({
+    accountId: params.accountId,
+    msg: params.msg,
+  });
   if (!key) {
     return { kind: "invalid" };
   }
 
   let releaseRetries = 0;
   while (true) {
-    const claim = await params.guard.claim(key, { namespace: params.accountId });
+    const claim = await params.guard.claim(key, {
+      namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+    });
     if (claim.kind === "claimed") {
       return { kind: "claimed", key };
     }
@@ -87,21 +148,50 @@ function normalizeReplayKeys(keys?: readonly string[]): string[] {
 
 export async function commitTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
-  accountId: string;
   keys?: readonly string[];
 }): Promise<void> {
   const keys = normalizeReplayKeys(params.keys);
-  await Promise.all(keys.map((key) => params.guard.commit(key, { namespace: params.accountId })));
+  await Promise.all(
+    keys.map((key) =>
+      params.guard.commit(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
+    ),
+  );
+}
+
+export async function forgetTelegramMessageDispatchReplay(params: {
+  guard: TelegramMessageDispatchReplayGuard;
+  keys?: readonly string[];
+}): Promise<void> {
+  const keys = normalizeReplayKeys(params.keys);
+  const failures = (
+    await Promise.all(
+      keys.map(async (key): Promise<TelegramMessageDispatchReplayForgetFailure | null> => {
+        try {
+          const forgotten = await params.guard.forget(key, {
+            namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          });
+          return forgotten ? null : { key };
+        } catch (error) {
+          return { key, error };
+        }
+      }),
+    )
+  ).filter((failure): failure is TelegramMessageDispatchReplayForgetFailure => Boolean(failure));
+  if (failures.length > 0) {
+    throw new TelegramMessageDispatchReplayForgetError(failures);
+  }
 }
 
 export function releaseTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
-  accountId: string;
   keys?: readonly string[];
   error?: unknown;
 }): void {
   const keys = normalizeReplayKeys(params.keys);
   for (const key of keys) {
-    params.guard.release(key, { namespace: params.accountId, error: params.error });
+    params.guard.release(key, {
+      namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+      error: params.error,
+    });
   }
 }

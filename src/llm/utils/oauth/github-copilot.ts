@@ -2,13 +2,13 @@
  * GitHub Copilot OAuth flow
  */
 
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromEpochSeconds,
 } from "../../../infra/parse-finite-number.js";
-import { resolveTimerTimeoutMs } from "../../../shared/number-coercion.js";
 import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
@@ -405,9 +405,10 @@ async function enableGitHubCopilotModel(
 ): Promise<boolean> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models/${modelId}/policy`;
+  let response: Response | undefined;
 
   try {
-    const response = await fetchResponse(
+    response = await fetchResponse(
       url,
       {
         method: "POST",
@@ -426,6 +427,8 @@ async function enableGitHubCopilotModel(
     return response.ok;
   } catch {
     return false;
+  } finally {
+    await response?.body?.cancel().catch(() => undefined);
   }
 }
 

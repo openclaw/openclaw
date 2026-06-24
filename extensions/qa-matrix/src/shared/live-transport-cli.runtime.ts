@@ -1,7 +1,9 @@
+// Qa Matrix plugin module implements live transport cli behavior.
 import path from "node:path";
 import { resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import type { QaProviderMode } from "../run-config.js";
 import { normalizeQaProviderMode } from "../run-config.js";
+import { createLiveTransportQaRunId } from "./live-transport-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
 export function resolveLiveTransportQaRunOptions(
@@ -14,7 +16,7 @@ export function resolveLiveTransportQaRunOptions(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${createLiveTransportQaRunId()}`);
   return {
     repoRoot,
     outputDir,

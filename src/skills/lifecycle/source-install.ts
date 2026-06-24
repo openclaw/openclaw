@@ -1,13 +1,15 @@
+// Source install helpers install skills from source directories and repositories.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withTempDir } from "../../infra/install-source-utils.js";
 import { writeJson } from "../../infra/json-files.js";
-import { parseGitPluginSpec } from "../../plugins/git-install.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { parseFrontmatter } from "../loading/frontmatter.js";
 import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
@@ -32,7 +34,7 @@ type SkillSourceOrigin = {
   };
 };
 
-export type SkillSourceInstallResult =
+type SkillSourceInstallResult =
   | {
       ok: true;
       slug: string;
@@ -200,6 +202,7 @@ async function installLocalSkillDir(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: Logger;
+  config?: OpenClawConfig;
   git?: SkillSourceOrigin["git"];
 }): Promise<SkillSourceInstallResult> {
   const slug = await resolveSkillInstallSlug({
@@ -214,9 +217,25 @@ async function installLocalSkillDir(params: {
     mode: params.force ? "update" : "install",
     timeoutMs: params.timeoutMs,
     logger: params.logger,
-    scan: {
+    policy: {
+      config: params.config,
       installId: params.source,
-      origin: params.sourceSpec,
+      origin: {
+        type: params.source,
+        spec: params.sourceSpec,
+        ...(params.git?.commit ? { commit: params.git.commit } : {}),
+        ...(params.git?.ref ? { ref: params.git.ref } : {}),
+      },
+      source:
+        params.source === "git"
+          ? {
+              kind: "git",
+              authority: "third-party",
+              mutable: !isImmutableGitCommitRef(params.git?.ref),
+              network: true,
+            }
+          : { kind: "local-path", authority: "user", mutable: true, network: false },
+      requestedSpecifier: params.sourceSpec,
     },
   });
   if (!install.ok) {
@@ -250,6 +269,7 @@ async function installGitSkill(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
   if (!parsed) {
@@ -329,6 +349,7 @@ async function installGitSkill(params: {
       force: params.force,
       timeoutMs: params.timeoutMs,
       logger: params.logger,
+      config: params.config,
       git,
     });
   });
@@ -341,6 +362,7 @@ async function installPathSkill(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const sourceDir = resolveUserPath(params.spec);
   let stat;
@@ -362,6 +384,7 @@ async function installPathSkill(params: {
     force: params.force,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
+    config: params.config,
   });
 }
 
@@ -383,6 +406,7 @@ export async function installSkillFromSource(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {

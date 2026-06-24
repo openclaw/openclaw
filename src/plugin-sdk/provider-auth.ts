@@ -1,6 +1,11 @@
-// Public auth/onboarding helpers for provider plugins.
-
+// Provider auth helpers define auth methods, credential resolution, and setup status contracts.
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromEpochSeconds,
+  parseStrictNonNegativeInteger,
+} from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -12,6 +17,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -20,8 +26,6 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
@@ -97,6 +101,14 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
+  buildOpenAICodexCredentialExtra,
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAccessTokenExpiry,
+  resolveOpenAICodexAuthIdentity,
+  resolveOpenAICodexImportProfileName,
+  type OpenAICodexAuthIdentity,
+} from "./provider-openai-chatgpt-auth.js";
+export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
   toFormUrlEncoded,
@@ -121,9 +133,13 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export type CachedCopilotToken = {
+  /** Copilot API token returned by GitHub's internal exchange endpoint. */
   token: string;
+  /** Absolute epoch milliseconds when the Copilot API token expires. */
   expiresAt: number;
+  /** Absolute epoch milliseconds when this cache entry was written. */
   updatedAt: number;
+  /** Copilot integration id that produced this cached token. */
   integrationId?: string;
 };
 
@@ -132,7 +148,27 @@ function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
-  return cache.integrationId === COPILOT_INTEGRATION_ID && cache.expiresAt - now > 5 * 60 * 1000;
+  const expiresAt = asDateTimestampMs(cache.expiresAt);
+  return (
+    cache.integrationId === COPILOT_INTEGRATION_ID &&
+    expiresAt !== undefined &&
+    expiresAt - now > 5 * 60 * 1000
+  );
+}
+
+function resolveCopilotTokenExpiresAtMs(expiresAt: unknown): number | undefined {
+  const parsed =
+    typeof expiresAt === "number" && Number.isFinite(expiresAt)
+      ? expiresAt
+      : typeof expiresAt === "string" && expiresAt.trim().length > 0
+        ? parseStrictNonNegativeInteger(expiresAt)
+        : undefined;
+  if (parsed === undefined) {
+    return undefined;
+  }
+  return parsed < 100_000_000_000
+    ? resolveExpiresAtMsFromEpochSeconds(parsed)
+    : asDateTimestampMs(parsed);
 }
 
 function parseCopilotTokenResponse(value: unknown): {
@@ -149,20 +185,25 @@ function parseCopilotTokenResponse(value: unknown): {
     throw new Error("Copilot token response missing token");
   }
 
-  let expiresAtMs: number;
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
-  } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = parseStrictNonNegativeInteger(expiresAt);
-    if (parsed === undefined) {
-      throw new Error("Copilot token response has invalid expires_at");
-    }
-    expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
-  } else {
+  const expiresAtMs = resolveCopilotTokenExpiresAtMs(expiresAt);
+  if (
+    expiresAt === undefined ||
+    expiresAt === null ||
+    (typeof expiresAt === "string" && expiresAt.trim().length === 0)
+  ) {
     throw new Error("Copilot token response missing expires_at");
+  }
+  if (expiresAtMs === undefined) {
+    throw new Error("Copilot token response has invalid expires_at");
   }
 
   return { token, expiresAt: expiresAtMs };
+}
+
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 function resolveCopilotProxyHost(proxyEp: string): string | null {
@@ -184,7 +225,10 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
 }
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
+export function deriveCopilotApiBaseUrlFromToken(
+  /** Copilot API token text that may contain a `proxy-ep` attribute. */
+  token: string,
+): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
     return null;
@@ -206,18 +250,30 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
+/**
+ * @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins.
+ */
 export async function resolveCopilotApiToken(params: {
+  /** GitHub OAuth token exchanged for a Copilot API token. */
   githubToken: string;
+  /** Environment used to resolve the default token cache path. */
   env?: NodeJS.ProcessEnv;
+  /** Fetch implementation used for the Copilot token exchange. */
   fetchImpl?: typeof fetch;
+  /** Explicit cache file path for the exchanged Copilot token. */
   cachePath?: string;
+  /** Cache reader override for tests and alternate storage backends. */
   loadJsonFileImpl?: (path: string) => unknown;
+  /** Cache writer override for tests and alternate storage backends. */
   saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
 }): Promise<{
+  /** Copilot API token, from cache or fresh exchange. */
   token: string;
+  /** Absolute epoch milliseconds when the Copilot API token expires. */
   expiresAt: number;
+  /** Source marker identifying cache path or exchange endpoint. */
   source: string;
+  /** Copilot API base URL derived from token metadata or default endpoint. */
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
@@ -226,6 +282,8 @@ export async function resolveCopilotApiToken(params: {
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
+    // Token cache entries are scoped to the current Copilot integration id so
+    // stale tokens from older editor identities are exchanged again.
     if (isCopilotTokenUsable(cached)) {
       return {
         token: cached.token,
@@ -248,6 +306,7 @@ export async function resolveCopilotApiToken(params: {
   });
 
   if (!res.ok) {
+    await cancelUnreadResponseBody(res);
     throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
   }
 
@@ -268,9 +327,16 @@ export async function resolveCopilotApiToken(params: {
   };
 }
 
+/**
+ * Checks whether a provider has either env auth or matching local auth profiles configured.
+ */
 export function isProviderApiKeyConfigured(params: {
+  /** Provider id to check for env auth or local auth profiles. */
   provider: string;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
 }): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
@@ -282,46 +348,84 @@ export function isProviderApiKeyConfigured(params: {
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  return listProfilesForProvider(store, params.provider).length > 0;
+  const profileIds = listProfilesForProvider(store, params.provider);
+  if (!params.profileTypes?.length) {
+    return profileIds.length > 0;
+  }
+  const allowedTypes = new Set(params.profileTypes);
+  return profileIds.some((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    return type !== undefined && allowedTypes.has(type);
+  });
 }
 
+/**
+ * Lists auth profile ids usable for a provider without throwing on missing stores or keychain access.
+ */
 export function listUsableProviderAuthProfileIds(params: {
+  /** Provider id whose usable auth profiles should be listed. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and default agent dir. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
-    return { agentDir, profileIds };
+    const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
+    return { agentDir, profileIds: filterAuthProfileIdsByType(store, profileIds, params) };
   } catch {
     return { agentDir: "", profileIds: [] };
   }
 }
 
+/**
+ * Checks whether any usable auth profile exists for a provider.
+ */
 export function isProviderAuthProfileConfigured(params: {
+  /** Provider id to check for usable auth profiles. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and default agent dir. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
 
+/**
+ * Resolves the first usable auth-profile API key for a provider in configured profile order.
+ */
 export async function resolveProviderAuthProfileApiKey(params: {
+  /** Provider id whose first usable auth profile should resolve to an API key. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and secret refs. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  for (const profileId of profileIds) {
+  for (const profileId of filterAuthProfileIdsByType(store, profileIds, params)) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
       store,
@@ -364,7 +468,6 @@ function resolveUsableProviderAuthProfiles(params: {
 
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: true,
   });
   return {
     agentDir,
@@ -375,4 +478,19 @@ function resolveUsableProviderAuthProfiles(params: {
     }),
     store: fallbackStore,
   };
+}
+
+function filterAuthProfileIdsByType(
+  store: AuthProfileStore,
+  profileIds: readonly string[],
+  params: { profileTypes?: readonly AuthProfileCredential["type"][] },
+): string[] {
+  if (!params.profileTypes?.length) {
+    return [...profileIds];
+  }
+  const allowedTypes = new Set(params.profileTypes);
+  return profileIds.filter((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    return type !== undefined && allowedTypes.has(type);
+  });
 }

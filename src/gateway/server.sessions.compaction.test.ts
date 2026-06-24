@@ -1,7 +1,11 @@
+/**
+ * Gateway session compaction RPC tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -21,7 +25,88 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
+
+type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
+
+function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
+  const header = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
+    JSON.stringify({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
+      message: { role: "user", content: `line-${index}`, timestamp: index },
+    }),
+  );
+  return [header, ...entries];
+}
+
+function compactionCheckpointEntry(
+  fixture: CheckpointFixture,
+  options: {
+    checkpointId: string;
+    sessionKey: string;
+    createdAt: number;
+    reason: SessionCompactionCheckpoint["reason"];
+    summary: string;
+    tokensBefore?: number;
+    tokensAfter?: number;
+  },
+) {
+  return {
+    checkpointId: options.checkpointId,
+    sessionKey: options.sessionKey,
+    sessionId: fixture.sessionId,
+    createdAt: options.createdAt,
+    reason: options.reason,
+    summary: options.summary,
+    ...(options.tokensBefore === undefined ? {} : { tokensBefore: options.tokensBefore }),
+    ...(options.tokensAfter === undefined ? {} : { tokensAfter: options.tokensAfter }),
+    firstKeptEntryId: fixture.preCompactionLeafId,
+    preCompaction: {
+      sessionId: fixture.sessionId,
+      leafId: fixture.preCompactionLeafId,
+    },
+    postCompaction: {
+      sessionId: fixture.sessionId,
+      sessionFile: fixture.sessionFile,
+      leafId: fixture.postCompactionLeafId,
+      entryId: fixture.postCompactionLeafId,
+    },
+  };
+}
+
+function isCompactOperationEvent(message: unknown, phase: "start" | "end") {
+  const candidate = message as {
+    event?: unknown;
+    payload?: { operation?: unknown; phase?: unknown };
+    type?: unknown;
+  };
+  return (
+    candidate.type === "event" &&
+    candidate.event === "session.operation" &&
+    candidate.payload?.operation === "compact" &&
+    candidate.payload?.phase === phase
+  );
+}
+
+function expectMainCompactionResult(
+  compacted: { ok?: boolean; payload?: { compacted?: boolean; key?: string } | null },
+  expectedCompacted: boolean,
+) {
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe("agent:main:main");
+  expect(compacted.payload?.compacted).toBe(expectedCompacted);
+}
 
 test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
@@ -29,34 +114,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect((await fs.readdir(dir)).some((file) => file.includes(".checkpoint."))).toBe(false);
   const checkpointEntryCount = fixture.session.getEntries().length;
   const checkpointCreatedAt = Date.now();
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-1",
+    sessionKey: "agent:main:main",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+    summary: "checkpoint summary",
+    tokensBefore: 123,
+    tokensAfter: 45,
+  });
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {
         sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [
-          {
-            checkpointId: "checkpoint-1",
-            sessionKey: "agent:main:main",
-            sessionId: fixture.sessionId,
-            createdAt: checkpointCreatedAt,
-            reason: "manual",
-            tokensBefore: 123,
-            tokensAfter: 45,
-            summary: "checkpoint summary",
-            firstKeptEntryId: fixture.preCompactionLeafId,
-            preCompaction: {
-              sessionId: fixture.sessionId,
-              leafId: fixture.preCompactionLeafId,
-            },
-            postCompaction: {
-              sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
-              leafId: fixture.postCompactionLeafId,
-              entryId: fixture.postCompactionLeafId,
-            },
-          },
-        ],
+        compactionCheckpoints: [checkpointEntry],
       }),
     },
   });
@@ -101,27 +173,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(listedCheckpoints.ok).toBe(true);
   expect(listedCheckpoints.payload?.key).toBe("agent:main:main");
   expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
-  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual({
-    checkpointId: "checkpoint-1",
-    sessionKey: "agent:main:main",
-    sessionId: fixture.sessionId,
-    createdAt: checkpointCreatedAt,
-    reason: "manual",
-    summary: "checkpoint summary",
-    tokensBefore: 123,
-    tokensAfter: 45,
-    firstKeptEntryId: fixture.preCompactionLeafId,
-    preCompaction: {
-      sessionId: fixture.sessionId,
-      leafId: fixture.preCompactionLeafId,
-    },
-    postCompaction: {
-      sessionId: fixture.sessionId,
-      sessionFile: fixture.sessionFile,
-      leafId: fixture.postCompactionLeafId,
-      entryId: fixture.postCompactionLeafId,
-    },
-  });
+  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual(checkpointEntry);
 
   const checkpoint = await rpcReq<{
     ok: true;
@@ -277,13 +329,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
 });
 
 test("sessions.compaction.* scopes selected global checkpoints to the requested agent", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const workDir = path.dirname(workStorePath);
   await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
   await fs.mkdir(workDir, { recursive: true });
@@ -291,6 +337,13 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   await fs.writeFile(mainSessionFile, `${JSON.stringify({ role: "user", content: "main" })}\n`);
   const fixture = await createCheckpointFixture(workDir, { legacyPreCompactionSnapshot: false });
   const checkpointCreatedAt = Date.now();
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-work",
+    sessionKey: "global",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+    summary: "work checkpoint",
+  });
   await fs.writeFile(
     mainStorePath,
     JSON.stringify(
@@ -305,27 +358,7 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
       {
         global: sessionStoreEntry(fixture.sessionId, {
           sessionFile: fixture.sessionFile,
-          compactionCheckpoints: [
-            {
-              checkpointId: "checkpoint-work",
-              sessionKey: "global",
-              sessionId: fixture.sessionId,
-              createdAt: checkpointCreatedAt,
-              reason: "manual",
-              summary: "work checkpoint",
-              firstKeptEntryId: fixture.preCompactionLeafId,
-              preCompaction: {
-                sessionId: fixture.sessionId,
-                leafId: fixture.preCompactionLeafId,
-              },
-              postCompaction: {
-                sessionId: fixture.sessionId,
-                sessionFile: fixture.sessionFile,
-                leafId: fixture.postCompactionLeafId,
-                entryId: fixture.postCompactionLeafId,
-              },
-            },
-          ],
+          compactionCheckpoints: [checkpointEntry],
         }),
       },
       null,
@@ -410,22 +443,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
 
   const { ws } = await openClient();
   await rpcReq(ws, "sessions.subscribe", {});
-  const startEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "start",
-  );
-  const endEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
-  );
+  const startEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "start"));
+  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
   const compacted = await rpcReq<{
     ok: true;
     key: string;
@@ -435,9 +454,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     key: "main",
   });
 
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(true);
+  expectMainCompactionResult(compacted, true);
   const startEvent = await startEventPromise;
   const endEvent = await endEventPromise;
   const startPayload = startEvent.payload as {
@@ -568,14 +585,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
 
   const { ws } = await openClient();
   await rpcReq(ws, "sessions.subscribe", {});
-  const endEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
-  );
+  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
 
   const compacted = await rpcReq<{
     ok: true;
@@ -586,9 +596,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
     key: "main",
   });
 
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(false);
+  expectMainCompactionResult(compacted, false);
   expect(compacted.payload?.result?.details).toMatchObject({
     backend: "codex-app-server",
     threadId: "thread-1",
@@ -614,6 +622,172 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
   expect(store["agent:main:main"]?.compactionCount).toBe(2);
   expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+    archived?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+
+  // Active transcript stays reopenable: header + 49 newest entries.
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+  expect(JSON.parse(truncated[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+  expect(JSON.parse(truncated[1] ?? "{}")).toMatchObject({ id: "entry-450", parentId: null });
+  expect(JSON.parse(truncated.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-498",
+    message: { content: "line-498" },
+  });
+
+  // Original 500 lines preserved verbatim in the .bak archive.
+  const archivedPath = compacted.payload?.archived;
+  if (!archivedPath) {
+    throw new Error("expected archived transcript path");
+  }
+  const archived = (await fs.readFile(archivedPath, "utf-8")).trim().split("\n");
+  expect(archived).toHaveLength(500);
+  expect(JSON.parse(archived[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+
+  // No active run present, so the interrupt guard short-circuits without aborting.
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines interrupts an active run before truncating, matching the LLM compact path", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Simulate an embedded agent run actively appending to this session transcript.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  // Regression for the ClawSweeper finding: the maxLines truncate branch must
+  // run the same active-run interrupt guard as the LLM-summarize branch *before*
+  // archiving and overwriting the transcript, so an active runner cannot keep
+  // appending to the file being truncated (the data-loss mode tracked by #72765).
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  // The guard ran first; truncation still completed deterministically afterwards.
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when truncation is a no-op", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 10);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.kept).toBe(10);
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when no transcript exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    reason?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.reason).toBe("no transcript");
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines aborts without truncating when an active run cannot be interrupted", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Active embedded run that fails to end within the interrupt window.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", false);
+
+  const compacted = await rpcReq<{ ok: boolean }>(ws, "sessions.compact", {
+    key: "main",
+    maxLines: 50,
+  });
+
+  // Order proof: the guard ran first and failed, so the RPC errors out *before*
+  // any archive/truncate. If the guard ran after truncation, the transcript
+  // would already be 50 lines here. It is still 500 with no .bak, proving the
+  // interrupt happens before the destructive tail-read/archive/write.
+  expect(compacted.ok).toBe(false);
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  const untouched = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(untouched).toHaveLength(500);
+  const dirEntries = await fs.readdir(dir);
+  expect(dirEntries.some((name) => name.includes(".bak"))).toBe(false);
+  expect(storePath).toBeTruthy();
 
   ws.close();
 });

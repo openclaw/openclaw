@@ -1,15 +1,18 @@
+// Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { clamp } from "../utils.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
+// Tail reader for the active log file, with cursor reset and line redaction.
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
 const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
 
+/** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
   file: string;
   cursor: number;
@@ -23,6 +26,7 @@ function isRollingLogFile(file: string): boolean {
   return ROLLING_LOG_RE.test(path.basename(file));
 }
 
+/** Resolves a rolling daily log path to the newest existing rolling log when needed. */
 export async function resolveLogFile(file: string): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
   if (stat) {
@@ -79,16 +83,18 @@ async function readLogSlice(params: {
       : undefined;
   let reset = false;
   let truncated = false;
-  let start = 0;
+  let start;
 
   if (cursor != null) {
     if (cursor > size) {
+      // File rotated or shrank since the previous cursor; restart near the end.
       reset = true;
       start = Math.max(0, size - maxBytes);
       truncated = start > 0;
     } else {
       start = cursor;
       if (size - start > maxBytes) {
+        // Cursor is valid but too stale; cap reads and tell the caller state was reset.
         reset = true;
         truncated = true;
         start = Math.max(0, size - maxBytes);
@@ -124,6 +130,7 @@ async function readLogSlice(params: {
     const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
+      // Drop the first partial line when starting in the middle of a file.
       lines = lines.slice(1);
     }
     if (lines.length > 0 && lines[lines.length - 1] === "") {
@@ -147,6 +154,7 @@ async function readLogSlice(params: {
   }
 }
 
+/** Reads and redacts the configured log tail with bounded bytes and line count. */
 export async function readConfiguredLogTail(params?: {
   cursor?: number;
   limit?: number;

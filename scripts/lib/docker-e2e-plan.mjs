@@ -28,7 +28,8 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
-  npm: 10,
+  "live:telegram": 1,
+  npm: 5,
   service: 7,
 };
 export const DEFAULT_TAIL_PARALLELISM = 10;
@@ -103,7 +104,7 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.PATCH.`,
     );
   }
   return spec;
@@ -163,12 +164,12 @@ function parsePublishedReleaseVersion(spec) {
   return {
     year: Number(match[1]),
     month: Number(match[2]),
-    day: Number(match[3]),
+    patch: Number(match[3]),
   };
 }
 
 function comparePublishedReleaseVersion(a, b) {
-  return a.year - b.year || a.month - b.month || a.day - b.day;
+  return a.year - b.year || a.month - b.month || a.patch - b.patch;
 }
 
 function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
@@ -179,7 +180,7 @@ function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
   if (!version) {
     return true;
   }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
 }
 
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
@@ -351,6 +352,9 @@ function laneCredentialRequirements(poolLane) {
   if (resources.includes("live:opencode")) {
     credentials.push("opencode");
   }
+  if (resources.includes("live:telegram")) {
+    credentials.push("telegram");
+  }
   return credentials;
 }
 
@@ -459,7 +463,7 @@ export function resolveDockerE2ePlan(options) {
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
-      ? releaseLanes
+      ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);

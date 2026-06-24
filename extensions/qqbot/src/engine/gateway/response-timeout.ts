@@ -1,3 +1,4 @@
+// Qqbot plugin module implements response timeout behavior.
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
@@ -34,7 +35,7 @@ import {
  * present. Preserves the historical 5-minute guard for unconfigured
  * deployments.
  */
-export const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
 
 interface AgentsDefaultsLike {
   timeoutSeconds?: unknown;

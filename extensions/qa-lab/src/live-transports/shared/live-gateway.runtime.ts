@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live gateway behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   startQaGatewayChild,
@@ -35,7 +36,7 @@ async function stopQaLiveLaneResources(
 }
 
 function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
-  if (!entries || !Object.prototype.hasOwnProperty.call(entries, "memory-core")) {
+  if (!entries || !Object.hasOwn(entries, "memory-core")) {
     return entries;
   }
   const { "memory-core": _memoryCore, ...rest } = entries;
@@ -127,7 +128,18 @@ export async function startQaLiveLaneGateway(params: {
       },
     };
   } catch (error) {
-    await mock?.stop().catch(() => {});
+    if (mock) {
+      try {
+        await mock.stop();
+      } catch (cleanupError) {
+        const errors: string[] = [];
+        appendLiveLaneIssue(errors, "gateway startup failed", error);
+        appendLiveLaneIssue(errors, "mock provider stop failed", cleanupError);
+        throw new Error(`failed to start QA live lane gateway:\n${errors.join("\n")}`, {
+          cause: cleanupError,
+        });
+      }
+    }
     throw error;
   }
 }

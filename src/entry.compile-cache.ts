@@ -1,13 +1,21 @@
+// Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
+import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  runRespawnChildWithSignalBridge,
+  type RespawnChildRuntime,
+} from "./process/respawn-child-runner.js";
 
-const COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
-const COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
-const COMPILE_CACHE_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
+// Node 24.0-24.14 can deadlock during ESM module loading when compile cache is
+// enabled on Windows npm-global installs. Keep the skip scoped to that platform.
+const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -30,11 +38,37 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
+export function isNodeVersionAffectedByCompileCacheDeadlock(
+  nodeVersion: string | undefined,
+): boolean {
+  if (!nodeVersion) {
+    return false;
+  }
+  const match = nodeVersion.match(/^(\d+)\.(\d+)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2], 10);
+  if (major !== 24) {
+    return false;
+  }
+  return minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
+}
+
 export function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
+  nodeVersion?: string;
+  platform?: NodeJS.Platform;
 }): boolean {
   if (isNodeCompileCacheDisabled(params.env)) {
+    return false;
+  }
+  if (
+    (params.platform ?? process.platform) === "win32" &&
+    isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node)
+  ) {
     return false;
   }
   return !isSourceCheckoutInstallRoot(params.installRoot);
@@ -89,16 +123,14 @@ export function resolveOpenClawCompileCacheDirectory(params: {
   );
 }
 
-export type OpenClawCompileCacheRespawnPlan = {
+type OpenClawCompileCacheRespawnPlan = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
-type OpenClawCompileCacheRespawnRuntime = {
-  spawn: typeof spawn;
-  attachChildProcessBridge: typeof attachChildProcessBridge;
-  exit: (code?: number) => never;
+type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
   writeError: (message: string) => void;
 };
 
@@ -110,12 +142,18 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   installRoot: string;
   argv?: string[];
   compileCacheDir?: string;
+  nodeVersion?: string;
+  platform?: NodeJS.Platform;
 }): OpenClawCompileCacheRespawnPlan | undefined {
   const env = params.env ?? process.env;
-  if (!isSourceCheckoutInstallRoot(params.installRoot)) {
+  const needsDisabledCompileCacheRespawn =
+    isSourceCheckoutInstallRoot(params.installRoot) ||
+    ((params.platform ?? process.platform) === "win32" &&
+      isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node));
+  if (!needsDisabledCompileCacheRespawn) {
     return undefined;
   }
-  if (env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+  if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
     return undefined;
   }
   if (!params.compileCacheDir && !isNodeCompileCacheRequested(env)) {
@@ -124,7 +162,7 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   const nextEnv: NodeJS.ProcessEnv = {
     ...env,
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
@@ -135,6 +173,9 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
       ...(params.argv ?? process.argv).slice(2),
     ],
     env: nextEnv,
+    detachForProcessTree:
+      (params.platform ?? process.platform) !== "win32" &&
+      !isTerminalInteractiveRespawnArgv(params.argv ?? process.argv),
   };
 }
 
@@ -163,84 +204,20 @@ export function runOpenClawCompileCacheRespawnPlan(
     writeError: (message: string) => process.stderr.write(message),
   },
 ): ChildProcess {
-  const child = runtime.spawn(plan.command, plan.args, {
-    stdio: "inherit",
+  return runRespawnChildWithSignalBridge({
+    command: plan.command,
+    args: plan.args,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
+    runtime,
+    onError: (error) => {
+      runtime.writeError(
+        `[openclaw] Failed to respawn CLI without compile cache: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }\n`,
+      );
+    },
   });
-  // Give the child a moment to honor forwarded signals, then exit the parent so
-  // a child that ignores SIGTERM cannot keep the compile-cache wrapper alive indefinitely.
-  let signalExitTimer: NodeJS.Timeout | undefined;
-  let signalForceKillTimer: NodeJS.Timeout | undefined;
-  let signalHardExitTimer: NodeJS.Timeout | undefined;
-  const clearSignalExitTimer = (): void => {
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = undefined;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = undefined;
-    }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = undefined;
-    }
-  };
-  const forceKillChild = (): void => {
-    try {
-      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-  };
-  const requestChildTermination = (): void => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-    signalForceKillTimer = setTimeout(() => {
-      forceKillChild();
-      signalHardExitTimer = setTimeout(() => {
-        runtime.exit(1);
-      }, COMPILE_CACHE_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
-      signalHardExitTimer.unref?.();
-    }, COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
-    signalForceKillTimer.unref?.();
-  };
-  const scheduleParentExit = (): void => {
-    if (signalExitTimer) {
-      return;
-    }
-    signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS);
-    signalExitTimer.unref?.();
-  };
-
-  runtime.attachChildProcessBridge(child, {
-    onSignal: scheduleParentExit,
-  });
-
-  child.once("exit", (code, signal) => {
-    clearSignalExitTimer();
-    if (signal) {
-      runtime.exit(1);
-    }
-    runtime.exit(code ?? 1);
-  });
-
-  child.once("error", (error) => {
-    clearSignalExitTimer();
-    runtime.writeError(
-      `[openclaw] Failed to respawn CLI without compile cache: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }\n`,
-    );
-    runtime.exit(1);
-  });
-
-  return child;
 }
 
 export function enableOpenClawCompileCache(params: {

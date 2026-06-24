@@ -1,3 +1,4 @@
+// PID liveness tests cover process existence checks across platforms.
 import fsSync from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -77,7 +78,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(true);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns false when process probing reports EPERM", () => {
@@ -87,7 +88,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns true for zombie processes on Linux", async () => {

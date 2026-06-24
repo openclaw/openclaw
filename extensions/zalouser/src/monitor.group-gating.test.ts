@@ -1,7 +1,8 @@
+// Zalouser tests cover monitor.group gating plugin behavior.
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
+import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { testing, monitorZalouserProvider } from "./monitor.js";
@@ -10,7 +11,7 @@ import {
   sendMessageZalouserMock,
   sendSeenZalouserMock,
   sendTypingZalouserMock,
-} from "./monitor.send-mocks.js";
+} from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
@@ -168,29 +169,29 @@ function installRuntime(params: {
     };
   });
   const buildContext = vi.fn(
-    (params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0]) =>
+    (paramsLocal: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0]) =>
       ({
-        Body: params.message.body ?? params.message.rawBody,
-        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-        InboundHistory: params.message.inboundHistory,
-        RawBody: params.message.rawBody,
-        CommandBody: params.message.commandBody ?? params.message.rawBody,
-        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
-        From: params.from,
-        To: params.reply.to,
-        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-        AccountId: params.route.accountId ?? params.accountId,
-        ChatType: params.conversation.kind,
-        ConversationLabel: params.conversation.label,
-        SenderName: params.sender.name,
-        SenderId: params.sender.id,
-        Provider: params.provider ?? params.channel,
-        Surface: params.surface ?? params.provider ?? params.channel,
-        MessageSid: params.messageId,
-        MessageSidFull: params.messageIdFull,
-        OriginatingChannel: params.channel,
-        OriginatingTo: params.reply.originatingTo,
-        ...params.extra,
+        Body: paramsLocal.message.body ?? paramsLocal.message.rawBody,
+        BodyForAgent: paramsLocal.message.bodyForAgent ?? paramsLocal.message.rawBody,
+        InboundHistory: paramsLocal.message.inboundHistory,
+        RawBody: paramsLocal.message.rawBody,
+        CommandBody: paramsLocal.message.commandBody ?? paramsLocal.message.rawBody,
+        BodyForCommands: paramsLocal.message.commandBody ?? paramsLocal.message.rawBody,
+        From: paramsLocal.from,
+        To: paramsLocal.reply.to,
+        SessionKey: paramsLocal.route.dispatchSessionKey ?? paramsLocal.route.routeSessionKey,
+        AccountId: paramsLocal.route.accountId ?? paramsLocal.accountId,
+        ChatType: paramsLocal.conversation.kind,
+        ConversationLabel: paramsLocal.conversation.label,
+        SenderName: paramsLocal.sender.name,
+        SenderId: paramsLocal.sender.id,
+        Provider: paramsLocal.provider ?? paramsLocal.channel,
+        Surface: paramsLocal.surface ?? paramsLocal.provider ?? paramsLocal.channel,
+        MessageSid: paramsLocal.messageId,
+        MessageSidFull: paramsLocal.messageIdFull,
+        OriginatingChannel: paramsLocal.channel,
+        OriginatingTo: paramsLocal.reply.originatingTo,
+        ...paramsLocal.extra,
       }) as Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>>,
   );
   const buildAgentSessionKey = vi.fn(

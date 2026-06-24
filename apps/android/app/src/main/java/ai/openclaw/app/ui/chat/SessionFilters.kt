@@ -4,22 +4,9 @@ import ai.openclaw.app.chat.ChatSessionEntry
 
 private const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
 
-/**
- * Derive a human-friendly label from a raw session key.
- * Examples:
- *   "telegram:g-agent-main-main" -> "Main"
- *   "agent:main:main" -> "Main"
- *   "discord:g-server-channel" -> "Server Channel"
- *   "my-custom-session" -> "My Custom Session"
- */
 fun friendlySessionName(key: String): String {
-  // Strip common prefixes like "telegram:", "agent:", "discord:" etc.
   val stripped = key.substringAfterLast(":")
-
-  // Remove leading "g-" prefix (gateway artifact)
   val cleaned = if (stripped.startsWith("g-")) stripped.removePrefix("g-") else stripped
-
-  // Split on hyphens/underscores, title-case each word, collapse "main main" -> "Main"
   val words =
     cleaned
       .split('-', '_')
@@ -32,6 +19,7 @@ fun friendlySessionName(key: String): String {
   return result.ifBlank { key }
 }
 
+/** Builds the selectable recent-session list while preserving the active session. */
 fun resolveSessionChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,
@@ -46,6 +34,7 @@ fun resolveSessionChoices(
   val recent = mutableListOf<ChatSessionEntry>()
   val seen = mutableSetOf<String>()
   for (entry in sorted) {
+    // Hide the legacy main alias when the gateway has supplied a canonical main session key.
     if (aliasKey != null && entry.key == aliasKey) continue
     if (!seen.add(entry.key)) continue
     if ((entry.updatedAtMs ?: 0L) < cutoff) continue
@@ -70,8 +59,40 @@ fun resolveSessionChoices(
   }
 
   if (current.isNotEmpty() && !included.contains(current)) {
+    // Keep the active session selectable even if it is old or missing from the recent list.
     result.add(ChatSessionEntry(key = current, updatedAtMs = null))
   }
 
   return result
+}
+
+fun resolveCompactSessionChoices(
+  currentSessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  nowMs: Long = System.currentTimeMillis(),
+  maxOptions: Int = 5,
+): List<ChatSessionEntry> {
+  val allChoices =
+    resolveSessionChoices(
+      currentSessionKey = currentSessionKey,
+      sessions = sessions,
+      mainSessionKey = mainSessionKey,
+      nowMs = nowMs,
+    )
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
+  val pinnedRank =
+    listOf(mainKey, current)
+      .filter { it.isNotBlank() }
+      .distinct()
+      .withIndex()
+      .associate { it.value to it.index }
+  val unpinnedRank = pinnedRank.size
+
+  return allChoices
+    .withIndex()
+    .sortedWith(compareBy({ pinnedRank[it.value.key] ?: unpinnedRank }, { it.index }))
+    .take(maxOptions)
+    .map { it.value }
 }

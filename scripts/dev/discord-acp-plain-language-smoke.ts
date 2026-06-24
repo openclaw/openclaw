@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
+// Discord Acp Plain Language Smoke script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 // Manual ACP thread smoke for plain-language routing.
 // Keep this script available for regression/debug validation. Do not delete.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
+import { createPluginStateKeyedStore } from "../../src/plugin-state/plugin-state-store.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -39,11 +41,6 @@ type ThreadBindingRecord = {
   boundAt?: number;
 };
 
-type ThreadBindingsPayload = {
-  version?: number;
-  bindings?: Record<string, ThreadBindingRecord>;
-};
-
 type DiscordMessage = {
   id: string;
   content?: string;
@@ -67,6 +64,8 @@ type WebhookForCleanup = {
 };
 
 const execFileAsync = promisify(execFile);
+const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
+const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
 
 type DriverMode = "token" | "webhook" | "openclaw";
 
@@ -82,7 +81,7 @@ type Args = {
   pollMs: number;
   mentionUserId?: string;
   instruction?: string;
-  threadBindingsPath: string;
+  stateDir: string;
   openclawBin: string;
   json: boolean;
 };
@@ -135,10 +134,33 @@ type FailureResult = {
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_OPENCLAW_CLI_TIMEOUT_MS = 60_000;
+const DISCORD_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
+const BOOLEAN_OPTIONS = new Set(["--help", "-h", "--json"]);
+const VALUE_OPTIONS = new Set([
+  "--channel",
+  "--driver",
+  "--token",
+  "--token-prefix",
+  "--bot-token",
+  "--bot-token-prefix",
+  "--agent",
+  "--mention",
+  "--instruction",
+  "--timeout-ms",
+  "--poll-ms",
+  "--state-dir",
+  "--openclaw-bin",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
@@ -185,6 +207,41 @@ function parseNumber(value: string | undefined, fallback: number, label: string)
   return parseStrictIntegerOption({ fallback, label, min: 1, raw: value });
 }
 
+function createDiscordResponseTooLargeError(message: string): Error {
+  const error = new Error(message);
+  (error as NodeJS.ErrnoException).code = "ETOOBIG";
+  return error;
+}
+
+function isTooLargeError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ETOOBIG";
+}
+
+async function readDiscordResponseText(params: {
+  response: Response;
+  label: string;
+  signal: AbortSignal;
+  maxBytes: number;
+}): Promise<string> {
+  return await readBoundedResponseText(params.response, params.label, params.maxBytes, {
+    createTooLargeError: createDiscordResponseTooLargeError,
+    signal: params.signal,
+  });
+}
+
+async function readDiscordResponseJson(params: {
+  response: Response;
+  label: string;
+  signal: AbortSignal;
+  maxBytes: number;
+}): Promise<unknown> {
+  const text = await readDiscordResponseText(params);
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
+}
+
 function resolveStateDir(): string {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
@@ -200,21 +257,48 @@ function resolveStateDir(): string {
   return path.join(home, ".openclaw");
 }
 
-function resolveArg(flag: string): string | undefined {
-  const argv = process.argv.slice(2);
+function resolveArg(flag: string, argv: string[]): string | undefined {
   const eq = argv.find((entry) => entry.startsWith(`${flag}=`));
   if (eq) {
-    return eq.slice(flag.length + 1);
+    const value = eq.slice(flag.length + 1);
+    if (!value) {
+      throw new CliArgumentError(`${flag} requires a value`);
+    }
+    return value;
   }
   const idx = argv.indexOf(flag);
-  if (idx >= 0 && idx + 1 < argv.length) {
-    return argv[idx + 1];
+  if (idx < 0) {
+    return undefined;
   }
-  return undefined;
+  const value = argv[idx + 1];
+  if (!value || value.startsWith("-")) {
+    throw new CliArgumentError(`${flag} requires a value`);
+  }
+  return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.slice(2).includes(flag);
+function hasFlag(flag: string, argv = process.argv.slice(2)): boolean {
+  return argv.includes(flag);
+}
+
+function validateCliArgs(argv: string[]): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_OPTIONS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--") && arg.includes("=")) {
+      const [flag] = arg.split("=", 1);
+      if (VALUE_OPTIONS.has(flag)) {
+        continue;
+      }
+    }
+    if (VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseDriverMode(raw: string): DriverMode {
@@ -257,7 +341,7 @@ function usage(): string {
     "  --instruction <text>         Custom instruction template (optional)\n" +
     "  --timeout-ms <n>             Total timeout in ms (default: 240000)\n" +
     "  --poll-ms <n>                Poll interval in ms (default: 1500)\n" +
-    "  --thread-bindings-path <p>   Override thread-bindings json path\n" +
+    "  --state-dir <p>              Override OpenClaw state dir for plugin-state polling\n" +
     "  --openclaw-bin <path>        OpenClaw CLI binary for driver=openclaw (default: openclaw)\n" +
     "  --json                       Emit JSON output\n" +
     "\n" +
@@ -272,52 +356,59 @@ function usage(): string {
     "  OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID\n" +
     "  OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS\n" +
     "  OPENCLAW_DISCORD_SMOKE_POLL_MS\n" +
-    "  OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH\n" +
+    "  OPENCLAW_STATE_DIR\n" +
     "  OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN"
   );
 }
 
-function parseArgs(): Args {
-  const channelId = resolveArg("--channel") || process.env.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID || "";
+function parseArgs(argv = process.argv.slice(2)): Args {
+  validateCliArgs(argv);
+  const channelId =
+    resolveArg("--channel", argv) || process.env.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID || "";
   const driverModeRaw =
-    resolveArg("--driver") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER || "token";
+    resolveArg("--driver", argv) || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER || "token";
   const driverMode = parseDriverMode(driverModeRaw);
   const driverToken =
-    resolveArg("--token") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN || "";
+    resolveArg("--token", argv) || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN || "";
   const driverTokenPrefix =
-    resolveArg("--token-prefix") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN_PREFIX || "Bot";
+    resolveArg("--token-prefix", argv) ||
+    process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN_PREFIX ||
+    "Bot";
   const botToken =
-    resolveArg("--bot-token") ||
+    resolveArg("--bot-token", argv) ||
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN ||
     process.env.DISCORD_BOT_TOKEN ||
     "";
   const botTokenPrefix =
-    resolveArg("--bot-token-prefix") ||
+    resolveArg("--bot-token-prefix", argv) ||
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN_PREFIX ||
     "Bot";
-  const targetAgent = resolveArg("--agent") || process.env.OPENCLAW_DISCORD_SMOKE_AGENT || "codex";
+  const targetAgent =
+    resolveArg("--agent", argv) || process.env.OPENCLAW_DISCORD_SMOKE_AGENT || "codex";
   const mentionUserId =
-    resolveArg("--mention") || process.env.OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID || undefined;
+    resolveArg("--mention", argv) ||
+    process.env.OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID ||
+    undefined;
   const instruction =
-    resolveArg("--instruction") || process.env.OPENCLAW_DISCORD_SMOKE_INSTRUCTION || undefined;
+    resolveArg("--instruction", argv) ||
+    process.env.OPENCLAW_DISCORD_SMOKE_INSTRUCTION ||
+    undefined;
   const timeoutMs = parseNumber(
-    resolveArg("--timeout-ms") || process.env.OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS,
+    resolveArg("--timeout-ms", argv) || process.env.OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS,
     240_000,
     "--timeout-ms",
   );
   const pollMs = parseNumber(
-    resolveArg("--poll-ms") || process.env.OPENCLAW_DISCORD_SMOKE_POLL_MS,
+    resolveArg("--poll-ms", argv) || process.env.OPENCLAW_DISCORD_SMOKE_POLL_MS,
     1_500,
     "--poll-ms",
   );
-  const defaultBindingsPath = path.join(resolveStateDir(), "discord", "thread-bindings.json");
-  const threadBindingsPath =
-    resolveArg("--thread-bindings-path") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH ||
-    defaultBindingsPath;
+  const stateDir = path.resolve(resolveArg("--state-dir", argv) || resolveStateDir());
   const openclawBin =
-    resolveArg("--openclaw-bin") || process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN || "openclaw";
-  const json = hasFlag("--json");
+    resolveArg("--openclaw-bin", argv) ||
+    process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN ||
+    "openclaw";
+  const json = hasFlag("--json", argv);
 
   if (!channelId) {
     throw new Error(usage());
@@ -341,7 +432,7 @@ function parseArgs(): Args {
     pollMs,
     mentionUserId,
     instruction,
-    threadBindingsPath,
+    stateDir,
     openclawBin,
     json,
   };
@@ -436,10 +527,10 @@ async function discordWebhookApi<T>(params: {
   timeoutMs?: number;
 }): Promise<T> {
   const suffix = params.query ? `?${params.query}` : "";
-  const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
+  const pathLocal = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
   return requestDiscordJson<T>({
     method: params.method,
-    path,
+    path: pathLocal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -458,12 +549,14 @@ async function requestDiscordJson<T>(params: {
   retries?: number;
   timeoutMs?: number;
   errorPrefix: string;
+  responseBodyMaxBytes?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
 }): Promise<T> {
   const retries = params.retries ?? 6;
   const fetchImpl = params.fetchImpl ?? fetch;
   const sleepImpl = params.sleepImpl ?? sleep;
+  const responseBodyMaxBytes = params.responseBodyMaxBytes ?? DISCORD_RESPONSE_BODY_MAX_BYTES;
   const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const timeoutError = () =>
     new Error(
@@ -488,20 +581,42 @@ async function requestDiscordJson<T>(params: {
     if (response.status === 429) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const body = (await withTimeout({
-        operation: response.json().catch(() => ({})),
+        operation: readDiscordResponseJson({
+          response,
+          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+          signal: controller.signal,
+          maxBytes: responseBodyMaxBytes,
+        }).catch((error: unknown) => {
+          if (isTooLargeError(error)) {
+            throw error;
+          }
+          return {};
+        }),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
+      const waitMs = Math.ceil(waitSeconds * 1000);
+      const remainingMs = remainingTimeoutMs(deadlineMs);
+      if (waitMs >= remainingMs) {
+        throw new Error(
+          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
+        );
+      }
+      await sleepImpl(waitMs);
       continue;
     }
 
     if (!response.ok) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const text = await withTimeout({
-        operation: response.text().catch(() => ""),
+        operation: readDiscordResponseText({
+          response,
+          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+          signal: controller.signal,
+          maxBytes: responseBodyMaxBytes,
+        }),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
@@ -519,7 +634,12 @@ async function requestDiscordJson<T>(params: {
 
     const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
     return (await withTimeout({
-      operation: response.json(),
+      operation: readDiscordResponseJson({
+        response,
+        label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+        signal: controller.signal,
+        maxBytes: responseBodyMaxBytes,
+      }),
       timeoutMs: bodyTimeoutMs,
       timeoutError,
       onTimeout: () => controller.abort(),
@@ -531,11 +651,16 @@ async function requestDiscordJson<T>(params: {
   );
 }
 
-async function readThreadBindings(filePath: string): Promise<ThreadBindingRecord[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const payload = JSON.parse(raw) as ThreadBindingsPayload;
-  const entries = Object.values(payload.bindings ?? {});
-  return entries.filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
+async function readThreadBindings(stateDir: string): Promise<ThreadBindingRecord[]> {
+  const store = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  const entries = await store.entries();
+  return entries
+    .map((entry) => entry.value)
+    .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
 }
 
 function normalizeBoundAt(record: ThreadBindingRecord): number {
@@ -669,10 +794,10 @@ function printOutput(params: { json: boolean; payload: SuccessResult | FailureRe
   }
 }
 
-async function run(): Promise<SuccessResult | FailureResult> {
+async function run(argv = process.argv.slice(2)): Promise<SuccessResult | FailureResult> {
   let args: Args;
   try {
-    args = parseArgs();
+    args = parseArgs(argv);
   } catch (err) {
     return {
       ok: false,
@@ -695,10 +820,10 @@ async function run(): Promise<SuccessResult | FailureResult> {
   });
 
   let readAuthHeader = "";
-  let sentMessageId = "";
+  let sentMessageId;
   let setupStage: "discord-api" | "send-message" = "discord-api";
   let senderAuthorId: string | undefined;
-  let minBindingBoundAt = startedAt - 3_000;
+  let minBindingBoundAt;
   let webhookForCleanup: WebhookForCleanup | undefined;
 
   try {
@@ -828,7 +953,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
   try {
     while (Date.now() < deadline && !winningBinding) {
       try {
-        const entries = await readThreadBindings(args.threadBindingsPath);
+        const entries = await readThreadBindings(args.stateDir);
         latestCandidates = resolveCandidateBindings({
           entries,
           minBoundAt: minBindingBoundAt,
@@ -858,7 +983,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         ok: false,
         stage: "wait-binding",
         smokeId,
-        error: `Timed out waiting for new ACP thread binding (path: ${redactHomePath(args.threadBindingsPath)}).`,
+        error: `Timed out waiting for new ACP thread binding (state: ${redactHomePath(args.stateDir)}).`,
         diagnostics: {
           bindingCandidates: latestCandidates.slice(0, 6).map((entry) => ({
             threadId: entry.threadId || "",
@@ -965,13 +1090,19 @@ async function run(): Promise<SuccessResult | FailureResult> {
   }
 }
 
-async function main(): Promise<number> {
-  if (hasFlag("--help") || hasFlag("-h")) {
+async function main(argv = process.argv.slice(2)): Promise<number> {
+  try {
+    validateCliArgs(argv);
+  } catch (err) {
+    writeStderrLine(safeErrorMessage(err));
+    return 1;
+  }
+  if (hasFlag("--help", argv) || hasFlag("-h", argv)) {
     writeStdoutLine(usage());
     return 0;
   }
-  const result = await run().catch(
-    (err): FailureResult => ({
+  const result = await run(argv).catch(
+    (err: unknown): FailureResult => ({
       ok: false,
       stage: "unexpected",
       smokeId: "n/a",
@@ -979,7 +1110,7 @@ async function main(): Promise<number> {
     }),
   );
   printOutput({
-    json: hasFlag("--json"),
+    json: hasFlag("--json", argv),
     payload: result,
   });
   return result.ok ? 0 : 1;
@@ -987,8 +1118,11 @@ async function main(): Promise<number> {
 
 export const testing = {
   parseDriverMode,
+  parseArgs,
   parseNumber,
+  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
+  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
   resolveStateDir,

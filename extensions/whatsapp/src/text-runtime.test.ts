@@ -1,3 +1,4 @@
+// Whatsapp tests cover text runtime plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   assertWebChannel,
   jidToE164,
   markdownToWhatsApp,
+  resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
@@ -40,12 +42,23 @@ describe("markdownToWhatsApp", () => {
     ["returns empty string for empty input", "", ""],
     ["returns plain text unchanged", "no formatting here", "no formatting here"],
     ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
+    // Regression: a digit immediately after an inline-code span must not be
+    // absorbed into the placeholder index (which previously dropped both).
+    ["preserves inline code immediately followed by a digit", "`a`5", "`a`5"],
+    ["preserves inline code followed by a number", "`status`200 done", "`status`200 done"],
+    ["preserves two adjacent code+digit spans", "`x`1 and `y`2", "`x`1 and `y`2"],
+    ["preserves inline code with a space before a digit", "`a` 5", "`a` 5"],
   ] as const)("handles markdown-to-whatsapp conversion: %s", (_name, input, expected) => {
     expect(markdownToWhatsApp(input)).toBe(expected);
   });
 
   it("preserves fenced code blocks", () => {
     const input = "```\nconst x = **bold**;\n```";
+    expect(markdownToWhatsApp(input)).toBe(input);
+  });
+
+  it("preserves a fenced code block immediately followed by a digit", () => {
+    const input = "```code```7 done";
     expect(markdownToWhatsApp(input)).toBe(input);
   });
 
@@ -196,5 +209,36 @@ describe("resolveJidToE164", () => {
     };
     await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
     expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
+});
+
+describe("resolveEquivalentWhatsAppDirectChatJids", () => {
+  it.each([
+    ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
+    ["15551230000:2@hosted", "15551230000@hosted"],
+    ["777:1@lid", "777@lid"],
+    ["777:2@hosted.lid", "777@hosted.lid"],
+  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
+      observedJid,
+      bareJid,
+    ]);
+  });
+
+  it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {
+    await withTempDir("whatsapp-hosted-lid-map-", async (authDir) => {
+      fs.writeFileSync(path.join(authDir, "lid-mapping-15551230000.json"), JSON.stringify("777"));
+      fs.writeFileSync(
+        path.join(authDir, "lid-mapping-777_reverse.json"),
+        JSON.stringify("15551230000"),
+      );
+
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
+      ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
+      ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    });
   });
 });

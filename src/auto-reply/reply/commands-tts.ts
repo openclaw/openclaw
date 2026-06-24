@@ -1,10 +1,11 @@
+// Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,

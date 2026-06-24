@@ -1,4 +1,10 @@
+// Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -13,10 +19,15 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
+/**
+ * Gateway hook HTTP handler factory.
+ *
+ * Hooks can either enqueue wake events or spawn isolated agent turns; both paths
+ * sanitize external input before it reaches logs or system-event text.
+ */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
@@ -80,6 +91,7 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+/** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -105,7 +117,7 @@ export function createGatewayHooksRequestHandler(params: {
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
     const runId = randomUUID();
-    const now = Date.now();
+    const nowMs = resolveDateTimestampMs(Date.now());
     const delivery = value.deliver
       ? {
           mode: "announce" as const,
@@ -118,9 +130,9 @@ export function createGatewayHooksRequestHandler(params: {
       agentId: value.agentId,
       name: safeName,
       enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "at", at: new Date(now).toISOString() },
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+      schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {
@@ -133,12 +145,14 @@ export function createGatewayHooksRequestHandler(params: {
         externalContentSource: value.externalContentSource,
       },
       delivery,
-      state: { nextRunAtMs: now },
+      state: { nextRunAtMs: nowMs },
     };
 
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
+        // Agent hooks run after the HTTP response path has returned, so failure
+        // handling must record a system event instead of throwing to the caller.
         const cfg = getRuntimeConfig();
         hookEventSessionKey = resolveHookEventSessionKey({
           cfg,

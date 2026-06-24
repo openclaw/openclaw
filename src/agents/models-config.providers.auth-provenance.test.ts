@@ -1,3 +1,4 @@
+// Verifies persisted provider auth markers preserve credential provenance.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -18,7 +19,7 @@ type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let MINIMAX_OAUTH_MARKER: typeof import("./model-auth-markers.js").MINIMAX_OAUTH_MARKER;
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
-let resolveApiKeyFromCredential: typeof import("./models-config.providers.secrets.js").resolveApiKeyFromCredential;
+let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
@@ -28,9 +29,10 @@ let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
-  const [providerRuntimeModule, markersModule, secretsModule] = await Promise.all([
+  const [providerRuntimeModule, markersModule, helperModule, secretsModule] = await Promise.all([
     import("../plugins/provider-runtime.js"),
     import("./model-auth-markers.js"),
+    import("./models-config.providers.secret-helpers.js"),
     import("./models-config.providers.secrets.js"),
   ]);
   mockedResolveProviderSyntheticAuthWithPlugin = vi.mocked(
@@ -39,7 +41,7 @@ async function loadProviderAuthModules() {
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   MINIMAX_OAUTH_MARKER = markersModule.MINIMAX_OAUTH_MARKER;
-  resolveApiKeyFromCredential = secretsModule.resolveApiKeyFromCredential;
+  resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
@@ -53,6 +55,8 @@ beforeEach(() => {
 beforeAll(loadProviderAuthModules);
 
 function buildPairedApiKeyProviders(apiKey: string) {
+  // Several generated provider pairs should carry the same persisted key
+  // marker; this helper keeps those expectations identical.
   return {
     provider: { apiKey },
     paired: { apiKey },
@@ -86,6 +90,8 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
+    // Ref-managed secrets may be resolved in memory, but models.json should
+    // persist only a non-env marker so plaintext is not written back.
     const byteplusApiKey = resolveApiKeyFromCredential({
       type: "api_key",
       provider: "byteplus",
@@ -141,6 +147,8 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("resolves plugin-owned synthetic auth through the provider hook", () => {
+    // Plugin-owned synthetic auth can provide discovery keys while persisted
+    // config still records a non-secret marker.
     mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
       apiKey: "xai-plugin-key",
       mode: "api-key",

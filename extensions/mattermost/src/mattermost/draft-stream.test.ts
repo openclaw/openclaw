@@ -1,6 +1,7 @@
+// Mattermost tests cover draft stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -250,32 +251,5 @@ describe("createMattermostDraftStream", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
     expect(calls[1]?.path).toBe("/posts/post-1");
-  });
-});
-
-describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the shared tool label", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("📖 Read");
-  });
-
-  it("honors raw exec detail mode", () => {
-    expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-      }),
-    ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
-  });
-
-  it("can hide raw exec detail from status text", () => {
-    expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-        config: { streaming: { preview: { commandText: "status" } } },
-      }),
-    ).toBe("🛠️ Exec");
   });
 });

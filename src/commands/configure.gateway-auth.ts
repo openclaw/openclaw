@@ -1,3 +1,4 @@
+// Configure wizard model/auth selection and gateway auth config helpers.
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -110,6 +111,25 @@ function resolveProviderFromModelRef(model: string | undefined): string | undefi
   return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
 }
 
+function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+  cfg: OpenClawConfig,
+  selectedModels: readonly string[],
+): string | undefined {
+  const currentModel = cfg.agents?.defaults?.model;
+  const primary =
+    typeof currentModel === "string"
+      ? currentModel.trim()
+      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
+        ? currentModel.primary.trim()
+        : undefined;
+  const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
+  if (!modelId) {
+    return undefined;
+  }
+  const canonical = `openai/${modelId}`;
+  return selectedModels.find((model) => model.trim() === canonical);
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -137,6 +157,7 @@ function resolveConfiguredProviderFromAuthChange(params: {
   );
 }
 
+/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
@@ -177,13 +198,14 @@ export function buildGatewayAuthConfig(params: {
   return base;
 }
 
+/** Prompt for model provider credentials and default model allowlist settings. */
 export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   let next = cfg;
-  let authChoice: string = "skip";
+  let authChoice = "skip";
   let preferredProvider: string | undefined;
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
@@ -285,6 +307,13 @@ export async function promptAuthConfig(
       loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
+      const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+        next,
+        allowlistSelection.models,
+      );
+      if (canonicalPrimary) {
+        next = applyPrimaryModel(next, canonicalPrimary);
+      }
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
         scopeKeys: allowlistSelection.scopeKeys,
       });

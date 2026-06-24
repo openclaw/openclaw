@@ -1,3 +1,7 @@
+/**
+ * ACPX runtime plugin entry. It registers the embedded ACP backend service and
+ * wires reply-dispatch hooks into the plugin SDK runtime.
+ */
 import { tryDispatchAcpReplyHook } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createAcpxRuntimeService } from "./register.runtime.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
@@ -10,6 +14,7 @@ const plugin = {
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,
+        openKeyedStore: (options) => api.runtime.state.openKeyedStore(options),
       }),
     );
     api.on("reply_dispatch", tryDispatchAcpReplyHook);

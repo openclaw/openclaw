@@ -1,9 +1,11 @@
+// Install download helpers fetch remote skill artifacts into temporary storage.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
@@ -11,7 +13,6 @@ import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js"
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { isWithinDir } from "../../infra/path-safety.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
@@ -140,7 +141,7 @@ export async function installDownloadSpec(params: {
     };
   }
 
-  let filename = "";
+  let filename;
   try {
     const parsed = new URL(url);
     filename = path.basename(parsed.pathname);
@@ -151,8 +152,8 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalRoot = "";
-  let targetDir = "";
+  let canonicalRoot;
+  let targetDir;
   try {
     await ensureDir(root);
     await assertCanonicalPathWithinBase({
@@ -192,7 +193,7 @@ export async function installDownloadSpec(params: {
       code: null,
     };
   }
-  let downloaded = 0;
+  let downloaded;
   try {
     const result = await downloadFile({
       url,

@@ -1,8 +1,13 @@
+// Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing as cliBackendsTesting } from "./cli-backends.js";
-import { createModelPickerVisibleProviderPredicate } from "./model-picker-visibility.js";
 import {
+  createModelPickerVisibleProviderPredicate,
+  isRetiredModelPickerProvider,
+} from "./model-picker-visibility.js";
+import {
+  areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
@@ -11,6 +16,8 @@ function createAnthropicAuthConfig(params: {
   order?: string[];
   models?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
 }): OpenClawConfig {
+  // Auth order controls whether Anthropic execution is direct API or Claude
+  // CLI-backed when no explicit runtime policy overrides it.
   return {
     auth: {
       order: params.order ? { anthropic: params.order } : undefined,
@@ -97,6 +104,8 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   });
 
   it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
+    // Runtime policy is more explicit than profile order, so CLI auth cannot
+    // force a model onto the CLI harness when config says OpenClaw.
     expect(
       resolveCliRuntimeExecutionProvider({
         cfg: createAnthropicAuthConfig({
@@ -121,6 +130,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         }),
         provider: "",
         modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
       }),
     ).toBe("claude-cli");
   });
@@ -162,5 +191,77 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
+  });
+
+  it("recognizes retired picker providers without loading CLI backend metadata", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => {
+        throw new Error("retired provider checks should not load setup metadata");
+      },
+      resolveRuntimeCliBackends: () => {
+        throw new Error("retired provider checks should not load runtime metadata");
+      },
+    });
+
+    expect(isRetiredModelPickerProvider("CODEX-CLI")).toBe(true);
+    expect(isRetiredModelPickerProvider("anthropic")).toBe(false);
+  });
+});
+
+describe("areRuntimeModelRefsEquivalent", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
+  it("does not load setup runtime aliases for already-identical refs", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for identical refs");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    expect(
+      areRuntimeModelRefsEquivalent("anthropic/claude", "anthropic/claude", {
+        config: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves one setup runtime alias without loading the full setup registry", () => {
+    // Equivalence checks use targeted setup lookup so hot model comparisons do
+    // not load the full plugin setup registry.
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for a single runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    expect(
+      areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": { command: "claude" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

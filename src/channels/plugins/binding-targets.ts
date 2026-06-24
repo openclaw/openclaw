@@ -1,3 +1,8 @@
+/**
+ * Configured binding target lifecycle helpers.
+ *
+ * Ensures or resets stateful binding targets through registered target drivers.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import {
@@ -7,8 +12,12 @@ import {
 import {
   getStatefulBindingTargetDriver,
   resolveStatefulBindingTargetBySessionKey,
+  type StatefulBindingTargetResetResult,
 } from "./stateful-target-drivers.js";
 
+/**
+ * Ensures the stateful target driver for a configured binding is ready to receive traffic.
+ */
 export async function ensureConfiguredBindingTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
@@ -18,6 +27,8 @@ export async function ensureConfiguredBindingTargetReady(params: {
   }
   const driverId = params.bindingResolution.statefulTarget.driverId;
   let driver = getStatefulBindingTargetDriver(driverId);
+  // Built-in drivers are registered lazily so normal channel startup does not load every
+  // stateful target implementation before a binding actually needs one.
   if (!driver && isStatefulTargetBuiltinDriverId(driverId)) {
     await ensureStatefulTargetBuiltinsRegistered();
     driver = getStatefulBindingTargetDriver(driverId);
@@ -34,12 +45,15 @@ export async function ensureConfiguredBindingTargetReady(params: {
   });
 }
 
+/**
+ * Resets a stateful configured binding target in place when its driver supports reset.
+ */
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "new" | "reset";
   commandSource?: string;
-}): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
+}): Promise<StatefulBindingTargetResetResult> {
   let resolved = resolveStatefulBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -52,6 +66,7 @@ export async function resetConfiguredBindingTargetInPlace(params: {
     });
   }
   if (!resolved?.driver.resetInPlace) {
+    // A missing reset hook is a valid skip, not a hard routing failure.
     return {
       ok: false,
       skipped: true,
@@ -63,6 +78,9 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   });
 }
 
+/**
+ * Ensures the configured binding target session exists and returns its session key.
+ */
 export async function ensureConfiguredBindingTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;

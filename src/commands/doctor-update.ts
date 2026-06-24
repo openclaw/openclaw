@@ -1,12 +1,15 @@
+/** Optional pre-doctor update prompt for source checkouts and package installs. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 async function resolveComparablePath(target: string): Promise<string> {
@@ -34,6 +37,7 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     : "not-git";
 }
 
+/** Offers to update OpenClaw before doctor when running interactively from an updatable install. */
 export async function maybeOfferUpdateBeforeDoctor(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
@@ -61,11 +65,18 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     if (!shouldUpdate) {
       return { updated: false };
     }
-    note("Running update (fetch/rebase/build/ui:build/doctor)…", "Update");
-    const result = await runGatewayUpdate({
-      cwd: params.root,
-      argv1: process.argv[1],
-    });
+    note("Running update…", "Update");
+    const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
+    let result: UpdateRunResult;
+    try {
+      result = await runGatewayUpdate({
+        cwd: params.root,
+        argv1: process.argv[1],
+        progress,
+      });
+    } finally {
+      stop();
+    }
     note(
       [
         `Status: ${result.status}`,

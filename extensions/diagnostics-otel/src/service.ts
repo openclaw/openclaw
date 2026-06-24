@@ -1,3 +1,4 @@
+// Diagnostics Otel plugin module implements service behavior.
 import {
   context as otelContextApi,
   metrics,
@@ -6,6 +7,7 @@ import {
   SpanStatusCode,
   TraceFlags,
 } from "@opentelemetry/api";
+import type { SpanContext } from "@opentelemetry/api";
 import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
@@ -26,6 +28,7 @@ import {
   ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
   ATTR_GEN_AI_TOOL_DEFINITIONS,
 } from "@opentelemetry/semantic-conventions/incubating";
+import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type {
   DiagnosticEventMetadata,
@@ -64,6 +67,7 @@ const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.trace_id",
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const SECURITY_TARGET_NAME_VALUE_RE = /^[A-Za-z0-9@/_.:-]{1,256}$/u;
 const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
@@ -86,6 +90,8 @@ const GEN_AI_TOKEN_USAGE_BUCKETS = [
 const GEN_AI_OPERATION_DURATION_BUCKETS = [
   0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
 ];
+const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
+const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -97,11 +103,23 @@ type OtelContentCapturePolicy = {
   logBodies: boolean;
 };
 
+type OtelLogsExporter = "otlp" | "stdout" | "both";
+
+type BuiltOtelLogRecord = {
+  logRecord: LogRecord;
+  traceContext?: DiagnosticTraceContext;
+};
+
 type OtelModelCallContent = {
   inputMessages?: unknown;
   outputMessages?: unknown;
   systemPrompt?: string;
   toolDefinitions?: unknown;
+};
+
+type OtelToolCallContent = {
+  toolInput?: unknown;
+  toolOutput?: unknown;
 };
 
 type MessageDeliveryDiagnosticEvent = Extract<
@@ -128,6 +146,8 @@ type SessionRecoveryDiagnosticEvent = Extract<
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
 type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
+type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
+type TrustedSpanAliasOwner = { kind: "run"; id: string };
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   inputMessages: false,
@@ -307,6 +327,18 @@ function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): st
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
 }
 
+function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
+  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
 function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unknown"): string {
   if (!value) {
     return fallback;
@@ -323,6 +355,43 @@ function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unkn
 
 function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): boolean {
   return policy.logBodies;
+}
+
+function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+  if (Array.isArray(timestamp)) {
+    const [seconds, nanoseconds] = timestamp;
+    if (Number.isFinite(seconds) && Number.isFinite(nanoseconds)) {
+      return new Date(seconds * 1000 + Math.trunc(nanoseconds / 1_000_000)).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
+function writeStdoutDiagnosticLogRecord(params: {
+  logRecord: LogRecord;
+  serviceName: string;
+  traceContext?: DiagnosticTraceContext;
+}): void {
+  const { logRecord, serviceName, traceContext } = params;
+  const line = {
+    ts: otelLogTimestampIso(logRecord.timestamp),
+    signal: "openclaw.diagnostic.log",
+    "service.name": serviceName,
+    severityText: logRecord.severityText,
+    severityNumber: logRecord.severityNumber,
+    body: logRecord.body,
+    attributes: logRecord.attributes ?? {},
+    ...(traceContext?.traceId ? { trace_id: traceContext.traceId } : {}),
+    ...(traceContext?.spanId ? { span_id: traceContext.spanId } : {}),
+    ...(traceContext?.traceFlags ? { trace_flags: traceContext.traceFlags } : {}),
+  };
+  process.stdout.write(`${JSON.stringify(line)}\n`);
 }
 
 function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
@@ -399,7 +468,12 @@ function assignGenAiSpanIdentityAttrs(
     attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
   }
   if (input.model) {
-    attrs["gen_ai.request.model"] = lowCardinalityAttr(input.model);
+    // Span attributes carry the full model id; only metric labels need bounded cardinality
+    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
+    // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
+    // reads gen_ai.request.model). Keep the redacted raw model on the span.
+    attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
   }
   attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
 }
@@ -898,24 +972,20 @@ function assignOtelModelContentAttributes(
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.system_prompt",
-      content?.systemPrompt,
-    );
+    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
   }
 }
 
 function assignOtelToolContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  event: Record<string, unknown>,
+  content: OtelToolCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
   if (policy.toolInputs) {
-    assignOtelContentAttribute(attributes, "openclaw.content.tool_input", event.toolInput);
+    assignOtelContentAttribute(attributes, "openclaw.content.tool_input", content?.toolInput);
   }
   if (policy.toolOutputs) {
-    assignOtelContentAttribute(attributes, "openclaw.content.tool_output", event.toolOutput);
+    assignOtelContentAttribute(attributes, "openclaw.content.tool_output", content?.toolOutput);
   }
 }
 
@@ -1002,6 +1072,165 @@ function assignOtelLogEventAttributes(
   }
 }
 
+function assignOtelSecurityEventAttributes(
+  attributes: Record<string, string | number | boolean>,
+  eventAttributes: Record<string, string | number | boolean> | undefined,
+): void {
+  if (!eventAttributes) {
+    return;
+  }
+  for (const rawKey in eventAttributes) {
+    if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
+      break;
+    }
+    if (!Object.hasOwn(eventAttributes, rawKey)) {
+      continue;
+    }
+    const key = rawKey.trim();
+    if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
+      continue;
+    }
+    if (redactSensitiveText(key) !== key) {
+      continue;
+    }
+    if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
+      continue;
+    }
+    const value = eventAttributes[rawKey];
+    assignOtelLogAttribute(
+      attributes,
+      `openclaw.security.attribute.${key}`,
+      typeof value === "string" ? lowCardinalityAttr(value) : value,
+    );
+  }
+}
+
+function securitySeverityText(
+  severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
+): SecuritySeverityText {
+  switch (severity) {
+    case "critical":
+      return "FATAL";
+    case "high":
+      return "ERROR";
+    case "medium":
+      return "WARN";
+    case "info":
+    case "low":
+      return "INFO";
+  }
+  const unreachable: never = severity;
+  return unreachable;
+}
+
+function assignOtelSecurityAttributes(
+  attributes: Record<string, string | number | boolean>,
+  evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
+): void {
+  assignOtelLogAttribute(attributes, "openclaw.security.event_id", evt.eventId);
+  assignOtelLogAttribute(attributes, "openclaw.security.category", evt.category);
+  assignOtelLogAttribute(attributes, "openclaw.security.action", lowCardinalityAttr(evt.action));
+  assignOtelLogAttribute(attributes, "openclaw.security.outcome", evt.outcome);
+  assignOtelLogAttribute(attributes, "openclaw.security.severity", evt.severity);
+  if (evt.reason) {
+    assignOtelLogAttribute(attributes, "openclaw.security.reason", lowCardinalityAttr(evt.reason));
+  }
+  if (evt.actor) {
+    assignOtelLogAttribute(attributes, "openclaw.security.actor.kind", evt.actor.kind);
+    if (evt.actor.idHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.id_hash",
+        lowCardinalityAttr(evt.actor.idHash),
+      );
+    }
+    if (evt.actor.deviceIdHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.device_id_hash",
+        lowCardinalityAttr(evt.actor.deviceIdHash),
+      );
+    }
+    if (evt.actor.channel) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.channel",
+        lowCardinalityAttr(evt.actor.channel),
+      );
+    }
+    if (evt.actor.role) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.role",
+        lowCardinalityAttr(evt.actor.role),
+      );
+    }
+    if (evt.actor.scopes?.length) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.scopes",
+        evt.actor.scopes.map((scope) => lowCardinalityAttr(scope)).join(","),
+      );
+    }
+  }
+  if (evt.target) {
+    assignOtelLogAttribute(attributes, "openclaw.security.target.kind", evt.target.kind);
+    if (evt.target.idHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.id_hash",
+        lowCardinalityAttr(evt.target.idHash),
+      );
+    }
+    if (evt.target.name) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.name",
+        securityTargetNameAttr(evt.target.name),
+      );
+    }
+    if (evt.target.owner) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.owner",
+        lowCardinalityAttr(evt.target.owner),
+      );
+    }
+  }
+  if (evt.policy) {
+    if (evt.policy.id) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.policy.id",
+        lowCardinalityAttr(evt.policy.id),
+      );
+    }
+    if (evt.policy.decision) {
+      assignOtelLogAttribute(attributes, "openclaw.security.policy.decision", evt.policy.decision);
+    }
+    if (evt.policy.reason) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.policy.reason",
+        lowCardinalityAttr(evt.policy.reason),
+      );
+    }
+  }
+  if (evt.control) {
+    if (evt.control.id) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.control.id",
+        lowCardinalityAttr(evt.control.id),
+      );
+    }
+    if (evt.control.family) {
+      assignOtelLogAttribute(attributes, "openclaw.security.control.family", evt.control.family);
+    }
+  }
+  assignOtelSecurityEventAttributes(attributes, evt.attributes);
+}
+
 function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   const parsed = Number.parseInt(traceFlags ?? "00", 16);
   return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
@@ -1024,7 +1253,18 @@ function contextForTrustedTraceContext(
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
 ) {
-  return metadata.trusted ? contextForTraceContext(evt.trace) : undefined;
+  return metadata.trusted || metadata.trustedTraceContext === true
+    ? contextForTraceContext(evt.trace)
+    : undefined;
+}
+
+function normalizedTrustedTraceContext(
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+): DiagnosticTraceContext | undefined {
+  return metadata.trusted || metadata.trustedTraceContext === true
+    ? normalizeTraceContext(evt.trace)
+    : undefined;
 }
 
 function addTraceAttributes(
@@ -1112,6 +1352,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
       const logsEnabled = otel.logs === true;
+      const logsExporter: OtelLogsExporter = otel.logsExporter ?? "otlp";
+      const logsToOtlp = logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
+      const logsToStdout = logsEnabled && (logsExporter === "stdout" || logsExporter === "both");
+      const otlpSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+        ...(tracesEnabled ? (["traces"] as const) : []),
+        ...(metricsEnabled ? (["metrics"] as const) : []),
+        ...(logsToOtlp ? (["logs"] as const) : []),
+      ];
       const enabledSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
         ...(tracesEnabled ? (["traces"] as const) : []),
         ...(metricsEnabled ? (["metrics"] as const) : []),
@@ -1122,8 +1370,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       }
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
-      if (protocol !== "http/protobuf") {
-        emitForSignals(enabledSignals, {
+      if (otlpSignals.length > 0 && protocol !== "http/protobuf") {
+        emitForSignals(otlpSignals, {
           exporter: "diagnostics-otel",
           status: "failure",
           reason: "unsupported_protocol",
@@ -1244,17 +1492,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const meter = metrics.getMeter("openclaw");
       const tracer = trace.getTracer("openclaw");
       const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
-      const activeTrustedSpanAliases = new Map<string, ReturnType<typeof tracer.startSpan>>();
-      const pendingTrustedRunFinalizers = new Map<string, ReturnType<typeof setImmediate>>();
+      const activeTrustedSpanAliases = new Map<
+        string,
+        { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
+      >();
+      const retainedTrustedSpanContexts = new Map<
+        string,
+        { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
+      >();
+      const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
-        for (const handle of pendingTrustedRunFinalizers.values()) {
-          clearImmediate(handle);
+        for (const handle of retainedTrustedSpanContextCleanupTimers) {
+          clearTimeout(handle);
         }
-        pendingTrustedRunFinalizers.clear();
+        retainedTrustedSpanContextCleanupTimers.clear();
+        retainedTrustedSpanContexts.clear();
         for (const span of new Set([
           ...activeTrustedSpans.values(),
-          ...activeTrustedSpanAliases.values(),
+          ...Array.from(activeTrustedSpanAliases.values(), (entry) => entry.span),
         ])) {
           span.end(stopAt);
         }
@@ -1454,7 +1710,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         "openclaw.model_call.response_bytes",
         {
           unit: "By",
-          description: "UTF-8 byte size of streamed model response events",
+          description: "UTF-8 byte size of bounded streamed model response payloads",
         },
       );
       const modelCallTimeToFirstByteHistogram = meter.createHistogram(
@@ -1475,13 +1731,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
-      const toolExecutionBlockedCounter = meter.createCounter(
-        "openclaw.tool.execution.blocked",
-        {
-          unit: "1",
-          description: "Tool executions blocked by policy or sandbox diagnostics",
-        },
-      );
+      const toolExecutionBlockedCounter = meter.createCounter("openclaw.tool.execution.blocked", {
+        unit: "1",
+        description: "Tool executions blocked by policy or sandbox diagnostics",
+      });
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
         unit: "ms",
         description: "Exec process duration",
@@ -1571,81 +1824,148 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             metadata: DiagnosticEventMetadata,
           ) => void)
         | undefined;
+      let recordSecurityEvent:
+        | ((
+            evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
+            metadata: DiagnosticEventMetadata,
+          ) => void)
+        | undefined;
       if (logsEnabled) {
         let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
-        const logExporter = new OTLPLogExporter({
-          ...(logUrl ? { url: logUrl } : {}),
-          ...(headers ? { headers } : {}),
-        });
-        const logProcessor = new BatchLogRecordProcessor(
-          logExporter,
-          typeof otel.flushIntervalMs === "number"
-            ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
-            : {},
-        );
-        logProvider = new LoggerProvider({
-          resource,
-          processors: [logProcessor],
-        });
-        const otelLogger = logProvider.getLogger("openclaw");
+
+        let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
+        if (logsToOtlp) {
+          const logExporter = new OTLPLogExporter({
+            ...(logUrl ? { url: logUrl } : {}),
+            ...(headers ? { headers } : {}),
+          });
+          const logProcessor = new BatchLogRecordProcessor(
+            logExporter,
+            typeof otel.flushIntervalMs === "number"
+              ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
+              : {},
+          );
+          logProvider = new LoggerProvider({
+            resource,
+            processors: [logProcessor],
+          });
+          otelLogger = logProvider.getLogger("openclaw");
+        }
+
+        const reportLogExportFailure = (err: unknown, label: "log record" | "security event") => {
+          emitExporterEvent({
+            exporter: "diagnostics-otel",
+            signal: "logs",
+            status: "failure",
+            reason: "emit_failed",
+            errorCategory: errorCategory(err),
+          });
+          const now = Date.now();
+          if (
+            now - logRecordExportFailureLastReportedAt >=
+            LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
+          ) {
+            logRecordExportFailureLastReportedAt = now;
+            ctx.logger.error(`diagnostics-otel: ${label} export failed: ${formatError(err)}`);
+          }
+        };
+
+        const emitLogRecord = ({ logRecord, traceContext }: BuiltOtelLogRecord) => {
+          if (logsToOtlp) {
+            otelLogger?.emit(logRecord);
+          }
+          if (logsToStdout) {
+            writeStdoutDiagnosticLogRecord({
+              logRecord,
+              serviceName,
+              ...(traceContext ? { traceContext } : {}),
+            });
+          }
+        };
+
+        const buildDiagnosticLogRecord = (
+          evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
+          metadata: DiagnosticEventMetadata,
+        ): BuiltOtelLogRecord => {
+          const logLevelName = evt.level || "INFO";
+          const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
+          const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+            ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
+            : "log";
+          const attributes = Object.create(null) as Record<string, string | number | boolean>;
+          assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
+          if (evt.loggerName) {
+            assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
+          }
+          if (evt.loggerParents?.length) {
+            assignOtelLogAttribute(
+              attributes,
+              "openclaw.logger.parents",
+              evt.loggerParents.join("."),
+            );
+          }
+          assignOtelLogEventAttributes(attributes, evt.attributes);
+          if (evt.code?.line) {
+            assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
+          }
+          if (evt.code?.functionName) {
+            assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
+          }
+          const traceContext = normalizedTrustedTraceContext(evt, metadata);
+          addTraceAttributes(attributes, traceContext);
+
+          const logRecord: LogRecord = {
+            body,
+            severityText: logLevelName,
+            severityNumber,
+            attributes: redactOtelAttributes(attributes),
+            timestamp: evt.ts,
+          };
+          const logContext = contextForTrustedTraceContext(evt, metadata);
+          if (logContext) {
+            logRecord.context = logContext;
+          }
+          return { logRecord, ...(traceContext ? { traceContext } : {}) };
+        };
+
+        const buildSecurityLogRecord = (
+          evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
+          metadata: DiagnosticEventMetadata,
+        ): BuiltOtelLogRecord => {
+          const severityText = securitySeverityText(evt.severity);
+          const attributes = Object.create(null) as Record<string, string | number | boolean>;
+          assignOtelSecurityAttributes(attributes, evt);
+
+          const traceContext = normalizedTrustedTraceContext(evt, metadata);
+          const logRecord: LogRecord = {
+            body: "openclaw.security.event",
+            severityText,
+            severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),
+            attributes: redactOtelAttributes(attributes),
+            timestamp: evt.ts,
+          };
+          const logContext = contextForTrustedTraceContext(evt, metadata);
+          if (logContext) {
+            logRecord.context = logContext;
+          }
+          return { logRecord, ...(traceContext ? { traceContext } : {}) };
+        };
+
         recordLogRecord = (evt, metadata) => {
           try {
-            const logLevelName = evt.level || "INFO";
-            const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-            const body = shouldCaptureOtelLogBody(contentCapturePolicy)
-              ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
-              : "log";
-            const attributes = Object.create(null) as Record<string, string | number | boolean>;
-            assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
-            if (evt.loggerName) {
-              assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
-            }
-            if (evt.loggerParents?.length) {
-              assignOtelLogAttribute(
-                attributes,
-                "openclaw.logger.parents",
-                evt.loggerParents.join("."),
-              );
-            }
-            assignOtelLogEventAttributes(attributes, evt.attributes);
-            if (evt.code?.line) {
-              assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
-            }
-            if (evt.code?.functionName) {
-              assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
-            }
-            if (metadata.trusted) {
-              addTraceAttributes(attributes, evt.trace);
-            }
-
-            const logRecord: LogRecord = {
-              body,
-              severityText: logLevelName,
-              severityNumber,
-              attributes: redactOtelAttributes(attributes),
-              timestamp: evt.ts,
-            };
-            const logContext = contextForTrustedTraceContext(evt, metadata);
-            if (logContext) {
-              logRecord.context = logContext;
-            }
-            otelLogger.emit(logRecord);
+            emitLogRecord(buildDiagnosticLogRecord(evt, metadata));
           } catch (err) {
-            emitExporterEvent({
-              exporter: "diagnostics-otel",
-              signal: "logs",
-              status: "failure",
-              reason: "emit_failed",
-              errorCategory: errorCategory(err),
-            });
-            const now = Date.now();
-            if (
-              now - logRecordExportFailureLastReportedAt >=
-              LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
-            ) {
-              logRecordExportFailureLastReportedAt = now;
-              ctx.logger.error(`diagnostics-otel: log record export failed: ${formatError(err)}`);
-            }
+            reportLogExportFailure(err, "log record");
+          }
+        };
+        recordSecurityEvent = (evt, metadata) => {
+          if (!metadata.trusted) {
+            return;
+          }
+          try {
+            emitLogRecord(buildSecurityLogRecord(evt, metadata));
+          } catch (err) {
+            reportLogExportFailure(err, "security event");
           }
         };
       }
@@ -1685,20 +2005,139 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
       ) => (metadata.trusted ? normalizeTraceContext(evt.trace) : undefined);
+      const internalOrTrustedTraceContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => (metadata.trusted || metadata.internal ? normalizeTraceContext(evt.trace) : undefined);
+      const trustedSpanAliasOwner = (
+        evt: DiagnosticEventPayload,
+      ): TrustedSpanAliasOwner | undefined => {
+        if ("runId" in evt && evt.runId) {
+          return { kind: "run", id: evt.runId };
+        }
+        return undefined;
+      };
+      const sameTrustedSpanAliasOwner = (
+        left: TrustedSpanAliasOwner | undefined,
+        right: TrustedSpanAliasOwner | undefined,
+      ) => Boolean(left && right && left.kind === right.kind && left.id === right.id);
+      const trustedSpanAliasKey = (spanId: string, owner: TrustedSpanAliasOwner) =>
+        `${spanId}:${owner.kind}:${owner.id}`;
+      const retainedTrustedSpanContextKey = (
+        traceId: string,
+        spanId: string,
+        owner?: TrustedSpanAliasOwner,
+      ) => `${traceId}:${owner ? trustedSpanAliasKey(spanId, owner) : spanId}`;
+      const retainedTrustedSpanContext = (
+        traceContext: DiagnosticTraceContext | undefined,
+        spanId: string | undefined,
+        owner?: TrustedSpanAliasOwner,
+      ) => {
+        if (!traceContext?.traceId || !spanId) {
+          return undefined;
+        }
+        const retained =
+          (owner
+            ? retainedTrustedSpanContexts.get(
+                retainedTrustedSpanContextKey(traceContext.traceId, spanId, owner),
+              )
+            : undefined) ??
+          retainedTrustedSpanContexts.get(
+            retainedTrustedSpanContextKey(traceContext.traceId, spanId),
+          );
+        if (retained?.spanContext.traceId !== traceContext.traceId) {
+          return undefined;
+        }
+        if (retained.owner && !sameTrustedSpanAliasOwner(retained.owner, owner)) {
+          return undefined;
+        }
+        return retained.spanContext;
+      };
+      const activeTrustedSpanAlias = (spanId: string, owner: TrustedSpanAliasOwner | undefined) => {
+        if (!owner) {
+          return undefined;
+        }
+        const alias = activeTrustedSpanAliases.get(trustedSpanAliasKey(spanId, owner));
+        if (!alias || !sameTrustedSpanAliasOwner(alias.owner, owner)) {
+          return undefined;
+        }
+        return alias.span;
+      };
+      const internalOrTrustedParentContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        const parentSpanId = traceContext?.parentSpanId ?? traceContext?.spanId;
+        if (!traceContext || !parentSpanId) {
+          return undefined;
+        }
+        return contextForTraceContext({
+          ...traceContext,
+          spanId: parentSpanId,
+        });
+      };
+      const internalOrTrustedExplicitParentContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (!traceContext?.parentSpanId) {
+          return undefined;
+        }
+        return contextForTraceContext({
+          ...traceContext,
+          spanId: traceContext.parentSpanId,
+        });
+      };
       const activeTrustedParentContext = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
       ) => {
-        const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
+        const traceContext = trustedTraceContext(evt, metadata);
+        const parentSpanId = traceContext?.parentSpanId;
         if (!parentSpanId) {
           return undefined;
         }
+        const owner = trustedSpanAliasOwner(evt);
         const activeParentSpan =
-          activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAliases.get(parentSpanId);
-        if (!activeParentSpan) {
+          activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAlias(parentSpanId, owner);
+        const spanContext =
+          activeParentSpan?.spanContext() ??
+          retainedTrustedSpanContext(traceContext, parentSpanId, owner);
+        if (!spanContext) {
           return undefined;
         }
-        return trace.setSpanContext(otelContextApi.active(), activeParentSpan.spanContext());
+        return trace.setSpanContext(otelContextApi.active(), spanContext);
+      };
+      const activeInternalOrTrustedContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (!traceContext) {
+          return undefined;
+        }
+        const owner = trustedSpanAliasOwner(evt);
+        const activeSpan =
+          (traceContext.spanId
+            ? (activeTrustedSpans.get(traceContext.spanId) ??
+              activeTrustedSpanAlias(traceContext.spanId, owner))
+            : undefined) ??
+          (traceContext.parentSpanId
+            ? (activeTrustedSpans.get(traceContext.parentSpanId) ??
+              activeTrustedSpanAlias(traceContext.parentSpanId, owner))
+            : undefined);
+        if (activeSpan) {
+          return trace.setSpanContext(otelContextApi.active(), activeSpan.spanContext());
+        }
+        const retainedSpanContext =
+          retainedTrustedSpanContext(traceContext, traceContext.spanId, owner) ??
+          retainedTrustedSpanContext(traceContext, traceContext.parentSpanId, owner);
+        if (retainedSpanContext) {
+          return trace.setSpanContext(otelContextApi.active(), retainedSpanContext);
+        }
+        return internalOrTrustedParentContext(evt, metadata);
       };
       const trackTrustedSpan = (
         evt: DiagnosticEventPayload,
@@ -1706,6 +2145,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span: ReturnType<typeof tracer.startSpan>,
       ) => {
         const spanId = trustedTraceContext(evt, metadata)?.spanId;
+        if (spanId) {
+          activeTrustedSpans.set(spanId, span);
+        }
+        return span;
+      };
+      const trackInternalOrTrustedSpan = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        span: ReturnType<typeof tracer.startSpan>,
+      ) => {
+        const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
         }
@@ -1725,33 +2175,109 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         return span;
       };
+      const getTrackedInternalOrTrustedSpan = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
+        if (!spanId) {
+          return undefined;
+        }
+        return activeTrustedSpans.get(spanId);
+      };
       const setSpanAttrs = (
         span: ReturnType<typeof tracer.startSpan>,
         attributes: Record<string, string | number | boolean>,
       ) => {
         span.setAttributes?.(redactOtelAttributes(attributes));
       };
-      const scheduleTrackedRunSpanFinalize = (
+      const retainTrustedSpanContext = (
+        traceId: string,
         spanId: string,
-        parentSpanId: string | undefined,
+        spanContext: SpanContext,
+        token: symbol,
+        owner?: TrustedSpanAliasOwner,
+      ) => {
+        retainedTrustedSpanContexts.set(retainedTrustedSpanContextKey(traceId, spanId, owner), {
+          spanContext,
+          token,
+          ...(owner ? { owner } : {}),
+        });
+        while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {
+          const oldestKey = retainedTrustedSpanContexts.keys().next().value;
+          if (!oldestKey) {
+            break;
+          }
+          retainedTrustedSpanContexts.delete(oldestKey);
+        }
+      };
+      const scheduleRetainedTrustedSpanContextCleanup = (token: symbol) => {
+        let drainHandle: ReturnType<typeof setTimeout> | undefined;
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const cleanup = () => {
+          if (drainHandle) {
+            clearTimeout(drainHandle);
+            retainedTrustedSpanContextCleanupTimers.delete(drainHandle);
+            drainHandle = undefined;
+          }
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            retainedTrustedSpanContextCleanupTimers.delete(timeoutHandle);
+            timeoutHandle = undefined;
+          }
+          for (const [key, retained] of retainedTrustedSpanContexts) {
+            if (retained.token === token) {
+              retainedTrustedSpanContexts.delete(key);
+            }
+          }
+        };
+        drainHandle = setTimeout(() => {
+          if (drainHandle) {
+            retainedTrustedSpanContextCleanupTimers.delete(drainHandle);
+            drainHandle = undefined;
+          }
+          void waitForDiagnosticEventsDrained().then(cleanup, cleanup);
+        }, 0);
+        (drainHandle as { unref?: () => void }).unref?.();
+        retainedTrustedSpanContextCleanupTimers.add(drainHandle);
+        timeoutHandle = setTimeout(cleanup, RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS);
+        (timeoutHandle as { unref?: () => void }).unref?.();
+        retainedTrustedSpanContextCleanupTimers.add(timeoutHandle);
+      };
+      const completeTrackedLifecycleSpan = (
+        spanId: string,
         span: ReturnType<typeof tracer.startSpan>,
         endTimeMs: number,
       ) => {
-        const existingHandle = pendingTrustedRunFinalizers.get(spanId);
-        if (existingHandle) {
-          clearImmediate(existingHandle);
+        const spanContext = span.spanContext();
+        const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
+        const retainedAliasKeys: string[] = [];
+        for (const [aliasKey, alias] of activeTrustedSpanAliases) {
+          if (alias.span === span) {
+            retainedKeys.push({ spanId: alias.spanId, owner: alias.owner });
+            retainedAliasKeys.push(aliasKey);
+          }
         }
-        const handle = setImmediate(() => {
-          pendingTrustedRunFinalizers.delete(spanId);
-          if (activeTrustedSpans.get(spanId) === span) {
-            activeTrustedSpans.delete(spanId);
+        if (activeTrustedSpans.get(spanId) === span) {
+          activeTrustedSpans.delete(spanId);
+        }
+        for (const aliasKey of retainedAliasKeys) {
+          if (activeTrustedSpanAliases.get(aliasKey)?.span === span) {
+            activeTrustedSpanAliases.delete(aliasKey);
           }
-          if (parentSpanId && activeTrustedSpanAliases.get(parentSpanId) === span) {
-            activeTrustedSpanAliases.delete(parentSpanId);
-          }
-          span.end(endTimeMs);
-        });
-        pendingTrustedRunFinalizers.set(spanId, handle);
+        }
+        span.end(endTimeMs);
+        const token = Symbol("retainedTrustedSpanContext");
+        for (const retainedKey of retainedKeys) {
+          retainTrustedSpanContext(
+            spanContext.traceId,
+            retainedKey.spanId,
+            spanContext,
+            token,
+            retainedKey.owner,
+          );
+        }
+        scheduleRetainedTrustedSpanContextCleanup(token);
       };
 
       const addRunAttrs = (
@@ -1968,11 +2494,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageDispatchStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "message.dispatch.started" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
-        messageDispatchStartedCounter.add(1, {
+        const attrs = {
           "openclaw.channel": lowCardinalityAttr(evt.channel),
           "openclaw.source": lowCardinalityAttr(evt.source),
-        });
+        };
+        messageDispatchStartedCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (!traceContext?.spanId || activeTrustedSpans.has(traceContext.spanId)) {
+          return;
+        }
+        trackInternalOrTrustedSpan(
+          evt,
+          metadata,
+          spanWithDuration("openclaw.message.processed", attrs, undefined, {
+            parentContext: internalOrTrustedExplicitParentContext(evt, metadata),
+            startTimeMs: evt.ts,
+          }),
+        );
       };
 
       const recordMessageDispatchCompleted = (
@@ -1990,6 +2533,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageProcessed = (
         evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           "openclaw.channel": lowCardinalityAttr(evt.channel),
@@ -2006,11 +2550,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = lowCardinalityAttr(evt.reason, "unknown");
         }
-        const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
+        const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
+        const span =
+          trackedSpan ??
+          spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs, {
+            parentContext: internalOrTrustedExplicitParentContext(evt, metadata),
+            endTimeMs: evt.ts,
+          });
+        setSpanAttrs(span, spanAttrs);
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
         }
-        span.end();
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (trackedSpan && traceContext?.spanId) {
+          completeTrackedLifecycleSpan(traceContext.spanId, trackedSpan, evt.ts);
+          return;
+        }
+        span.end(evt.ts);
       };
 
       const messageDeliveryAttrs = (
@@ -2028,6 +2584,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageDeliveryCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "message.delivery.completed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           ...messageDeliveryAttrs(evt),
@@ -2044,13 +2601,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             "openclaw.delivery.result_count": evt.resultCount,
           },
           evt.durationMs,
-          { endTimeMs: evt.ts },
+          { parentContext: activeInternalOrTrustedContext(evt, metadata), endTimeMs: evt.ts },
         );
         span.end(evt.ts);
       };
 
       const recordMessageDeliveryError = (
         evt: Extract<DiagnosticEventPayload, { type: "message.delivery.error" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           ...messageDeliveryAttrs(evt),
@@ -2062,6 +2620,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           return;
         }
         const span = spanWithDuration("openclaw.message.delivery", attrs, evt.durationMs, {
+          parentContext: activeInternalOrTrustedContext(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.setStatus({
@@ -2090,7 +2649,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         );
         const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
         if (parentSpanId && !activeTrustedSpans.has(parentSpanId)) {
-          activeTrustedSpanAliases.set(parentSpanId, span);
+          const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
+          activeTrustedSpanAliases.set(trustedSpanAliasKey(parentSpanId, owner), {
+            span,
+            spanId: parentSpanId,
+            owner,
+          });
         }
       };
 
@@ -2369,12 +2933,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         }
         if (trackedSpan && trustedTrace?.spanId) {
-          scheduleTrackedRunSpanFinalize(
-            trustedTrace.spanId,
-            trustedTrace.parentSpanId,
-            trackedSpan,
-            evt.ts,
-          );
+          completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
           return;
         }
         span.end(evt.ts);
@@ -2434,8 +2993,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
           spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
         }
+        const trustedTrace = trustedTraceContext(evt, metadata);
+        const trackedSpan = trustedTrace?.spanId
+          ? activeTrustedSpans.get(trustedTrace.spanId)
+          : undefined;
         const span =
-          takeTrackedTrustedSpan(evt, metadata) ??
+          trackedSpan ??
           spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
             parentContext: activeTrustedParentContext(evt, metadata),
             endTimeMs: evt.ts,
@@ -2446,6 +3009,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             code: SpanStatusCode.ERROR,
             message: "error",
           });
+        }
+        if (trackedSpan && trustedTrace?.spanId) {
+          completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
+          return;
         }
         span.end(evt.ts);
       };
@@ -2791,6 +3358,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordToolExecutionCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
         metadata: DiagnosticEventMetadata,
+        toolContent?: OtelToolCallContent,
       ) => {
         const attrs = toolExecutionBaseAttrs(evt);
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
@@ -2801,11 +3369,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ...toolExecutionBaseAttrs(evt),
         };
         addRunAttrs(spanAttrs, evt);
-        assignOtelToolContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
@@ -2819,6 +3383,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordToolExecutionError = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.error" }>,
         metadata: DiagnosticEventMetadata,
+        toolContent?: OtelToolCallContent,
       ) => {
         const attrs = {
           ...toolExecutionBaseAttrs(evt),
@@ -2836,11 +3401,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.errorCode) {
           spanAttrs["openclaw.errorCode"] = lowCardinalityAttr(evt.errorCode, "other");
         }
-        assignOtelToolContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
@@ -3082,22 +3643,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordMessageReceived(evt);
               return;
             case "message.dispatch.started":
-              recordMessageDispatchStarted(evt);
+              recordMessageDispatchStarted(evt, metadata);
               return;
             case "message.dispatch.completed":
               recordMessageDispatchCompleted(evt);
               return;
             case "message.processed":
-              recordMessageProcessed(evt);
+              recordMessageProcessed(evt, metadata);
               return;
             case "message.delivery.started":
               recordMessageDeliveryStarted(evt);
               return;
             case "message.delivery.completed":
-              recordMessageDeliveryCompleted(evt);
+              recordMessageDeliveryCompleted(evt, metadata);
               return;
             case "message.delivery.error":
-              recordMessageDeliveryError(evt);
+              recordMessageDeliveryError(evt, metadata);
               return;
             case "talk.event":
               recordTalkEvent(evt, metadata);
@@ -3171,10 +3732,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordToolExecutionStarted(evt, metadata);
               return;
             case "tool.execution.completed":
-              recordToolExecutionCompleted(evt, metadata);
+              recordToolExecutionCompleted(evt, metadata, privateData.toolContent);
               return;
             case "tool.execution.error":
-              recordToolExecutionError(evt, metadata);
+              recordToolExecutionError(evt, metadata, privateData.toolContent);
               return;
             case "tool.execution.blocked":
               recordToolExecutionBlocked(evt, metadata);
@@ -3187,6 +3748,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "log.record":
               recordLogRecord?.(evt, metadata);
+              return;
+            case "security.event":
+              recordSecurityEvent?.(evt, metadata);
               return;
             case "tool.loop":
               recordToolLoop(evt);
@@ -3208,7 +3772,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);
-              return;
           }
         } catch (err) {
           ctx.logger.error(
@@ -3236,7 +3799,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       });
 
       if (logsEnabled) {
-        ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/Protobuf)");
+        const label =
+          logsExporter === "both"
+            ? "OTLP/Protobuf + stdout JSONL"
+            : logsExporter === "stdout"
+              ? "stdout JSONL"
+              : "OTLP/Protobuf";
+        ctx.logger.info(`diagnostics-otel: logs exporter enabled (${label})`);
       }
     },
     async stop() {

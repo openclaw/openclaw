@@ -1,3 +1,4 @@
+// Bundled OpenClaw provider index advertises pre-install provider metadata for model picker discovery.
 import type { OpenClawProviderIndex } from "./types.js";
 
 // OpenClaw-owned preview metadata for providers whose plugins may not be
@@ -25,6 +26,13 @@ export const OPENCLAW_PROVIDER_INDEX = {
           {
             id: "kimi-k2.6",
             name: "Kimi K2.6",
+            input: ["text", "image"],
+            contextWindow: 262144,
+          },
+          {
+            id: "kimi-k2.7-code",
+            name: "Kimi K2.7 Code",
+            reasoning: true,
             input: ["text", "image"],
             contextWindow: 262144,
           },

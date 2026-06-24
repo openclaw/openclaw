@@ -1,9 +1,19 @@
-import { accessSync, chmodSync, constants, mkdtempSync, writeFileSync } from "node:fs";
+// Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
+  isChangedLaneTestPath,
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
@@ -30,7 +40,29 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 ];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const PROMPT_SNAPSHOT_CHECK_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+const RUNTIME_SIDECAR_BASELINE_PATH_RE =
+  /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
+  /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
+const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
+const TARGETED_CORE_LINT_PATH_LIMIT = 8;
+const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const ANDROID_VERSION_SYNC_PATHS = new Set([
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
+]);
+const MACOS_APP_CI_PATH_RE =
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
+let corepackPnpmShimCleanupRegistered = false;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -47,6 +79,16 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function hasAndroidVersionSyncPath(paths) {
+  return paths.some((changedPath) =>
+    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
+  );
+}
+
+function hasMacosAppCiPath(paths) {
+  return paths.some((changedPath) => MACOS_APP_CI_PATH_RE.test(normalizeChangedPath(changedPath)));
 }
 
 function executableExistsOnPath(command, env = process.env) {
@@ -77,7 +119,7 @@ export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
-  if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
@@ -89,7 +131,8 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   return true;
 }
 
-export function buildChangedCheckCrabboxArgs(argv = []) {
+export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
+  const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
     "crabbox:run",
     "--",
@@ -109,15 +152,65 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
+    "env",
+    "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+    "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+    "CI=1",
+    "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
     "corepack",
     "pnpm",
     "check:changed",
-    ...argv,
+    ...delegatedArgv,
   ];
+}
+
+function buildDelegatedChangedCheckArgv(argv, options = {}) {
+  const args = parseArgs(argv);
+  if (!args.staged || args.paths.length > 0) {
+    return argv;
+  }
+  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const next = [];
+  if (args.timed) {
+    next.push("--timed");
+  }
+  if (stagedPaths.length === 0) {
+    next.push("--no-changes");
+    return next;
+  }
+  next.push("--base", "HEAD", "--head", "HEAD");
+  next.push("--", ...stagedPaths);
+  return next;
 }
 
 export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+}
+
+export function shouldRunPromptSnapshotCheck(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_CHECK_PATH_RE.test(changedPath));
+}
+
+export function shouldRunPromptSnapshotOwnerTest(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
+}
+
+export function shouldRunRuntimeSidecarBaselineCheck(paths) {
+  return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
+}
+
+export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
+  return paths.some((changedPath) =>
+    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+export function shouldRunAppcastOwnerTest(paths) {
+  return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
+}
+
+export function shouldRunTestTempCreationReport(paths) {
+  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
 
 export function createShrinkwrapGuardCommand(paths) {
@@ -143,9 +236,7 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error(
-    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
-  );
+  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
   return await runManagedCommand({
     bin: "pnpm",
     args: buildChangedCheckCrabboxArgs(argv),
@@ -172,6 +263,22 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
+  const addTestTempCreationReport = () => {
+    if (!shouldRunTestTempCreationReport(result.paths)) {
+      return;
+    }
+    addCommand(
+      "test temp creation report (warning-only)",
+      "node",
+      [
+        "scripts/report-test-temp-creations.mjs",
+        ...(options.staged
+          ? ["--staged"]
+          : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+      ],
+      baseEnv,
+    );
+  };
 
   add("conflict markers", ["check:no-conflict-markers"]);
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -188,6 +295,39 @@ export function createChangedCheckPlan(result, options = {}) {
       baseEnv,
     );
   }
+  if (shouldRunPromptSnapshotCheck(result.paths)) {
+    add("prompt snapshot drift", ["prompt:snapshots:check"]);
+  }
+  if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
+    add(
+      "prompt snapshot owner test",
+      ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunRuntimeSidecarBaselineCheck(result.paths)) {
+    add("runtime sidecar baseline", ["runtime-sidecars:check"]);
+    add(
+      "runtime sidecar owner test",
+      ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
+    addCommand(
+      "Canvas A2UI native resource sync",
+      "node",
+      ["scripts/sync-native-a2ui.mjs", "--check"],
+      baseEnv,
+    );
+  }
+  if (shouldRunAppcastOwnerTest(result.paths)) {
+    add(
+      "appcast owner tests",
+      ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      baseEnv,
+    );
+  }
   add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
@@ -197,8 +337,11 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  addTestTempCreationReport();
+
   const lanes = result.lanes;
   const runAll = lanes.all;
+  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -208,6 +351,7 @@ export function createChangedCheckPlan(result, options = {}) {
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    add("Android version sync", ["android:version:check"]);
     add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
@@ -218,7 +362,12 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  if (shouldRunAndroidVersionSync) {
+    add("Android version sync", ["android:version:check"]);
+  }
+
   if (runAll) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -244,7 +393,17 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.coreTests) {
-    addLint("lint core", ["lint:core"]);
+    const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
+    if (coreLintCommand) {
+      addCommand(
+        coreLintCommand.name,
+        coreLintCommand.bin,
+        coreLintCommand.args,
+        coreLintCommand.env,
+      );
+    } else {
+      addLint("lint core", ["lint:core"]);
+    }
   }
   if (
     lanes.liveDockerTooling &&
@@ -272,8 +431,12 @@ export function createChangedCheckPlan(result, options = {}) {
   } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
+  if (hasMacosAppCiPath(result.paths)) {
+    add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
 
   if (lanes.core || lanes.extensions) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
@@ -299,6 +462,34 @@ export function createChangedCheckPlan(result, options = {}) {
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
       .join(", "),
+  };
+}
+
+export function createTargetedCoreLintCommand(paths, env = process.env, options = {}) {
+  if (
+    paths.some(
+      (changedPath) =>
+        !LINTABLE_CORE_PATH_RE.test(changedPath) &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+    )
+  ) {
+    return null;
+  }
+  const targets = paths
+    .filter((changedPath) => LINTABLE_CORE_PATH_RE.test(changedPath))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (targets.length === 0 || targets.length > TARGETED_CORE_LINT_PATH_LIMIT) {
+    return null;
+  }
+  const fileExists = options.fileExists ?? existsSync;
+  if (!targets.every((target) => fileExists(target))) {
+    return null;
+  }
+  return {
+    name: targets.length === 1 ? "lint core changed file" : "lint core changed files",
+    bin: "node",
+    args: ["scripts/run-oxlint.mjs", "--tsconfig", CORE_OXLINT_TS_CONFIG, ...targets],
+    env,
   };
 }
 
@@ -398,7 +589,25 @@ function ensureCorepackPnpmShimDir() {
   chmodSync(pnpmPath, 0o755);
   writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
   corepackPnpmShimDir = dir;
+  registerCorepackPnpmShimCleanup();
   return dir;
+}
+
+function registerCorepackPnpmShimCleanup() {
+  if (corepackPnpmShimCleanupRegistered) {
+    return;
+  }
+  corepackPnpmShimCleanupRegistered = true;
+  process.once("exit", cleanupCorepackPnpmShimDir);
+}
+
+export function cleanupCorepackPnpmShimDir() {
+  if (!corepackPnpmShimDir) {
+    return;
+  }
+  const dir = corepackPnpmShimDir;
+  corepackPnpmShimDir = undefined;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 async function runCommand(command, timings) {
@@ -428,17 +637,22 @@ function printSummary(timings, options) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths =
+    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
   const args = {
     base: "origin/main",
     head: "HEAD",
     staged: false,
     dryRun: false,
     timed: false,
+    noChanges: false,
     help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
@@ -446,19 +660,22 @@ function parseArgs(argv) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--no-changes", "noChanges"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(normalizeChangedPath(arg));
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
 }
 
 function printUsage() {
@@ -472,6 +689,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",
     ].join("\n"),
@@ -484,15 +702,22 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  const args = parseArgs(argv);
+  let args;
+  try {
+    args = parseArgs(argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     printUsage();
     process.exitCode = 0;
   } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
     process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const paths =
-      args.paths.length > 0
+    const paths = args.noChanges
+      ? []
+      : args.paths.length > 0
         ? args.paths
         : args.staged
           ? listStagedChangedPaths()

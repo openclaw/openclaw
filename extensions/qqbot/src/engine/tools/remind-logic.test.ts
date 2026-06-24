@@ -1,17 +1,21 @@
-import { describe, expect, it } from "vitest";
+// Qqbot tests cover remind logic plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseRelativeTime,
   isCronExpression,
   formatDelay,
   generateJobName,
   buildReminderPrompt,
-  executeRemind,
   executeScheduledRemind,
   prepareRemindCronAction,
   type RemindCronAction,
 } from "./remind-logic.js";
 
 describe("engine/tools/remind-logic", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   describe("parseRelativeTime", () => {
     it("parses minutes shorthand", () => {
       expect(parseRelativeTime("5m")).toBe(5 * 60_000);
@@ -105,21 +109,6 @@ describe("engine/tools/remind-logic", () => {
     it("includes the content in the prompt", () => {
       const prompt = buildReminderPrompt("drink water");
       expect(prompt).toContain("drink water");
-    });
-  });
-
-  describe("executeRemind", () => {
-    it("renders internal scheduling output without exposing cronParams", () => {
-      const result = executeRemind({ action: "list" });
-      expect(result.details).toEqual({
-        _instruction: "Gateway cron action prepared for internal QQ reminder scheduling.",
-        action: "list",
-        summary: undefined,
-      });
-      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
-        "Use the cron tool",
-      );
-      expect(result.details).not.toHaveProperty("cronParams");
     });
   });
 
@@ -297,6 +286,21 @@ describe("engine/tools/remind-logic", () => {
       expect(result.details).toEqual({
         error: "Failed to run Gateway cron action: gateway unavailable",
         action: "remove",
+      });
+    });
+
+    it("rejects relative reminders whose scheduled time exceeds the Date range", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+      const plan = prepareRemindCronAction(
+        { action: "add", content: "test reminder", to: "qqbot:c2c:123", time: "5m" },
+        {},
+      );
+
+      expect(plan).toEqual({
+        ok: false,
+        error: "Reminder time is outside the supported Date range",
       });
     });
   });

@@ -1,3 +1,4 @@
+// Verifies node camera/photo tool payloads, media URLs, and vision gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
@@ -11,14 +12,21 @@ const { callGateway } = vi.hoisted(() => ({
 
 vi.mock("../gateway/call.js", () => ({ callGateway }));
 vi.mock("../media/media-services.js", () => ({
+  buildImageResizeSideGrid: vi.fn(() => [1600]),
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
+  IMAGE_REDUCE_QUALITY_STEPS: [85],
+  isImageProcessorUnavailableError: vi.fn(() => false),
+  MAX_IMAGE_INPUT_PIXELS: 25_000_000,
+  readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
 const NODE_ID = "mac-1";
+const TINY_JPEG_BASE64 =
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z";
 const JPG_PAYLOAD = {
   format: "jpg",
-  base64: "aGVsbG8=",
+  base64: TINY_JPEG_BASE64,
   width: 1,
   height: 1,
 } as const;
@@ -32,7 +40,7 @@ const PHOTOS_LATEST_PAYLOAD = {
   photos: [
     {
       format: "jpeg",
-      base64: "aGVsbG8=",
+      base64: TINY_JPEG_BASE64,
       width: 1,
       height: 1,
       createdAt: "2026-03-04T00:00:00Z",
@@ -47,6 +55,7 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
+  // Tests vary only model vision capability and media invoke permission.
   return createNodesTool({
     ...(options?.modelHasVision !== undefined ? { modelHasVision: options.modelHasVision } : {}),
     ...(options?.allowMediaInvokeCommands !== undefined
@@ -80,6 +89,7 @@ function expectInvokeParams(
     params?: Record<string, unknown>;
   },
 ) {
+  // Node command payloads are nested under the gateway node.invoke params object.
   const record = requireRecord(invokeParams, "node.invoke params");
   expect(record.command).toBe(expected.command);
   if (expected.nodeId !== undefined) {
@@ -146,6 +156,7 @@ function setupNodeInvokeMock(params: {
   onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
   invokePayload?: unknown;
 }) {
+  // Most camera tests need node.list followed by one node.invoke command.
   callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
     if (method === "node.list") {
       return mockNodeList({ commands: params.commands, remoteIp: params.remoteIp });

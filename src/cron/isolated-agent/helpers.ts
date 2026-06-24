@@ -1,8 +1,9 @@
+/** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -11,6 +12,7 @@ type DeliveryPayload = Pick<
   "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
 >;
 
+/** Normalized cron run payload state used for summaries, delivery, and failure classification. */
 export type CronPayloadOutcome = {
   summary?: string;
   outputText?: string;
@@ -41,6 +43,8 @@ type NormalizedCronFailureSignal = CronFailureSignal & {
 function normalizeCronFailureSignal(
   signal: CronFailureSignal | undefined,
 ): NormalizedCronFailureSignal | undefined {
+  // Only explicit fatal signals become cron failures; ordinary tool warnings
+  // still need payload/output evidence before failing the run.
   const message = normalizeOptionalString(signal?.message);
   if (signal?.fatalForCron !== true || !message) {
     return undefined;
@@ -77,6 +81,7 @@ function formatCronRunLevelError(error: unknown): string | undefined {
   return "cron isolated run failed";
 }
 
+/** Picks a bounded cron run summary from plain text output. */
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) {
@@ -86,6 +91,7 @@ export function pickSummaryFromOutput(text: string | undefined) {
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
+/** Picks the last non-error payload text suitable for cron run summaries. */
 export function pickSummaryFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
@@ -110,6 +116,7 @@ export function pickSummaryFromPayloads(
   return undefined;
 }
 
+/** Picks the last non-empty payload text while ignoring terminal error payloads first. */
 export function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
@@ -154,6 +161,7 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
   );
 }
 
+/** Picks the last payload with deliverable outbound content, preferring non-error payloads. */
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     if (payloads[i]?.isError) {
@@ -171,6 +179,7 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   return undefined;
 }
 
+/** Selects deliverable cron payloads while preserving multi-payload successful responses. */
 export function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
   const successfulDeliverablePayloads = payloads.filter(
     (payload) => payload != null && payload.isError !== true && isDeliverablePayload(payload),
@@ -190,6 +199,7 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
+/** Resolves the non-negative heartbeat ack length used for heartbeat-only filtering. */
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
   const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   return Math.max(0, raw);
@@ -218,6 +228,7 @@ function isSuccessfulCronPayload(payload: DeliveryPayload | undefined): boolean 
   );
 }
 
+/** Resolves summary, output text, delivery payloads, and fatal-error state from cron run output. */
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
@@ -259,6 +270,8 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
+  // Some tools emit warning/error payloads before a final answer. Treat those
+  // as non-terminal only when later visible output proves the run recovered.
   const hasNonTerminalToolErrorWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
@@ -281,14 +294,20 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // Structured error payloads are fatal unless later successful output or a
+  // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
     !hasRecoveredToolWarning;
+  // Fatal structured errors own the final delivery payload unless later output
+  // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
+  // A final assistant answer can replace textual warning payloads, but never
+  // structured/media payloads that carry the actual delivery content.
   const shouldUseFinalAssistantVisibleText =
     params.preferFinalAssistantVisibleText === true &&
     normalizedFinalAssistantVisibleText !== undefined &&

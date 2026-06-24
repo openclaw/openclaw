@@ -1,8 +1,12 @@
+// Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
+// cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
   createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
@@ -107,6 +111,23 @@ describe("auth rate limiter", () => {
     }
   });
 
+  it("clamps oversized lockout durations", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      limiter.recordFailure("10.0.0.34");
+
+      expect(limiter.check("10.0.0.34").retryAfterMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ---------- sliding window expiry ----------
 
   it("expires old failures outside the window", () => {
@@ -180,6 +201,13 @@ describe("auth rate limiter", () => {
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
   });
 
+  it("does not exempt opaque identity keys", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    const key = buildRateLimitIdentityKey("node", "node-1");
+    limiter.recordFailure(key);
+    expect(limiter.check(key).allowed).toBe(false);
+  });
+
   // ---------- reset ----------
 
   it("clears tracking state when reset is called", () => {
@@ -233,6 +261,19 @@ describe("auth rate limiter", () => {
       vi.advanceTimersByTime(6_000);
       limiter.prune();
       expect(limiter.size()).toBe(1); // Still locked-out, not pruned.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized positive auto-prune intervals", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+
+      limiter = createAuthRateLimiter({ pruneIntervalMs: Number.MAX_SAFE_INTEGER });
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       vi.useRealTimers();
     }

@@ -1,3 +1,4 @@
+// Config CLI tests cover config command registration, reads, writes, and output modes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,7 +24,7 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
-const mockLoadPluginMetadataSnapshot = vi.fn((configForTest: unknown) =>
+const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
 
@@ -108,6 +109,11 @@ function writeTempJson5File(prefix: string, value: unknown): string {
   );
   fs.writeFileSync(pathname, JSON.stringify(value), "utf8");
   return pathname;
+}
+
+function writeSecurePluginEntrypoint(pathname: string, contents: string): void {
+  fs.writeFileSync(pathname, contents, "utf8");
+  fs.chmodSync(pathname, 0o644);
 }
 
 function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
@@ -1046,6 +1052,37 @@ describe("config cli", () => {
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expectLogIncludes("Config valid:");
+    });
+
+    it("prints warnings while still reporting a valid config", async () => {
+      setSnapshotOnce({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        sourceConfig: {},
+        resolved: {},
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [
+          {
+            path: "channels.mattermost.allowFrom",
+            message:
+              'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; all DMs will be dropped.',
+          },
+        ],
+        legacyIssues: [],
+      });
+
+      await runConfigCommand(["config", "validate"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expectLogIncludes("Config valid:");
+      expectLogIncludes("channels.mattermost.allowFrom");
+      expectLogIncludes("all DMs will be dropped");
     });
 
     it("prints issues and exits 1 when config is invalid", async () => {
@@ -2259,8 +2296,8 @@ describe("config cli", () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
       try {
-        fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
-        fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n", "utf8");
+        writeSecurePluginEntrypoint(path.join(rootDir, "index.js"), "export default {};\n");
+        writeSecurePluginEntrypoint(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
         const resolved = {
           secrets: {
             providers: {},

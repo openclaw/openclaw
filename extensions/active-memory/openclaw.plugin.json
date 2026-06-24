@@ -123,11 +123,12 @@
       "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
-      "label": "Timeout (ms)"
+      "label": "Timeout (ms)",
+      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",
-      "help": "Advanced: extra blocking budget for cold embedded-run setup before the recall timeout is considered exhausted. Defaults to 0 so timeoutMs remains the main-lane hook budget unless you opt in."
+      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0. The separate 1500 ms preflight cap and 1500 ms post-recall completion allowance still apply."
     },
     "queryMode": {
       "label": "Query Mode",

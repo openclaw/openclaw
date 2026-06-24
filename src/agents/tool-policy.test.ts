@@ -1,10 +1,13 @@
+/**
+ * Regression coverage for core tool allow/deny policy helpers.
+ * Verifies sandbox policy resolution, explicit lists, and tool matching.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
@@ -75,17 +78,6 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
-  });
-});
-
-describe("TOOL_POLICY_CONFORMANCE", () => {
-  it("matches exported TOOL_GROUPS exactly", () => {
-    expect(TOOL_POLICY_CONFORMANCE.toolGroups).toEqual(TOOL_GROUPS);
-  });
-
-  it("is JSON-serializable", () => {
-    const serialized = JSON.stringify(TOOL_POLICY_CONFORMANCE);
-    expect(JSON.parse(serialized)).toEqual({ toolGroups: TOOL_GROUPS });
   });
 });
 

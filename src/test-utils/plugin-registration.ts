@@ -1,3 +1,4 @@
+// Test helpers for captured plugin registration and manifest setup.
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import type {
   ImageGenerationProviderPlugin,
@@ -11,6 +12,7 @@ import type {
   VideoGenerationProviderPlugin,
 } from "../plugins/types.js";
 
+/** Captured registration helpers for provider plugin tests. */
 export { createCapturedPluginRegistration };
 
 type RegistrablePlugin = {
@@ -28,6 +30,7 @@ export type RegisteredProviderCollections = {
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
+/** Registers one provider plugin callback and returns its first provider. */
 export async function registerSingleProviderPlugin(params: {
   register(api: OpenClawPluginApi): void;
 }): Promise<ProviderPlugin> {
@@ -73,12 +76,17 @@ export async function registerProviderPlugins(
   return captured.providers;
 }
 
-export function requireRegisteredProvider<T extends { id: string }>(
-  providers: T[],
-  providerId: string,
-  label = "provider",
-): T {
-  const provider = providers.find((entry) => entry.id === providerId);
+function matchesRegisteredProviderId(
+  entry: { id: string; hookAliases?: readonly string[] },
+  id: string,
+) {
+  return entry.id === id || entry.hookAliases?.includes(id) === true;
+}
+
+export function requireRegisteredProvider<
+  T extends { id: string; hookAliases?: readonly string[] },
+>(providers: T[], providerId: string, label = "provider"): T {
+  const provider = providers.find((entry) => matchesRegisteredProviderId(entry, providerId));
   if (!provider) {
     throw new Error(`${label} ${providerId} missing`);
   }

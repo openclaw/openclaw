@@ -1,3 +1,4 @@
+// Openai tests cover memory embedding adapter plugin behavior.
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -78,5 +79,37 @@ describe("OpenAI memory embedding adapter", () => {
       dimensions: 512,
       input_type: "document",
     });
+  });
+
+  it("preserves the caller provider id for custom OpenAI-compatible embedding providers", async () => {
+    const result = await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      provider: "bailian-embedding",
+      model: "text-embedding-v3",
+      fallback: "none",
+    });
+
+    expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "bailian-embedding",
+        fallback: "none",
+        model: "text-embedding-v3",
+      }),
+    );
+    expect(result.runtime?.cacheKeyData?.provider).toBe("bailian-embedding");
+  });
+
+  it("defaults provider id to openai when the caller leaves it unset", async () => {
+    await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+      }),
+    );
   });
 });

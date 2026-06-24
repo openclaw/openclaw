@@ -1,12 +1,13 @@
+// Dev gateway bootstrap for a local loopback config and seeded dev workspace.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
 const DEV_IDENTITY_NAME = "C3-PO";
@@ -15,6 +16,7 @@ const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+  // Template frontmatter is metadata only; workspace files receive the body content.
   try {
     const templateDirs = await resolveWorkspaceTemplateSearchDirs();
     for (const templateDir of templateDirs) {

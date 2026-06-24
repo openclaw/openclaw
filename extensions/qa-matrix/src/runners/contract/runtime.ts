@@ -1,10 +1,15 @@
+// Qa Matrix plugin module implements runtime behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -24,6 +29,7 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
@@ -54,6 +60,9 @@ type MatrixQaGatewayChild = {
 const DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const DEFAULT_MATRIX_QA_CANARY_TIMEOUT_MS = 45_000;
+const MATRIX_QA_GATEWAY_STDERR_LOG = "gateway.stderr.log";
+const MATRIX_QA_GATEWAY_DEBUG_MAX_LINES = 6;
+const MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS = 700;
 
 type MatrixQaLiveLaneGatewayHarness = {
   gateway: MatrixQaGatewayChild;
@@ -191,12 +200,50 @@ function writeMatrixQaProgress(message: string) {
   process.stderr.write(`[matrix-qa] ${message}\n`);
 }
 
+function isMatrixQaGatewayDebugRelevantLine(line: string) {
+  return /\b(?:auth|authorization|unauthorized|forbidden|missing|error|fail(?:ed|ure)?|exception|provider|api[-_ ]?key|token|denied|rejected|timeout)\b/iu.test(
+    line,
+  );
+}
+
+function trimMatrixQaGatewayDebugLine(line: string) {
+  const redacted = redactSensitiveText(line.trim());
+  return redacted.length > MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS
+    ? `${redacted.slice(0, MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS)}...`
+    : redacted;
+}
+
+function summarizeMatrixQaGatewayStderrLog(stderrText: string) {
+  const lines = stderrText.split(/\r?\n/u).map(trimMatrixQaGatewayDebugLine).filter(Boolean);
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  const relevantLines = lines.filter(isMatrixQaGatewayDebugRelevantLine);
+  const selectedLines = (relevantLines.length > 0 ? relevantLines : lines).slice(
+    -MATRIX_QA_GATEWAY_DEBUG_MAX_LINES,
+  );
+  return ["gateway stderr tail:", ...selectedLines.map((line) => `- ${line}`)].join("\n");
+}
+
+async function readMatrixQaGatewayDebugSummary(debugDirPath: string) {
+  const stderrText = await fs
+    .readFile(path.join(debugDirPath, MATRIX_QA_GATEWAY_STDERR_LOG), "utf8")
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+  return summarizeMatrixQaGatewayStderrLog(stderrText);
+}
+
 function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   const raw = process.env[name];
   if (raw === undefined) {
     return fallback;
   }
-  return parseStrictPositiveInteger(raw) ?? fallback;
+  return resolveTimerTimeoutMs(parseStrictPositiveInteger(raw), fallback);
 }
 
 function createMatrixQaRunDeadline() {
@@ -542,6 +589,7 @@ async function waitForMatrixChannelReady(
 async function patchMatrixQaGatewayConfig(params: {
   gateway: MatrixQaGatewayChild;
   patch: Record<string, unknown>;
+  replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -557,6 +605,7 @@ async function patchMatrixQaGatewayConfig(params: {
         {
           raw: JSON.stringify(params.patch, null, 2),
           baseHash: snapshot.hash,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
@@ -573,6 +622,13 @@ async function patchMatrixQaGatewayConfig(params: {
 
 function isMatrixQaStaleConfigPatchError(error: unknown) {
   return formatErrorMessage(error).toLowerCase().includes("config changed since last load");
+}
+
+function resolveMatrixQaOutputDir(params: { outputDir?: string; repoRoot: string }) {
+  return (
+    params.outputDir ??
+    path.join(params.repoRoot, ".artifacts", "qa-e2e", `matrix-${createLiveTransportQaRunId()}`)
+  );
 }
 
 async function startMatrixQaLiveLaneGateway(params: {
@@ -609,9 +665,7 @@ export async function runMatrixQaLive(params: {
   alternateModel?: string;
 }): Promise<MatrixQaRunResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputDir =
-    params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
+  const outputDir = resolveMatrixQaOutputDir({ outputDir: params.outputDir, repoRoot });
   await fs.mkdir(outputDir, { recursive: true });
 
   const defaultModels = resolveMatrixQaModels({
@@ -701,7 +755,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -884,8 +938,8 @@ export async function runMatrixQaLive(params: {
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
                 gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
-                gatewayCall: async (method, params, opts) =>
-                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
+                gatewayCall: async (method, paramsLocal, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {
@@ -969,6 +1023,7 @@ export async function runMatrixQaLive(params: {
                   await patchMatrixQaGatewayConfig({
                     gateway: scenarioGateway.harness.gateway,
                     patch,
+                    replacePaths: opts?.replacePaths,
                     restartDelayMs: opts?.restartDelayMs,
                   });
                 },
@@ -1064,11 +1119,16 @@ export async function runMatrixQaLive(params: {
       details: cleanupErrors.join("\n"),
     });
   }
+  const gatewayDebugSummary = preservedGatewayDebugDirPath
+    ? await readMatrixQaGatewayDebugSummary(preservedGatewayDebugDirPath)
+    : undefined;
   if (preservedGatewayDebugDirPath) {
     checks.push({
       name: "Matrix gateway debug logs",
       status: "pass",
-      details: `preserved at: ${preservedGatewayDebugDirPath}`,
+      details: [`preserved at: ${preservedGatewayDebugDirPath}`, gatewayDebugSummary]
+        .filter(Boolean)
+        .join("\n"),
     });
   }
 
@@ -1182,6 +1242,7 @@ export async function runMatrixQaLive(params: {
         details: [
           ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
           ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
+          ...(gatewayDebugSummary ? [`gateway debug: ${gatewayDebugSummary}`] : []),
           ...cleanupErrors.map((error) => `cleanup: ${error}`),
         ],
         artifacts: artifactPaths,
@@ -1221,9 +1282,11 @@ export const testing = {
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
   remainingMatrixQaRunMs,
+  resolveMatrixQaOutputDir,
   resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,
+  summarizeMatrixQaGatewayStderrLog,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
   withMatrixQaRunDeadline,

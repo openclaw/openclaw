@@ -1,3 +1,8 @@
+/**
+ * Post-spawn guidance notes.
+ *
+ * Returns push-based completion guidance for run spawns and thread-binding guidance for session spawns.
+ */
 import { isCronSessionKey } from "../routing/session-key.js";
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -5,6 +10,7 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
 
+/** Resolve the post-spawn note, suppressing polling guidance for cron sessions. */
 export function resolveSubagentSpawnAcceptedNote(params: {
   spawnMode: "run" | "session";
   agentSessionKey?: string;

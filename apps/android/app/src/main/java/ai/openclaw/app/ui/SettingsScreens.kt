@@ -1,19 +1,21 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -44,11 +46,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -86,7 +92,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,11 +99,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
+/**
+ * Detail routes reachable from the Android settings home surface.
+ */
 internal enum class SettingsRoute {
   Home,
   Profile,
   Voice,
   Agents,
+  ProvidersModels,
   Approvals,
   CronJobs,
   Usage,
@@ -115,6 +124,9 @@ internal enum class SettingsRoute {
   About,
 }
 
+/**
+ * Dispatches a selected settings route to its detail screen without changing navigation ownership.
+ */
 @Composable
 internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
@@ -126,6 +138,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Voice -> VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Agents -> AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.ProvidersModels -> ProvidersModelsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Approvals -> ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -137,7 +150,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
@@ -289,29 +302,62 @@ private fun ApprovalsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val isConnected by viewModel.isConnected.collectAsState()
+  val execApprovals by viewModel.execApprovals.collectAsState()
+  val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
+  val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val waitingCount = pendingToolCalls.count { it.isError != true }
-  val issueCount = pendingToolCalls.count { it.isError == true }
+  val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshExecApprovals()
+    }
+  }
 
   SettingsDetailFrame(title = "Approvals", subtitle = "Review actions that need your attention.", icon = Icons.Default.Lock, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Pending", waitingCount.toString()),
+          SettingsMetric("Gateway Pending", execApprovals.size.toString()),
+          SettingsMetric("Session Activity", pendingToolCalls.size.toString()),
           SettingsMetric("Issues", issueCount.toString()),
           SettingsMetric("Active Runs", pendingRunCount.toString()),
         ),
     )
-    if (pendingToolCalls.isEmpty()) {
+    ClawSecondaryButton(
+      text = if (execApprovalsRefreshing) "Refreshing" else "Refresh",
+      onClick = viewModel::refreshExecApprovals,
+      enabled = isConnected && !execApprovalsRefreshing,
+      modifier = Modifier.fillMaxWidth(),
+    )
+    if (execApprovalsErrorText != null) {
+      ClawPanel {
+        Text(text = execApprovalsErrorText ?: "", style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
+    }
+    if (!isConnected) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = "Nothing needs approval.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = "OpenClaw will show action requests here when a session pauses for review.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(text = "Gateway disconnected.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Connect the gateway to load approval requests in the app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      }
+    } else if (execApprovals.isEmpty()) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = "No gateway approvals.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Exec approval requests will appear here while this phone is connected.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
     } else {
-      ApprovalsPanel(toolCalls = pendingToolCalls)
+      ExecApprovalsPanel(approvals = execApprovals, onResolve = viewModel::resolveExecApproval)
+    }
+    if (pendingToolCalls.isNotEmpty()) {
+      Text(text = "Session activity", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = "Chat tool calls waiting in the active session remain visible here.", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      SessionToolCallsPanel(toolCalls = pendingToolCalls)
     }
   }
 }
@@ -487,6 +533,8 @@ private fun playVoiceSetupTone() {
   Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 300L)
 }
 
+private const val NOTIFICATION_PICKER_RESULT_LIMIT = 40
+
 @Composable
 private fun NotificationSettingsScreen(
   viewModel: MainViewModel,
@@ -501,6 +549,19 @@ private fun NotificationSettingsScreen(
   val quietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val maxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val modeLabel = if (mode == NotificationPackageFilterMode.Blocklist) "Blocklist" else "Allowlist"
+  val installedApps = remember(context, packages) { queryInstalledApps(context, packages) }
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  val filteredApps =
+    remember(installedApps, packages, notificationAppSearch, notificationShowSystemApps) {
+      filterNotificationAppsForPicker(
+        apps = installedApps,
+        selectedPackages = packages,
+        query = notificationAppSearch,
+        showSystemApps = notificationShowSystemApps,
+      )
+    }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -561,6 +622,124 @@ private fun NotificationSettingsScreen(
         )
       }
     }
+    NotificationPackagePickerPanel(
+      mode = mode,
+      selectedPackages = packages,
+      apps = filteredApps,
+      search = notificationAppSearch,
+      showSystemApps = notificationShowSystemApps,
+      expanded = notificationPickerExpanded,
+      onSearchChange = { notificationAppSearch = it },
+      onShowSystemAppsChange = { notificationShowSystemApps = it },
+      onExpandedChange = { notificationPickerExpanded = it },
+      onPackageSelectionChange = { packageName, selected ->
+        val next = packages.toMutableSet()
+        if (selected) {
+          next.add(packageName)
+        } else {
+          next.remove(packageName)
+        }
+        viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+      },
+    )
+  }
+}
+
+@Composable
+private fun NotificationPackagePickerPanel(
+  mode: NotificationPackageFilterMode,
+  selectedPackages: Set<String>,
+  apps: List<InstalledApp>,
+  search: String,
+  showSystemApps: Boolean,
+  expanded: Boolean,
+  onSearchChange: (String) -> Unit,
+  onShowSystemAppsChange: (Boolean) -> Unit,
+  onExpandedChange: (Boolean) -> Unit,
+  onPackageSelectionChange: (String, Boolean) -> Unit,
+) {
+  val visibleApps = apps.take(NOTIFICATION_PICKER_RESULT_LIMIT)
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = "App Filter", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = notificationPackageSelectionSummary(mode = mode, selectedCount = selectedPackages.size),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      ClawSecondaryButton(
+        text = if (expanded) "Close App Picker" else "Open App Picker",
+        onClick = { onExpandedChange(!expanded) },
+        modifier = Modifier.fillMaxWidth(),
+      )
+      if (expanded) {
+        ClawTextField(value = search, onValueChange = onSearchChange, placeholder = "Search apps")
+        SettingsToggleListRow(
+          SettingsToggleRow(
+            title = "Show System Apps",
+            subtitle = "Include Android and background packages.",
+            icon = Icons.Default.Storage,
+            checked = showSystemApps,
+            onCheckedChange = onShowSystemAppsChange,
+          ),
+        )
+        if (visibleApps.isEmpty()) {
+          Text(text = "No matching apps.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          ClawSeparatedColumn(items = visibleApps) { app ->
+            NotificationPackageAppRow(
+              app = app,
+              selected = selectedPackages.contains(app.packageName),
+              onSelectedChange = { selected -> onPackageSelectionChange(app.packageName, selected) },
+            )
+          }
+          if (apps.size > visibleApps.size) {
+            Text(
+              text = "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotificationPackageAppRow(
+  app: InstalledApp,
+  selected: Boolean,
+  onSelectedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 58.dp)
+        .clickable { onSelectedChange(!selected) }
+        .padding(vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    ClawTextBadge(text = notificationAppBadge(app.label))
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(
+        text = app.label,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.text,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Text(
+        text = app.packageName,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    Switch(checked = selected, onCheckedChange = onSelectedChange)
   }
 }
 
@@ -575,6 +754,7 @@ private fun PhoneCapabilitiesScreen(
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
+  val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val cameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setCameraEnabled(granted)
@@ -629,6 +809,13 @@ private fun PhoneCapabilitiesScreen(
         listOf(
           SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
           SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
+          SettingsToggleRow(
+            "Installed Apps",
+            if (installedAppsSharingEnabled) "OpenClaw can list launcher-visible apps." else "App list stays on this phone.",
+            Icons.Default.Storage,
+            installedAppsSharingEnabled,
+            viewModel::setInstalledAppsSharingEnabled,
+          ),
           SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
@@ -669,6 +856,7 @@ private fun GatewaySettingsScreen(
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
   var validationText by remember { mutableStateOf<String?>(null) }
+  var showSetupCodeHelp by remember { mutableStateOf(false) }
 
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
@@ -689,7 +877,17 @@ private fun GatewaySettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.weight(1f), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.weight(1f), icon = Icons.Default.Info)
+        }
+        if (showSetupCodeHelp) {
+          Text(
+            text = "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
       }
     }
     ClawPanel {
@@ -746,18 +944,14 @@ private fun GatewaySettingsScreen(
                 .orEmpty()
                 .ifEmpty { passwordInput.trim() }
             validationText = null
-            viewModel.setManualEnabled(true)
-            viewModel.setManualHost(endpointConfig.host)
-            viewModel.setManualPort(endpointConfig.port)
-            viewModel.setManualTls(endpointConfig.tls)
-            viewModel.setGatewayBootstrapToken(bootstrapToken)
-            viewModel.setGatewayToken(token)
-            viewModel.setGatewayPassword(password)
-            viewModel.connect(
-              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
-              token = token.ifEmpty { null },
-              bootstrapToken = bootstrapToken.ifEmpty { null },
-              password = password.ifEmpty { null },
+            viewModel.saveGatewayConfigAndConnect(
+              host = endpointConfig.host,
+              port = endpointConfig.port,
+              tls = endpointConfig.tls,
+              token = token,
+              bootstrapToken = bootstrapToken,
+              password = password,
+              resetSetupAuth = setup != null,
             )
           },
           modifier = Modifier.fillMaxWidth(),
@@ -768,22 +962,41 @@ private fun GatewaySettingsScreen(
 }
 
 @Composable
-private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+private fun AppearanceSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val themeMode by viewModel.appearanceThemeMode.collectAsState()
+
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Theme", "Dark"),
+          SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
     )
     ClawPanel {
-      Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Theme", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawSegmentedControl(
+          options = appearanceThemeOptions(),
+          selected = appearanceThemeSummary(themeMode),
+          onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        )
+      }
     }
   }
 }
 
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
+
+internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map { it.displayLabel }
+
+internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
+
+/** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
@@ -819,7 +1032,7 @@ private fun AboutSettingsScreen(
         listOf(
           SettingsMetric("Android App", BuildConfig.VERSION_NAME),
           SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
-          SettingsMetric("Channel", "Play"),
+          SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
@@ -842,6 +1055,14 @@ private fun AboutSettingsScreen(
   }
 }
 
+internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
+  when (flavor.trim()) {
+    "play" -> "Play"
+    "thirdParty" -> "Third-party"
+    "" -> "Unknown"
+    else -> flavor.trim()
+  }
+
 @Composable
 private fun AboutStatusRow(
   title: String,
@@ -861,6 +1082,7 @@ private fun AboutStatusRow(
   }
 }
 
+/** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
     "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
@@ -868,6 +1090,9 @@ private fun aboutUpdateText(latestVersion: String?): String =
     "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
   }
 
+/**
+ * Shared settings detail shell with back navigation, title, subtitle, and section content.
+ */
 @Composable
 internal fun SettingsDetailFrame(
   title: String,
@@ -876,11 +1101,18 @@ internal fun SettingsDetailFrame(
   onBack: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 20.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
+    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+  ) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-          SettingsBackButton(onClick = onBack)
+          ClawPlainIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            onClick = onBack,
+          )
           Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
           SettingsIconMark(icon = icon)
         }
@@ -893,13 +1125,13 @@ internal fun SettingsDetailFrame(
           content()
         }
       }
-      item {
-        Spacer(modifier = Modifier.height(12.dp))
-      }
     }
   }
 }
 
+/**
+ * Toggle row model reused by settings sections that render simple on/off controls.
+ */
 private data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
@@ -908,13 +1140,79 @@ private data class SettingsToggleRow(
   val onCheckedChange: (Boolean) -> Unit,
 )
 
+/**
+ * Compact metric row model for connected gateway summaries.
+ */
 internal data class SettingsMetric(
   val title: String,
   val value: String,
 )
 
 @Composable
-private fun ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
+private fun ExecApprovalsPanel(
+  approvals: List<GatewayExecApprovalSummary>,
+  onResolve: (String, String) -> Unit,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    approvals.forEach { approval ->
+      ExecApprovalCard(approval = approval, onResolve = onResolve)
+    }
+  }
+}
+
+@Composable
+private fun ExecApprovalCard(
+  approval: GatewayExecApprovalSummary,
+  onResolve: (String, String) -> Unit,
+) {
+  val resolving = approval.resolvingDecision != null
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = approval.commandText, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          approval.commandPreview?.let { preview ->
+            Text(text = preview, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          }
+        }
+        ClawStatusPill(text = if (resolving) "Sending" else "Review", status = if (resolving) ClawStatus.Warning else ClawStatus.Success)
+      }
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      approval.errorText?.let { errorText ->
+        Text(text = errorText, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if ("allow-once" in approval.allowedDecisions) {
+          ClawPrimaryButton(
+            text = if (approval.resolvingDecision == "allow-once") "Allowing" else "Allow Once",
+            onClick = { onResolve(approval.id, "allow-once") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+        if ("allow-always" in approval.allowedDecisions) {
+          ClawSecondaryButton(
+            text = if (approval.resolvingDecision == "allow-always") "Saving" else "Always",
+            onClick = { onResolve(approval.id, "allow-always") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+        if ("deny" in approval.allowedDecisions) {
+          ClawSecondaryButton(
+            text = if (approval.resolvingDecision == "deny") "Denying" else "Deny",
+            onClick = { onResolve(approval.id, "deny") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
   ClawListPanel(items = toolCalls) { toolCall ->
     ApprovalListRow(toolCall = toolCall)
   }
@@ -989,6 +1287,9 @@ private fun AgentListRow(
   )
 }
 
+/**
+ * Chooses a display name for the configured default agent, falling back to any available agent.
+ */
 private fun defaultAgentName(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -998,6 +1299,9 @@ private fun defaultAgentName(
   return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: "None"
 }
 
+/**
+ * Builds a short stable badge from agent emoji/name/id for dense lists.
+ */
 private fun agentBadge(agent: GatewayAgentSummary): String {
   agent.emoji
     ?.trim()
@@ -1013,6 +1317,9 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .ifBlank { "A" }
 }
 
+/**
+ * Normalizes tool-call names into readable approval action labels.
+ */
 private fun approvalActionName(name: String): String {
   val cleaned =
     name
@@ -1027,6 +1334,7 @@ private fun approvalActionName(name: String): String {
     .ifBlank { "Action Request" }
 }
 
+/** Builds approval row age/error copy without exposing raw tool arguments. */
 private fun approvalSubtitle(
   toolCall: ChatPendingToolCall,
   hasIssue: Boolean,
@@ -1037,8 +1345,34 @@ private fun approvalSubtitle(
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
 }
 
+private fun execApprovalMetadata(approval: GatewayExecApprovalSummary): String {
+  val target =
+    when {
+      approval.host == "node" && approval.nodeId != null -> "Node ${approval.nodeId.take(8)}"
+      approval.host != null -> approval.host.replaceFirstChar { it.uppercaseChar() }
+      else -> "Gateway"
+    }
+  val agent = approval.agentId?.let { "Agent ${it.take(8)}" }
+  val age = approval.createdAtMs?.let { "Waiting ${formatApprovalDuration(System.currentTimeMillis() - it)}" }
+  val expires = approval.expiresAtMs?.let { "Expires ${formatApprovalDuration(it - System.currentTimeMillis())}" }
+  return listOfNotNull(target, agent, age, expires).joinToString(" · ")
+}
+
+private fun formatApprovalDuration(deltaMs: Long): String {
+  val safeDelta = deltaMs.coerceAtLeast(0L)
+  val minutes = safeDelta / 60_000L
+  val hours = minutes / 60L
+  return when {
+    minutes < 1 -> "soon"
+    hours < 1 -> "${minutes}m"
+    else -> "${hours}h"
+  }
+}
+
+/** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
 
+/** Summarizes a provider plan and most-used quota window for usage rows. */
 private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
@@ -1046,6 +1380,9 @@ private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String
   return listOfNotNull(provider.plan, quota).joinToString(" · ").ifBlank { "No limits reported" }
 }
 
+/**
+ * Converts usage timestamps into short relative labels for metric panels.
+ */
 private fun formatUsageUpdated(updatedAtMs: Long?): String {
   val updated = updatedAtMs ?: return "Never"
   val deltaMs = (System.currentTimeMillis() - updated).coerceAtLeast(0L)
@@ -1059,6 +1396,7 @@ private fun formatUsageUpdated(updatedAtMs: Long?): String {
   }
 }
 
+/** Converts gateway cron status text into the short row badge label. */
 private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   if (!job.enabled) return "Off"
   return when (job.lastRunStatus?.lowercase()) {
@@ -1069,6 +1407,7 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
+/** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
   return when (job.lastRunStatus?.lowercase()) {
@@ -1078,6 +1417,61 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   }
 }
 
+/** Applies query/system visibility rules while always preserving selected packages. */
+internal fun filterNotificationAppsForPicker(
+  apps: List<InstalledApp>,
+  selectedPackages: Set<String>,
+  query: String,
+  showSystemApps: Boolean,
+): List<InstalledApp> {
+  val normalizedQuery = query.trim().lowercase()
+  return apps.filter { app ->
+    val selected = app.packageName in selectedPackages
+    val visibleByType = showSystemApps || !app.isSystemApp || selected
+    val visibleBySearch =
+      normalizedQuery.isEmpty() ||
+        app.label.lowercase().contains(normalizedQuery) ||
+        app.packageName.lowercase().contains(normalizedQuery)
+    visibleByType && visibleBySearch
+  }
+}
+
+/** Summarizes allowlist/blocklist mode with an empty-state warning when needed. */
+private fun notificationPackageSelectionSummary(
+  mode: NotificationPackageFilterMode,
+  selectedCount: Int,
+): String =
+  when (mode) {
+    NotificationPackageFilterMode.Allowlist ->
+      if (selectedCount == 0) {
+        "No apps selected. Nothing forwards until you add apps."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} allowed to forward."
+      }
+    NotificationPackageFilterMode.Blocklist ->
+      if (selectedCount == 0) {
+        "No apps blocked. Apps can forward unless you add blocks."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} blocked from forwarding."
+      }
+  }
+
+/** Builds compact two-letter app badges from package-picker labels. */
+private fun notificationAppBadge(label: String): String {
+  val initials =
+    label
+      .split(' ', '-', '_', '.')
+      .asSequence()
+      .filter { it.isNotBlank() }
+      .take(2)
+      .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+      .joinToString("")
+  return initials.ifBlank { "A" }
+}
+
+/**
+ * Converts cron wake times into short relative labels for scheduled-work rows.
+ */
 private fun formatCronWake(timeMs: Long?): String {
   val target = timeMs ?: return "None"
   val deltaMs = target - System.currentTimeMillis()
@@ -1123,6 +1517,9 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
+/**
+ * Reusable metric panel for settings screens with compact title/value rows.
+ */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
@@ -1131,15 +1528,6 @@ internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
         Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-    }
-  }
-}
-
-@Composable
-private fun SettingsBackButton(onClick: () -> Unit) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -1159,11 +1547,15 @@ private fun SettingsIconMark(icon: ImageVector) {
   }
 }
 
+/**
+ * Checks an exact Android runtime permission for settings enablement.
+ */
 private fun hasPermission(
   context: Context,
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+/** Returns true when either fine or coarse location is available to settings callers. */
 private fun hasLocationPermission(context: Context): Boolean =
   hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
     hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)

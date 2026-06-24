@@ -1,3 +1,5 @@
+// Media-understanding apply tests cover attachment transcription/description,
+// local binary probing, file text extraction, and context mutation.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -160,6 +162,8 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 }
 
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+  // Many tests reuse identical fixture buffers; cache by content hash to keep
+  // setup cheap while each case still gets a stable local path.
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
   const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
@@ -271,13 +275,20 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      isProviderAuthError: (err: unknown, code?: string) =>
+        err instanceof Error &&
+        "code" in err &&
+        (code === undefined || (err as { code?: unknown }).code === code),
       requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        throw new Error(
+        const err = new Error(
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
+        (err as { code?: string; provider?: string }).code = "missing-api-key";
+        (err as { code?: string; provider?: string }).provider = provider;
+        throw err;
       },
     }));
     vi.doMock("../media/fetch.js", () => ({
@@ -365,7 +376,6 @@ describe("applyMediaUnderstanding", () => {
       cfg: createGroqAudioConfig(),
       providers: createGroqProviders(),
     });
-
     expect(result.appliedAudio).toBe(true);
     expectTranscriptApplied({
       ctx,
@@ -1689,6 +1699,28 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("hello from utf16 text");
+  });
+
+  it("extracts inbound files above the 5MB OpenResponses default up to the managed-media cap", async () => {
+    // #90096: inbound extraction sizes to the agent media cap (default 20MB),
+    // not the OpenResponses input_file default (5MB). A ~6MB managed document
+    // would previously be skipped at the 5MB cap, leaving locked-down agents
+    // with only an attachment marker; it must now reach the prompt as text.
+    const marker = "LARGE-DOC-MARKER";
+    const largeText = `${marker} `.repeat(360_000); // ~6MB, above the old 5MB cap
+    const filePath = await createTempMediaFile({
+      fileName: "large-report.txt",
+      content: largeText,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain(marker);
   });
 
   it("does not reclassify PDF attachments as text/plain", async () => {

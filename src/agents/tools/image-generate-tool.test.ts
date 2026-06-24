@@ -1,4 +1,7 @@
+// image_generate tool tests cover provider/model selection, edit inputs,
+// background task handling, media saving, and duplicate-generation guards.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -212,6 +215,8 @@ function createToolWithPrimaryImageModel(
 }
 
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
+  // Edit tests stub the whole media pipeline so assertions focus on tool input
+  // shaping, provider choice, and saved-media metadata.
   const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
     provider: "google",
     model: "gemini-3-pro-image-preview",
@@ -510,7 +515,7 @@ describe("createImageGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "gpt-image-2",
         models: ["gpt-image-2"],
         isConfigured: () => true,
@@ -530,7 +535,7 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },
@@ -697,6 +702,80 @@ describe("createImageGenerateTool", () => {
     expect(text).not.toMatch(/^MEDIA:/m);
   });
 
+  it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "microsoft-foundry",
+        models: [],
+        isConfigured: () => true,
+        capabilities: {
+          generate: {
+            maxCount: 1,
+            supportsSize: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 1,
+            supportsSize: false,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "microsoft-foundry",
+      model: "prod-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "foundry.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/foundry.png",
+      id: "foundry.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "bootstrap/unused",
+          },
+        },
+      },
+    };
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config }));
+    config.agents!.defaults!.imageGenerationModel = { timeoutMs: 180_000 };
+
+    const result = await tool.execute("call-explicit-foundry", {
+      prompt: "A product render",
+      model: "microsoft-foundry/prod-image",
+      size: "800x1000",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.modelOverride).toBe("microsoft-foundry/prod-image");
+    const cfg = requireRecord(generateArgs.cfg, "generateImage config");
+    const agents = requireRecord(cfg.agents, "generateImage agents config");
+    const defaults = requireRecord(agents.defaults, "generateImage defaults config");
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "microsoft-foundry/prod-image",
+      timeoutMs: 180_000,
+    });
+    expect(generateArgs.timeoutMs).toBe(180_000);
+    expect(resultDetails(result).provider).toBe("microsoft-foundry");
+    expect(resultDetails(result).model).toBe("prod-image");
+    expect(resultDetails(result).timeoutMs).toBe(180_000);
+  });
+
   it("starts image generation asynchronously when a session delivery context is available", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -758,7 +837,7 @@ describe("createImageGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect(details.taskId).toBe("task-image-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         taskKind: "image_generation",
@@ -779,6 +858,76 @@ describe("createImageGenerateTool", () => {
       "Image generation task task-image-123 is already running",
     );
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
+  });
+
+  it("starts run-scoped cron image generation as a tracked async task", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cron.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-cron.png",
+      id: "generated-cron.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-cron-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const onAsyncTaskStarted = vi.fn();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        onAsyncTaskStarted,
+      }),
+    );
+
+    const result = await tool.execute("call-cron-inline", {
+      prompt: "Daily proof image",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).async).toBe(true);
+    expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^tool:image_generate:/),
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
   });
 
   it("starts a distinct image request while another image task is active", async () => {
@@ -1688,6 +1837,9 @@ describe("createImageGenerateTool", () => {
     const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
     expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1712,6 +1864,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });

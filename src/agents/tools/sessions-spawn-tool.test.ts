@@ -1,3 +1,5 @@
+// sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
+// dispatch, and result details for spawned child sessions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
@@ -108,6 +110,8 @@ describe("sessions_spawn tool", () => {
   }
 
   it("hides ACP runtime affordances when no ACP backend is loaded", () => {
+    // The tool schema is generated from live runtime availability; stale ACP
+    // fields should not be advertised when no backend can handle them.
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: {
@@ -128,7 +132,19 @@ describe("sessions_spawn tool", () => {
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 
-    const tool = createSessionsSpawnTool();
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
@@ -139,6 +155,7 @@ describe("sessions_spawn tool", () => {
 
     expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
     expect(tool.description).toContain('runtime="acp"');
+    expect(tool.description).toContain('unless ACP uses `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
@@ -218,6 +235,19 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
   });
 
+  it("does not expose timeout override fields to the model", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runTimeoutSeconds?: unknown;
+        timeoutSeconds?: unknown;
+      };
+    };
+
+    expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
+    expect(schema.properties?.timeoutSeconds).toBeUndefined();
+  });
+
   it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
     const tool = createSessionsSpawnTool({
       agentChannel: "discord",
@@ -242,6 +272,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.thread).toBeUndefined();
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(tool.description).not.toContain("thread-bound");
+    expect(tool.description).not.toContain("session-mode output stays in thread");
   });
 
   it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {
@@ -286,7 +317,6 @@ describe("sessions_spawn tool", () => {
       model: "anthropic/claude-sonnet-4-6",
       thinking: "medium",
       cwd: "/workspace/requester",
-      runTimeoutSeconds: 5,
       thread: true,
       mode: "session",
       cleanup: "keep",
@@ -304,7 +334,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.model).toBe("anthropic/claude-sonnet-4-6");
     expect(spawnArgs.thinking).toBe("medium");
     expect(spawnArgs.cwd).toBe("/workspace/requester");
-    expect(spawnArgs.runTimeoutSeconds).toBe(5);
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");
@@ -452,36 +482,25 @@ describe("sessions_spawn tool", () => {
     expect(result.details).not.toHaveProperty("role");
   });
 
-  it("supports legacy timeoutSeconds alias", async () => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
-
-    await tool.execute("call-timeout-alias", {
-      task: "do thing",
-      timeoutSeconds: 2,
-    });
-
-    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("do thing");
-    expect(spawnArgs.runTimeoutSeconds).toBe(2);
-  });
-
   it.each([
-    [{ runTimeoutSeconds: 1.5 }, "runTimeoutSeconds must be a non-negative integer"],
-    [{ runTimeoutSeconds: -1 }, "runTimeoutSeconds must be a non-negative integer"],
-    [{ timeoutSeconds: "1sec" }, "timeoutSeconds must be a non-negative integer"],
-  ])("rejects invalid timeout override %o", async (params, message) => {
+    "runTimeoutSeconds",
+    "timeoutSeconds",
+    "run_timeout_seconds",
+    "timeout_seconds",
+  ] as const)("rejects stale timeout override argument %s", async (timeoutParam) => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     await expect(
-      tool.execute("call-invalid-timeout", {
+      tool.execute("call-stale-timeout-override", {
         task: "do thing",
-        ...params,
+        [timeoutParam]: 2,
       }),
-    ).rejects.toThrow(message);
+    ).rejects.toThrow(
+      `sessions_spawn does not support per-call "${timeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+    );
+
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
@@ -537,6 +556,7 @@ describe("sessions_spawn tool", () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
       agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
@@ -548,7 +568,6 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
-      runTimeoutSeconds: 45,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -563,14 +582,23 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("investigate the failing CI run");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.cwd).toBe("/workspace");
-    expect(spawnArgs.runTimeoutSeconds).toBe(45);
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.streamTo).toBe("parent");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
+    expect(spawnContext.requesterAgentIdOverride).toBe("main");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
+    expect(registration.runId).toBe("run-acp");
+    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
+    expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterAgentId).toBe("main");
+    expect(registration.task).toBe("investigate the failing CI run");
+    expect(registration.cleanup).toBe("keep");
+    expect(registration.spawnMode).toBe("session");
+    expect(registration.expectsCompletionMessage).toBe(true);
   });
 
   it("passes inherited tool denies to ACP spawns", async () => {
@@ -736,6 +764,13 @@ describe("sessions_spawn tool", () => {
 
   it("forwards ACP sandbox options", async () => {
     registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      mode: "run",
+      runTimeoutSeconds: 120,
+    });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
     });
@@ -758,6 +793,7 @@ describe("sessions_spawn tool", () => {
     expect(registration.requesterSessionKey).toBe("agent:main:subagent:parent");
     expect(registration.task).toBe("investigate");
     expect(registration.cleanup).toBe("keep");
+    expect(registration.runTimeoutSeconds).toBe(120);
     expect(registration.spawnMode).toBe("run");
   });
 

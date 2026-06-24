@@ -1,13 +1,19 @@
-import { spawn, spawnSync } from "node:child_process";
+// Bench Gateway Startup script supports OpenClaw repository automation.
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
+import {
+  getFreePort,
+  parseProcessRssKb,
+  readProcessRssMb,
+  readProcessTreeCpuMs,
+  requestProbeStatus,
+} from "./lib/gateway-bench-probes.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -101,6 +107,20 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--cpu-prof-dir",
+  "--entry",
+  "--output",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -177,27 +197,59 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
+function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new CliArgumentError(`${flag} requires a value`);
   }
-  return process.argv[index + 1];
+  return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
+function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
-function hasHelpFlag(): boolean {
-  return hasFlag("--help") || hasFlag("-h");
+function parseFlagValue(argv: string[], flag: string): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      return readRequiredFlagValue(argv, index, flag);
+    }
+  }
+  return undefined;
 }
 
-function parseRepeatableFlag(flag: string): string[] {
+function hasFlag(argv: string[], flag: string): boolean {
+  return argv.includes(flag);
+}
+
+function hasHelpFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--help") || hasFlag(argv, "-h");
+}
+
+function parseRepeatableFlag(argv: string[], flag: string): string[] {
   const values: string[] = [];
-  for (let index = 0; index < process.argv.length; index += 1) {
-    if (process.argv[index] === flag && process.argv[index + 1]) {
-      values.push(process.argv[index + 1]);
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      values.push(readRequiredFlagValue(argv, index, flag));
+      index += 1;
     }
   }
   return values;
@@ -237,6 +289,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [...GATEWAY_CASES];
   }
+  const seenIds = new Set<string>();
+  for (const id of caseIds) {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
+  }
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
     const benchCase = byId.get(id);
@@ -247,16 +306,21 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   });
 }
 
-function parseOptions(): CliOptions {
+function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
-    cases: resolveCases(parseRepeatableFlag("--case")),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    entry: resolveEntry(parseFlagValue("--entry")),
-    json: hasFlag("--json"),
-    output: resolveOutputPath(parseFlagValue("--output")),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    cases: resolveCases(parseRepeatableFlag(argv, "--case")),
+    cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
+    entry: resolveEntry(parseFlagValue(argv, "--entry")),
+    json: hasFlag(argv, "--json"),
+    output: resolveOutputPath(parseFlagValue(argv, "--output")),
+    runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(
+      parseFlagValue(argv, "--timeout-ms"),
+      DEFAULT_TIMEOUT_MS,
+      "--timeout-ms",
+    ),
+    warmup: parseNonNegativeInt(parseFlagValue(argv, "--warmup"), DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -492,22 +556,6 @@ function getStartupTraceStat(
   return startupTrace[key] ?? null;
 }
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to allocate port")));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 async function waitForProbe(params: {
   deadlineAt: number;
   isDone?: () => boolean;
@@ -559,59 +607,6 @@ async function waitForProbe(params: {
     await delay(25);
   }
   return { firstErrorKind, firstRecoveryMs, ms: null, status: lastStatus, transitions };
-}
-
-async function requestProbeStatus(
-  port: number,
-  pathname: string,
-): Promise<{ errorKind: string | null; status: number | null }> {
-  try {
-    const status = await requestStatus(port, pathname);
-    return {
-      errorKind: status === 200 ? null : `http-${status}`,
-      status,
-    };
-  } catch (error) {
-    return {
-      errorKind: classifyProbeErrorKind(error),
-      status: null,
-    };
-  }
-}
-
-function classifyProbeErrorKind(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) {
-      return code.trim().toLowerCase();
-    }
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
-      return "timeout";
-    }
-    const name = (error as { name?: unknown }).name;
-    if (typeof name === "string" && name.trim()) {
-      return name.trim().toLowerCase();
-    }
-  }
-  return "error";
-}
-
-function requestStatus(port: number, pathname: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("probe timeout"));
-    });
-    req.end();
-  });
 }
 
 function writePluginFixtures(
@@ -746,86 +741,6 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     metrics.push({ key, value });
   }
   return metrics;
-}
-
-function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const rssKb = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
-}
-
-function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
-    return null;
-  }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
-  }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
-  }
-  return null;
-}
-
-function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
-  if (!rootPid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
-      continue;
-    }
-    cpuByPid.set(pid, cpuMs);
-    const children = childrenByParent.get(ppid) ?? [];
-    children.push(pid);
-    childrenByParent.set(ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
 }
 
 async function runGatewaySample(options: {
@@ -1032,12 +947,13 @@ function printResult(result: CaseResult): void {
 }
 
 async function main() {
-  if (hasHelpFlag()) {
+  const argv = process.argv.slice(2);
+  if (hasHelpFlag(argv)) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(argv);
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
   }
@@ -1081,21 +997,28 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectResultFailures,
   collectStartupTrace,
+  parseOptions,
   parseNonNegativeInt,
   parsePositiveInt,
+  parseProcessRssKb,
   resolveEntry,
   sanitizedEnv,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForProbe,
   writeConfig,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
+  main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

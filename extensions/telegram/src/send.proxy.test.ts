@@ -1,12 +1,35 @@
+// Telegram tests cover send.proxy plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
-  botApi: {
-    config: { use: vi.fn() },
-    sendMessage: vi.fn(),
-    setMessageReaction: vi.fn(),
-    deleteMessage: vi.fn(),
-  },
+  botApi: (() => {
+    const sendMessage = vi.fn();
+    type RichMessageParams = {
+      chat_id?: string | number;
+      rich_message?: {
+        markdown?: string;
+        html?: string;
+      };
+      [key: string]: unknown;
+    };
+    return {
+      config: { use: vi.fn() },
+      sendMessage,
+      setMessageReaction: vi.fn(),
+      deleteMessage: vi.fn(),
+      raw: {
+        sendRichMessage: vi.fn(async (params: RichMessageParams) =>
+          sendMessage(
+            params.chat_id,
+            params.rich_message?.markdown ?? params.rich_message?.html ?? "",
+            Object.fromEntries(
+              Object.entries(params).filter(([key]) => key !== "chat_id" && key !== "rich_message"),
+            ),
+          ),
+        ),
+      },
+    };
+  })(),
   botCtorSpy: vi.fn(),
 }));
 
@@ -122,7 +145,7 @@ describe("telegram proxy client", () => {
   });
 
   it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
-    const { proxyFetch, fetchImpl } = prepareProxyFetch();
+    const { proxyFetch, fetchImpl: _fetchImpl } = prepareProxyFetch();
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "production");
 
@@ -189,7 +212,11 @@ describe("telegram proxy client", () => {
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise((_resolve, reject) => {
           const signal = init?.signal as AbortSignal;
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
         }),
     );
 
@@ -212,3 +239,17 @@ describe("telegram proxy client", () => {
     vi.useRealTimers();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

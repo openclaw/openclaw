@@ -42,7 +42,7 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   const pluginToolPolicy = resolvePluginToolPolicy(config);
-  ensureStandalonePluginToolRegistryLoaded({
+  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
     context: { config },
     ...pluginToolPolicy,
   });
@@ -50,6 +50,7 @@ function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
     context: { config },
     ...pluginToolPolicy,
     suppressNameConflicts: true,
+    runtimeRegistry,
   });
 }
 
@@ -80,7 +81,7 @@ export async function servePluginToolsMcp(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  servePluginToolsMcp().catch((err) => {
+  servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

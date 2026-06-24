@@ -1,3 +1,4 @@
+// Slack tests cover provider.allowlist plugin behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +74,8 @@ describe("slack startup user allowlist resolution", () => {
       channels: {
         slack: {
           enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
           allowFrom: ["U123OWNER"],
           execApprovals: {
             enabled: false,

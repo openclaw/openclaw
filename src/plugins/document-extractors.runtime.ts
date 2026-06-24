@@ -1,5 +1,9 @@
+/** Resolves bundled document extractor providers from enabled manifest contracts. */
+import {
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
@@ -36,6 +40,7 @@ function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   );
 }
 
+/** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

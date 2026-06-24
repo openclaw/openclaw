@@ -1,22 +1,53 @@
-import { resetToolStream } from "../app-tool-stream.ts";
-import {
-  getChatAttachmentDataUrl,
-  getChatAttachmentPreviewUrl,
-} from "../chat/attachment-payload-store.ts";
+// Control UI controller manages chat gateway state.
+import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
+import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatMessages,
+  type ChatMessageCache,
+} from "../chat/session-message-cache.ts";
+import {
+  appendTerminalAssistantMessage,
+  clearToolStreamSegments,
+  currentLiveToolCallIds,
+  hasVisibleStreamParts,
+  historyReplacedVisibleStream,
+  materializeVisibleStreamState,
+  messageTimestampMs,
+  maybeResetToolStream,
+  persistedCurrentToolStreamIds,
+  prunePersistedToolStreamMessages,
+  visibleCurrentAssistantStreamTail,
+} from "../chat/stream-reconciliation.ts";
+import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
 import { formatConnectError } from "../connect-error.ts";
+import {
+  controlUiNowMs,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+} from "../control-ui-performance.ts";
+import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  ModelCatalogEntry,
+} from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -24,11 +55,12 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
+export { isGatewayMethodAdvertised } from "../gateway-methods.ts";
+
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
-const CHAT_HISTORY_REQUEST_MAX_CHARS = 4_000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -49,7 +81,7 @@ function shouldApplyChatHistoryResult(
   state: ChatState,
   version: number,
   sessionKey: string,
-  agentId?: string | null,
+  agentId?: string,
 ): boolean {
   if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
     return false;
@@ -145,6 +177,10 @@ function isHeartbeatAckStream(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
+function isHiddenAssistantStreamText(text: string): boolean {
+  return isSilentReplyStream(text) || isHeartbeatAckStream(text);
+}
+
 function shouldHideAssistantChatMessage(message: unknown): boolean {
   return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
 }
@@ -155,6 +191,22 @@ function shouldHideHistoryMessage(message: unknown): boolean {
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );
+}
+
+function materializeVisibleAssistantStreamMessages(
+  messages: unknown[],
+  state: ChatState,
+  opts: {
+    includeCurrent?: boolean;
+    requirePersistedTool?: boolean;
+    replacementMessages?: unknown[];
+  } = {},
+): unknown[] {
+  return materializeVisibleStreamState(messages, state, {
+    ...opts,
+    isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+    isHiddenStreamText: isHiddenAssistantStreamText,
+  });
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
@@ -192,6 +244,24 @@ function messageDisplaySignature(message: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function historyHasSameOrNewerDisplayMessage(
+  historyMessages: unknown[],
+  signature: string,
+  message: unknown,
+): boolean {
+  const timestamp = messageTimestampMs(message);
+  if (timestamp == null) {
+    return false;
+  }
+  return historyMessages.some((historyMessage) => {
+    if (messageDisplaySignature(historyMessage) !== signature) {
+      return false;
+    }
+    const historyTimestamp = messageTimestampMs(historyMessage);
+    return historyTimestamp != null && historyTimestamp >= timestamp;
+  });
 }
 
 export function preserveOptimisticTailMessages(
@@ -247,6 +317,34 @@ export function preserveOptimisticTailMessages(
   return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
+function collectLateOptimisticTailMessages(
+  previousMessages: unknown[],
+  currentMessages: unknown[],
+  historyMessages: unknown[],
+): unknown[] {
+  if (currentMessages === previousMessages || currentMessages.length <= previousMessages.length) {
+    return [];
+  }
+  if (previousMessages.some((message, index) => currentMessages[index] !== message)) {
+    return [];
+  }
+  const lateTail: unknown[] = [];
+  for (const message of currentMessages.slice(previousMessages.length)) {
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      return [];
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature) {
+      return [];
+    }
+    if (historyHasSameOrNewerDisplayMessage(historyMessages, signature, message)) {
+      continue;
+    }
+    lateTail.push(message);
+  }
+  return lateTail;
+}
+
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
   if (!(err instanceof GatewayRequestError)) {
     return false;
@@ -262,6 +360,14 @@ function isRetryableStartupUnavailable(err: unknown, method: string): err is Gat
   return typeof detailMethod !== "string" || detailMethod === method;
 }
 
+function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
+  return (
+    err instanceof GatewayRequestError &&
+    err.gatewayCode === "INVALID_REQUEST" &&
+    err.message.includes(`unknown method: ${method}`)
+  );
+}
+
 function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
   const retryAfterMs =
     typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
@@ -269,7 +375,9 @@ function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type ChatState = {
@@ -277,8 +385,10 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   currentSessionId?: string | null;
+  reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
+  chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -287,10 +397,31 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  chatError?: string | null;
+  agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: ChatAgentsListSnapshot | null;
+  agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
+};
+
+type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
+  agents?: Array<{ id: string }>;
+};
+
+export type ChatHistoryResult = {
+  messages?: Array<unknown>;
+  sessionId?: string;
+  thinkingLevel?: string;
+  defaults?: GatewaySessionsDefaults;
+  sessionInfo?: GatewaySessionRow;
+  agentsList?: AgentsListResult;
+  metadata?: ChatMetadataResult;
+};
+
+export type ChatMetadataResult = CommandsListResult & {
+  models?: ModelCatalogEntry[];
 };
 
 export type ChatEventPayload = {
@@ -299,8 +430,15 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
+
+function setChatError(state: ChatState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
 
 function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
@@ -382,58 +520,207 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
   );
 }
 
-function maybeResetToolStream(state: ChatState) {
-  const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
-  if (
-    toolHost.toolStreamById instanceof Map &&
-    Array.isArray(toolHost.toolStreamOrder) &&
-    Array.isArray(toolHost.chatToolMessages) &&
-    Array.isArray(toolHost.chatStreamSegments)
-  ) {
-    resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
+function resolveDeltaChatStreamText(
+  currentStream: string | null,
+  payload: ChatEventPayload,
+): string | null {
+  const snapshot = payload.message == null ? null : extractText(payload.message);
+  if (typeof payload.deltaText === "string") {
+    if (payload.replace === true) {
+      return payload.deltaText;
+    }
+    if (currentStream === null) {
+      return typeof snapshot === "string" ? snapshot : payload.deltaText;
+    }
+    if (typeof snapshot === "string") {
+      const prefixLength = snapshot.length - payload.deltaText.length;
+      if (
+        prefixLength !== currentStream.length ||
+        snapshot.slice(0, prefixLength) !== currentStream
+      ) {
+        return snapshot;
+      }
+    }
+    return `${currentStream}${payload.deltaText}`;
   }
+  return typeof snapshot === "string" ? snapshot : null;
 }
 
-export async function loadChatHistory(state: ChatState) {
-  if (!state.client || !state.connected) {
+type InFlightChatHistoryRequest = {
+  client: NonNullable<ChatState["client"]>;
+  key: string;
+  messages: unknown[];
+  promise: Promise<ChatHistoryResult | undefined>;
+};
+
+type LoadChatHistoryOptions = {
+  startup?: boolean;
+};
+
+const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
+
+function recordChatHistoryTiming(
+  state: ChatState,
+  phase: "start" | "applied" | "stream-reset" | "stale" | "error",
+  startedAtMs: number,
+  extra: Record<string, unknown> = {},
+) {
+  recordControlUiPerformanceEvent(
+    state as ChatState & Parameters<typeof recordControlUiPerformanceEvent>[0],
+    "control-ui.chat.history",
+    {
+      phase,
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+      sessionKey: state.sessionKey,
+      activeRunId: state.chatRunId,
+      ...extra,
+    },
+    { console: false, maxBufferedEventsForType: 30 },
+  );
+}
+
+function appendCachedChatMessage(
+  state: ChatState,
+  sessionKey: string,
+  message: unknown,
+  agentId?: string,
+) {
+  if (!state.chatMessagesBySession) {
     return;
   }
+  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
+}
+
+function replaceCachedChatMessages(
+  state: ChatState,
+  sessionKey: string,
+  messages: unknown[],
+  agentId?: string,
+) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
+}
+
+export async function loadChatHistory(
+  state: ChatState,
+  opts: LoadChatHistoryOptions = {},
+): Promise<ChatHistoryResult | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
   const sessionKey = state.sessionKey;
-  const requestVersion = beginChatHistoryRequest(state);
   const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
     ? resolveSelectedAgentId(state)
-    : null;
+    : undefined;
+  const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
+  const method =
+    opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
+  const requestKey = `${method}\0${sessionKey}\0${requestAgentId ?? ""}`;
+  const inFlight = inFlightChatHistoryRequests.get(state);
+  if (
+    inFlight?.key === requestKey &&
+    inFlight.client === state.client &&
+    inFlight.messages === state.chatMessages
+  ) {
+    return inFlight.promise;
+  }
+  const promise = loadChatHistoryUncached(
+    state,
+    state.client,
+    sessionKey,
+    requestAgentId,
+    method,
+  ).finally(() => {
+    if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
+      inFlightChatHistoryRequests.delete(state);
+    }
+  });
+  inFlightChatHistoryRequests.set(state, {
+    client: state.client,
+    key: requestKey,
+    messages: state.chatMessages,
+    promise,
+  });
+  return promise;
+}
+
+function applyChatStartupAgentsList(state: ChatState, agentsList: AgentsListResult | undefined) {
+  if (!agentsList) {
+    return;
+  }
+  state.agentsList = agentsList;
+  state.agentsError = null;
+  const selectedId =
+    typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
+      ? normalizeAgentId(state.agentsSelectedId)
+      : undefined;
+  if (selectedId && agentsList.agents.some((entry) => normalizeAgentId(entry.id) === selectedId)) {
+    return;
+  }
+  state.agentsSelectedId =
+    typeof agentsList.defaultId === "string" && agentsList.defaultId.trim()
+      ? agentsList.defaultId
+      : (agentsList.agents[0]?.id ?? null);
+}
+
+async function loadChatHistoryUncached(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  method: "chat.history" | "chat.startup",
+): Promise<ChatHistoryResult | undefined> {
+  const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
+  const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
+  const previousRunId = state.chatRunId;
+  recordChatHistoryTiming(state, "start", startedAtMs, {
+    requestSessionKey: sessionKey,
+    requestAgentId,
+    method,
+    previousRunId,
+  });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  state.lastError = null;
+  setChatError(state, null);
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: ChatHistoryResult;
     for (;;) {
       try {
-        res = await state.client.request<{
-          messages?: Array<unknown>;
-          sessionId?: string;
-          thinkingLevel?: string;
-        }>("chat.history", {
+        res = await client.request<ChatHistoryResult>(method, {
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
-          maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
         });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-          return;
+          recordChatHistoryTiming(state, "stale", startedAtMs, {
+            requestSessionKey: sessionKey,
+            requestAgentId,
+            previousRunId,
+            reason: "request-version",
+          });
+          return undefined;
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
-        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
+        if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
+          res = await client.request<ChatHistoryResult>("chat.history", {
+            sessionKey,
+            ...(requestAgentId ? { agentId: requestAgentId } : {}),
+            limit: CHAT_HISTORY_REQUEST_LIMIT,
+          });
+          break;
+        }
+        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, method)) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
-            return;
+            return undefined;
           }
           continue;
         }
@@ -441,35 +728,146 @@ export async function loadChatHistory(state: ChatState) {
       }
     }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      recordChatHistoryTiming(state, "stale", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        reason: "apply-version",
+      });
+      return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
+    applyChatStartupAgentsList(state, res.agentsList);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      previousMessages,
+      state.chatMessages,
+      visibleMessages,
+    );
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    if (lateOptimisticTail.length > 0) {
+      state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
+    }
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
     state.currentSessionId =
-      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
-    state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
+        ? res.sessionInfo.sessionId
+        : typeof res.sessionId === "string" && res.sessionId.trim()
+          ? res.sessionId
+          : null;
+    if (
+      state.reconnectResumeSessionId &&
+      state.reconnectResumeSessionId !== state.currentSessionId
+    ) {
+      state.reconnectResumeSessionId = null;
+    }
+    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
+    if (resetStream) {
+      const streamReconciliation = {
+        isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+        isHiddenStreamText: isHiddenAssistantStreamText,
+      };
+      const hasVisibleStream = hasVisibleStreamParts(state, streamReconciliation);
+      const historyReplacedStream = historyReplacedVisibleStream(
+        state.chatMessages,
+        state,
+        streamReconciliation,
+      );
+      const liveToolIds = currentLiveToolCallIds(state);
+      const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
+      const historyReplacedToolStream =
+        liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
+      const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
+      const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
+      if (!hasVisibleStream || historyReplacedStream) {
+        if (liveToolStreamReplaced) {
+          // Clear all streaming state — history includes tool results and text
+          // inline, so keeping streaming artifacts would cause duplicates.
+          maybeResetToolStream(state);
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+          clearToolStreamSegments(state);
+        }
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+        recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
+          requestSessionKey: sessionKey,
+          requestAgentId,
+          previousRunId,
+          messageCount: messages.length,
+          visibleMessageCount: visibleMessages.length,
+        });
+      } else if (!state.chatRunId) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+        maybeResetToolStream(state);
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+      } else if (historyReplacedToolStream) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        state.chatStream = visibleCurrentAssistantStreamTail(
+          state,
+          streamReconciliation.isHiddenStreamText,
+        );
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
+        maybeResetToolStream(state);
+      } else if (historyReplacedSomeToolStream) {
+        const visibleCurrentTail = visibleCurrentAssistantStreamTail(
+          state,
+          streamReconciliation.isHiddenStreamText,
+        );
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+          requirePersistedTool: true,
+        });
+        state.chatStream = visibleCurrentTail;
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
+        prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+      }
+    }
+    recordChatHistoryTiming(state, "applied", startedAtMs, {
+      requestSessionKey: sessionKey,
+      requestAgentId,
+      previousRunId,
+      messageCount: messages.length,
+      visibleMessageCount: visibleMessages.length,
+      resetStream,
+    });
+    return res;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      recordChatHistoryTiming(state, "stale", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        reason: "error-version",
+      });
+      return undefined;
     }
+    recordChatHistoryTiming(state, "error", startedAtMs, {
+      requestSessionKey: sessionKey,
+      requestAgentId,
+      previousRunId,
+    });
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
-      state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
+      setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      state.lastError = String(err);
+      setChatError(state, String(err));
     }
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
     }
   }
+  return undefined;
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -478,15 +876,6 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   return { mimeType: match[1], content: match[2] };
-}
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
@@ -510,12 +899,39 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+export type ChatSendAckServerTiming = {
+  receivedToAckMs?: number;
+  loadSessionMs?: number;
+  prepareAttachmentsMs?: number;
+};
 
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  serverTiming?: ChatSendAckServerTiming;
 };
+
+function normalizeAckTimingValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
+  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
+  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
+  const timing: ChatSendAckServerTiming = {
+    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
+    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
+    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+  };
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
 
 function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
   if (!payload || typeof payload !== "object") {
@@ -525,9 +941,14 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const runId =
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
+  const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
-    status: status === "in_flight" || status === "ok" ? status : "started",
+    status:
+      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : "started",
+    ...(serverTiming ? { serverTiming } : {}),
   };
 }
 
@@ -541,6 +962,35 @@ export async function requestChatSend(
     agentId?: string;
   },
 ): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, params);
+  const controlUiReconnectResume = Boolean(
+    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+  );
+  const payload = await state.client!.request("chat.send", {
+    sessionKey: routing.sessionKey,
+    ...(isGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
+      ? { agentId: routing.selectedAgentId }
+      : {}),
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
+  if (controlUiReconnectResume) {
+    state.reconnectResumeSessionId = null;
+  }
+  return normalizeChatSendAck(payload, params.runId);
+}
+
+function resolveChatSendRouting(
+  state: ChatState,
+  params: {
+    sessionKey?: string;
+    agentId?: string;
+  },
+): { selectedAgentId?: string; sessionId?: string; sessionKey: string } {
   const sessionKey = params.sessionKey ?? state.sessionKey;
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
@@ -554,14 +1004,36 @@ export async function requestChatSend(
     canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
       ? currentSessionId.trim()
       : undefined;
-  const payload = await state.client!.request("chat.send", {
+  return {
     sessionKey,
-    ...(isGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
+    ...(selectedAgentId ? { selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
-    message: params.message,
-    deliver: false,
+  };
+}
+
+export async function requestSkillWorkshopRevisionChatSend(
+  state: ChatState,
+  params: {
+    proposalId: string;
+    instructions: string;
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+    targetAgentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, {
+    sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
+  });
+  const payload = await state.client!.request("skills.proposals.requestRevision", {
+    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
+    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
+    proposalId: params.proposalId,
+    instructions: params.instructions,
+    sessionKey: routing.sessionKey,
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
     idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
   });
   return normalizeChatSendAck(payload, params.runId);
 }
@@ -615,6 +1087,27 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function buildErrorAssistantMessage(payload: ChatEventPayload): Record<string, unknown> | null {
+  const normalized = normalizeFinalAssistantMessage(payload.message);
+  if (normalized && !shouldHideAssistantChatMessage(normalized)) {
+    return normalized;
+  }
+  const error = payload.errorMessage?.trim();
+  if (!error) {
+    return null;
+  }
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: error.startsWith("⚠️") || error.startsWith("Error:") ? error : `Error: ${error}`,
+      },
+    ],
+    timestamp: Date.now(),
+  };
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -633,10 +1126,10 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
-  appendUserChatMessage(state, msg, attachments, now);
+  const optimisticMessage = appendUserChatMessage(state, msg, attachments, now);
 
   state.chatSending = true;
-  state.lastError = null;
+  setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
   });
@@ -648,13 +1141,45 @@ export async function sendChatMessage(
   try {
     const ack = await requestChatSend(state, { message: msg, attachments, runId });
     if (ack.status === "ok") {
-      state.chatRunId = null;
-      state.chatStream = null;
-      state.chatStreamStartedAt = null;
-    } else {
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "done",
+          sessionStatus: "done",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: true,
+        },
+      );
+    } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
+    } else {
+      state.chatMessages = state.chatMessages.filter(
+        (messageEntry) => messageEntry !== optimisticMessage,
+      );
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "interrupted",
+          sessionStatus: ack.status === "error" ? "failed" : "killed",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: ack.runId === runId,
+        },
+      );
+      setChatError(
+        state,
+        ack.status === "error"
+          ? "Chat failed before the run started; try again."
+          : "The run ended before the message was accepted.",
+      );
+      return null;
     }
-    return ack.status === "ok" ? ack.runId : runId;
+    return ack.runId;
   } catch (err) {
     const error = formatConnectError(err);
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
@@ -665,7 +1190,7 @@ export async function sendChatMessage(
       clearLocalRun: true,
       clearChatStream: true,
     });
-    state.lastError = error;
+    setChatError(state, error);
     state.chatMessages = [
       ...state.chatMessages,
       {
@@ -686,67 +1211,20 @@ export function appendUserChatMessage(
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
 ) {
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  const contentBlocks: Array<{
-    type: string;
-    text?: string;
-    url?: string;
-    source?: unknown;
-    attachment?: {
-      url: string;
-      kind: "audio" | "document";
-      label: string;
-      mimeType?: string;
-    };
-  }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
-  }
-  if (hasAttachments) {
-    for (const att of attachments) {
-      const previewUrl = getChatAttachmentPreviewUrl(att);
-      if (!previewUrl) {
-        continue;
-      }
-      if (att.mimeType.startsWith("image/")) {
-        if (isInlineDataUrl(previewUrl)) {
-          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
-          continue;
-        }
-        contentBlocks.push({
-          type: "image",
-          url: previewUrl,
-          source: { type: "url", url: previewUrl },
-        });
-        continue;
-      }
-      contentBlocks.push({
-        type: "attachment",
-        attachment: {
-          url: previewUrl,
-          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
-          label: att.fileName?.trim() || "Attached file",
-          mimeType: att.mimeType,
-        },
-      });
-    }
-  }
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: contentBlocks,
-      timestamp,
-    },
-  ];
+  const entry = {
+    role: "user" as const,
+    content: buildUserChatMessageContentBlocks(message, attachments),
+    timestamp,
+  };
+  state.chatMessages = [...state.chatMessages, entry];
+  return entry;
 }
 
 async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
   }
@@ -755,13 +1233,12 @@ async function sendChatMessageWithGeneratedRunId(
   if (!msg && !hasAttachments) {
     return null;
   }
-  state.lastError = null;
+  setChatError(state, null);
   const runId = generateUUID();
   try {
-    const ack = await requestChatSend(state, { message: msg, attachments, runId });
-    return ack.runId;
+    return await requestChatSend(state, { message: msg, attachments, runId });
   } catch (err) {
-    state.lastError = formatConnectError(err);
+    setChatError(state, formatConnectError(err));
     return null;
   }
 }
@@ -770,7 +1247,7 @@ export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
@@ -778,7 +1255,7 @@ export async function sendSteerChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
@@ -809,7 +1286,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
     );
     return true;
   } catch (err) {
-    state.lastError = formatConnectError(err);
+    setChatError(state, formatConnectError(err));
     return false;
   }
 }
@@ -818,12 +1295,22 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
+  const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        const cacheAgentId = isGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveDefaultAgentId(state) ?? DEFAULT_AGENT_ID)
+          : payload.agentId;
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+      }
+    }
     return null;
   }
   if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
@@ -859,10 +1346,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
+      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
+    const next = resolveDeltaChatStreamText(state.chatStream, payload);
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
@@ -873,47 +1361,48 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (
-      state.chatStream?.trim() &&
-      !isSilentReplyStream(state.chatStream) &&
-      !isHeartbeatAckStream(state.chatStream)
-    ) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+    } else {
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        replacementMessages: [normalizedMessage],
+        includeCurrent: false,
+      });
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
-      const streamedText = state.chatStream ?? "";
-      if (
-        streamedText.trim() &&
-        !isSilentReplyStream(streamedText) &&
-        !isHeartbeatAckStream(streamedText)
-      ) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
-      }
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
+    const payloadMessage = hadActiveRunBeforeEvent
+      ? normalizeFinalAssistantMessage(payload.message)
+      : null;
+    const visiblePayloadMessage =
+      payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
+    if (visiblePayloadMessage) {
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        replacementMessages: [visiblePayloadMessage],
+      });
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        visiblePayloadMessage,
+      );
+    } else {
+      const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+      if (hadActiveRunBeforeEvent) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      }
+      if (errorMessage) {
+        state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, errorMessage);
+      }
+    }
     reconcileTerminalRun("interrupted", "failed");
-    state.lastError = payload.errorMessage ?? "chat error";
+    setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
 }

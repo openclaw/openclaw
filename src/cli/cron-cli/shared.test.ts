@@ -1,12 +1,16 @@
+// Cron shared tests cover shared cron CLI parsing, display, and error helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
+  enrichCronJsonWithStatus,
   getCronChannelOptions,
   parseAt,
   parseCronToolsAllow,
+  parseDurationMs,
   printCronList,
+  printCronShow,
 } from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -248,6 +252,20 @@ describe("parseAt", () => {
   it("rejects out-of-range epoch milliseconds", () => {
     expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
   });
+
+  it("rejects relative durations outside the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+999999999999999999d")).toBeNull();
+  });
+
+  it("rejects relative durations when the current clock is at the Date boundary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(parseAt("+1m")).toBeNull();
+  });
 });
 
 describe("getCronChannelOptions", () => {
@@ -297,5 +315,61 @@ describe("coerceCronDeliveryPreviews", () => {
         },
       }).size,
     ).toBe(0);
+  });
+});
+
+describe("parseDurationMs", () => {
+  it("parses valid positive durations", () => {
+    expect(parseDurationMs("500ms")).toBe(500);
+    expect(parseDurationMs("30s")).toBe(30_000);
+    expect(parseDurationMs("1.5h")).toBe(5_400_000);
+    expect(parseDurationMs("1d")).toBe(86_400_000);
+  });
+
+  it("rejects non-positive and malformed durations", () => {
+    expect(parseDurationMs("0s")).toBeNull();
+    expect(parseDurationMs("-5s")).toBeNull();
+    expect(parseDurationMs("abc")).toBeNull();
+    expect(parseDurationMs("")).toBeNull();
+  });
+
+  it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
+    // A finite mantissa can still overflow once multiplied by a large unit factor.
+    expect(parseDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
+    // A large-but-finite result is still accepted.
+    expect(parseDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+  });
+});
+
+describe("cron status rendering", () => {
+  beforeEach(() => {
+    hoisted.listChannelPluginsMock.mockReset();
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+  });
+
+  // `lastRunStatus` is the primary execution-status field (`lastStatus` is the
+  // deprecated alias). The human `cron list`/`cron show` output must resolve it
+  // the same way the `--json` status field does, instead of showing "idle".
+  it("renders lastRunStatus (matching the --json status), not idle, when lastStatus is unset", () => {
+    const now = Date.now();
+    const job = createBaseJob({
+      id: "status-job",
+      sessionTarget: "isolated",
+      state: { nextRunAtMs: now + 3_600_000, lastRunStatus: "ok" },
+    });
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "status: ok");
+    expect(show.logs.join("\n")).not.toContain("status: idle");
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const dataLine = list.logs.find((line) => line.includes("status-job")) ?? "";
+    expect(dataLine).toContain("ok");
+    expect(dataLine).not.toContain("idle");
+
+    // The computed --json status must agree with the human render.
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "ok" });
   });
 });

@@ -1,13 +1,14 @@
+// Defines TUI slash commands and their help metadata.
 import type { SlashCommand } from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const TRACE_LEVELS = ["on", "off"];
-const FAST_LEVELS = ["status", "on", "off"];
+const FAST_LEVELS = ["status", "auto", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -111,7 +112,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "fast",
-      description: "Set fast mode on/off",
+      description: "Set fast mode auto/on/off",
       getArgumentCompletions: fastCompletions,
     },
     {
@@ -150,8 +151,8 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
-    { name: "new", description: "Reset the session" },
-    { name: "reset", description: "Reset the session" },
+    { name: "new", description: "Spawn a new isolated session" },
+    { name: "reset", description: "Reset the current session" },
     { name: "settings", description: "Open settings" },
     { name: "exit", description: "Exit the TUI" },
     { name: "quit", description: "Exit the TUI" },
@@ -191,7 +192,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
-    "/fast <status|on|off>",
+    "/fast <status|auto|on|off>",
     "/verbose <on|off>",
     "/trace <on|off>",
     "/reasoning <on|off>",

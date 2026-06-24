@@ -1,3 +1,4 @@
+// Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
@@ -212,7 +213,9 @@ describe("pw-session ensurePageState", () => {
 
     try {
       handlers.get("download")?.[0]?.(download);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(unhandled).toStrictEqual([]);
       await expect(download.path?.()).rejects.toThrow("save failed");

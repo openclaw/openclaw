@@ -1,4 +1,11 @@
-export interface DecodedHtmlEntity {
+/**
+ * Minimal HTML entity decoding helpers.
+ *
+ * Syntax highlighting and terminal renderers use this to decode the small
+ * entity subset emitted by trusted HTML producers without parsing full HTML.
+ */
+/** Decoded entity text plus the source length consumed from the input. */
+interface DecodedHtmlEntity {
   text: string;
   length: number;
 }
@@ -10,7 +17,8 @@ function decodeCodePoint(codePoint: number): string | undefined {
   return String.fromCodePoint(codePoint);
 }
 
-export function decodeHtmlEntity(entity: string): string | undefined {
+/** Decodes a named or numeric HTML entity without the surrounding `&`/`;`. */
+function decodeHtmlEntity(entity: string): string | undefined {
   switch (entity) {
     case "amp":
       return "&";
@@ -35,6 +43,7 @@ export function decodeHtmlEntity(entity: string): string | undefined {
   return undefined;
 }
 
+/** Decodes an entity starting at `index` in an HTML string. */
 export function decodeHtmlEntityAt(html: string, index: number): DecodedHtmlEntity | undefined {
   const semicolonIndex = html.indexOf(";", index + 1);
   if (semicolonIndex === -1 || semicolonIndex - index > 16) {

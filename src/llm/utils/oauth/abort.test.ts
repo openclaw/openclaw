@@ -1,5 +1,6 @@
+// OAuth abort tests cover cancellation of pending OAuth flows.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../../shared/number-coercion.js";
 import { buildOAuthRequestSignal } from "./abort.js";
 
 describe("buildOAuthRequestSignal", () => {

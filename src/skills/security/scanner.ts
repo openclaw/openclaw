@@ -1,3 +1,4 @@
+// Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -220,6 +221,52 @@ const SOURCE_RULES: SourceRule[] = [
   },
 ];
 
+const SKILL_CONTENT_RULES: SourceRule[] = [
+  {
+    ruleId: "prompt-injection-ignore-instructions",
+    severity: "critical",
+    message: "Prompt-injection wording attempts to override higher-priority instructions",
+    pattern: /ignore (all|any|previous|above|prior) instructions/i,
+  },
+  {
+    ruleId: "prompt-injection-system",
+    severity: "critical",
+    message: "Skill text references hidden prompt layers",
+    pattern: /\b(system prompt|developer message|hidden instructions)\b/i,
+  },
+  {
+    ruleId: "prompt-injection-tool",
+    severity: "critical",
+    message: "Skill text encourages bypassing tool approval",
+    pattern:
+      /\b(run|execute|invoke|call)\b.{0,50}\btool\b.{0,50}\bwithout\b.{0,30}\b(permission|approval)/i,
+  },
+  {
+    ruleId: "shell-pipe-to-shell",
+    severity: "critical",
+    message: "Skill text includes pipe-to-shell install pattern",
+    pattern: /\b(curl|wget)\b[^|\n]{0,120}\|\s*(sh|bash|zsh)\b/i,
+  },
+  {
+    ruleId: "secret-exfiltration",
+    severity: "critical",
+    message: "Skill text may exfiltrate environment variables",
+    pattern: /\b(process\.env|env)\b.{0,80}\b(fetch|curl|wget|http|https)\b/i,
+  },
+  {
+    ruleId: "destructive-delete",
+    severity: "warn",
+    message: "Skill text contains broad destructive delete command",
+    pattern: /\brm\s+-rf\s+(\/|\$HOME|~|\.)/i,
+  },
+  {
+    ruleId: "unsafe-permissions",
+    severity: "warn",
+    message: "Skill text contains unsafe permission change",
+    pattern: /\bchmod\s+(-R\s+)?777\b/i,
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
@@ -426,6 +473,37 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   return findings;
 }
 
+export function scanSkillContent(content: string, filePath: string): SkillScanFinding[] {
+  const findings: SkillScanFinding[] = [];
+  const lines = content.split("\n");
+  const matchedRules = new Set<string>();
+
+  for (const rule of SKILL_CONTENT_RULES) {
+    if (matchedRules.has(rule.ruleId)) {
+      continue;
+    }
+    const match = findSourceRuleMatch({
+      rule,
+      source: content,
+      lines,
+    });
+    if (!match) {
+      continue;
+    }
+    findings.push({
+      ruleId: rule.ruleId,
+      severity: rule.severity,
+      file: filePath,
+      line: match.line,
+      message: rule.message,
+      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+    });
+    matchedRules.add(rule.ruleId);
+  }
+
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Directory scanner
 // ---------------------------------------------------------------------------
@@ -511,7 +589,7 @@ async function walkDirWithLimit(
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(dirPath);
   } catch (err) {
@@ -568,7 +646,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+    let st: Awaited<ReturnType<typeof fs.stat>> | null;
     try {
       st = await fs.stat(includePath);
     } catch (err) {
@@ -636,7 +714,7 @@ async function scanFileWithCache(params: {
   maxFileBytes: number;
 }): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
   const { filePath, maxFileBytes } = params;
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(filePath);
   } catch (err) {
@@ -691,28 +769,6 @@ async function scanFileWithCache(params: {
     findings,
   });
   return { scanned: true, findings };
-}
-
-export async function scanDirectory(
-  dirPath: string,
-  opts?: SkillScanOptions,
-): Promise<SkillScanFinding[]> {
-  const scanOptions = normalizeScanOptions(opts);
-  const { files } = await collectScannableFiles(dirPath, scanOptions);
-  const allFindings: SkillScanFinding[] = [];
-
-  for (const file of files) {
-    const scanResult = await scanFileWithCache({
-      filePath: file,
-      maxFileBytes: scanOptions.maxFileBytes,
-    });
-    if (!scanResult.scanned) {
-      continue;
-    }
-    allFindings.push(...scanResult.findings);
-  }
-
-  return allFindings;
 }
 
 export async function scanDirectoryWithSummary(

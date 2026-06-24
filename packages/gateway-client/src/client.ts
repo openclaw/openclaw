@@ -1,14 +1,11 @@
+// Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
-import {
-  type ConnectParams,
-  type EventFrame,
-  type HelloOk,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-  type RequestFrame,
-  validateEventFrame,
-  validateRequestFrame,
-  validateResponseFrame,
+import type {
+  ConnectParams,
+  EventFrame,
+  HelloOk,
+  RequestFrame,
+  ResponseFrame,
 } from "@openclaw/gateway-protocol";
 import {
   GATEWAY_CLIENT_MODES,
@@ -25,6 +22,7 @@ import {
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -78,6 +76,63 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isGatewayClientErrorShape(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!isNonEmptyString(value.code) || !isNonEmptyString(value.message)) {
+    return false;
+  }
+  if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
+    return false;
+  }
+  if (value.retryAfterMs !== undefined && !isNonNegativeInteger(value.retryAfterMs)) {
+    return false;
+  }
+  return true;
+}
+
+function isGatewayEventFrame(value: unknown): value is EventFrame {
+  if (!isRecord(value) || value.type !== "event" || !isNonEmptyString(value.event)) {
+    return false;
+  }
+  return value.seq === undefined || isNonNegativeInteger(value.seq);
+}
+
+function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
+  if (
+    !isRecord(value) ||
+    value.type !== "res" ||
+    !isNonEmptyString(value.id) ||
+    typeof value.ok !== "boolean"
+  ) {
+    return false;
+  }
+  return value.error === undefined || isGatewayClientErrorShape(value.error);
+}
+
+function validateClientRequestFrame(frame: RequestFrame): string | null {
+  if (!isNonEmptyString(frame.id)) {
+    return "id must be a non-empty string";
+  }
+  if (!isNonEmptyString(frame.method)) {
+    return "method must be a non-empty string";
+  }
+  return null;
 }
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
@@ -306,6 +361,13 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
+  transientPreHelloCleanClose: boolean;
+};
+
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -319,6 +381,13 @@ export class GatewayClientRequestError extends Error {
     this.details = error.details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
+  }
+}
+
+class GatewayClientTransientPreHelloCloseError extends Error {
+  constructor() {
+    super("gateway transient pre-hello clean close");
+    this.name = "GatewayClientTransientPreHelloCloseError";
   }
 }
 
@@ -384,7 +453,7 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  onClose?: (code: number, reason: string) => void;
+  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -433,21 +502,24 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    env: opts.env,
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 
 type PendingStop = {
   ws: WebSocket;
   promise: Promise<void>;
   resolve: () => void;
+  terminateTimer?: NodeJS.Timeout;
 };
 
 export class GatewayClient {
@@ -476,6 +548,9 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
+  private transportValidated = false;
+  private helloOkReceived = false;
+  private suppressedTransientPreHelloCleanCloses = 0;
 
   constructor(opts: GatewayClientOptions) {
     this.deps = {
@@ -597,6 +672,8 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.socketOpened = false;
+    this.transportValidated = false;
+    this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
     this.clearConnectChallengeTimeout();
@@ -611,11 +688,18 @@ export class GatewayClient {
           return;
         }
       }
+      this.transportValidated = true;
       this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
+      const closeInfo: GatewayClientCloseInfo = {
+        phase: this.helloOkReceived ? "post-hello" : "pre-hello",
+        socketOpened: this.socketOpened,
+        transportValidated: this.transportValidated,
+        transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
+      };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       const connectErrorDetails = this.pendingConnectErrorDetails;
       this.pendingConnectErrorDetailCode = null;
@@ -624,9 +708,21 @@ export class GatewayClient {
         this.ws = null;
       }
       this.socketOpened = false;
+      this.transportValidated = false;
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();
+        return;
+      }
+      if (
+        closeInfo.transientPreHelloCleanClose &&
+        this.suppressedTransientPreHelloCleanCloses <
+          MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES
+      ) {
+        this.suppressedTransientPreHelloCleanCloses += 1;
+        this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
+        this.scheduleReconnect();
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       // Clear persisted device auth state only when device-token auth was active.
@@ -657,16 +753,16 @@ export class GatewayClient {
           details: connectErrorDetails,
         })
       ) {
-        this.opts.onReconnectPaused?.({
+        this.notifyReconnectPaused({
           code,
           reason: reasonText,
           detailCode: connectErrorDetailCode,
         });
-        this.opts.onClose?.(code, reasonText);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
+      this.notifyClose(code, reasonText, closeInfo);
     });
     ws.on("error", (err) => {
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
@@ -729,8 +825,7 @@ export class GatewayClient {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
-      const stopPromise = this.createPendingStop(ws);
-      ws.close();
+      const pendingStop = this.createPendingStop(ws);
       const forceTerminateTimer = setTimeout(() => {
         try {
           ws.terminate();
@@ -738,30 +833,35 @@ export class GatewayClient {
         this.resolvePendingStop(ws);
       }, FORCE_STOP_TERMINATE_GRACE_MS);
       forceTerminateTimer.unref?.();
+      pendingStop.terminateTimer = forceTerminateTimer;
+      ws.close();
       this.flushPendingErrors(new Error("gateway client stopped"));
-      return stopPromise;
+      return pendingStop.promise;
     }
     this.flushPendingErrors(new Error("gateway client stopped"));
     return null;
   }
 
-  private createPendingStop(ws: WebSocket): Promise<void> {
+  private createPendingStop(ws: WebSocket): PendingStop {
     if (this.pendingStop?.ws === ws) {
-      return this.pendingStop.promise;
+      return this.pendingStop;
     }
     let resolve!: () => void;
     const promise = new Promise<void>((res) => {
       resolve = res;
     });
     this.pendingStop = { ws, promise, resolve };
-    return promise;
+    return this.pendingStop;
   }
 
   private resolvePendingStop(ws: WebSocket): void {
     if (this.pendingStop?.ws !== ws) {
       return;
     }
-    const { resolve } = this.pendingStop;
+    const { resolve, terminateTimer } = this.pendingStop;
+    if (terminateTimer) {
+      clearTimeout(terminateTimer);
+    }
     this.pendingStop = null;
     resolve();
   }
@@ -800,11 +900,13 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", assembled.params)
       .then((helloOk) => {
+        this.helloOkReceived = true;
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
         this.pendingConnectErrorDetails = null;
+        this.suppressedTransientPreHelloCleanCloses = 0;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           this.deps.storeDeviceAuthToken({
@@ -822,9 +924,12 @@ export class GatewayClient {
             : 30_000;
         this.lastTick = Date.now();
         this.startTickWatch();
-        this.opts.onHelloOk?.(helloOk);
+        this.notifyHelloOk(helloOk);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
+        if (err instanceof GatewayClientTransientPreHelloCloseError) {
+          return;
+        }
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         this.pendingConnectErrorDetails =
@@ -1027,6 +1132,38 @@ export class GatewayClient {
       this.logDebug(
         `gateway client connect error handler error: ${formatGatewayClientErrorForLog(err)}`,
       );
+    }
+  }
+
+  private notifyHelloOk(helloOk: HelloOk): void {
+    try {
+      this.opts.onHelloOk?.(helloOk);
+    } catch (err) {
+      this.logDebug(
+        `gateway client hello-ok handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyReconnectPaused(info: GatewayReconnectPausedInfo): void {
+    try {
+      this.opts.onReconnectPaused?.(info);
+    } catch (err) {
+      this.logDebug(
+        `gateway client reconnect paused handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyClose(code: number, reason: string, info?: GatewayClientCloseInfo): void {
+    try {
+      if (info === undefined) {
+        this.opts.onClose?.(code, reason);
+        return;
+      }
+      this.opts.onClose?.(code, reason, info);
+    } catch (err) {
+      this.logDebug(`gateway client close handler error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 
@@ -1233,7 +1370,7 @@ export class GatewayClient {
       this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(err)}`);
       return;
     }
-    if (validateEventFrame(parsed)) {
+    if (isGatewayEventFrame(parsed)) {
       this.lastTick = Date.now();
       const evt = parsed;
       if (evt.event === "connect.challenge") {
@@ -1267,7 +1404,7 @@ export class GatewayClient {
       }
       return;
     }
-    if (validateResponseFrame(parsed)) {
+    if (isGatewayResponseFrame(parsed)) {
       this.lastTick = Date.now();
       const pending = this.pending.get(parsed.id);
       if (!pending) {
@@ -1389,7 +1526,7 @@ export class GatewayClient {
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)
         ? Math.max(1, Math.min(30_000, rawMinInterval))
         : 1000;
-    const interval = Math.max(this.tickIntervalMs, minInterval);
+    const interval = resolveSafeTimeoutDelayMs(Math.max(this.tickIntervalMs, minInterval));
     this.tickTimer = setInterval(() => {
       if (this.closed) {
         return;
@@ -1454,10 +1591,9 @@ export class GatewayClient {
     }
     const id = randomUUID();
     const frame: RequestFrame = { type: "req", id, method, params };
-    if (!validateRequestFrame(frame)) {
-      throw new Error(
-        `invalid request frame: ${JSON.stringify(validateRequestFrame.errors, null, 2)}`,
-      );
+    const requestFrameError = validateClientRequestFrame(frame);
+    if (requestFrameError) {
+      throw new Error(`invalid request frame: ${requestFrameError}`);
     }
     const expectFinal = opts?.expectFinal === true;
     const timeoutMs =
@@ -1470,7 +1606,6 @@ export class GatewayClient {
             : this.requestTimeoutMs;
     const signal = opts?.signal;
     const p = new Promise<T>((resolve, reject) => {
-      let abortHandler: (() => void) | undefined;
       const timeout =
         timeoutMs === null
           ? null
@@ -1488,7 +1623,7 @@ export class GatewayClient {
           signal.removeEventListener("abort", abortHandler);
         }
       };
-      abortHandler = () => {
+      const abortHandler: (() => void) | undefined = () => {
         const pending = this.pending.get(id);
         this.pending.delete(id);
         pending?.cleanup?.();
@@ -1504,7 +1639,14 @@ export class GatewayClient {
       });
       signal?.addEventListener("abort", abortHandler, { once: true });
     });
-    this.ws.send(JSON.stringify(frame));
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (error) {
+      const pending = this.pending.get(id);
+      this.pending.delete(id);
+      pending?.cleanup?.();
+      throw error;
+    }
     return p;
   }
 }

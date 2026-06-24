@@ -1,3 +1,6 @@
+/**
+ * Optional JSONL diagnostics for agent cache/session/prompt tracing.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -11,6 +14,8 @@ import type { AgentMessage, StreamFn } from "./runtime/index.js";
 import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
+// Payloads are redacted before JSONL output while stable digests preserve
+// correlation across prompt/session/cache stages.
 type CacheTraceStage =
   | "cache:result"
   | "cache:state"
@@ -119,6 +124,8 @@ function summarizeMessages(messages: AgentMessage[]): {
   messageFingerprints: string[];
   messagesDigest: string;
 } {
+  // Hash each message and then the ordered fingerprint list so traces can detect
+  // prompt drift without writing full messages when disabled.
   const messageFingerprints = messages.map((msg) => digest(msg));
   return {
     messageCount: messages.length,
@@ -128,6 +135,7 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
+/** Create a cache trace recorder when diagnostics config/env enables it. */
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const cfg = resolveCacheTraceConfig(params);
   if (!cfg.enabled) {
@@ -169,6 +177,8 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
+        // Full messages are optional; summaries/digests are always recorded when
+        // message payloads are supplied.
         event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
       }
     }

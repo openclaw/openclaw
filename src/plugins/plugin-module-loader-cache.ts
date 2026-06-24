@@ -1,3 +1,4 @@
+/** Caches plugin module loaders and native-load stats for runtime/source module imports. */
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5,6 +6,7 @@ import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
@@ -12,6 +14,7 @@ import {
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
+/** Jiti-based module loader used for plugin source/runtime imports. */
 export type PluginModuleLoader = ReturnType<typeof createJiti>;
 export type PluginModuleLoaderFactory = typeof createJiti;
 export type PluginModuleLoaderCache = Pick<
@@ -26,6 +29,7 @@ export type ResolvePluginModuleLoaderCacheEntryParams = {
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
   sharedCacheScopeKey?: string;
@@ -78,6 +82,7 @@ function recordSourceTransformTarget(target: string): void {
   }
 }
 
+/** Returns process-local plugin module loader stats for diagnostics and tests. */
 export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
   return {
     calls: pluginModuleLoaderStats.calls,
@@ -90,15 +95,6 @@ export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
       .slice(0, 8)
       .map(([target, count]) => ({ target, count })),
   };
-}
-
-export function resetPluginModuleLoaderStatsForTest(): void {
-  pluginModuleLoaderStats.calls = 0;
-  pluginModuleLoaderStats.nativeHits = 0;
-  pluginModuleLoaderStats.nativeMisses = 0;
-  pluginModuleLoaderStats.sourceTransformForced = 0;
-  pluginModuleLoaderStats.sourceTransformFallbacks = 0;
-  pluginModuleLoaderStats.sourceTransformTargets.clear();
 }
 
 function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
@@ -133,6 +129,7 @@ function resolveDefaultPluginModuleLoaderConfig(
     modulePath: params.modulePath,
     argv1: params.argvEntry ?? process.argv[1],
     moduleUrl: params.importerUrl,
+    devSourceRoot: params.devSourceRoot,
     ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
     ...(params.pluginSdkResolution ? { pluginSdkResolution: params.pluginSdkResolution } : {}),
   });
@@ -291,6 +288,7 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
   if (cached) {

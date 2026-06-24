@@ -47,6 +47,20 @@ Scope selection:
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
+Tail human-readable trajectory progress for stored sessions:
+
+```bash
+openclaw sessions tail
+openclaw sessions tail --follow
+openclaw sessions tail --session-key "agent:main:telegram:direct:123" --tail 25
+openclaw sessions --agent work tail --follow
+openclaw sessions --all-agents tail --follow
+```
+
+`openclaw sessions tail` renders recent trajectory JSONL events as compact progress lines. Without `--session-key`, it tails running sessions first, then the latest stored session. `--tail <count>` controls how many existing events print before follow mode; the default is `80`, and `0` starts at the current end. `--follow` keeps watching the selected trajectory files, including relocated files referenced by `<session>.trajectory-path.json`.
+
+The progress view is intentionally conservative: prompt text, tool arguments, and tool result bodies are not printed. Tool calls show the tool name with `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`; model completion lines show provider/model and terminal status.
+
 Export a trajectory bundle for a stored session:
 
 ```bash
@@ -104,11 +118,11 @@ openclaw sessions cleanup --json
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
-- Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
+- Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
-  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
@@ -154,11 +168,62 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
 }
 ```
 
-Related:
+## Compact a session
 
-- Session config: [Configuration reference](/gateway/config-agents#session)
+Reclaim context budget for a wedged or oversized session. `openclaw sessions compact <key>` is the first-class wrapper around the `sessions.compact` gateway RPC and requires a running gateway.
+
+```bash
+openclaw sessions compact "agent:main:main"
+openclaw sessions compact "agent:main:main" --max-lines 200
+openclaw sessions compact "agent:work:main" --agent work --json
+```
+
+- Without `--max-lines`, the gateway LLM-summarizes the transcript. This can be slow, so the default `--timeout` is `180000` ms.
+- With `--max-lines <n>`, it truncates to the last `n` transcript lines and archives the prior transcript as a `.bak` sidecar.
+- `--agent <id>`: agent that owns the session; required for `global` keys.
+- `--url` / `--token` / `--password`: gateway connection overrides.
+- `--timeout <ms>`: RPC timeout in milliseconds.
+- `--json`: print the raw RPC payload.
+
+The command exits non-zero when the gateway reports a failed compaction or is unreachable, so crons and scripts never mistake a silent no-op for success.
+
+> Note: `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash commands from the CLI are rejected by the authorized-sender check; that invocation exits non-zero with guidance pointing here instead of silently no-opping.
+
+### sessions.compact RPC
+
+`openclaw gateway call sessions.compact --params '<json>'` accepts:
+
+| Field      | Type        | Required | Description                                                |
+| ---------- | ----------- | -------- | ---------------------------------------------------------- |
+| `key`      | string      | yes      | Session key to compact (for example `agent:main:main`).    |
+| `agentId`  | string      | no       | Agent id that owns the session (for `global` keys).        |
+| `maxLines` | integer ≥ 1 | no       | Truncate to the last N lines instead of LLM summarization. |
+
+Example LLM-summarize response:
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "result": { "tokensBefore": 243868, "tokensAfter": 34941 }
+}
+```
+
+Example truncate response (`--max-lines 200`):
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "archived": "/home/user/.openclaw/agents/main/sessions/transcripts/<id>.jsonl.bak",
+  "kept": 200
+}
+```
 
 ## Related
 
+- Session config: [Configuration reference](/gateway/config-agents#session)
 - [CLI reference](/cli)
 - [Session management](/concepts/session)

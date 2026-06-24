@@ -1,8 +1,10 @@
+// Skill test helpers build canonical skill fixtures for unit tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
 import type { SkillEntry } from "../types.js";
 
+/** Writes a SKILL.md fixture with frontmatter and optional body. */
 export async function writeSkill(params: {
   dir: string;
   name: string;
@@ -30,6 +32,7 @@ export function createCanonicalFixtureSkill(params: {
   filePath: string;
   baseDir: string;
   source: string;
+  promptVersion?: string;
   disableModelInvocation?: boolean;
 }): Skill {
   return {
@@ -37,6 +40,7 @@ export function createCanonicalFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
+    promptVersion: params.promptVersion,
     source: params.source,
     sourceInfo: createSyntheticSourceInfo(params.filePath, {
       source: params.source,

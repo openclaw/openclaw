@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -194,9 +195,8 @@ function createXaiRealtimeTranscriptionSession(
       }
       case "error":
         config.onError?.(new Error(readErrorDetail(event.error ?? event.message)));
-        return;
+
       default:
-        return;
     }
   };
 

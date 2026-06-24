@@ -61,25 +61,13 @@
       "types": "./dist/harness/session.d.ts",
       "default": "./dist/harness/session.js"
     },
-    "./harness/session/jsonl-repo": {
-      "types": "./dist/harness/session/jsonl-repo.d.ts",
-      "default": "./dist/harness/session/jsonl-repo.js"
-    },
     "./harness/session/jsonl-storage": {
       "types": "./dist/harness/session/jsonl-storage.d.ts",
       "default": "./dist/harness/session/jsonl-storage.js"
     },
-    "./harness/session/memory-repo": {
-      "types": "./dist/harness/session/memory-repo.d.ts",
-      "default": "./dist/harness/session/memory-repo.js"
-    },
     "./harness/session/memory-storage": {
       "types": "./dist/harness/session/memory-storage.d.ts",
       "default": "./dist/harness/session/memory-storage.js"
-    },
-    "./harness/session/repo-utils": {
-      "types": "./dist/harness/session/repo-utils.d.ts",
-      "default": "./dist/harness/session/repo-utils.js"
     },
     "./harness/session/uuid": {
       "types": "./dist/harness/session/uuid.d.ts",
@@ -93,21 +81,13 @@
       "types": "./dist/harness/branch-summarization.d.ts",
       "default": "./dist/harness/branch-summarization.js"
     },
-    "./harness/prompt-templates": {
-      "types": "./dist/harness/prompt-templates.d.ts",
-      "default": "./dist/harness/prompt-templates.js"
+    "./harness/prompt-template-arguments": {
+      "types": "./dist/harness/prompt-template-arguments.d.ts",
+      "default": "./dist/harness/prompt-template-arguments.js"
     },
     "./harness/skills": {
       "types": "./dist/harness/skills.d.ts",
       "default": "./dist/harness/skills.js"
-    },
-    "./harness/system-prompt": {
-      "types": "./dist/harness/system-prompt.d.ts",
-      "default": "./dist/harness/system-prompt.js"
-    },
-    "./harness/utils/shell-output": {
-      "types": "./dist/harness/utils/shell-output.d.ts",
-      "default": "./dist/harness/utils/shell-output.js"
     },
     "./harness/utils/truncate": {
       "types": "./dist/harness/utils/truncate.d.ts",
@@ -115,8 +95,7 @@
     }
   },
   "dependencies": {
-    "ignore": "7.0.5",
-    "typebox": "1.1.38",
-    "yaml": "2.9.0"
+    "@openclaw/llm-core": "workspace:*",
+    "typebox": "1.1.39"
   }
 }

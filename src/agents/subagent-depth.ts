@@ -1,11 +1,16 @@
+/**
+ * Subagent spawn-depth lookup helpers.
+ *
+ * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
+ */
 import fs from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
-import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
 type SessionDepthEntry = {
   sessionId?: unknown;
@@ -55,12 +60,12 @@ function findEntryBySessionId(
   store: Record<string, SessionDepthEntry>,
   sessionId: string,
 ): SessionDepthEntry | undefined {
-  const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
   for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeSubagentSessionKey(entry?.sessionId);
+    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
     if (candidateSessionId && candidateSessionId === normalizedSessionId) {
       return entry;
     }
@@ -127,7 +132,7 @@ export function getSubagentDepthFromSessionStore(
   const visited = new Set<string>();
 
   const depthFromStore = (key: string): number | undefined => {
-    const normalizedKey = normalizeSubagentSessionKey(key);
+    const normalizedKey = normalizeOptionalString(key);
     if (!normalizedKey) {
       return undefined;
     }
@@ -148,7 +153,7 @@ export function getSubagentDepthFromSessionStore(
       return storedDepth;
     }
 
-    const spawnedBy = normalizeSubagentSessionKey(entry?.spawnedBy);
+    const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
     if (!spawnedBy) {
       return undefined;
     }

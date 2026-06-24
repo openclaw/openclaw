@@ -1,3 +1,4 @@
+// GitHub config discovery helpers locate skill config files inside repository archives.
 import { posix as posixPath, win32 as win32Path } from "node:path";
 
 function pathFor(platform: NodeJS.Platform) {
@@ -11,7 +12,7 @@ function pathFor(platform: NodeJS.Platform) {
 // "not logged in", even though the operator HOME has a valid hosts.yml.
 // See https://github.com/openclaw/openclaw/issues/78063.
 
-export type GhConfigDiscoveryEnv = {
+type GhConfigDiscoveryEnv = {
   HOME?: string;
   XDG_CONFIG_HOME?: string;
   GH_CONFIG_DIR?: string;

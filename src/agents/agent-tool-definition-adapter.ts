@@ -1,3 +1,8 @@
+/**
+ * Adapts runtime AgentTool objects into session ToolDefinition entries.
+ * Owns hook execution, client-tool delegation, result coercion, and safe
+ * logging for failed tool calls.
+ */
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
@@ -8,6 +13,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
   recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -23,6 +29,13 @@ import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
+type BeforeToolCallPreparingTool = AnyAgentTool & {
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+};
 
 type ToolExecuteArgsCurrent = [
   string,
@@ -47,7 +60,7 @@ const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
-export type ClientToolCallRecorder =
+type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
   | {
       reserve?: (toolCallId: string, toolName: string) => void;
@@ -269,8 +282,35 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+async function prepareToolParamsBeforeHook(params: {
+  tool: AnyAgentTool;
+  rawParams: unknown;
+  toolCallId?: string;
+  hookContext?: HookContext;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const prepare = (params.tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
+  return prepare
+    ? await prepare(params.rawParams, {
+        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+        ...(params.hookContext ? { hookContext: params.hookContext } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
+      })
+    : params.rawParams;
+}
 
+function finalizeToolParamsBeforeExecute(params: {
+  tool: AnyAgentTool;
+  executeParams: unknown;
+  preparedParams: unknown;
+}): unknown {
+  const finalize = (params.tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams;
+  return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
+}
+
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+
+/** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
   existingToolNames?: Iterable<string>;
@@ -305,14 +345,17 @@ export function findClientToolNameConflicts(params: {
   return Array.from(conflicts);
 }
 
+/** Build a recognizable error for rejecting conflicting client tool names. */
 export function createClientToolNameConflictError(conflicts: string[]): Error {
   return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
 
+/** Detect client tool conflict errors without depending on object identity. */
 export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
+/** Convert executable agent tools into session definitions with hook handling. */
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
@@ -326,13 +369,29 @@ export function toToolDefinitions(
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
+      prepareArguments: tool.prepareArguments,
+      executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
-            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+            const preparedParams = await prepareToolParamsBeforeHook({
+              tool,
+              rawParams: params,
+              ...(toolCallId ? { toolCallId } : {}),
+              ...(hookContext ? { hookContext } : {}),
+              ...(signal ? { signal } : {}),
+            });
+            const hookParams = normalizeCodeModeExecBeforeHookParams({
+              tool,
+              params: preparedParams,
+            });
+            const hookMetadata = getCodeModeExecBeforeHookMetadata({
+              tool,
+              params: preparedParams,
+            });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params: hookParams,
@@ -345,15 +404,22 @@ export function toToolDefinitions(
                 return buildBlockedToolResult({
                   reason: hookOutcome.reason,
                   deniedReason: hookOutcome.deniedReason,
+                  toolCallId,
+                  runId: hookContext?.runId,
                 });
               }
               throw new Error(hookOutcome.reason);
             }
             executeParams = reconcileCodeModeExecBeforeHookParams({
               tool,
-              originalParams: params,
+              originalParams: preparedParams,
               hookParams,
               adjustedParams: hookOutcome.params,
+            });
+            executeParams = finalizeToolParamsBeforeExecute({
+              tool,
+              executeParams,
+              preparedParams,
             });
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
@@ -371,6 +437,8 @@ export function toToolDefinitions(
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
             return buildBlockedToolResult({
               reason: err.reason,
+              toolCallId,
+              runId: hookContext?.runId,
             });
           }
           const described = describeToolExecutionError(err);
@@ -426,8 +494,7 @@ function coerceParamsRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-// Convert client tools (OpenResponses hosted tools) to ToolDefinition format
-// These tools are intercepted to return a "pending" result instead of executing
+/** Convert client-hosted tools into pending session definitions. */
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,
@@ -461,6 +528,8 @@ export function toClientToolDefinitions(
               return buildBlockedToolResult({
                 reason: outcome.reason,
                 deniedReason: outcome.deniedReason,
+                toolCallId,
+                runId: hookContext?.runId,
               });
             }
             throw new Error(outcome.reason);

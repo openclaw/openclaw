@@ -1,3 +1,4 @@
+// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -63,10 +64,6 @@ const callbackUrls = new Map<string, string>();
 
 export function setInteractionCallbackUrl(accountId: string, url: string): void {
   callbackUrls.set(accountId, url);
-}
-
-export function getInteractionCallbackUrl(accountId: string): string | undefined {
-  return callbackUrls.get(accountId);
 }
 
 type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
@@ -503,8 +500,8 @@ export function createMattermostInteractionHandler(params: {
     }
 
     const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let originalPost: MattermostPost | null = null;
+    let originalMessage;
+    let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);

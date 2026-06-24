@@ -1,5 +1,9 @@
+// Cron tool schema tests cover the provider-facing parameter shape and runtime
+// validation compatibility for cron jobs.
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { CronToolSchema } from "./cron-tool.js";
+import { normalizeToolParameterSchema } from "../agent-tools-parameter-schema.js";
+import { createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -24,8 +28,15 @@ function propertyAt(
   return cursor;
 }
 
-describe("CronToolSchema", () => {
-  const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
+describe("createCronToolSchema", () => {
+  const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
+    modelProvider: "gemini",
+  }) as unknown as Record<string, unknown>;
+  const jjccGeminiSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
+    modelProvider: "jjcc",
+    modelId: "gemini-3.1-pro-preview",
+  }) as unknown as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -105,6 +116,8 @@ describe("CronToolSchema", () => {
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    // Cron expressions are interpreted by the gateway scheduler; model-facing
+    // docs must not encourage UTC conversion by the agent.
     const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
     const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
     const jobTz = propertyAt(schemaRecord, "job.schedule.tz");
@@ -197,37 +210,77 @@ describe("CronToolSchema", () => {
     expect(schema?.description).toMatch(/false/i);
   });
 
-  it("job.agentId and job.sessionKey use plain string type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
-      | Record<string, { properties?: Record<string, unknown> }>
-      | undefined;
-    const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
-
-    // Must be plain "string" — not ["string", "null"] — for provider compat.
-    // Null semantics are conveyed via the field description and handled at runtime.
-    expect(jobProps?.agentId?.type).toBe("string");
-    expect(jobProps?.sessionKey?.type).toBe("string");
+  it("accepts nullable cron patch clears in the runtime schema", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          agentId: null,
+          sessionKey: null,
+          payload: {
+            toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
-  it("patch.payload.toolsAllow uses plain array type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
+  it("job.agentId and job.sessionKey project to plain string type for OpenAPI 3.0 compat", () => {
+    const root = providerSchemaRecord.properties as
+      | Record<string, { properties?: Record<string, unknown> }>
+      | undefined;
+    const jobProps = root?.job?.properties as
+      | Record<string, { type?: unknown; description?: string }>
+      | undefined;
+
+    // Provider projection must be plain "string" rather than a nullable union.
+    // The raw runtime schema remains nullable so local validation accepts clears.
+    expect(jobProps?.agentId?.type).toBe("string");
+    expect(jobProps?.agentId?.description).toMatch(/null to keep it unset/i);
+    expect(jobProps?.sessionKey?.type).toBe("string");
+    expect(jobProps?.sessionKey?.description).toMatch(/null to clear it/i);
+  });
+
+  it("patch.payload.toolsAllow projects to plain array type for OpenAPI 3.0 compat", () => {
+    const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as
-      | Record<string, { properties?: Record<string, { type?: unknown }> }>
+      | Record<string, { properties?: Record<string, { type?: unknown; description?: string }> }>
       | undefined;
 
-    // Must be plain "array" — not ["array", "null"] — for provider compat.
+    // Provider-facing schemas must be plain "array" rather than JSON Schema
+    // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
+    expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
+    expect(patchProps?.payload?.properties?.model?.type).toBe("string");
+    expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
+  });
+
+  it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.agentId")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.sessionKey")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.payload.toolsAllow")).toMatchObject({
+      type: "array",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.delivery.channel")).toMatchObject({
+      type: "string",
+    });
+    expect(JSON.stringify(jjccGeminiSchemaRecord)).not.toContain('"anyOf"');
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
-  // serialized cron tool schema.  This catches future regressions at the source.
-  it("serialized schema contains no type-array or not/const keywords", () => {
-    const json = JSON.stringify(CronToolSchema);
+  // serialized provider-facing cron tool schema.
+  it("serialized provider schema contains no type-array or not/const keywords", () => {
+    const json = JSON.stringify(providerSchemaRecord);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
-    // "not" composition keyword is not supported by OpenAPI 3.0
+    // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
   });
 });

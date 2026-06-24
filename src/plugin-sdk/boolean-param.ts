@@ -1,4 +1,5 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Boolean parameter helpers parse plugin-facing string flags into stable booleans.
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
 /** Read loose boolean params from tool input that may arrive as booleans or "true"/"false" strings. */
 export function readBooleanParam(

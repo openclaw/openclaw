@@ -1,3 +1,7 @@
+// Memory Host SDK helper module supports retry utils behavior.
+import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
+
+/** Retry timing configuration with optional jitter. */
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -5,6 +9,7 @@ export type RetryConfig = {
   jitter?: number;
 };
 
+/** Retry callback payload. */
 export type RetryInfo = {
   attempt: number;
   maxAttempts: number;
@@ -13,6 +18,7 @@ export type RetryInfo = {
   label?: string;
 };
 
+/** Retry options for retryAsync. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
@@ -28,7 +34,9 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
@@ -55,18 +63,22 @@ function resolveAttempts(value: unknown, fallback: number): number {
   return Math.max(1, value);
 }
 
+/** Resolve retry settings with clamped positive timeout values. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
   const attempts = resolveAttempts(overrides?.attempts, defaults.attempts);
-  const minDelayMs = Math.max(
-    0,
+  const minDelayMs = resolveSafeTimeoutDelayMs(
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
+    { minMs: 0 },
   );
   const maxDelayMs = Math.max(
     minDelayMs,
-    Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
+    resolveSafeTimeoutDelayMs(
+      Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
+      { minMs: 0 },
+    ),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
   return { attempts, minDelayMs, maxDelayMs, jitter };
@@ -80,6 +92,7 @@ function applyJitter(delayMs: number, jitter: number): number {
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
+/** Run an async operation with exponential backoff retry handling. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
@@ -96,10 +109,10 @@ export async function retryAsync<T>(
         if (i === attempts - 1) {
           break;
         }
-        await sleep(initialDelayMs * 2 ** i);
+        await sleep(resolveSafeTimeoutDelayMs(initialDelayMs * 2 ** i, { minMs: 0 }));
       }
     }
-    throw lastErr ?? new Error("Retry failed");
+    throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
   }
 
   const options = attemptsOrOptions;
@@ -125,8 +138,8 @@ export async function retryAsync<T>(
       const retryAfterMs = options.retryAfterMs?.(err);
       const hasRetryAfter = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
       const baseDelay = hasRetryAfter
-        ? Math.max(retryAfterMs, minDelayMs)
-        : minDelayMs * 2 ** (attempt - 1);
+        ? Math.max(resolveSafeTimeoutDelayMs(retryAfterMs, { minMs: 0 }), minDelayMs)
+        : resolveSafeTimeoutDelayMs(minDelayMs * 2 ** (attempt - 1), { minMs: 0 });
       let delay = Math.min(baseDelay, maxDelayMs);
       delay = applyJitter(delay, resolved.jitter);
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
@@ -144,5 +157,19 @@ export async function retryAsync<T>(
     }
   }
 
-  throw lastErr ?? new Error("Retry failed");
+  throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

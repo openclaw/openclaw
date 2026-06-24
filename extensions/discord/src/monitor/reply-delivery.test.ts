@@ -1,3 +1,4 @@
+// Discord tests cover reply delivery plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -140,6 +141,21 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.rest).toBe(rest);
   });
 
+  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Because it helps", isReasoning: true }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "block",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+  });
+
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
 
@@ -176,6 +192,33 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("strips assistant scaffolding from explicit tool progress payloads", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "<think>private reasoning</think>",
+            '<tool_call>{"name":"x"}</tool_call>',
+            "🛠️ run git status",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "tool",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "🛠️ run git status" }],
+      }),
+    );
+  });
+
   it("strips internal execution trace lines at the final Discord send boundary", async () => {
     await deliverDiscordReply({
       replies: [
@@ -183,6 +226,7 @@ describe("deliverDiscordReply", () => {
           text: [
             "📊 Session Status: current",
             "🛠️ run git status",
+            "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
             "🛠️ `gh pr view`",
             "🛠️ `docker compose up`",
             "🛠️ elevated · `cd /tmp && pnpm test`",
@@ -202,6 +246,26 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
+  });
+
+  it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
   });
 
   it("strips serialized tool call blocks at the final Discord send boundary", async () => {

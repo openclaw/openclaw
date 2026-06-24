@@ -1,3 +1,4 @@
+/** Tests MCP server/tool name sanitization, truncation, and collision handling. */
 import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,
@@ -37,6 +38,26 @@ describe("agent bundle MCP names", () => {
       reservedNames,
     });
     expect(safeToolName).toBe(`memory${TOOL_NAME_SEPARATOR}status-2`);
+  });
+
+  it("uses the bundle server name for Link MCP tools", () => {
+    const usedServerNames = new Set<string>();
+    const serverName = sanitizeServerName("link", usedServerNames);
+
+    expect(
+      buildSafeToolName({
+        serverName,
+        toolName: "auth_login",
+        reservedNames: new Set(),
+      }),
+    ).toBe(`link${TOOL_NAME_SEPARATOR}auth_login`);
+    expect(
+      buildSafeToolName({
+        serverName,
+        toolName: "spend-request_create",
+        reservedNames: new Set(),
+      }),
+    ).toBe(`link${TOOL_NAME_SEPARATOR}spend-request_create`);
   });
 
   it("truncates overlong tool names while keeping the server prefix", () => {

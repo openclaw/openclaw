@@ -1,9 +1,10 @@
+// Tests session update lifecycle ordering and active-session state transitions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -106,5 +107,36 @@ describe("session-updates lifecycle hooks", () => {
     expect(startContext?.sessionId).toBe("s2");
     expect(startContext?.sessionKey).toBe(sessionKey);
     expect(startContext?.agentId).toBe("main");
+  });
+
+  it("recreates a complete persisted row when compaction updates a missing store row", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "s2",
+      tokensAfter: 123,
+      now: 456,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
+    expect(sessionStore[sessionKey]?.sessionFile).toContain("s2.jsonl");
+    expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
+    expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual(["s1", "s2"]);
+    expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+    expect(sessionStore[sessionKey]?.totalTokens).toBe(123);
+    expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
+    expect(persisted?.sessionId).toBe("s2");
+    expect(persisted?.sessionFile).toContain("s2.jsonl");
+    expect(persisted?.usageFamilyKey).toBe(sessionKey);
+    expect(persisted?.usageFamilySessionIds).toEqual(["s1", "s2"]);
+    expect(persisted?.compactionCount).toBe(1);
+    expect(persisted?.totalTokens).toBe(123);
+    expect(persisted?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
   });
 });

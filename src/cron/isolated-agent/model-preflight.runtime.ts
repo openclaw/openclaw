@@ -1,15 +1,17 @@
-import { normalizeProviderId } from "../../agents/provider-id.js";
+/** Preflights local model-provider endpoints before scheduled cron runner startup. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
 
 type PreflightApi = "ollama" | "openai-completions";
 
+/** Local provider reachability result used to skip cron runs before runner startup. */
 export type CronModelProviderPreflightResult =
   | { status: "available" }
   | {
@@ -111,6 +113,8 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
       return undefined;
     }
     return {
+      // Local-provider probes intentionally allow private hosts, but only the
+      // exact hostname from the configured provider base URL.
       hostnameAllowlist: [parsed.hostname],
       allowPrivateNetwork: true,
     };
@@ -174,6 +178,7 @@ async function probeLocalProviderEndpoint(params: {
   }
 }
 
+/** Checks local model-provider reachability before a scheduled cron run starts. */
 export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -187,6 +192,8 @@ export async function preflightCronModelProvider(params: {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
   const api = normalizeProbeApi(providerConfig);
   if (!baseUrl || !api || !isLocalProviderBaseUrl(baseUrl)) {
+    // Remote/cloud providers should fail in the model runner, not in this cron
+    // reachability preflight.
     return { status: "available" };
   }
 
@@ -194,6 +201,8 @@ export async function preflightCronModelProvider(params: {
   const cacheKey = `${api}\0${baseUrl}`;
   const cached = preflightCache.get(cacheKey);
   if (cached && nowMs - cached.checkedAtMs < PREFLIGHT_CACHE_TTL_MS) {
+    // Cache by endpoint, not model: this probe only verifies local server
+    // reachability, while model availability is handled by the runner.
     if (cached.result.status === "available") {
       return { status: "available" };
     }
@@ -224,6 +233,7 @@ export async function preflightCronModelProvider(params: {
   });
 }
 
+/** Clears the local-provider preflight cache for deterministic tests. */
 export function resetCronModelProviderPreflightCacheForTest(): void {
   preflightCache.clear();
 }

@@ -69,6 +69,17 @@
         "fileName"
       ]
     },
+    "api": {
+      "emoji": "🌐",
+      "title": "API",
+      "detailKeys": [
+        "url",
+        "endpoint",
+        "path",
+        "method",
+        "name"
+      ]
+    },
     "browser": {
       "emoji": "🌐",
       "title": "Browser",
@@ -306,6 +317,15 @@
             "fps",
             "screenIndex"
           ]
+        },
+        "screen_snapshot": {
+          "label": "screen snapshot",
+          "detailKeys": [
+            "node",
+            "nodeId",
+            "screenIndex",
+            "maxWidth"
+          ]
         }
       }
     },
@@ -387,6 +407,15 @@
       "detailKeys": [
         "explanation",
         "plan.0.step"
+      ]
+    },
+    "skill_workshop": {
+      "emoji": "🧰",
+      "title": "Skill Workshop",
+      "detailKeys": [
+        "action",
+        "name",
+        "proposal_id"
       ]
     },
     "gateway": {

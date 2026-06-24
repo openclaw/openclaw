@@ -1,3 +1,5 @@
+// Gateway method registry aggregator wires core and plugin RPC descriptors to
+// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -7,7 +9,11 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
-import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  authorizeOperatorScopesForMethod,
+  authorizeOperatorScopesForRequiredScope,
+} from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -16,6 +22,7 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import type {
   GatewayRequestHandler,
@@ -29,6 +36,8 @@ function lazyHandlerModule<T>(
   selectHandlers: (module: T) => GatewayRequestHandlers,
 ): () => Promise<GatewayRequestHandlers> {
   let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
+  // Gateway starts advertise the method table before most handler modules are needed; cache the
+  // first import promise so concurrent calls to the same method family share one load.
   return () => (handlersPromise ??= loadModule().then(selectHandlers));
 }
 
@@ -43,6 +52,8 @@ function createLazyCoreHandlers(params: {
         const handlers = await params.loadHandlers();
         const handler = handlers[method];
         if (!handler) {
+          // Descriptor drift should fail loudly: advertised core methods must exist in the
+          // loaded family module once the lazy boundary resolves.
           throw new Error(`lazy gateway handler not found: ${method}`);
         }
         await handler(opts);
@@ -151,6 +162,10 @@ const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
 );
+const loadSessionsFilesHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-files.js"),
+  (module) => module.sessionsFilesHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
@@ -216,7 +231,10 @@ function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
   params: unknown,
+  methodRegistry: GatewayMethodRegistry,
 ) {
+  // Pre-connect and health requests are allowed through; role/scope checks require the
+  // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect) {
     return null;
   }
@@ -238,7 +256,10 @@ function authorizeGatewayMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, params);
+  const registeredScope = methodRegistry.getScope(method);
+  const scopeAuth = isOperatorScope(registeredScope)
+    ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
+    : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
@@ -271,7 +292,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["chat.history", "chat.abort", "chat.send", "chat.inject"],
+    methods: [
+      "chat.history",
+      "chat.startup",
+      "chat.metadata",
+      "chat.message.get",
+      "chat.abort",
+      "chat.send",
+      "chat.inject",
+    ],
     loadHandlers: loadChatHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -433,6 +462,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.proposals.list",
+      "skills.proposals.inspect",
+      "skills.proposals.create",
+      "skills.proposals.update",
+      "skills.proposals.revise",
+      "skills.proposals.requestRevision",
+      "skills.proposals.apply",
+      "skills.proposals.reject",
+      "skills.proposals.quarantine",
     ],
     loadHandlers: loadSkillsHandlers,
   }),
@@ -550,8 +588,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
   }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.files.list", "sessions.files.get"],
+    loadHandlers: loadSessionsFilesHandlers,
+  }),
 };
 
+/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
@@ -561,6 +604,8 @@ function createRequestGatewayMethodRegistry(
   const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
   for (const [method, extraHandler] of extraHandlerEntries) {
+    // Tests and local harnesses can override classified core methods, but plugin-provided
+    // methods win so a loaded plugin cannot be shadowed by a caller-local extra handler.
     if (!pluginMethodNames.has(method) && isCoreGatewayMethodClassified(method)) {
       coreDescriptorHandlers[method] = extraHandler;
     }
@@ -589,18 +634,27 @@ function createRequestGatewayMethodRegistry(
   ]);
 }
 
+/** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
+  // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
+  // metadata newer than global runtime state still authorizes and dispatches correctly. When the
+  // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
+  // methods registered after the startup snapshot stay reachable (#94127).
   const methodRegistry =
-    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params);
+    opts.methodRegistry?.getHandler(req.method) !== undefined
+      ? opts.methodRegistry
+      : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {
+    // During startup, methods can be listed before their runtime is ready. Return the protocol
+    // retry shape so clients can back off without treating startup as a permanent unknown method.
     respond(
       false,
       undefined,
@@ -615,6 +669,8 @@ export async function handleGatewayRequest(
   if (methodRegistry.isControlPlaneWrite(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
     if (!budget.allowed) {
+      // Control-plane writes mutate gateway-wide state; rate limit before handler lookup so
+      // plugin and aux write methods share the same protection.
       const actor = resolveControlPlaneActor(client);
       context.logGateway.warn(
         `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
@@ -659,5 +715,6 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
+  // The scope also carries caller identity into plugin-owned gateway methods.
   await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
 }

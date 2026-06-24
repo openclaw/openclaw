@@ -1,3 +1,8 @@
+/**
+ * Session manager wrapper for tool-result transcript guards.
+ *
+ * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -44,6 +49,10 @@ export function guardSessionManager(
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    withCompactionPersistence?: (
+      append: () => string,
+      validateAppend: (entryId: string, appendedText: string) => boolean,
+    ) => string;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -135,6 +144,7 @@ export function guardSessionManager(
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
+    withCompactionPersistence: opts?.withCompactionPersistence,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });

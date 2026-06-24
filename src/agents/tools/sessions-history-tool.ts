@@ -1,17 +1,23 @@
+/**
+ * sessions_history built-in tool.
+ *
+ * Reads bounded, redacted session transcript history after session visibility filtering.
+ */
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
+import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
@@ -21,7 +27,6 @@ import {
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({

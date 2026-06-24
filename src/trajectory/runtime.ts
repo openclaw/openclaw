@@ -1,3 +1,4 @@
+// Trajectory runtime records runtime events into trajectory log files.
 import fs from "node:fs";
 import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
@@ -20,16 +21,6 @@ import {
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
-
-export {
-  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
-  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-  resolveTrajectoryPointerOpenFlags,
-  safeTrajectorySessionFileName,
-} from "./paths.js";
 
 type TrajectoryRuntimeInit = {
   cfg?: OpenClawConfig;

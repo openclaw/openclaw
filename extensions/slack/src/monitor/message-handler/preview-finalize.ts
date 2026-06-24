@@ -1,3 +1,4 @@
+// Slack plugin module implements preview finalize behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackMessage } from "../../actions.js";
@@ -105,7 +106,6 @@ export async function finalizeSlackPreviewEdit(params: {
       client: params.client,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     });
-    return;
   } catch (err) {
     try {
       const applied = await didSlackPreviewEditApplyAfterError({

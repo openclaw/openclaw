@@ -1,3 +1,4 @@
+// Configure channels tests cover interactive channel selection, account prompts, and config mutation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const select = vi.hoisted(() => vi.fn());
@@ -14,7 +15,7 @@ vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => chatChannels(),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: (...args: unknown[]) => note(...args),
 }));
 

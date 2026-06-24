@@ -1,5 +1,14 @@
+// Defines message queue and delivery configuration types.
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
+
+export type MentionPatternsMode = "allow" | "deny";
+
+export type MentionPatternsPolicyConfig = {
+  mode?: MentionPatternsMode;
+  allowIn?: string[];
+  denyIn?: string[];
+};
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];
@@ -130,6 +139,8 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /** Custom `/usage full` footer template, inline or JSON file path. */
+  usageTemplate?: string | Record<string, unknown>;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

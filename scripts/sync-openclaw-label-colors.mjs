@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Synchronizes GitHub label colors to the OpenClaw taxonomy policy.
 import { execFileSync } from "node:child_process";
 
 const REPO = "openclaw/openclaw";
@@ -137,6 +138,7 @@ const EXACT_COLORS = new Map(
     "dedupe:child": COLORS.paleBlue,
     dependencies: COLORS.neutralGray,
     "dependencies-changed": COLORS.paleYellow,
+    "security-sensitive-changed": COLORS.paleYellow,
     github_actions: COLORS.neutralGray,
     go: COLORS.neutralGray,
     java: COLORS.neutralGray,

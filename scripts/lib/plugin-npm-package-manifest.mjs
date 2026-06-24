@@ -1,14 +1,15 @@
+// Augments plugin npm package manifests with generated runtime/package metadata.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mjs";
-import { resolveNpmRunner } from "../npm-runner.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -137,6 +138,7 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
+/** Resolve an npm command invocation for plugin package scripts. */
 export function resolvePluginNpmCommand(args, params = {}) {
   return resolveNpmRunner({
     comSpec: params.comSpec,
@@ -405,6 +407,7 @@ function installPackageLocalBundledDependencies(params) {
   };
 }
 
+/** Build the package.json that should be used while packaging a plugin for npm. */
 export function resolveAugmentedPluginNpmPackageJson(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -441,7 +444,12 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     openclaw: {
       ...plan.packageJson.openclaw,
       runtimeExtensions: plan.runtimeExtensions,
-      ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
+      ...(plan.runtimeSetupEntry
+        ? {
+            setupEntry: plan.runtimeSetupEntry,
+            runtimeSetupEntry: plan.runtimeSetupEntry,
+          }
+        : {}),
     },
   };
   if (shouldBundleDependencies(params.bundleDependencies, plan.packageJson)) {
@@ -462,6 +470,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   };
 }
 
+/** Read generated bundled channel config metadata keyed by plugin id. */
 export function readGeneratedBundledChannelConfigs(repoRoot) {
   const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
   if (!fs.existsSync(metadataPath)) {
@@ -528,6 +537,7 @@ function readGeneratedBundledChannelConfigEntries(source) {
   }
 }
 
+/** Merge generated channel config schemas into a plugin manifest without clobbering labels. */
 export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
   if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
     return manifest;
@@ -561,6 +571,7 @@ export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) 
   };
 }
 
+/** Build the plugin manifest that should be used while packaging a plugin for npm. */
 export function resolveAugmentedPluginNpmManifest(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -590,6 +601,7 @@ export function resolveAugmentedPluginNpmManifest(params) {
   };
 }
 
+/** Temporarily write augmented manifest/package metadata while a packaging callback runs. */
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -671,18 +683,31 @@ export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   }
 }
 
-function parseRunArgs(argv) {
-  if (argv[0] !== "--run") {
-    throw new Error(
-      "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]",
-    );
-  }
+const RUN_USAGE =
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";
+
+function readRunPackageDir(argv) {
   const packageDir = argv[1];
+  if (!packageDir || packageDir.startsWith("--")) {
+    throw new Error(RUN_USAGE);
+  }
+  return packageDir;
+}
+
+export function parseRunArgs(argv) {
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    return { help: true, packageDir: "", command: "", args: [] };
+  }
+  if (argv[0] !== "--run") {
+    throw new Error(RUN_USAGE);
+  }
+  const packageDir = readRunPackageDir(argv);
   const separatorIndex = argv.indexOf("--", 2);
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
-    throw new Error(
-      "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]",
-    );
+    throw new Error(RUN_USAGE);
+  }
+  if (separatorIndex !== 2) {
+    throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
   }
   return {
     packageDir,
@@ -692,7 +717,12 @@ function parseRunArgs(argv) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const { packageDir, command, args } = parseRunArgs(argv);
+  const parsedArgs = parseRunArgs(argv);
+  if (parsedArgs.help) {
+    console.log(RUN_USAGE);
+    return 0;
+  }
+  const { packageDir, command, args } = parsedArgs;
   return withAugmentedPluginNpmManifestForPackage(
     {
       packageDir,

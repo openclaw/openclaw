@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+// Verifies OpenRouter model scan filtering, metadata normalization, and timeouts.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
+  // scanOpenRouterModels accepts an injected fetch so tests stay offline while
+  // exercising OpenRouter's catalog response shape.
   return withFetchPreconnect(
     async () =>
       new Response(JSON.stringify(payload), {
@@ -15,8 +18,14 @@ function createFetchFixture(payload: unknown): typeof fetch {
 }
 
 describe("scanOpenRouterModels", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("lists free models without probing", async () => {
@@ -72,6 +81,89 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
+  it("drops out-of-range OpenRouter created_at timestamps", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-invalid-created:free",
+          name: "Free Invalid Created",
+          context_length: 16_384,
+          supported_parameters: [],
+          modality: "text",
+          created_at: 8_640_000_000_000_001,
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.createdAtMs).toBeNull();
+  });
+
+  it("cancels catalog error response bodies", async () => {
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = withFetchPreconnect(async () => response);
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(/HTTP 503/);
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an oversized catalog success body and cancels the stream", async () => {
+    // The success body is provider-controlled and runtime-fetched. A faulty or
+    // hostile provider can stream an effectively unbounded JSON document; the
+    // read must stop at the byte cap, cancel the upstream stream, and surface a
+    // clear overflow error instead of buffering the whole payload into memory.
+    const cancel = vi.fn(async () => undefined);
+    let pullCount = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x20); // 64 KiB of spaces
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              // Valid JSON array prefix so the body would parse if ever read in full.
+              controller.enqueue(new TextEncoder().encode('{"data":['));
+            },
+            pull(controller) {
+              pullCount += 1;
+              controller.enqueue(chunk);
+            },
+            cancel,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
+      /OpenRouter \/models response too large/,
+    );
+
+    // The reader stopped early instead of draining an unbounded stream, and
+    // cancelled the upstream body once the byte cap was crossed.
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pullCount).toBeGreaterThan(0);
+    expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
+  });
+
+  it("rejects a malformed catalog success body", async () => {
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response("not json at all", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
+      /OpenRouter \/models response is malformed JSON/,
+    );
+  });
+
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
@@ -86,6 +178,7 @@ describe("scanOpenRouterModels", () => {
   });
 
   it("applies the scan timeout to the OpenRouter catalog request", async () => {
+    vi.useFakeTimers();
     const fetchImpl: typeof fetch = async (_input, init) =>
       await new Promise<Response>((_resolve, reject) => {
         const signal = typeof init === "object" && init ? init.signal : undefined;
@@ -98,16 +191,21 @@ describe("scanOpenRouterModels", () => {
         });
       });
 
-    await expect(
+    const scan = expect(
       scanOpenRouterModels({
         fetchImpl,
         probe: false,
         timeoutMs: 1,
       }),
     ).rejects.toThrow(/catalog aborted/);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await scan;
   });
 
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
+    // Timer APIs cannot safely schedule above the platform max; cap before
+    // creating the catalog abort timeout.
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
@@ -124,6 +222,8 @@ describe("scanOpenRouterModels", () => {
   });
 
   it("does not match provider filters across provider id variants", async () => {
+    // Provider filters are literal OpenRouter owner ids. Do not normalize z.ai
+    // into z-ai here or scans will include unintended rows.
     const fetchImpl = createFetchFixture({
       data: [
         {

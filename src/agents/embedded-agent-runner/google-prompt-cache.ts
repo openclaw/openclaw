@@ -1,12 +1,21 @@
+/**
+ * Prepares Google prompt-cache payloads for embedded-agent stream calls.
+ */
 import crypto from "node:crypto";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
-import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
@@ -15,6 +24,9 @@ import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cac
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
+// CachedContent metadata responses are tiny (name + expireTime); cap the read so
+// a buggy/hostile Google endpoint cannot stream an unbounded body into memory.
+const GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES = 1024 * 1024;
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
 const GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS = 30_000;
 const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -174,7 +186,7 @@ async function appendGooglePromptCacheEntry(
   try {
     await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
-    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockTimeoutError(err)) {
+    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockAcquireError(err)) {
       throw err;
     }
     // ignore persistence failures
@@ -185,8 +197,7 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   if (!expireTime) {
     return null;
   }
-  const timestamp = Date.parse(expireTime);
-  return Number.isFinite(timestamp) ? timestamp : null;
+  return asDateTimestampMs(Date.parse(expireTime)) ?? null;
 }
 
 function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
@@ -265,6 +276,25 @@ function buildManagedContextForCachedContent(context: GooglePromptCacheContext) 
   };
 }
 
+async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response && !response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
+/**
+ * Reads a Google cachedContents JSON body under a byte cap and parses it.
+ * Streams through the shared limiter so an oversized response is cancelled
+ * mid-flight instead of being fully buffered by `response.json()`.
+ */
+async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
+  const buffer = await readResponseWithLimit(response, GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Google prompt cache response too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+  });
+  return JSON.parse(buffer.toString("utf8")) as T;
+}
+
 async function updateGooglePromptCacheTtl(params: {
   apiKey: string;
   baseUrl: string;
@@ -274,22 +304,24 @@ async function updateGooglePromptCacheTtl(params: {
   headers?: Record<string, string>;
   signal?: AbortSignal;
 }): Promise<{ expireTime?: string } | null> {
-  const response = await params.fetchImpl(
-    `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`,
-    {
+  let response: Response | undefined;
+  try {
+    response = await params.fetchImpl(`${params.baseUrl}/${params.cachedContent}?updateMask=ttl`, {
       method: "PATCH",
       headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
       body: JSON.stringify({
         ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
       }),
       signal: params.signal,
-    },
-  );
-  if (!response.ok) {
-    return null;
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const json = await readGooglePromptCacheJson<{ expireTime?: string }>(response);
+    return json;
+  } finally {
+    await cancelUnreadResponseBody(response);
   }
-  const json = (await response.json()) as { expireTime?: string };
-  return json;
 }
 
 async function createGooglePromptCache(params: {
@@ -304,26 +336,31 @@ async function createGooglePromptCache(params: {
   tools?: unknown;
   toolConfig?: unknown;
 }): Promise<{ cachedContent: string; expireTime?: string } | null> {
-  const response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
-    method: "POST",
-    headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
-    body: JSON.stringify({
-      model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
-      ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
-      systemInstruction: {
-        parts: [{ text: params.systemPrompt }],
-      },
-      ...(params.tools ? { tools: params.tools } : {}),
-      ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
-    }),
-    signal: params.signal,
-  });
-  if (!response.ok) {
-    return null;
+  let response: Response | undefined;
+  try {
+    response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
+      method: "POST",
+      headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
+      body: JSON.stringify({
+        model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
+        ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
+        systemInstruction: {
+          parts: [{ text: params.systemPrompt }],
+        },
+        ...(params.tools ? { tools: params.tools } : {}),
+        ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
+      }),
+      signal: params.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const json = await readGooglePromptCacheJson<{ name?: string; expireTime?: string }>(response);
+    const cachedContent = normalizeOptionalString(json.name) ?? "";
+    return cachedContent ? { cachedContent, expireTime: json.expireTime } : null;
+  } finally {
+    await cancelUnreadResponseBody(response);
   }
-  const json = (await response.json()) as { name?: string; expireTime?: string };
-  const cachedContent = normalizeOptionalString(json.name) ?? "";
-  return cachedContent ? { cachedContent, expireTime: json.expireTime } : null;
 }
 
 async function ensureGooglePromptCache(
@@ -342,7 +379,10 @@ async function ensureGooglePromptCache(
   deps: GooglePromptCacheDeps,
 ): Promise<string | null> {
   const baseUrl = normalizeGoogleApiBaseUrl(params.model.baseUrl);
-  const now = deps.now?.() ?? Date.now();
+  const now = asDateTimestampMs(deps.now?.() ?? Date.now());
+  if (now === undefined) {
+    return null;
+  }
   const systemPromptDigest = digestSystemPrompt(params.systemPrompt);
   const matchKey = buildGooglePromptCacheMatchKey({
     provider: params.provider,
@@ -354,7 +394,10 @@ async function ensureGooglePromptCache(
   });
   const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
 
-  if (latestEntry?.status === "failed" && latestEntry.retryAfter > now) {
+  if (
+    latestEntry?.status === "failed" &&
+    isFutureDateTimestampMs(latestEntry.retryAfter, { nowMs: now })
+  ) {
     return null;
   }
 
@@ -362,7 +405,7 @@ async function ensureGooglePromptCache(
   const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
   if (latestEntry?.status === "ready" && latestEntry.cachedContent) {
     const expiresAt = parseExpireTimeMs(latestEntry.expireTime);
-    const isExpired = expiresAt !== null && expiresAt <= now;
+    const isExpired = expiresAt !== null && !isFutureDateTimestampMs(expiresAt, { nowMs: now });
     if (!isExpired) {
       const needsRefresh = expiresAt !== null && expiresAt - now <= refreshWindowMs;
       if (!needsRefresh) {
@@ -420,7 +463,8 @@ async function ensureGooglePromptCache(
       systemPromptDigest,
       cacheConfigDigest: params.cacheConfigDigest,
       cacheRetention: params.cacheRetention,
-      retryAfter: now + GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS,
+      retryAfter:
+        resolveExpiresAtMsFromDurationMs(GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS, { nowMs: now }) ?? 0,
     });
     return null;
   }

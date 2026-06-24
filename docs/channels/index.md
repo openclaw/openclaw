@@ -39,8 +39,10 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Nextcloud Talk](/channels/nextcloud-talk) - Self-hosted chat via Nextcloud Talk (bundled plugin).
 - [Nostr](/channels/nostr) - Decentralized DMs via NIP-04 (bundled plugin).
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (bundled plugin).
+- [Raft](/channels/raft) - Raft CLI wake bridge for human and agent collaboration (external plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused.
 - [Slack](/channels/slack) - Bolt SDK; workspace apps.
+- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (official plugin).
 - [Synology Chat](/channels/synology-chat) - Synology NAS Chat via outgoing+incoming webhooks (bundled plugin).
 - [Telegram](/channels/telegram) - Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) - Urbit-based messenger (bundled plugin).
@@ -51,6 +53,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WhatsApp](/channels/whatsapp) - Most popular; uses Baileys and requires QR pairing.
 - [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (bundled plugin).
+- [Zalo ClawBot](/channels/zaloclawbot) - Personal Zalo assistant via QR login; owner-bound (external plugin).
 - [Zalo Personal](/channels/zalouser) - Zalo personal account via QR login (bundled plugin).
 
 ## Notes

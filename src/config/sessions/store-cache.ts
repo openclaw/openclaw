@@ -1,7 +1,8 @@
+// Session store caches share parsed stores, immutable snapshots, and serialized JSON.
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionSkillPromptRef } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -35,6 +36,7 @@ type SessionStoreSnapshotCacheEntry = {
 type SerializedSessionStoreCacheEntry = {
   serialized: string;
   sizeBytes: number;
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
@@ -185,6 +187,7 @@ export function cloneSessionStoreRecord(
   store: Record<string, SessionEntry>,
   serialized?: string,
 ): Record<string, SessionEntry> {
+  // When serialized JSON is already available, parse it instead of deep-cloning field-by-field.
   const cloned =
     serialized === undefined
       ? cloneJsonLikeValue(store)
@@ -210,7 +213,7 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const key in value as Record<string, unknown>) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       continue;
     }
     const child = (value as Record<string, unknown>)[key];
@@ -219,6 +222,7 @@ function cloneJsonLikeValue<T>(value: T): T {
     }
     const clonedChild = cloneJsonLikeValue(child);
     if (key === "__proto__") {
+      // Preserve JSON object shape without letting `__proto__` mutate the clone prototype.
       Object.defineProperty(cloned, key, {
         value: clonedChild,
         enumerable: true,
@@ -302,6 +306,7 @@ function pruneSerializedSessionStoreCache(): void {
     (SESSION_STORE_SERIALIZED_CACHE.size > maxEntries ||
       sessionStoreSerializedCacheBytes > maxBytes)
   ) {
+    // Map insertion order gives us a tiny LRU-ish eviction policy without extra bookkeeping.
     const oldestKey = SESSION_STORE_SERIALIZED_CACHE.keys().next().value;
     if (typeof oldestKey !== "string") {
       break;
@@ -315,10 +320,30 @@ export function getSerializedSessionStore(storePath: string): string | undefined
   return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.serialized;
 }
 
+export function getSerializedSessionStorePromptRefs(
+  storePath: string,
+): ReadonlyMap<string, SessionSkillPromptRef> | undefined {
+  pruneSerializedSessionStoreCache();
+  return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.promptRefs;
+}
+
+export function setSerializedSessionStorePromptRefs(
+  storePath: string,
+  promptRefs: ReadonlyMap<string, SessionSkillPromptRef>,
+): void {
+  pruneSerializedSessionStoreCache();
+  const cached = SESSION_STORE_SERIALIZED_CACHE.get(storePath);
+  if (!cached) {
+    return;
+  }
+  cached.promptRefs = promptRefs;
+}
+
 export function setSerializedSessionStore(
   storePath: string,
   serialized?: string,
   sizeBytesHint?: number,
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>,
 ): void {
   deleteSerializedSessionStore(storePath);
   if (serialized === undefined) {
@@ -333,7 +358,7 @@ export function setSerializedSessionStore(
   if (maxEntries <= 0 || maxBytes <= 0 || sizeBytes > maxBytes) {
     return;
   }
-  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes });
+  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes, promptRefs });
   sessionStoreSerializedCacheBytes += sizeBytes;
   pruneSerializedSessionStoreCache();
 }
@@ -357,6 +382,7 @@ export function readSessionStoreSnapshotCache(params: {
     return null;
   }
   if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+    // Object and snapshot caches share file identity; a stat mismatch invalidates both views.
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -422,12 +448,14 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
   cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   bumpSessionStoreCacheVersion(params.storePath);
   const store =
     params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
+  // Ownership is only taken for freshly parsed store objects that no caller will mutate afterward.
   if (params.takeOwnership === true) {
     internSessionStoreLargeStrings(store);
   }
@@ -437,5 +465,10 @@ export function writeSessionStoreCache(params: {
     sizeBytes: params.sizeBytes,
     serialized: params.cloneSerialized,
   });
-  setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
+  setSerializedSessionStore(
+    params.storePath,
+    params.serialized,
+    params.sizeBytes,
+    params.serializedPromptRefs,
+  );
 }

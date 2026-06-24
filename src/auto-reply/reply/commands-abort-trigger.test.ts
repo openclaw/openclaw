@@ -1,3 +1,4 @@
+// Tests abort trigger command parsing and cancellation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
@@ -6,6 +7,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn());
+const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
+  vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
+);
 const setAbortMemoryMock = vi.hoisted(() => vi.fn());
 const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
 
@@ -31,13 +35,13 @@ vi.mock("./abort.js", () => ({
   abortSessionRunTarget: abortSessionRunTargetMock,
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
-  resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
   setAbortMemory: setAbortMemoryMock,
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
+  resolveCommandSessionEntryForKey: resolveCommandSessionEntryForKeyMock,
 }));
 
 vi.mock("./reply-run-registry.js", () => ({

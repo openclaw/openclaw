@@ -1,8 +1,10 @@
+// Covers plugin config validation and manifest-backed constraints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -316,6 +318,416 @@ describe("config plugin validation", () => {
     }
   });
 
+  describe("missing Codex plugin diagnostics", () => {
+    const validateWithMissingCodexPlugin = (raw: Record<string, unknown>) =>
+      validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          ...raw,
+        },
+        {
+          env: suiteEnv(),
+          pluginMetadataSnapshot: {
+            manifestRegistry: {
+              plugins: [],
+              diagnostics: [],
+            },
+          },
+        },
+      );
+
+    const expectNoMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).not.toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    const expectMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    it.each([
+      {
+        name: "provider-level PI runtime policy",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "agent wildcard PI runtime policy",
+        config: {
+          agents: {
+            list: [{ id: "openclaw" }],
+            defaults: {
+              models: {
+                "openai/*": { agentRuntime: { id: "pi" } },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "explicitly disabled Codex plugin entry",
+        config: {
+          plugins: { entries: { codex: { enabled: false } } },
+        },
+      },
+    ])("does not warn when $name keeps Codex unavailable", ({ config }) => {
+      const res = validateWithMissingCodexPlugin(config);
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one provider model route is pinned to OpenClaw", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "openclaw" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when provider PI policy is overridden by an automatic OpenAI model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when exact agent policy overrides an automatic OpenAI provider model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "pi" } },
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a normalized custom OpenAI-compatible provider key uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            OpenAI: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still reports explicit Codex allowlist entries for custom OpenAI-compatible base URLs", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: {
+          allow: ["codex"],
+          entries: { codex: {} },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+      expect(res.warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic wildcard policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one agent model route is pinned to PI", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when the missing Codex plugin is explicitly enabled", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        plugins: { entries: { codex: { enabled: true } } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "codex" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when an agent model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+  });
+
   it("deduplicates catalog install hints for missing configured official external plugins", () => {
     const res = validateConfigObjectWithPlugins(
       {
@@ -434,7 +846,7 @@ describe("config plugin validation", () => {
 
     expect(res.ok).toBe(true);
     const message =
-      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.13.1";
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.15.0";
     expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
     expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
   });
@@ -832,26 +1244,27 @@ describe("config plugin validation", () => {
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
-    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
-    await mkdirSafe(path.dirname(installedPluginIndexPath));
+    const stateDir = path.join(suiteHome, ".openclaw");
     clearLoadInstalledPluginIndexInstallRecordsCache();
-    await fs.writeFile(
-      installedPluginIndexPath,
-      JSON.stringify(
-        {
-          installRecords: {
-            "missing-sms": {
-              source: "npm",
-              spec: "missing-sms@1.0.0",
-              installedAt: "2026-04-12T00:00:00.000Z",
-            },
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          "missing-sms": {
+            source: "npm",
+            spec: "missing-sms@1.0.0",
+            installedAt: "2026-04-12T00:00:00.000Z",
           },
-          plugins: [],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir },
     );
     clearLoadInstalledPluginIndexInstallRecordsCache();
     try {
@@ -872,7 +1285,20 @@ describe("config plugin validation", () => {
           "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
       });
     } finally {
-      await fs.rm(installedPluginIndexPath, { force: true });
+      await writePersistedInstalledPluginIndex(
+        {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: "test",
+          generatedAtMs: 2,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        { stateDir },
+      );
       clearLoadInstalledPluginIndexInstallRecordsCache();
     }
   });
@@ -936,6 +1362,18 @@ describe("config plugin validation", () => {
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
+  it("warns for removed skill-workshop plugin id instead of failing validation", () => {
+    const removedId = "skill-workshop";
+    const res = validateRemovedPluginConfig(removedId);
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+    expectPathMessage(res.warnings, `plugins.entries.${removedId}`, message);
+    expectPathMessage(res.warnings, "plugins.allow", message);
+    expectPathMessage(res.warnings, "plugins.deny", message);
+    expectPathMessage(res.warnings, "plugins.slots.memory", message);
+  });
+
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {
     const res = validateInSuite({
       plugins: {
@@ -961,6 +1399,22 @@ describe("config plugin validation", () => {
       path: "plugins.entries.google",
       message: "plugin disabled (not in allowlist) but config is present",
     });
+  });
+
+  it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
+    const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
+    await mkdirSafe(path.dirname(helperPath));
+    await fs.writeFile(helperPath, "export default {};\n", "utf-8");
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: { enabled: true },
+      });
+
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(helperPath, { force: true });
+    }
   });
 
   it("surfaces plugin config diagnostics", () => {

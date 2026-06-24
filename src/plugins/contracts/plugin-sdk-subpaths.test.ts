@@ -1,3 +1,4 @@
+// Plugin SDK subpath tests cover documented SDK subpath exports and package aliases.
 import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,9 +23,10 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
+import type { GetReplyOptions as ReplyRuntimeGetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
   BaseProbeResult,
@@ -477,6 +479,25 @@ function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
 }
 
 describe("plugin-sdk subpath exports", () => {
+  let deprecatedChannelRuntimeMatches: string[] = [];
+
+  beforeAll(() => {
+    deprecatedChannelRuntimeMatches = findRepoFilesContaining({
+      roots: [
+        resolve(REPO_ROOT, "src"),
+        resolve(REPO_ROOT, "extensions"),
+        resolve(REPO_ROOT, "test"),
+      ],
+      pattern:
+        /(?:from\s+|import\s+(?:type\s+)?|import\s*\(\s*)["']openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
+      exclude: [
+        "src/plugins/compat/registry.ts",
+        "src/plugins/sdk-alias.test.ts",
+        "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
+      ],
+    });
+  });
+
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",
@@ -605,6 +626,8 @@ describe("plugin-sdk subpath exports", () => {
         "clearHistoryEntriesIfEnabled",
         "recordPendingHistoryEntryIfEnabled",
         "DEFAULT_GROUP_HISTORY_LIMIT",
+        "requestedSessionId",
+        "resumeRequestedSession",
       ],
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
@@ -842,21 +865,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
-    const matches = findRepoFilesContaining({
-      roots: [
-        resolve(REPO_ROOT, "src"),
-        resolve(REPO_ROOT, "extensions"),
-        resolve(REPO_ROOT, "test"),
-      ],
-      pattern:
-        /(?:from\s+|import\s+(?:type\s+)?|import\s*\(\s*)["']openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
-      exclude: [
-        "src/plugins/compat/registry.ts",
-        "src/plugins/sdk-alias.test.ts",
-        "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
-      ],
-    });
-    expect(matches).toStrictEqual([]);
+    expect(deprecatedChannelRuntimeMatches).toStrictEqual([]);
   });
 
   it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
@@ -1331,6 +1340,11 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
+    type PrivateResumeOptionKeys = Extract<
+      keyof ReplyRuntimeGetReplyOptions,
+      "requestedSessionId" | "resumeRequestedSession"
+    >;
+    expectTypeOf<PrivateResumeOptionKeys>().toEqualTypeOf<never>();
   });
 
   it("keeps runtime entry subpaths importable", async () => {

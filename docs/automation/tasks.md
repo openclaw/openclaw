@@ -311,7 +311,9 @@ $OPENCLAW_STATE_DIR/tasks/runs.sqlite
 
 The registry loads into memory at gateway start and syncs writes to SQLite for durability across restarts.
 The Gateway keeps the SQLite write-ahead log bounded by using SQLite's default
-autocheckpoint threshold plus periodic and shutdown `TRUNCATE` checkpoints.
+autocheckpoint threshold plus periodic `PASSIVE` checkpoints. Shutdown and
+explicit maintenance checkpoints still use `TRUNCATE` so normal closes can
+reclaim WAL space without making the background sweeper wait on active readers.
 
 ### Automatic maintenance
 
@@ -346,7 +348,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and cron">
-    A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
+    Cron job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
     See [Cron Jobs](/automation/cron-jobs).
 
@@ -358,7 +360,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and sessions">
-    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Sessions are conversation context; tasks are activity tracking on top of that.
+    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
     A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.

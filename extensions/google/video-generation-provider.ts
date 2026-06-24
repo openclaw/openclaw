@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -531,7 +532,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       }
       let generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
-        usedRestFallback = true;
         operation = await generateGoogleVideoViaRest({
           baseUrl: restBaseUrl,
           headers: authHeaders,

@@ -1,7 +1,14 @@
+// Orchestrates security audit collection and report formatting.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
@@ -9,6 +16,10 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import {
+  canMaterializeGatewayAuthSecretRefsWithoutExec,
+  materializeGatewayAuthSecretRefs,
+} from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecApprovalsFile,
@@ -23,10 +34,8 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -215,8 +224,74 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
   return { critical, warn, info };
 }
 
+function emitSecurityAuditReportEvent(params: {
+  summary: SecurityAuditSummary;
+  deep: boolean;
+  includeFilesystem: boolean;
+  includeChannelSecurity: boolean;
+  suppressedCount: number;
+}) {
+  const hasCritical = params.summary.critical > 0;
+  const hasWarnings = params.summary.warn > 0;
+  emitTrustedSecurityEvent({
+    category: "audit",
+    action: "security.audit.completed",
+    outcome: hasCritical || hasWarnings ? "failure" : "success",
+    severity: hasCritical ? "critical" : hasWarnings ? "medium" : "info",
+    actor: {
+      kind: "operator",
+    },
+    target: {
+      kind: "config",
+      name: "security.audit",
+    },
+    policy: {
+      id: "security.audit",
+      decision: "not_applicable",
+    },
+    control: {
+      id: "security.audit",
+      family: "authorization",
+    },
+    attributes: {
+      critical_count: params.summary.critical,
+      warn_count: params.summary.warn,
+      info_count: params.summary.info,
+      suppressed_count: params.suppressedCount,
+      deep: params.deep,
+      include_filesystem: params.includeFilesystem,
+      include_channel_security: params.includeChannelSecurity,
+    },
+  });
+}
+
 function normalizeSuppressionText(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+async function materializeAuditGatewayAuthRefs(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const materializeParams = {
+    cfg: params.cfg,
+    env: params.env,
+    mode: params.cfg.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+  };
+  if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
+    return params.cfg;
+  }
+  try {
+    return await materializeGatewayAuthSecretRefs(materializeParams);
+  } catch {
+    return params.cfg;
+  }
+}
+
+function shouldMaterializeHooksGatewayAuthRefs(cfg: OpenClawConfig): boolean {
+  return cfg.hooks?.enabled === true && Boolean(normalizeOptionalString(cfg.hooks.token));
 }
 
 function findingMatchesSuppression(
@@ -1117,7 +1192,7 @@ async function maybeProbeGateway(params: {
   });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
-    .catch((err) => ({
+    .catch((err: unknown) => ({
       ok: false,
       url,
       connectLatencyMs: null,
@@ -1210,8 +1285,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
+  const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
+    ? await materializeAuditGatewayAuthRefs({
+        cfg,
+        env,
+      })
+    : cfg;
   findings.push(
-    ...auditNonDeep.collectHooksHardeningFindings(cfg, env, {
+    ...auditNonDeep.collectHooksHardeningFindings(hooksGatewayAuthCfg, env, {
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
@@ -1348,6 +1429,13 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         ]
       : filtered.findings;
   const summary = countBySeverity(activeFindings);
+  emitSecurityAuditReportEvent({
+    summary,
+    deep: context.deep,
+    includeFilesystem: context.includeFilesystem,
+    includeChannelSecurity: context.includeChannelSecurity,
+    suppressedCount: filtered.suppressedFindings.length,
+  });
   return {
     ts: Date.now(),
     summary,

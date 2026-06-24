@@ -172,7 +172,7 @@ By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
-- If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+- If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
@@ -196,31 +196,25 @@ Inbound attachments (images/audio/docs) can be surfaced to your command via temp
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (if audio transcription is enabled)
 
-Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). The directive must start the line as plain text, outside code fences and without Markdown wrappers such as bold or inline code. Example:
+Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 
+```json
+{
+  "message": "Here's the screenshot.",
+  "mediaUrl": "https://example.com/screenshot.png"
+}
 ```
-Here's the screenshot.
-MEDIA:https://example.com/screenshot.png
-```
 
-OpenClaw extracts these and sends them as media alongside the text.
-
-These forms are not attachment directives and are sent as normal text:
-
-```md
-**MEDIA:https://example.com/screenshot.png**
-`MEDIA:https://example.com/screenshot.png`
-Here is the screenshot: MEDIA:https://example.com/screenshot.png
-```
+OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
 
 Local-path behavior follows the same file-read trust model as the agent:
 
-- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
-- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound local media can use host-local files the agent is already allowed to read.
 - Local paths can be absolute, workspace-relative, or home-relative with `~/`.
-- Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
+- Host-local sends still only allow media and safe document types (images, audio, video, PDF, Office documents, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is an extension of the existing host-read trust boundary, not a secret scanner: if the agent can read a host-local `secret.txt` or `config.json`, it can attach that file when the extension and content validation match.
 
-That means generated images/files outside the workspace can now send when your fs policy already allows those reads, without reopening arbitrary host-text attachment exfiltration.
+That means generated images/files outside the workspace can now send when your fs policy already allows those reads, while arbitrary host-local text extensions remain blocked. Keep sensitive files outside the agent-readable filesystem, or keep `tools.fs.workspaceOnly=true` for stricter local-path sends.
 
 ## Operations checklist
 
@@ -241,7 +235,7 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - macOS menu bar companion: [OpenClaw macOS app](/platforms/macos)
 - iOS node app: [iOS app](/platforms/ios)
 - Android node app: [Android app](/platforms/android)
-- Windows status: [Windows (WSL2)](/platforms/windows)
+- Windows Hub: [Windows](/platforms/windows)
 - Linux status: [Linux app](/platforms/linux)
 - Security: [Security](/gateway/security)
 

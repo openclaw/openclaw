@@ -1,3 +1,4 @@
+// Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -22,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OLLAMA_CLOUD_BASE_URL,
+  OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
@@ -40,7 +42,7 @@ import {
 export { buildOllamaProvider };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = [...OLLAMA_CLOUD_DEFAULT_MODELS];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
@@ -202,10 +204,10 @@ async function readOllamaPullChunkWithIdleTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -368,10 +370,14 @@ async function promptForOllamaCloudCredential(params: {
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
-}): Promise<{ credential: SecretInput; credentialMode?: SecretInputMode }> {
+}): Promise<{
+  credential: SecretInput;
+  credentialMode?: SecretInputMode;
+  discoveryApiKey: string;
+}> {
   const captured: { credential?: SecretInput; credentialMode?: SecretInputMode } = {};
   const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
-  await ensureApiKeyFromOptionEnvOrPrompt({
+  const discoveryApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
     token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
     tokenProvider: optionToken
       ? "ollama"
@@ -403,7 +409,11 @@ async function promptForOllamaCloudCredential(params: {
   ) {
     throw new Error("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
   }
-  return { credential: captured.credential, credentialMode: captured.credentialMode };
+  return {
+    credential: captured.credential,
+    credentialMode: captured.credentialMode,
+    discoveryApiKey,
+  };
 }
 
 function buildOllamaModelsConfig(
@@ -590,7 +600,7 @@ export async function promptAndConfigureOllama(params: {
     ],
   })) as OllamaInteractiveMode;
   if (mode === "cloud-only") {
-    const { credential, credentialMode } = await promptForOllamaCloudCredential({
+    const { credential, credentialMode, discoveryApiKey } = await promptForOllamaCloudCredential({
       cfg: params.cfg,
       env: params.env,
       opts: params.opts,
@@ -598,7 +608,9 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
-    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
+    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
+      apiKey: discoveryApiKey,
+    });
     const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
     const discoveredModelNames = discoveredModels.map((model) => model.name);
     const modelNames =
@@ -740,4 +752,18 @@ export async function ensureOllamaModelPulled(params: {
   if (!(await pullOllamaModel(baseUrl, modelName, params.prompter))) {
     throw new WizardCancelledError("Failed to download selected Ollama model");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

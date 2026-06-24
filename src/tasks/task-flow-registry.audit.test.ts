@@ -1,23 +1,47 @@
+// Covers managed task-flow audit summaries and stale-flow classification.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
   listTaskFlowAuditFindings,
   type TaskFlowAuditCode,
   type TaskFlowAuditFinding,
 } from "./task-flow-registry.audit.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
 
 function requireFinding(
   findings: TaskFlowAuditFinding[],
@@ -57,11 +81,7 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 
 describe("task-flow-registry audit", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();

@@ -1,8 +1,13 @@
+// Session transcript hit tests cover transcript match formatting and path resolution.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
+  formatSessionTranscriptMemoryHitKey,
+  parseSessionTranscriptMemoryHitKey,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
 
@@ -270,5 +275,36 @@ describe("resolveTranscriptStemToSessionKeys", () => {
         allowQmdSlugFallback: true,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("session transcript memory hit key compatibility exports", () => {
+  it("keeps hit-subpath memory helpers off the runtime writer import path", () => {
+    const source = fs.readFileSync(new URL("./session-transcript-hit.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("session-transcript-runtime.js");
+  });
+
+  it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
+    const key = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    const store: Record<string, SessionEntry> = {
+      "agent:main:discord:direct:42": {
+        sessionFile: "/tmp/not-the-identity.jsonl",
+        sessionId: "session:legacy",
+        updatedAt: 10,
+      },
+    };
+
+    expect(key).toBe("transcript:main:session%3Alegacy");
+    expect(parseSessionTranscriptMemoryHitKey(key)).toMatchObject({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key, store })).toEqual([
+      "agent:main:discord:direct:42",
+    ]);
   });
 });

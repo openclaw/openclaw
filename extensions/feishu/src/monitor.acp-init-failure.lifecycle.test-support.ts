@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.acp init failure.lifecycle support behavior.
 import "./lifecycle.test-support.js";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,8 +29,6 @@ const {
   sendMessageFeishuMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
-
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycleFixture({
@@ -62,9 +61,7 @@ async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      handlers = registered;
-    },
+    onRegister: () => {},
     runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
@@ -77,7 +74,6 @@ describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    handlers = {};
     lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");
 

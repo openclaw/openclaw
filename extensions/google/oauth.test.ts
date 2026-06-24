@@ -1,3 +1,4 @@
+// Google tests cover oauth plugin behavior.
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -141,6 +142,12 @@ describe("resolveGeminiCliSelectedAuthType", () => {
 });
 
 describe("extractGeminiCliCredentials", () => {
+  const ENV_KEYS = [
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
+    "GEMINI_CLI_OAUTH_CLIENT_ID",
+    "GEMINI_CLI_OAUTH_CLIENT_SECRET",
+  ] as const;
   const normalizePath = (value: string) =>
     value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   const rootDir = parse(process.cwd()).root || "/";
@@ -152,7 +159,9 @@ describe("extractGeminiCliCredentials", () => {
   `;
 
   let originalPath: string | undefined;
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let extractGeminiCliCredentials: typeof import("./oauth.credentials.js").extractGeminiCliCredentials;
+  let resolveOAuthClientConfig: typeof import("./oauth.credentials.js").resolveOAuthClientConfig;
   let clearCredentialsCache: typeof import("./oauth.credentials.js").clearCredentialsCache;
   let setOAuthCredentialsFsForTest: typeof import("./oauth.credentials.js").setOAuthCredentialsFsForTest;
 
@@ -445,18 +454,34 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeAll(async () => {
-    ({ extractGeminiCliCredentials, clearCredentialsCache, setOAuthCredentialsFsForTest } =
-      await import("./oauth.credentials.js"));
+    ({
+      extractGeminiCliCredentials,
+      resolveOAuthClientConfig,
+      clearCredentialsCache,
+      setOAuthCredentialsFsForTest,
+    } = await import("./oauth.credentials.js"));
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    for (const key of ENV_KEYS) {
+      delete process.env[key];
+    }
     await installMockFs();
   });
 
   afterEach(async () => {
     process.env.PATH = originalPath;
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     setOAuthCredentialsFsForTest();
   });
 
@@ -466,6 +491,16 @@ describe("extractGeminiCliCredentials", () => {
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
+  });
+
+  it("includes missing binary details when resolving OAuth client config", async () => {
+    process.env.PATH = "/nonexistent";
+    mockExistsSync.mockReturnValue(false);
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Details: Gemini CLI binary was not found in PATH/,
+    );
   });
 
   it("extracts credentials from oauth2.js in known path", () => {
@@ -516,11 +551,45 @@ describe("extractGeminiCliCredentials", () => {
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
+  it("includes missing oauth2.js details when resolving OAuth client config", async () => {
+    installGeminiLayout({ oauth2Exists: false, readdir: [] });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(/Could not locate oauth2\.js/);
+    expect(() => resolveOAuthClientConfig()).toThrow(/recursiveSearchDepth=10/);
+  });
+
   it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
+  });
+
+  it("includes parse failure details when resolving OAuth client config", async () => {
+    installGeminiLayout({
+      oauth2Exists: true,
+      oauth2Content: "// no credentials here",
+      readdir: [],
+    });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Candidate credential files did not contain a parseable OAuth client id\/secret/,
+    );
+  });
+
+  it("includes unexpected extraction exception details when resolving OAuth client config", async () => {
+    installGeminiLayout({ oauth2Exists: true, readdir: [] });
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("mock read failure");
+    });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Unexpected errors occurred while reading candidate credential files\/directories/,
+    );
+    expect(() => resolveOAuthClientConfig()).toThrow(/mock read failure/);
   });
 
   it("caches credentials after first extraction", () => {
@@ -949,6 +1018,39 @@ describe("loginGeminiCliOAuth", () => {
 
     expect(Number.isFinite(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
+  });
+
+  it("keeps invalid clocks out of refreshed Gemini CLI credential expiry", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: 3600,
+        }),
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+      const result = await refreshTokensForGeminiCli({
+        refresh: "refresh-token",
+        email: "lobster@openclaw.ai",
+      });
+
+      expect(result.expires).toBe(0);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("keeps unsafe token expiry values out of refreshed Gemini CLI credentials", async () => {

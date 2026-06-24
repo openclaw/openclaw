@@ -1,7 +1,8 @@
+// Registers provider plugins into the provider registry.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -86,6 +87,17 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
     plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
   ) {
     return true;
+  }
+  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
   }
   for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
     const alias = normalizeProviderId(rawAlias);
@@ -765,27 +777,6 @@ export function resolveOwningPluginIdsForModelRefs(params: {
           ...(registry ? { registry } : {}),
         }) ?? [],
     ),
-  );
-}
-
-export function resolveNonBundledProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] {
-  const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      plugin.origin !== "bundled" &&
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
   );
 }
 

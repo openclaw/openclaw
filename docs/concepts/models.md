@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -61,7 +61,7 @@ The same `provider/model` can mean different things depending on where it came f
 - Configured defaults (`agents.defaults.model.primary` and agent-specific primaries) are the normal starting point and use `agents.defaults.model.fallbacks`.
 - Auto fallback selections are temporary recovery state. They are stored with `modelOverrideSource: "auto"` so later turns can keep using the fallback chain without probing a known-bad primary every time; OpenClaw periodically probes the original primary again, clears the auto selection when it recovers, and announces fallback/recovery transitions once per state change.
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
-- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, switch the current session with `/model Y` or clear stale session state with `/reset`.
+- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, clear the current session selection with `/model default` so it inherits the configured primary again.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
@@ -150,7 +150,7 @@ If you want to limit providers without manually listing every model, add
   agents: {
     defaults: {
       models: {
-        "openai-codex/*": {},
+        "openai/*": {},
         "vllm/*": {},
       },
     },
@@ -188,6 +188,7 @@ You can switch models for the current session without restarting:
 /model list
 /model 3
 /model openai/gpt-5.4
+/model default
 /model status
 ```
 
@@ -205,6 +206,7 @@ You can switch models for the current session without restarting:
     - If the agent is idle, the next run uses the new model right away.
     - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+    - `/model default` clears the session selection and returns the session to the configured default model.
     - A user-selected `/model` ref is strict for that session: if the selected provider/model is unreachable, the reply fails visibly instead of silently answering from `agents.defaults.model.fallbacks`. This is different from configured defaults and cron job primaries, which can still use fallback chains.
     - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 

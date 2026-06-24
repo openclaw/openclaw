@@ -1,4 +1,9 @@
+/**
+ * Gateway handler for browser.request, including optional node-host proxy
+ * dispatch and local Browser control route dispatch.
+ */
 import crypto from "node:crypto";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -129,6 +134,7 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+/** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
   params,
   respond,
@@ -139,10 +145,7 @@ export async function handleBrowserGatewayRequest({
   const path = normalizeOptionalString(typed.path) ?? "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
-  const timeoutMs =
-    typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
-      ? Math.max(1, Math.floor(typed.timeoutMs))
-      : undefined;
+  const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
 
   if (!methodRaw || !path) {
     respond(
@@ -173,7 +176,7 @@ export async function handleBrowserGatewayRequest({
   }
 
   const cfg = getRuntimeConfig();
-  let nodeTarget: NodeSession | null = null;
+  let nodeTarget: NodeSession | null;
   try {
     nodeTarget = resolveBrowserNodeTarget({
       cfg,
@@ -287,6 +290,7 @@ export async function handleBrowserGatewayRequest({
   respond(true, result.body);
 }
 
+/** Gateway request handler map contributed by the Browser plugin. */
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": handleBrowserGatewayRequest,
 };

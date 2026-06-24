@@ -1,3 +1,8 @@
+/**
+ * Plans root and plugin-owned model catalog writes. Setup and doctor flows use
+ * this module to merge implicit provider discovery, explicit config, and
+ * preserved secrets before touching models.json.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
@@ -21,6 +26,8 @@ import {
 } from "./plugin-model-catalog.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+
+/** Dependency hook for resolving implicit model providers while planning models.json. */
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -33,7 +40,8 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryEntriesOnly?: boolean;
 }) => Promise<Record<string, ProviderConfig>>;
 
-export type ModelsJsonPlan =
+/** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
+type ModelsJsonPlan =
   | {
       action: "skip";
       pluginCatalogWrites?: Record<string, string>;
@@ -83,6 +91,7 @@ function buildPluginCatalogWrites(
   );
 }
 
+/** Resolves providers for models.json with injectable implicit-provider discovery. */
 export async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -98,8 +107,11 @@ export async function resolveProvidersForModelsJsonWithDeps(
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
   },
 ): Promise<Record<string, ProviderConfig>> {
-  const { cfg, agentDir, env } = params;
-  const explicitProviders = cfg.models?.providers ?? {};
+  const { agentDir, env } = params;
+  const explicitProviders = stripBlankProviderBaseUrls(params.cfg.models?.providers ?? {});
+  const cfg = params.cfg.models?.providers
+    ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
+    : params.cfg;
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
@@ -122,6 +134,23 @@ export async function resolveProvidersForModelsJsonWithDeps(
     implicit: implicitProviders,
     explicit: explicitProviders,
   });
+}
+
+function stripBlankProviderBaseUrls(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    if (typeof provider?.baseUrl === "string" && provider.baseUrl.trim() === "") {
+      const { baseUrl: _blank, ...rest } = provider;
+      next[key] = rest as ProviderConfig;
+      mutated = true;
+      continue;
+    }
+    next[key] = provider;
+  }
+  return mutated ? next : providers;
 }
 
 function resolveProvidersForMode(params: {
@@ -164,6 +193,7 @@ function filterWritableProviders(
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
 
+/** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -274,6 +304,7 @@ export async function planOpenClawModelsJsonWithDeps(
   };
 }
 
+/** Plans root and plugin-owned model catalog writes for the current runtime. */
 export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {
