@@ -901,12 +901,16 @@ describe("main-session-restart-recovery", () => {
       maxRetries: 3,
     });
     for (let i = 0; i < 100 && vi.mocked(callGateway).mock.calls.length < 3; i++) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
     }
 
     let store = loadSessionStore(path.join(sessionsDir, "sessions.json"), { skipCache: true });
     for (let i = 0; i < 100 && store["agent:main:main"]?.abortedLastRun !== false; i++) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
       store = loadSessionStore(path.join(sessionsDir, "sessions.json"), { skipCache: true });
     }
 

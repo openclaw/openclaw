@@ -198,7 +198,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
-    if (next.abortedLastRun === false) {
+    if (!next.abortedLastRun) {
       clearAutomaticRestartRecoveryState(next);
     }
     if (result.meta.systemPromptReport) {
