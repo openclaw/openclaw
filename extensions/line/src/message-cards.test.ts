@@ -44,6 +44,16 @@ describe("createButtonTemplate", () => {
     expect((template.template as { title: string }).title.length).toBe(40);
   });
 
+  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
+    // 39 chars + an emoji land the truncation boundary inside the surrogate pair;
+    // a raw code-unit slice would keep only the lone high surrogate.
+    const template = createButtonTemplate(`${"x".repeat(39)}😀`, "Text", [messageAction("OK")]);
+    const title = (template.template as { title: string }).title;
+
+    expect(title).toBe("x".repeat(39));
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(title)).toBe(false);
+  });
+
   it("truncates text to 60 chars when no thumbnail is provided", () => {
     const longText = "x".repeat(100);
     const template = createButtonTemplate("Title", longText, [messageAction("OK")]);
