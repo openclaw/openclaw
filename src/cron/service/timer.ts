@@ -221,7 +221,20 @@ export async function executeJobCoreWithTimeout(
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
-      const corePromise = executeJobCore(state, job, runAbortController.signal);
+      // No wall-clock timeout means no watchdog to accumulate the resolved run
+      // identity, so track it locally from the same execution callbacks. Without
+      // this, an operator-cancel row for a timeout-disabled isolated run drops
+      // provider/model/session even though they were already known.
+      let activeExecution: CronAgentExecutionStarted | undefined;
+      const accumulateExecution = (info?: CronAgentExecutionStarted) => {
+        if (info) {
+          activeExecution = { ...activeExecution, ...info };
+        }
+      };
+      const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        onExecutionStarted: accumulateExecution,
+        onExecutionPhase: accumulateExecution,
+      });
       trackActiveCronTaskRunSettlement(corePromise);
       void corePromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
@@ -236,7 +249,7 @@ export async function executeJobCoreWithTimeout(
         return first;
       }
       startActiveCronTaskRunSettlementGrace();
-      return createOperatorCancellationOutcome();
+      return createOperatorCancellationOutcome(activeExecution);
     }
 
     let timeoutReason: string | undefined;

@@ -1281,6 +1281,80 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("keeps resolved provider/model/session on timeout-disabled cancel rows (#95873)", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      resetActiveCronTaskRunsForTests();
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:20:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "no-timeout-cancel-attribution",
+        name: "no timeout cancel attribution",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        // timeoutSeconds: 0 takes the no-watchdog branch, so attribution has to
+        // be tracked from the execution callbacks directly (no watchdog snapshot).
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      const activeJobMarker = markCronJobActive(cronJob.id);
+
+      const now = scheduledAt;
+      const runnerEntered = createDeferred<void>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async ({ onExecutionStarted }) => {
+          onExecutionStarted?.({
+            jobId: cronJob.id,
+            phase: "tool_execution_started",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            sessionId: "sess-attrib",
+            sessionKey: "key-attrib",
+          });
+          runnerEntered.resolve();
+          return await new Promise<never>(() => {});
+        }),
+      });
+
+      const runId = `cron:no-timeout-cancel-attribution:${scheduledAt}`;
+      try {
+        const resultPromise = executeJobCoreWithTimeout(state, cronJob, {
+          runId,
+          activeJobMarker,
+        });
+        await runnerEntered.promise;
+        const cancelled = cancelActiveCronTaskRun({
+          runId,
+          reason: "Cancelled by operator.",
+        });
+        expect(cancelled).toBe(true);
+        const result = await resultPromise;
+
+        expect(result.status).toBe("error");
+        expect(result.error).toBe("Cancelled by operator.");
+        // #95873 sibling: a timeout-disabled operator-cancel row keeps the
+        // already-resolved attribution instead of going blank.
+        expect(result.provider).toBe("deepseek");
+        expect(result.model).toBe("deepseek-v4-pro");
+        expect(result.sessionId).toBe("sess-attrib");
+        expect(result.sessionKey).toBe("key-attrib");
+      } finally {
+        clearCronJobActive(cronJob.id, activeJobMarker);
+      }
+    } finally {
+      resetActiveCronTaskRunsForTests();
+      resetTaskRegistryForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it("suppresses isolated follow-up side effects after timeout", async () => {
     vi.useFakeTimers();
     try {
