@@ -3331,6 +3331,45 @@ describe("config cli", () => {
       ]);
     });
 
+    it("explains when unset targets a runtime-only default shown by config get", async () => {
+      const resolved = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const runtimeMerged = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "gpt" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const aliasPath = 'agents.defaults.models["openai/gpt-5.4"].alias';
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "get", aliasPath]);
+
+      expect(mockLog).toHaveBeenCalledWith("gpt");
+      mockLog.mockClear();
+      setSnapshot(resolved, runtimeMerged);
+
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes(`Config path not found in authored config: ${aliasPath}.`);
+      expectErrorIncludes("It only exists after runtime defaults are applied");
+      expectErrorIncludes("openclaw config set <path> <value>");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "Run openclaw config get <path>",
+      );
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },

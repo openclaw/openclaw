@@ -23,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -44,6 +43,7 @@ import {
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -516,6 +516,16 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
     current = record[segment];
   }
   return { found: true, value: current };
+}
+
+function formatConfigUnsetMissingPathMessage(params: {
+  path: string;
+  runtimeOnly: boolean;
+}): string {
+  if (params.runtimeOnly) {
+    return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
+  }
+  return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
 }
 
 type JsonSchemaRecord = {
@@ -2369,6 +2379,11 @@ export async function runConfigUnset(opts: {
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      const runtimeOnly = getAtPath(snapshot.config, parsedPath).found;
+      const missingPathMessage = formatConfigUnsetMissingPathMessage({
+        path: opts.path,
+        runtimeOnly,
+      });
       if (cliOptions.dryRun && cliOptions.json) {
         throw new ConfigSetDryRunValidationError({
           ok: false,
@@ -2385,16 +2400,14 @@ export async function runConfigUnset(opts: {
           errors: [
             {
               kind: "missing-path",
-              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+              message: runtimeOnly
+                ? missingPathMessage
+                : `Config path not found: ${opts.path}. Nothing was changed.`,
             },
           ],
         });
       }
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
-        ),
-      );
+      runtime.error(danger(missingPathMessage));
       runtime.exit(1);
       return;
     }
