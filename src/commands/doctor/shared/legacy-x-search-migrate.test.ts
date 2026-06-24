@@ -1,10 +1,7 @@
 // Legacy X search migration tests cover doctor repair of old X search config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  listLegacyXSearchConfigPaths,
-  migrateLegacyXSearchConfig,
-} from "./legacy-x-search-migrate.js";
+import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
 describe("legacy x_search config migration", () => {
   it("moves only legacy x_search auth into the xai plugin config", () => {
@@ -134,20 +131,5 @@ describe("legacy x_search config migration", () => {
     expect(res.config).toEqual(config);
     expect(res.changes).toStrictEqual([]);
     expect(res.config.plugins?.entries?.xai).toBeUndefined();
-  });
-
-  it("lists legacy x_search paths", () => {
-    expect(
-      listLegacyXSearchConfigPaths({
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "xai-legacy-key",
-              enabled: false,
-            },
-          } as Record<string, unknown>,
-        },
-      } as OpenClawConfig),
-    ).toEqual(["tools.web.x_search.apiKey"]);
   });
 });

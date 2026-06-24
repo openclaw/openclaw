@@ -113,5 +113,3 @@ export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbedding
 export function clearEmbeddingProviders(): void {
   getEmbeddingProviders().clear();
 }
-
-export const resetEmbeddingProviders = clearEmbeddingProviders;

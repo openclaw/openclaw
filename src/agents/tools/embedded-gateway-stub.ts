@@ -1,3 +1,4 @@
+import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 /**
  * Embedded-mode Gateway method stub.
  *
@@ -130,7 +131,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionId: string | undefined;
   messages: unknown[];
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
 }> {
   const rt = await getRuntime();
@@ -155,14 +156,22 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
+  const sessionEntry =
+    typeof entry?.sessionId === "string"
+      ? {
+          sessionId: entry.sessionId,
+          ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
+        }
+      : undefined;
 
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile as string | undefined,
+            sessionEntry,
             sessionId,
+            sessionKey,
             storePath,
           },
           {
@@ -203,7 +212,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionId,
     messages: bounded.messages,
     thinkingLevel: entry?.thinkingLevel as string | undefined,
-    fastMode: entry?.fastMode as boolean | undefined,
+    fastMode: normalizeFastMode(entry?.fastMode),
     verboseLevel: entry?.verboseLevel as string | undefined,
   };
 }

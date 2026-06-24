@@ -4,14 +4,39 @@
 # They centralize temporary log naming and the small success/failure print
 # pattern used by Docker scenario scripts.
 
+docker_e2e_normalize_positive_int_value() {
+  local label="${1:?missing value label}"
+  local value="${2-}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $label: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$((10#$value))"
+}
+
+docker_e2e_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  docker_e2e_normalize_positive_int_value "$name" "$value"
+}
+
 run_logged() {
   local label="$1"
   shift
+  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
   if ! "$@" >"$log_file" 2>&1; then
-    docker_e2e_print_log "$log_file"
+    local print_status=0
+    docker_e2e_print_log "$log_file" || print_status="$?"
     rm -f "$log_file"
+    if [ "$print_status" -ne 0 ]; then
+      return "$print_status"
+    fi
     return 1
   fi
   rm -f "$log_file"
@@ -20,14 +45,23 @@ run_logged() {
 run_logged_print() {
   local label="$1"
   shift
+  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
   if ! "$@" >"$log_file" 2>&1; then
-    docker_e2e_print_log "$log_file"
+    local print_status=0
+    docker_e2e_print_log "$log_file" || print_status="$?"
     rm -f "$log_file"
+    if [ "$print_status" -ne 0 ]; then
+      return "$print_status"
+    fi
     return 1
   fi
-  docker_e2e_print_log "$log_file"
+  docker_e2e_print_log "$log_file" || {
+    local print_status="$?"
+    rm -f "$log_file"
+    return "$print_status"
+  }
   rm -f "$log_file"
 }
 
@@ -35,15 +69,15 @@ run_logged_print_heartbeat() {
   local label="$1"
   local interval_seconds="$2"
   shift 2
-  if ! [[ "$interval_seconds" =~ ^[0-9]+$ ]] || [ "$interval_seconds" -lt 1 ]; then
-    interval_seconds="30"
-  else
-    interval_seconds="$((10#$interval_seconds))"
-  fi
+  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
+  interval_seconds="$(docker_e2e_normalize_positive_int_value "Docker E2E log heartbeat interval" "$interval_seconds")" || return $?
+  local heartbeat_term_grace_seconds
+  heartbeat_term_grace_seconds="$(
+    docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS 30
+  )" || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
-  "$@" >"$log_file" 2>&1 &
-  local command_pid=$!
+  local command_pid=""
   local cleanup_done=0
   local previous_int_trap
   local previous_term_trap
@@ -52,15 +86,12 @@ run_logged_print_heartbeat() {
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
   terminate_heartbeat_command() {
-    kill -TERM "$command_pid" 2>/dev/null || true
-    local grace_seconds="${OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS:-30}"
-    if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]] || [ "$grace_seconds" -lt 1 ]; then
-      grace_seconds="30"
-    else
-      grace_seconds="$((10#$grace_seconds))"
+    if [ -z "$command_pid" ]; then
+      return 0
     fi
+    kill -TERM "$command_pid" 2>/dev/null || true
     local wait_attempt
-    for wait_attempt in $(seq 1 "$((grace_seconds * 10))"); do
+    for wait_attempt in $(seq 1 "$((heartbeat_term_grace_seconds * 10))"); do
       if ! kill -0 "$command_pid" 2>/dev/null; then
         return 0
       fi
@@ -106,6 +137,8 @@ run_logged_print_heartbeat() {
   trap 'cleanup_heartbeat_command 130' INT
   trap 'cleanup_heartbeat_command 143' TERM
   trap 'cleanup_heartbeat_command 129' HUP
+  "$@" >"$log_file" 2>&1 &
+  command_pid=$!
   local started_at="$SECONDS"
   local next_heartbeat=$interval_seconds
   local status=0
@@ -126,7 +159,11 @@ run_logged_print_heartbeat() {
   wait "$command_pid"
   status=$?
   set -e
-  docker_e2e_print_log "$log_file"
+  docker_e2e_print_log "$log_file" || {
+    local print_status="$?"
+    cleanup_heartbeat_command 0
+    return "$print_status"
+  }
   cleanup_heartbeat_command 0
   return "$status"
 }
@@ -140,12 +177,8 @@ docker_e2e_run_log() {
 
 docker_e2e_print_log() {
   local log_file="$1"
-  local max_bytes="${OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES:-65536}"
-  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
-    max_bytes="65536"
-  else
-    max_bytes="$((10#$max_bytes))"
-  fi
+  local max_bytes
+  max_bytes="$(docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536)" || return $?
   if [ ! -f "$log_file" ]; then
     return 0
   fi

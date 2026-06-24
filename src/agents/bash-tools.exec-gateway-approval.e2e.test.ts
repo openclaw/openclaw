@@ -16,7 +16,7 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "../gateway/test-helpers.e2e.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -106,18 +106,18 @@ describe("gateway-hosted exec approvals", () => {
         "utf8",
       );
 
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_GATEWAY_PORT = String(port);
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+      setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+      setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+      setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+      setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       clearSessionStoreCacheForTest();

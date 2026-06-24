@@ -41,6 +41,23 @@ describe("buildGatewayRuntimeHints", () => {
     ]);
   });
 
+  it("uses the provided env when rendering WSL systemd recovery hints", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "System has not been booted with systemd as init system",
+      },
+      { platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } },
+    );
+
+    expect(hints).toContain(
+      "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
+    );
+    expect(hints).toContain("Then run: wsl --shutdown (from PowerShell) and reopen your distro.");
+    expect(hints).toContain("Verify: systemctl --user status");
+    expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
+  });
+
   it("does not warn for normal systemd cgroup metrics", () => {
     expect(
       buildGatewayRuntimeHints(

@@ -13,6 +13,7 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
@@ -20,6 +21,7 @@ import {
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
+  resolveResponsesMessageSnapshotCollapse,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -253,7 +255,12 @@ export function convertResponsesMessages<TApi extends Api>(
     messages.push({
       type: "message",
       role,
-      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
+      content: [
+        {
+          type: "input_text",
+          text: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     });
   }
 
@@ -579,14 +586,48 @@ export async function processResponsesStream<TApi extends Api>(
     | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
+  let lastTextBlock: {
+    block: TextContent;
+    index: number;
+    phase: TextSignatureV1["phase"] | undefined;
+  } | null = null;
+  // While a message item may still be a cumulative snapshot of lastTextBlock,
+  // its public block is deferred so a collapsed item never leaves an
+  // unbalanced text_start behind (#91959). null = no deferral in progress.
+  let pendingMessageText: string | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
+  const appendPendingMessageDelta = (delta: string) => {
+    pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
+    const priorText = lastTextBlock?.block.text ?? "";
+    if (priorText.startsWith(pendingMessageText) || pendingMessageText.startsWith(priorText)) {
+      return;
+    }
+    // Diverged from the prior text: this is a distinct message, so open its
+    // block now and replay the withheld text as one delta.
+    currentBlock = { type: "text", text: pendingMessageText };
+    blocks.push(currentBlock);
+    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: pendingMessageText,
+      partial: output,
+    });
+    pendingMessageText = null;
+  };
 
   for await (const event of openaiStream) {
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
       const item = event.item;
+      if (item.type !== "message") {
+        // Snapshot collapse only applies to back-to-back message items; any
+        // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -594,9 +635,14 @@ export async function processResponsesStream<TApi extends Api>(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        currentBlock = { type: "text", text: "" };
-        output.content.push(currentBlock);
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        if (lastTextBlock) {
+          currentBlock = null;
+          pendingMessageText = "";
+        } else {
+          currentBlock = { type: "text", text: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        }
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -666,54 +712,66 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     } else if (event.type === "response.output_text.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+      if (currentItem?.type === "message") {
         if (!currentItem.content || currentItem.content.length === 0) {
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
         if (isResponsesTextContentPartType(lastPart?.type)) {
-          currentBlock.text += event.delta;
           lastPart.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: event.delta,
-            partial: output,
-          });
+          if (pendingMessageText !== null) {
+            appendPendingMessageDelta(event.delta);
+          } else if (currentBlock?.type === "text") {
+            currentBlock.text += event.delta;
+            stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: event.delta,
+              partial: output,
+            });
+          }
         }
       }
     } else if (isAzureResponsesTextDeltaEvent(event)) {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+      if (currentItem?.type === "message") {
         currentItem.content = currentItem.content || [];
         let lastPart = currentItem.content[currentItem.content.length - 1];
         if (lastPart?.type !== "text") {
           lastPart = { type: "text", text: "" };
           currentItem.content.push(lastPart);
         }
-        currentBlock.text += event.delta;
         lastPart.text += event.delta;
-        stream.push({
-          type: "text_delta",
-          contentIndex: blockIndex(),
-          delta: event.delta,
-          partial: output,
-        });
-      }
-    } else if (event.type === "response.refusal.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
-        if (!currentItem.content || currentItem.content.length === 0) {
-          continue;
-        }
-        const lastPart = currentItem.content[currentItem.content.length - 1];
-        if (lastPart?.type === "refusal") {
+        if (pendingMessageText !== null) {
+          appendPendingMessageDelta(event.delta);
+        } else if (currentBlock?.type === "text") {
           currentBlock.text += event.delta;
-          lastPart.refusal += event.delta;
           stream.push({
             type: "text_delta",
             contentIndex: blockIndex(),
             delta: event.delta,
             partial: output,
           });
+        }
+      }
+    } else if (event.type === "response.refusal.delta") {
+      if (currentItem?.type === "message") {
+        if (!currentItem.content || currentItem.content.length === 0) {
+          continue;
+        }
+        const lastPart = currentItem.content[currentItem.content.length - 1];
+        if (lastPart?.type === "refusal") {
+          lastPart.refusal += event.delta;
+          if (pendingMessageText !== null) {
+            appendPendingMessageDelta(event.delta);
+          } else if (currentBlock?.type === "text") {
+            currentBlock.text += event.delta;
+            stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: event.delta,
+              partial: output,
+            });
+          }
         }
       }
     } else if (event.type === "response.function_call_arguments.delta") {
@@ -754,6 +812,10 @@ export async function processResponsesStream<TApi extends Api>(
       }
     } else if (event.type === "response.output_item.done") {
       const item = event.item;
+      if (item.type !== "message") {
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
 
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
@@ -767,18 +829,58 @@ export async function processResponsesStream<TApi extends Api>(
           partial: output,
         });
         currentBlock = null;
-      } else if (item.type === "message" && currentBlock?.type === "text") {
+      } else if (
+        item.type === "message" &&
+        (currentBlock?.type === "text" || pendingMessageText !== null)
+      ) {
         // Support both OpenAI "output_text" and Azure "text" content types
-        currentBlock.text = item.content
+        const finalText = item.content
           .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-        stream.push({
-          type: "text_end",
-          contentIndex: blockIndex(),
-          content: currentBlock.text,
-          partial: output,
-        });
+        const phase = item.phase ?? undefined;
+        const collapse =
+          pendingMessageText !== null
+            ? resolveResponsesMessageSnapshotCollapse({
+                prior: lastTextBlock && {
+                  text: lastTextBlock.block.text,
+                  phase: lastTextBlock.phase,
+                },
+                nextText: finalText,
+                nextPhase: phase,
+              })
+            : ({ kind: "keep" } as const);
+        pendingMessageText = null;
+        if (collapse.kind === "extend" && lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The deferred block was never
+          // started publicly, and the newest item's signature is kept so
+          // replay carries the item that produced this content (#91959).
+          lastTextBlock.block.text = collapse.text;
+          lastTextBlock.block.textSignature = encodeTextSignatureV1(item.id, phase);
+          stream.push({
+            type: "text_end",
+            contentIndex: lastTextBlock.index,
+            content: collapse.text,
+            partial: output,
+          });
+        } else {
+          if (currentBlock?.type !== "text") {
+            // Deferred distinct message: open its block now, balanced with the
+            // text_end below.
+            currentBlock = { type: "text", text: "" };
+            blocks.push(currentBlock);
+            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+          }
+          currentBlock.text = finalText;
+          currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          stream.push({
+            type: "text_end",
+            contentIndex: blockIndex(),
+            content: currentBlock.text,
+            partial: output,
+          });
+        }
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =

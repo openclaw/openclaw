@@ -1,6 +1,7 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -134,6 +135,62 @@ describe("consumeGoogleGenerateContentStream", () => {
     });
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
+
+  it("generates a new id when Google repeats a streamed tool-call id", async () => {
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: string[] = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event.type);
+      }
+    })();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ functionCall: { id: "call_1", name: "lookup", args: {} } }],
+              },
+            },
+          ],
+        } as GenerateContentResponse,
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ functionCall: { id: "call_1", name: "lookup", args: {} } }],
+              },
+              finishReason: FinishReason.STOP,
+            },
+          ],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream,
+      nextToolCallId: (name) => `generated-${name}`,
+    });
+    await collect;
+
+    expect(events.at(-1)).toBe("done");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "lookup",
+        arguments: {},
+      },
+      {
+        type: "toolCall",
+        id: "generated-lookup",
+        name: "lookup",
+        arguments: {},
+      },
+    ]);
+  });
 });
 
 describe("buildGoogleGenerateContentParams", () => {
@@ -145,5 +202,15 @@ describe("buildGoogleGenerateContentParams", () => {
     );
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
+  });
+
+  it("strips the internal cache boundary marker from systemInstruction", () => {
+    const params = buildGoogleGenerateContentParams(model, {
+      systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    });
+
+    expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
+    expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 });

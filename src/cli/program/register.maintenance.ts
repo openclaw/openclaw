@@ -63,6 +63,7 @@ export function registerMaintenanceCommands(program: Command) {
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
               allowExec: Boolean(opts.allowExec),
+              deep: Boolean(opts.deep),
             });
             defaultRuntime.exit(exitCode);
           },

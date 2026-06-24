@@ -23,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -44,6 +43,7 @@ import {
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";

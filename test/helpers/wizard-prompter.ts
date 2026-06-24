@@ -5,8 +5,13 @@ import type { WizardPrompter } from "../../src/wizard/prompts.js";
 // Vitest mock prompter for wizard tests.
 
 /** Create a WizardPrompter with default mocked responses and optional overrides. */
-export function createWizardPrompter(overrides?: Partial<WizardPrompter>): WizardPrompter {
-  const select = vi.fn(async () => "quickstart") as unknown as WizardPrompter["select"];
+export function createWizardPrompter(
+  overrides?: Partial<WizardPrompter>,
+  options?: { defaultSelect?: string },
+): WizardPrompter {
+  const select = vi.fn(
+    async () => options?.defaultSelect ?? "quickstart",
+  ) as unknown as WizardPrompter["select"];
   return {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),

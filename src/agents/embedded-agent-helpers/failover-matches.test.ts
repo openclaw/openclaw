@@ -7,6 +7,7 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
+  isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -103,6 +104,19 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Chinese provider overload messages", () => {
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the Zhipu GLM overload body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
@@ -162,5 +176,37 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("generic assistant error text classification (#93931)", () => {
+  it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
+    // The generic error text wraps provider availability failures (model not
+    // loaded, endpoint unreachable) that should engage retry/fallback.
+    expect(classifyFailoverReason("LLM request failed.")).toBe("timeout");
+  });
+
+  it("classifies lowercase 'llm request failed.' as a timeout", () => {
+    expect(classifyFailoverReason("llm request failed.")).toBe("timeout");
+  });
+
+  it("does NOT match 'LLM request failed:' variants as timeout via this pattern", () => {
+    // Variants with specific reasons should be classified by their own patterns,
+    // not by the generic LLM request failed match. The schema rejection variant
+    // is a format error, not a transient timeout.
+    expect(
+      isTimeoutErrorMessage(
+        "LLM request failed: provider rejected the request schema or tool payload.",
+      ),
+    ).toBe(false);
+  });
+
+  it("does NOT match 'LLM request failed: connection refused' as timeout via this exact-match pattern", () => {
+    // The connection-refused variant is a sanitized user-facing string, not
+    // the raw error that cron/failover classifiers see. The exact-match regex
+    // /^llm request failed\.$/i should NOT match it because of the colon suffix.
+    expect(
+      isTimeoutErrorMessage("LLM request failed: connection refused by the provider endpoint."),
+    ).toBe(false);
   });
 });

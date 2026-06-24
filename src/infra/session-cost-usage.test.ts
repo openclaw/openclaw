@@ -2753,4 +2753,28 @@ example
       loadSessionLogs({ sessionFile, limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);
   });
+
+  it("keeps the latest logs when transcript timestamps are out of order", async () => {
+    const root = await makeSessionCostRoot("session-logs-unsorted-limit");
+    const sessionFile = path.join(root, "session.jsonl");
+    const entries = [
+      ["2026-02-12T10:03:00.000Z", "third"],
+      ["2026-02-12T10:01:00.000Z", "first"],
+      ["2026-02-12T10:04:00.000Z", "fourth"],
+      ["2026-02-12T10:02:00.000Z", "second"],
+    ].map(([timestamp, content]) => ({
+      type: "message",
+      timestamp,
+      message: { role: "user", content },
+    }));
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile, limit: 2 });
+
+    expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
+  });
 });

@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines the TUI backend contract and backend event shapes.
 import type {
   CommandEntry,
@@ -19,6 +20,11 @@ export type ChatSendOptions = {
   deliver?: boolean;
   timeoutMs?: number;
   runId?: string;
+};
+
+export type TuiChatSendResult = {
+  runId: string;
+  status?: string;
 };
 
 /** Options for forwarding a goal command to a backend session. */
@@ -62,6 +68,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -69,7 +76,7 @@ export type TuiSessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
-      fastMode?: boolean;
+      fastMode?: FastMode;
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;
@@ -141,7 +148,7 @@ export type TuiBackend = {
   start: () => void;
   stop: () => void | Promise<void>;
   subscribeSessionEvents?: () => Promise<unknown>;
-  sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
+  sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   abortChat: (opts: {
     sessionKey: string;
     agentId?: string;

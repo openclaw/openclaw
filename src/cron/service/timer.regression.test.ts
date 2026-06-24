@@ -43,7 +43,6 @@ import { createCronServiceState, type CronEvent } from "./state.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
-  executeJob,
   executeJobCore,
   executeJobCoreWithTimeout,
   onTimer,
@@ -548,6 +547,49 @@ describe("cron service timer regressions", () => {
     expect(finishedJob.state.lastStatus).toBe("ok");
     expect(finishedJob.state.nextRunAtMs).toBe(scheduledAt + everySixHoursMs);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries recurring jobs after isolated setup timeouts before the next scheduled slot", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-06-08T13:00:00.000Z");
+    const everySixHoursMs = 6 * 60 * 60 * 1_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-setup-timeout-retry",
+      name: "ShadowTrader Auto Channel Bug Monitor",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "monitor bugs" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    const now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValueOnce({
+      status: "error",
+      error: "cron: isolated agent setup timed out before runner start",
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["timeout"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = requireJob(state, "recurring-setup-timeout-retry");
+    expect(jobAfterRetry.enabled).toBe(true);
+    expect(jobAfterRetry.state.lastStatus).toBe("error");
+    expect(jobAfterRetry.state.lastError).toContain("setup timed out before runner start");
+    expect(jobAfterRetry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+    expect(jobAfterRetry.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
   it("uses the normal recurring schedule after transient retry attempts are exhausted", async () => {
@@ -1695,6 +1737,7 @@ describe("cron service timer regressions", () => {
   });
 
   it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
     let now = 0;
     const nowMs = () => {
       now += 10;
@@ -1716,11 +1759,11 @@ describe("cron service timer regressions", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: 0 },
+      state: { nextRunAtMs: 1 },
     };
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: "/tmp/openclaw-cron-busy-main-test/jobs.json",
+      storePath: store.storePath,
       log: noopLogger,
       nowMs,
       enqueueSystemEvent,
@@ -1731,16 +1774,20 @@ describe("cron service timer regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     state.store = { version: 1, jobs: [job] };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runPromise = executeJob(state, job, nowMs(), { forced: false });
+    const runPromise = runMissedJobs(state);
     await vi.advanceTimersByTimeAsync(1);
     await runPromise;
 
+    const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
+      (candidate) => candidate.id === job.id,
+    );
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(2);
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {

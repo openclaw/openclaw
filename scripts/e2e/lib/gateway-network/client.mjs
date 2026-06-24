@@ -11,6 +11,10 @@ function delay(ms) {
   });
 }
 
+function remainingDeadlineMs(deadline) {
+  return Math.max(1, deadline - Date.now());
+}
+
 async function openSocket(url, timeoutMs = 10_000) {
   const ws = new WebSocket(url);
   await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
@@ -68,7 +72,7 @@ export async function runGatewayNetworkClient(
   const deadline = Date.now() + timeoutMs;
   const delayImpl = deps.delay ?? delay;
   const onceFrameImpl = deps.onceFrame ?? onceFrame;
-  const openSocketImpl = deps.openSocket ?? ((targetUrl) => openSocket(targetUrl));
+  const openSocketImpl = deps.openSocket ?? openSocket;
   const protocolVersion = deps.protocolVersion ?? (await readProtocolVersion());
   const stdout = deps.stdout ?? console.log;
 
@@ -76,7 +80,7 @@ export async function runGatewayNetworkClient(
   while (Date.now() < deadline) {
     let ws;
     try {
-      ws = await openSocketImpl(url);
+      ws = await openSocketImpl(url, remainingDeadlineMs(deadline));
       ws.send(
         JSON.stringify({
           type: "req",
@@ -101,6 +105,7 @@ export async function runGatewayNetworkClient(
       const connectRes = await onceFrameImpl(
         ws,
         (frame) => frame?.type === "res" && frame?.id === "c1",
+        remainingDeadlineMs(deadline),
       );
       if (!connectRes.ok) {
         lastError = responseError("connect", connectRes);
@@ -112,6 +117,7 @@ export async function runGatewayNetworkClient(
         const healthRes = await onceFrameImpl(
           ws,
           (frame) => frame?.type === "res" && frame?.id === "h1",
+          remainingDeadlineMs(deadline),
         );
         if (healthRes.ok) {
           if (!hasGatewayHealthSummaryPayload(healthRes)) {
@@ -132,7 +138,10 @@ export async function runGatewayNetworkClient(
       ws?.close();
     }
 
-    await delayImpl(500);
+    const retryDelayMs = Math.min(500, deadline - Date.now());
+    if (retryDelayMs > 0) {
+      await delayImpl(retryDelayMs);
+    }
   }
 
   throw lastError ?? new Error("connect failed: timeout");
