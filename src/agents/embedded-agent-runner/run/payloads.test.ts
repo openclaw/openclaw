@@ -600,6 +600,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("still shows tool error warning when progress showed failure but no assistant reply exists (#96297)", () => {
+    // When an exec tool exits non-zero the progress compositor marks the error
+    // as already visible, setting suppressToolErrorWarnings. But if the model
+    // produced no assistant text the warning is the only payload — suppressing
+    // it leaves an empty reply and the user never sees the outcome.
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastToolError: { toolName: "exec", error: "process exited with code 1" },
+      suppressToolErrorWarnings: true,
+      verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+    });
+  });
+
   it("suppresses assistant text when a deterministic exec approval prompt was already delivered", () => {
     expectNoPayloads({
       assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],

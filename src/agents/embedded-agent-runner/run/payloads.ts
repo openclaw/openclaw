@@ -187,7 +187,7 @@ function resolveToolErrorWarningPolicy(params: {
     verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
   });
   const suppressToolErrorWarnings = toolErrorWarningOverride === true;
-  if (suppressToolErrorWarnings) {
+  if (suppressToolErrorWarnings && params.hasUserFacingReply) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -207,7 +207,7 @@ function resolveToolErrorWarningPolicy(params: {
       includeDetails,
     };
   }
-  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails && params.hasUserFacingReply) {
     return { showWarning: false, includeDetails };
   }
   return {
