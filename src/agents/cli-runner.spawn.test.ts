@@ -1961,13 +1961,14 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.type).toBe("control_response");
     expect(parsed.response.subtype).toBe("success");
     expect(parsed.response.request_id).toBe("req-allow");
     expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
+    expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
   });
 
@@ -2331,10 +2332,11 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.response.response.updatedInput).toEqual({ command: "echo hi" });
+    expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-default-allow-1");
   });
 
@@ -2767,10 +2769,11 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
+    expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-permmode-allow-1");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");

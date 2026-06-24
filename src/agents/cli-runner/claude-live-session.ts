@@ -877,6 +877,7 @@ function handleClaudeLiveControlRequest(
       request_id: requestId,
       response: allowed
         ? {
+            behavior: "allow",
             updatedInput: (request.input ?? {}) as Record<string, unknown>,
             ...(toolUseId ? { toolUseID: toolUseId } : {}),
           }
