@@ -128,6 +128,7 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
   "extensions/feishu/src/reasoning-preview.ts",
+  "extensions/memory-core/src/dreaming-phases.ts",
   "extensions/memory-core/src/dreaming-narrative.ts",
   "extensions/mattermost/src/mattermost/model-picker.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
