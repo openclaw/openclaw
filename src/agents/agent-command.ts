@@ -2465,10 +2465,14 @@ function emitIngressModelUsageDiagnostic(
   opts: AgentCommandIngressOpts,
 ): void {
   const cfg = getRuntimeConfig();
-  if (!isDiagnosticsEnabled(cfg)) return;
+  if (!isDiagnosticsEnabled(cfg)) {
+    return;
+  }
   const agentMeta = result.meta?.agentMeta;
   const usage = agentMeta?.usage;
-  if (!agentMeta || !hasNonzeroUsage(usage)) return;
+  if (!agentMeta || !hasNonzeroUsage(usage)) {
+    return;
+  }
 
   const providerUsed = agentMeta.provider ?? "";
   const modelUsed = agentMeta.model ?? "";

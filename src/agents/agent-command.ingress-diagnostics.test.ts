@@ -84,9 +84,9 @@ function makeResult(overrides?: Record<string, unknown>) {
         contextTokens: 128000,
         promptTokens: 1200,
         lastCallUsage: { input: 500, output: 200 },
-        ...((overrides?.agentMeta as Record<string, unknown>) ?? {}),
+        ...(overrides?.agentMeta as Record<string, unknown> | undefined),
       },
-      ...((overrides?.meta as Record<string, unknown>) ?? {}),
+      ...(overrides?.meta as Record<string, unknown> | undefined),
     },
     ...overrides,
   };
