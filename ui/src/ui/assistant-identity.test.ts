@@ -1,6 +1,6 @@
 // Control UI tests cover assistant identity behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 
 describe("normalizeAssistantIdentity", () => {
   it("preserves long image data URLs without truncating past 200 chars", () => {

@@ -1,9 +1,8 @@
 import {
-  loadLocalAssistantIdentity,
+  fetchAssistantIdentity,
   saveLocalAssistantIdentity,
 } from "../../app/assistant-identity.ts";
 // Control UI controller manages assistant identity gateway state.
-import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 
 export type AssistantIdentityState = {
@@ -54,32 +53,21 @@ export async function loadAssistantIdentity(
   }
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
   const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
-  const params = sessionKey ? { sessionKey } : {};
   const requestVersion = beginAssistantIdentityRequest(state);
   try {
-    const res = await state.client.request("agent.identity.get", params);
+    const normalized = await fetchAssistantIdentity(state.client, sessionKey);
     if (!shouldApplyAssistantIdentityResult(state, requestVersion, expectedSessionKey)) {
       return;
     }
-    if (!res) {
+    if (!normalized) {
       return;
     }
-    const normalized = normalizeAssistantIdentity(res);
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
     state.assistantAvatarSource = normalized.avatarSource ?? null;
     state.assistantAvatarStatus = normalized.avatarStatus ?? null;
     state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
-    const localAvatar = loadLocalAssistantIdentity({
-      agentId: state.assistantAgentId,
-    }).avatar;
-    if (localAvatar) {
-      state.assistantAvatar = localAvatar;
-      state.assistantAvatarSource = localAvatar;
-      state.assistantAvatarStatus = "data";
-      state.assistantAvatarReason = null;
-    }
   } catch {
     // Ignore errors; keep last known identity.
   }

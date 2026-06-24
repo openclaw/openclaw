@@ -5,7 +5,7 @@ import {
   promoteNativeTitleTooltip,
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
-} from "./dom-tooltips.ts";
+} from "../lib/dom-tooltips.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();

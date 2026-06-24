@@ -1,3 +1,5 @@
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { normalizeAssistantIdentity, type AssistantIdentity } from "../lib/assistant-identity.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -89,4 +91,28 @@ export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
   }
+}
+
+export async function fetchAssistantIdentity(
+  client: GatewayBrowserClient,
+  sessionKey?: string,
+): Promise<AssistantIdentity | null> {
+  const result = await client.request<Partial<AssistantIdentity>>(
+    "agent.identity.get",
+    sessionKey?.trim() ? { sessionKey: sessionKey.trim() } : {},
+  );
+  if (!result) {
+    return null;
+  }
+  const identity = normalizeAssistantIdentity(result);
+  const localAvatar = loadLocalAssistantIdentity({ agentId: identity.agentId }).avatar;
+  return localAvatar
+    ? {
+        ...identity,
+        avatar: localAvatar,
+        avatarSource: localAvatar,
+        avatarStatus: "data",
+        avatarReason: null,
+      }
+    : identity;
 }

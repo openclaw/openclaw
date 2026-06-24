@@ -1,15 +1,8 @@
-import type {
-  ApplicationGateway,
-  ApplicationPageContext,
-  ApplicationTheme,
-  StableApplicationContext,
-} from "./app/context.ts";
-import { createRouterOutletSnapshot } from "./app/router-outlet.ts";
-// Keep these imports disabled until each page uses the final application context.
+import type { ApplicationContext } from "./app/context.ts";
+import { page as chatPage } from "./pages/chat/route.ts";
 // import { page as activityPage } from "./pages/activity/route.ts";
 // import { page as agentsPage } from "./pages/agents/route.ts";
 // import { page as channelsPage } from "./pages/channels/route.ts";
-// import { page as chatPage } from "./pages/chat/route.ts";
 // import { pages as configPages } from "./pages/config/route.ts";
 // import { page as cronPage } from "./pages/cron/route.ts";
 // import { page as debugPage } from "./pages/debug/route.ts";
@@ -19,100 +12,38 @@ import { createRouterOutletSnapshot } from "./app/router-outlet.ts";
 // import { page as nodesPage } from "./pages/nodes/route.ts";
 // import { page as overviewPage } from "./pages/overview/route.ts";
 // import { page as sessionsPage } from "./pages/sessions/route.ts";
-import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 // import { page as skillsPage } from "./pages/skills/route.ts";
 // import { page as usagePage } from "./pages/usage/route.ts";
 // import { page as workboardPage } from "./pages/workboard/route.ts";
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/index.ts";
-import type { PageDefinition, RouteLocation, RouterHistory } from "./router/index.ts";
+import type { PageDefinition, RouteLocation, Router, RouterHistory } from "./router/index.ts";
 
 export type AppRouteModule = {
-  render: (context: ApplicationPageContext<RouteId>, data: unknown) => unknown;
+  render: (data: unknown) => unknown;
 };
 
-export type ApplicationContext = StableApplicationContext<RouteId, AppRouteModule, unknown>;
-export type AppRoute = PageDefinition<
+export type ApplicationRouter = Router<
   RouteId,
-  ApplicationPageContext<RouteId>,
+  ApplicationContext<RouteId>,
   AppRouteModule,
   unknown
 >;
-export type ApplicationRouter = ApplicationContext["router"];
+export type AppRoute = PageDefinition<
+  RouteId,
+  ApplicationContext<RouteId>,
+  AppRouteModule,
+  unknown
+>;
 
-// Only the migrated page is active. The old catalog and its paths remain available
-// for mount-path inference and can be re-enabled one page at a time.
-export const APP_ROUTE_TREE = [skillWorkshopPage] as const;
+export const APP_ROUTE_TREE = [chatPage] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
-
-const APP_ROUTE_PATHS = [
-  "/chat",
-  "/overview",
-  "/activity",
-  "/workboard",
-  "/instances",
-  "/sessions",
-  "/usage",
-  "/cron",
-  "/agents",
-  "/skills",
-  "/skills/workshop",
-  "/nodes",
-  "/dreaming",
-  "/config",
-  "/communications",
-  "/appearance",
-  "/automation",
-  "/mcp",
-  "/infrastructure",
-  "/ai-agents",
-  "/channels",
-  "/debug",
-  "/logs",
-] as const;
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
 
 export function createApplicationRouter(): ApplicationRouter {
-  return createRouter<RouteId, ApplicationPageContext<RouteId>, AppRouteModule, unknown>({
+  return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule, unknown>({
     routes: appRoutes,
   });
-}
-
-export function createApplicationContext(
-  router: ApplicationRouter,
-  gateway: ApplicationGateway,
-  theme: ApplicationTheme,
-  basePath: string,
-  assistantName = "OpenClaw",
-): ApplicationContext {
-  const routeSnapshot = createRouterOutletSnapshot(router);
-  let context!: ApplicationContext;
-  const navigate = (routeId: RouteId) => {
-    const location = {
-      pathname: router.pathForRoute(routeId, basePath),
-      search: "",
-      hash: "",
-    };
-    void router.navigate(routeId, context, { history: "push" }, location).catch((error) => {
-      console.error("[openclaw] route navigation failed", error);
-    });
-  };
-  context = {
-    basePath,
-    assistantName,
-    gateway,
-    theme,
-    router,
-    routeSnapshot,
-    navigate,
-    preload: (routeId) => router.preloadRoute(routeId, context),
-    dispose: () => {
-      routeSnapshot.dispose();
-      router.stop();
-      gateway.stop();
-    },
-  };
-  return context;
 }
 
 export function normalizeBasePath(basePath: string): string {
@@ -145,13 +76,13 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext,
+  context: ApplicationContext<RouteId>,
 ): Promise<void> {
   const location = history.location();
   if (routeIdFromPath(location.pathname, basePath) === null) {
     history.replace({
       ...location,
-      pathname: router.pathForRoute("skill-workshop", basePath),
+      pathname: router.pathForRoute("chat", basePath),
     });
   }
   await router.start(history, basePath, context);
@@ -161,7 +92,7 @@ export function startAppRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext,
+  context: ApplicationContext<RouteId>,
 ): Promise<void> {
   return startApplicationRouter(router, history, basePath, context);
 }
@@ -175,9 +106,10 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   const segments = normalized.split("/").filter(Boolean);
+  const routePaths = appRoutes.map((route) => route.path);
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
-    const routePath = APP_ROUTE_PATHS.find((path) => normalizePath(path) === candidate);
+    const routePath = routePaths.find((path) => normalizePath(path) === candidate);
     if (!routePath) {
       continue;
     }

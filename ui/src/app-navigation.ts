@@ -1,15 +1,39 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
-import type { RouteId } from "./app-routes.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
 
+export type NavigationRouteId =
+  | "chat"
+  | "overview"
+  | "activity"
+  | "workboard"
+  | "instances"
+  | "sessions"
+  | "usage"
+  | "cron"
+  | "agents"
+  | "skills"
+  | "skill-workshop"
+  | "nodes"
+  | "dreams"
+  | "config"
+  | "communications"
+  | "appearance"
+  | "automation"
+  | "mcp"
+  | "infrastructure"
+  | "ai-agents"
+  | "channels"
+  | "debug"
+  | "logs";
+
 type SidebarSection = {
   label: string;
-  routes: readonly RouteId[];
+  routes: readonly NavigationRouteId[];
 };
 
 type NavigationItem = {
-  [TRouteId in RouteId]: IconName;
+  [TRouteId in NavigationRouteId]: IconName;
 };
 
 export const SIDEBAR_SECTIONS = [
@@ -33,7 +57,7 @@ export const SETTINGS_NAVIGATION_ROUTES = [
   "ai-agents",
   "debug",
   "logs",
-] as const satisfies readonly RouteId[];
+] as const satisfies readonly NavigationRouteId[];
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "folder",
@@ -61,22 +85,25 @@ const NAVIGATION_ICONS: NavigationItem = {
   dreams: "moon",
 };
 
-export function isSettingsNavigationRoute(routeId: RouteId): boolean {
-  return (SETTINGS_NAVIGATION_ROUTES as readonly RouteId[]).includes(routeId);
+export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
+  return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
 }
 
-export function isRouteInSidebarSection(section: SidebarSection, routeId: RouteId): boolean {
+export function isRouteInSidebarSection(
+  section: SidebarSection,
+  routeId: NavigationRouteId,
+): boolean {
   if (section.label === "settings") {
     return isSettingsNavigationRoute(routeId);
   }
   return section.routes.includes(routeId);
 }
 
-export function navigationIconForRoute(routeId: RouteId): IconName {
+export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_ICONS[routeId] ?? "folder";
 }
 
-const NAVIGATION_COPY: Record<RouteId, { titleKey: string; subtitleKey: string }> = {
+const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
@@ -108,10 +135,10 @@ const NAVIGATION_COPY: Record<RouteId, { titleKey: string; subtitleKey: string }
   dreams: { titleKey: "tabs.dreams", subtitleKey: "subtitles.dreams" },
 };
 
-export function titleForRoute(routeId: RouteId): string {
+export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
 }
 
-export function subtitleForRoute(routeId: RouteId): string {
+export function subtitleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].subtitleKey);
 }
