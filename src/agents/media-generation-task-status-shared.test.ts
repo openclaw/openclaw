@@ -3,6 +3,7 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildActiveMediaGenerationTaskPromptContextForSession,
   findActiveMediaGenerationTaskForSession,
+  findDuplicateGuardMediaGenerationTaskForSession,
   listActiveMediaGenerationTasksForSession,
   MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
   resetRecentMediaGenerationDuplicateGuardsForTests,
@@ -94,5 +95,32 @@ describe("media generation delivery-phase prompt guard", () => {
         sourcePrefix: "video-generate",
       }),
     ).toEqual(task);
+  });
+
+  it("blocks the same prompt while allowing a distinct prompt", () => {
+    const task = makeTask({
+      task: "generate clip 01",
+      progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+    });
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+
+    expect(
+      findDuplicateGuardMediaGenerationTaskForSession({
+        sessionKey: "session/A",
+        taskKind: "video-generate",
+        sourcePrefix: "video-generate",
+        taskLabel: "generate clip 01",
+        maxAgeMs: 120_000,
+      }),
+    ).toEqual(task);
+    expect(
+      findDuplicateGuardMediaGenerationTaskForSession({
+        sessionKey: "session/A",
+        taskKind: "video-generate",
+        sourcePrefix: "video-generate",
+        taskLabel: "generate clip 02",
+        maxAgeMs: 120_000,
+      }),
+    ).toBeUndefined();
   });
 });
