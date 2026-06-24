@@ -60,6 +60,13 @@ function writeQaEvidence(params: {
           features: {
             total: 0,
             fulfilled: 0,
+            partial: 0,
+            missing: 0,
+            fulfillmentPercent: 0,
+          },
+          coverageIds: {
+            total: 0,
+            fulfilled: 0,
             missing: 0,
             fulfillmentPercent: 0,
           },
@@ -106,7 +113,13 @@ describe("maturity docs renderer CLI", () => {
       ],
     });
 
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--strict-inputs",
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
