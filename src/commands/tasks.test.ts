@@ -370,7 +370,7 @@ describe("tasks commands", () => {
     });
   });
 
-  it("preserves both slug and raw cron-run session keys for a running non-slug job id", async () => {
+  it("preserves the producer-specific cron-run session key for a running non-slug job id", async () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
       const old = now - 8 * 24 * 60 * 60_000;
@@ -382,7 +382,7 @@ describe("tasks commands", () => {
             name: "Daily Report",
             enabled: true,
             schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
+            sessionTarget: "main",
             sessionKey: "cron:daily-report",
             wakeMode: "now",
             payload: { kind: "agentTurn", message: "ping" },
@@ -397,9 +397,7 @@ describe("tasks commands", () => {
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
       await fs.mkdir(sessionsDir, { recursive: true });
-      // Main-session cron runs key the job segment slugified ("daily-report"); default-isolated runs
-      // key it raw-lowercased ("daily report"). Both belong to the running job and must survive the
-      // stale sweep; a stale run for a non-running job ("retired-job") must still be pruned.
+      // Main-session cron runs key the job segment slugified ("daily-report").
       const slugKey = "agent:main:cron:daily-report:run:old-run";
       const rawKey = "agent:main:cron:daily report:run:old-run";
       const retiredKey = "agent:main:cron:retired-job:run:old-run";
@@ -422,7 +420,7 @@ describe("tasks commands", () => {
 
       const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
       expect(updated[slugKey]).toBeDefined();
-      expect(updated[rawKey]).toBeDefined();
+      expect(updated[rawKey]).toBeUndefined();
       expect(updated[retiredKey]).toBeUndefined();
     });
   });

@@ -135,10 +135,11 @@ function readRunningCronJobIds(): Set<string> {
     return new Set(
       loadCronJobsStoreSync(cronStorePath)
         .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
-        // Cron-run session keys carry two job-segment shapes: main-session runs use the slugified
-        // segment (normalizeCronLaneSegment) while default-isolated runs use the raw lowercased id.
-        // Preserve both so neither live running session is pruned as stale.
-        .flatMap((job) => [job.id.toLowerCase(), normalizeCronLaneSegment(job.id, "job")]),
+        .map((job) =>
+          job.sessionTarget === "main"
+            ? normalizeCronLaneSegment(job.id, "job")
+            : job.id.toLowerCase(),
+        ),
     );
   } catch {
     return new Set();
