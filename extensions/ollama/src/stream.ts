@@ -247,7 +247,11 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-      normalizeOllamaCompatMessageToolArgs(payloadRecord);
+      // FIX #96441: Do not normalize tool call arguments here — the upstream
+      // OpenAI-compatible converter (openai-completions.ts) already serializes
+      // arguments as JSON strings per the OpenAI API spec. Re-normalizing them
+      // back to objects breaks Ollama Cloud's Go server which enforces the spec
+      // strictly. The native Ollama path has its own normalization elsewhere.
     });
 }
 
