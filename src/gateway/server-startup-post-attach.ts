@@ -1176,6 +1176,7 @@ export async function startGatewayPostAttachRuntime(
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
+      activationSourceConfig: params.gatewayPluginConfigAtStart,
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,
