@@ -212,7 +212,7 @@ plugins.
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines; normal verbose chatter stays off.
         - `/fast auto|on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
-        - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
+        - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`; MiniMax rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed` and opts `MiniMax-M3` into `service_tier=priority` (billed at 1.5x standard).
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
       </Accordion>

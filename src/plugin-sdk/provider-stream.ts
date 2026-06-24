@@ -72,7 +72,8 @@ function hasFastModeParam(extraParams: Record<string, unknown> | undefined): boo
   );
 }
 
-function resolveBooleanFastMode(
+/** Resolves a provider-agnostic `fastMode`/`fast_mode` extra-param (incl. the `/fast auto` function form) to a boolean. */
+export function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
@@ -216,7 +217,10 @@ export {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
-export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
+export {
+  createMinimaxFastModeWrapper,
+  type ResolveMinimaxFastLaneCost,
+} from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
