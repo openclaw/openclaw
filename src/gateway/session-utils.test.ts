@@ -300,6 +300,33 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Quote Assistant");
   });
 
+  test("direct channel session rows inherit channel-level account names", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          name: "Personal Phone",
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:default:whatsapp:direct:15551230000",
+      entry: {
+        sessionId: "whatsapp-direct-session",
+        updatedAt: 1,
+        origin: {
+          provider: "whatsapp",
+          label: "15551230000",
+        },
+      },
+    });
+
+    expect(row.displayName).toBe("Personal Phone");
+  });
+
   test("direct channel account names preserve labels and meaningful origin labels", () => {
     const cfg = {
       channels: {

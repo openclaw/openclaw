@@ -1249,9 +1249,12 @@ function readConfiguredChannelAccountName(params: {
   if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
     return undefined;
   }
+  const channelAccountName = normalizeOptionalString(
+    (channelConfig as { name?: unknown }).name,
+  );
   const accounts = (channelConfig as { accounts?: unknown }).accounts;
   if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-    return undefined;
+    return channelAccountName;
   }
   const accountConfig = resolveNormalizedAccountEntry(
     accounts as Record<string, unknown>,
@@ -1259,9 +1262,9 @@ function readConfiguredChannelAccountName(params: {
     normalizeAccountId,
   );
   if (!accountConfig || typeof accountConfig !== "object" || Array.isArray(accountConfig)) {
-    return undefined;
+    return channelAccountName;
   }
-  return normalizeOptionalString((accountConfig as { name?: unknown }).name);
+  return normalizeOptionalString((accountConfig as { name?: unknown }).name) ?? channelAccountName;
 }
 
 function readConfiguredChannelDefaultAccountId(params: {
