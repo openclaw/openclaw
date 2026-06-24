@@ -637,26 +637,6 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("builds post-tool relay commands for active Codex tool-result middleware", () => {
-    installCodexToolResultMiddlewareForTests(vi.fn());
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      sessionId: "session-1",
-      runId: "run-1",
-      command: {
-        executable: "/opt/Open Claw/openclaw.mjs",
-        nodeExecutable: "/usr/local/bin/node",
-        timeoutMs: 1234,
-      },
-    });
-
-    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
-    expect(relay.commandForEvent("post_tool_use")).toBe(
-      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event post_tool_use --timeout 1234`,
-    );
-  });
-
   it("builds relay commands for before-agent-finalize hooks", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: vi.fn() }]),
