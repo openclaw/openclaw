@@ -47,6 +47,12 @@ export type ResolvedSessionMaintenanceConfig = {
   highWaterBytes: number | null;
 };
 
+export type ResolvedSessionMaintenanceConfigInput = Omit<
+  ResolvedSessionMaintenanceConfig,
+  "modelRunPruneAfterMs"
+> &
+  Partial<Pick<ResolvedSessionMaintenanceConfig, "modelRunPruneAfterMs">>;
+
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
   const normalized = normalizeStringifiedOptionalString(raw);
@@ -144,6 +150,15 @@ export function resolveMaintenanceConfigFromInput(
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
+  };
+}
+
+export function normalizeResolvedMaintenanceConfigInput(
+  maintenance: ResolvedSessionMaintenanceConfigInput,
+): ResolvedSessionMaintenanceConfig {
+  return {
+    ...maintenance,
+    modelRunPruneAfterMs: maintenance.modelRunPruneAfterMs ?? DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
   };
 }
 

@@ -12,7 +12,8 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
-import type { ResolvedSessionMaintenanceConfig } from "../config/sessions/store.js";
+import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 type SessionStoreReadParams = {
@@ -42,7 +43,7 @@ type SessionStoreEntryPatch = (
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: SessionStoreEntryPatch;
@@ -128,7 +129,10 @@ export async function patchSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     fallbackEntry: params.fallbackEntry,
-    maintenanceConfig: params.maintenanceConfig,
+    maintenanceConfig:
+      params.maintenanceConfig !== undefined
+        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+        : undefined,
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
