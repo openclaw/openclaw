@@ -979,6 +979,7 @@ describe("plugins cli update", () => {
     expect(updateParams.pluginIds).toEqual(["codex"]);
     expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
     expect(updateParams.updateChannel).toBeUndefined();
+    expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
   });
 
   it("syncs official catalog specs with beta channel context for update --all", async () => {
@@ -1001,7 +1002,8 @@ describe("plugins cli update", () => {
     const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
     expect(updateParams.pluginIds).toEqual(["codex"]);
     expect(updateParams.syncOfficialPluginInstalls).toBe(true);
-    expect(updateParams.updateChannel).toBe("beta");
+    expect(updateParams.officialPluginUpdateChannel).toBe("beta");
+    expect(updateParams.updateChannel).toBeUndefined();
   });
 
   it("writes updated config when updater reports changes", async () => {

@@ -261,7 +261,7 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
-          updateChannel: params.opts.all
+          officialPluginUpdateChannel: params.opts.all
             ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
