@@ -33,6 +33,7 @@ import {
 import {
   listPluginDoctorStateMigrationEntries,
   type PluginDoctorStateMigrationContext,
+  type PluginDoctorStateMigrationDetection,
   type PluginDoctorStateMigration,
 } from "../plugins/doctor-contract-registry.js";
 import {
@@ -169,6 +170,7 @@ export type LegacyStateDetection = {
     targetPath: string;
     hasLegacy: boolean;
   };
+  warnings: string[];
   preview: string[];
 };
 
@@ -3890,6 +3892,7 @@ async function collectPluginDoctorStateMigrationPlans(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
+  warnings?: string[];
 }): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
   const config = params.pluginDoctorConfig ?? params.cfg;
@@ -3897,13 +3900,19 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     config,
     env: params.env,
   })) {
-    const detected = await entry.migration.detectLegacyState({
-      config,
-      env: params.env,
-      stateDir: params.stateDir,
-      oauthDir: params.oauthDir,
-      context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
-    });
+    let detected: PluginDoctorStateMigrationDetection | null;
+    try {
+      detected = await entry.migration.detectLegacyState({
+        config,
+        env: params.env,
+        stateDir: params.stateDir,
+        oauthDir: params.oauthDir,
+        context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
+      });
+    } catch (err) {
+      params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
+      continue;
+    }
     if (detected?.preview.length) {
       plans.push({
         pluginId: entry.pluginId,
@@ -4047,6 +4056,7 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     oauthDir,
   });
+  const pluginPlanWarnings: string[] = [];
   const pluginPlans =
     stateSchemaMigrations.length > 0
       ? []
@@ -4056,6 +4066,7 @@ export async function detectLegacyStateMigrations(params: {
           env,
           stateDir,
           oauthDir,
+          warnings: pluginPlanWarnings,
         });
 
   const preview: string[] = [];
@@ -4198,6 +4209,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasCurrentConversationBindings,
     },
     execApprovals,
+    warnings: pluginPlanWarnings,
     preview,
   };
 }
@@ -4471,9 +4483,15 @@ async function runPluginDoctorStateMigrationPlans(params: {
     env: process.env,
     stateDir: params.detected.stateDir,
     oauthDir: params.detected.oauthDir,
+    warnings,
   });
+  const hasDetectorFailure = warnings.length > 0;
+  // Previously detected plans are only safe when refresh found no current work.
+  // If any detector failed, skip stale plans instead of migrating on old assumptions.
   const plans =
-    refreshedPlans.length > 0 ? refreshedPlans : (params.detected.pluginPlans?.plans ?? []);
+    refreshedPlans.length > 0 || hasDetectorFailure
+      ? refreshedPlans
+      : (params.detected.pluginPlans?.plans ?? []);
   for (const plan of plans) {
     try {
       const result = await plan.migration.migrateLegacyState({
@@ -4514,14 +4532,23 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
+  const changes = [...stateDirResult.changes, ...stateSchema.changes];
+  const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
+  if (stateSchema.warnings.length > 0) {
+    return {
+      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
+      skipped: false,
+      changes,
+      warnings,
+    };
+  }
   const plans = await collectPluginDoctorStateMigrationPlans({
     cfg: params.config,
     env,
     stateDir,
     oauthDir,
+    warnings,
   });
-  const changes = [...stateDirResult.changes, ...stateSchema.changes];
-  const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   for (const plan of plans) {
     try {
       const result = await plan.migration.migrateLegacyState({
@@ -4833,6 +4860,7 @@ export async function runLegacyStateMigrations(params: {
     ],
     warnings: [
       ...stateSchema.warnings,
+      ...detected.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
       ...debugProxyCaptureSidecar.warnings,
@@ -5216,6 +5244,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...detected.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
@@ -5284,6 +5313,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...detected.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
     ];
@@ -5383,6 +5413,7 @@ export async function autoMigrateLegacyState(params: {
   const warnings = [
     ...stateDirResult.warnings,
     ...stateSchema.warnings,
+    ...detected.warnings,
     ...orphanKeys.warnings,
     ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,

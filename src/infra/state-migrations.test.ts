@@ -794,6 +794,167 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec("PRAGMA user_version = 2;");
+    } finally {
+      db.close();
+    }
+    const detectLegacyState = vi.fn(() => ({ preview: ["plugin state"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-schema-failure-test",
+          label: "Memory Core schema failure test migration",
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
+  it("reports plugin detector failures in read-only legacy state detection", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "msteams",
+        migration: {
+          id: "msteams-readonly-malformed-config-test",
+          label: "Microsoft Teams readonly malformed config test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+
+    expect(detected.pluginPlans?.hasLegacy).toBe(false);
+    expect(detected.warnings).toStrictEqual([
+      "Failed detecting Microsoft Teams readonly malformed config test migration: TypeError: config.agents.list is not iterable",
+    ]);
+  });
+
+  it("continues plugin doctor migrations when one detector rejects malformed config", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["healthy plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "msteams",
+        migration: {
+          id: "msteams-malformed-config-test",
+          label: "Microsoft Teams malformed config test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-healthy-config-test",
+          label: "Memory Core healthy config test migration",
+          detectLegacyState: () => ({ preview: ["healthy plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([
+      "Failed detecting Microsoft Teams malformed config test migration: TypeError: config.agents.list is not iterable",
+    ]);
+    expect(result.changes).toContain("healthy plugin state migrated");
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("skips stale plugin doctor plans when refresh detection fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["stale plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-stale-plan-test",
+          label: "Memory Core stale plan test migration",
+          detectLegacyState: () => ({ preview: ["stale plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.pluginPlans?.hasLegacy).toBe(true);
+
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-stale-plan-test",
+          label: "Memory Core stale plan test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toContain(
+      "Failed detecting Memory Core stale plan test migration: TypeError: config.agents.list is not iterable",
+    );
+    expect(result.changes).not.toContain("stale plugin state migrated");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
   it("runs plugin doctor migrations against the canonical state dir after state-dir repair", async () => {
     const root = await createTempDir();
     const legacyStateDir = path.join(root, ".clawdbot");
