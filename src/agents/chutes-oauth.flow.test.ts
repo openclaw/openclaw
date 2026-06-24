@@ -233,3 +233,114 @@ describe("chutes-oauth", () => {
     ).rejects.toThrow("Chutes token refresh returned invalid expires_in");
   });
 });
+
+/**
+ * Bounded-reader regression tests for `chutes-oauth` response.json() sites.
+ *
+ * Mirrors the bounded-read pattern merged for #95926 / #96036 / #96136 / #96144:
+ *   - 3 production sites (fetchChutesUserInfo:118, exchangeChutesCodeForTokens:158,
+ *     refreshChutesTokens:229) now route through `readProviderJsonResponse` from
+ *     `./provider-http-errors.js`, which caps reads at 16 MiB via
+ *     `PROVIDER_JSON_RESPONSE_MAX_BYTES` (provider-http-errors.ts:16).
+ *   - A misbehaving Chutes endpoint that streams an unbounded body must be
+ *     rejected with the canonical "JSON response exceeds 16777216 bytes" error
+ *     before the runtime buffers the full body.
+ *   - The token-refresh and userinfo responses must remain unchanged in shape
+ *     (the bounded reader preserves the same JSON.parse contract).
+ */
+describe("chutes-oauth bounded reader", () => {
+  function createStreamingJsonResponse({ totalBytes, chunkSize = 1024 * 1024 }) {
+    let written = 0;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (written >= totalBytes) {
+          controller.close();
+          return;
+        }
+        const remaining = totalBytes - written;
+        const slice = Math.min(chunkSize, remaining);
+        controller.enqueue(encoder.encode("a".repeat(slice)));
+        written += slice;
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("rejects hostile 64 MiB token exchange response with canonical overflow error", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      if (urlToString(input) === CHUTES_TOKEN_ENDPOINT) {
+        return createStreamingJsonResponse({ totalBytes: 64 * 1024 * 1024 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      exchangeChutesCodeForTokens({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://127.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        code: "code_oversize",
+        codeVerifier: "verifier_oversize",
+        fetchFn,
+        now: 1_000_000,
+      }),
+    ).rejects.toThrow("Chutes token exchange: JSON response exceeds 16777216 bytes");
+  });
+
+  it("rejects hostile 64 MiB token refresh response with canonical overflow error", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      if (urlToString(input) === CHUTES_TOKEN_ENDPOINT) {
+        return createStreamingJsonResponse({ totalBytes: 64 * 1024 * 1024 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      refreshChutesTokens({
+        credential: createStoredCredential(5_000_000),
+        fetchFn,
+        now: 5_000_000,
+      }),
+    ).rejects.toThrow("Chutes token refresh: JSON response exceeds 16777216 bytes");
+  });
+
+  it("rejects hostile 64 MiB userinfo response with canonical overflow error", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          JSON.stringify({
+            access_token: "at_oversize",
+            refresh_token: "rt_oversize",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return createStreamingJsonResponse({ totalBytes: 64 * 1024 * 1024 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      exchangeChutesCodeForTokens({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://127.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        code: "code_userinfo_oversize",
+        codeVerifier: "verifier_userinfo_oversize",
+        fetchFn,
+        now: 1_000_000,
+      }),
+    ).rejects.toThrow("Chutes userinfo: JSON response exceeds 16777216 bytes");
+  });
+});
