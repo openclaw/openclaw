@@ -88,7 +88,7 @@ describe("gateway.restart.request handler", () => {
 
     await invokeRestartRequest({ reason: "operator", skipDeferral: true });
 
-    expectRestartRequest({ skipDeferral: true });
+    expectRestartRequest({ skipDeferral: true, activeWorkInterruptApproved: true });
   });
 
   it("forwards active-work interruption approval only when explicitly true", async () => {

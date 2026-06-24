@@ -342,6 +342,7 @@ function canAttachToExistingAcpSpawnIntent(params: SpawnAcpParams & { threadRequ
     !normalizeOptionalString(params.cwd) &&
     !normalizeOptionalString(params.model) &&
     !normalizeOptionalString(params.thinking) &&
+    params.runTimeoutSeconds === undefined &&
     (!params.attachments || params.attachments.length === 0)
   );
 }

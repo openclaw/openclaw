@@ -35,11 +35,12 @@ export const restartHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
+    const skipDeferral = normalizeSkipDeferral(params.skipDeferral);
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,
-      skipDeferral: normalizeSkipDeferral(params.skipDeferral),
-      activeWorkInterruptApproved: params.interruptActiveWork === true,
+      skipDeferral,
+      activeWorkInterruptApproved: skipDeferral || params.interruptActiveWork === true,
       requester: formatControlPlaneActor(actor),
       audit: {
         actor: actor.actor,
