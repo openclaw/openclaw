@@ -6,6 +6,22 @@ import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream
 
 type CacheRetention = "none" | "short" | "long";
 
+const BEDROCK_NOVA_PROMPT_CACHE_MODEL_RE =
+  /(?:^|-)amazon-nova-(?:micro|lite|pro|premier|2-lite)(?:-|$)|^nova-(?:micro|lite|pro|premier|2-lite)(?:-|$)/;
+
+function isBedrockNovaPromptCacheEligible(params: { provider: string; modelId?: string }): boolean {
+  if (
+    normalizeLowercaseStringOrEmpty(params.provider) !== "amazon-bedrock" ||
+    typeof params.modelId !== "string" ||
+    params.modelId.length === 0
+  ) {
+    return false;
+  }
+  return BEDROCK_NOVA_PROMPT_CACHE_MODEL_RE.test(
+    normalizeLowercaseStringOrEmpty(params.modelId).replace(/[\s_.:]+/g, "-"),
+  );
+}
+
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
@@ -37,12 +53,14 @@ export function resolveCacheRetention(
   // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
   // flag they sit outside the anthropic/google family gates, so issue #81281
   // dropped the user's explicit `cacheRetention` before the transport layer
-  // could emit it. Proxies that route non-cacheable models via the same
-  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
-  // the flag unset, so the existing family gate still applies to them.
+  // could emit it. Bedrock Nova models use the same OpenAI-compatible wire but
+  // have provider-native cache points, so explicit user retention also needs
+  // to survive this shared resolver.
   const cacheKeyEligible = supportsPromptCacheKey === true;
+  const bedrockNovaEligible =
+    hasExplicitCacheConfig && isBedrockNovaPromptCacheEligible({ provider, modelId });
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  if (!family && !googleEligible && !cacheKeyEligible && !bedrockNovaEligible) {
     return undefined;
   }
 
