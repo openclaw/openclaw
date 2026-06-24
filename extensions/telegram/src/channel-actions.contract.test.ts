@@ -43,6 +43,21 @@ describe("telegram actions contract", () => {
     expect(capabilities?.includes("richText")).toBe(expected);
   });
 
+  it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            capabilities: [],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).toContain("inlineButtons");
+  });
+
   it("uses the selected Telegram account's rich text setting", () => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {
