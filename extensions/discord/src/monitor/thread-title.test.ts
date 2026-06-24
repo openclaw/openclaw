@@ -29,4 +29,11 @@ describe("normalizeGeneratedThreadTitle", () => {
       "Weekly Release Summary",
     );
   });
+
+  it("leaves a title with two separate emphasis spans intact", () => {
+    // Not a single wrapped span, so the outer markers must not be stripped.
+    expect(normalizeGeneratedThreadTitle("*Plan* for *project*")).toBe("*Plan* for *project*");
+    expect(normalizeGeneratedThreadTitle("**Bold** vs **Strong**")).toBe("**Bold** vs **Strong**");
+    expect(normalizeGeneratedThreadTitle("_intro_ and _outro_")).toBe("_intro_ and _outro_");
+  });
 });

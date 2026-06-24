@@ -161,11 +161,15 @@ function stripThreadTitleWrappers(raw: string): string {
   while (current && current !== previous) {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
-    current = current.replace(/^\*\*(.+)\*\*$/u, "$1").trim();
-    current = current.replace(/^__(.+)__$/u, "$1").trim();
-    current = current.replace(/^\*(.+)\*$/u, "$1").trim();
-    current = current.replace(/^_(.+)_$/u, "$1").trim();
-    current = current.replace(/^~~(.+)~~$/u, "$1").trim();
+    // Unwrap only a title that is a SINGLE wrapped span. The inner classes
+    // exclude the marker char so a title with two separate spans (e.g.
+    // "*Plan* for *project*") is left intact instead of having its outer
+    // markers stripped and stray ones left mid-string.
+    current = current.replace(/^\*\*([^*]+)\*\*$/u, "$1").trim();
+    current = current.replace(/^__([^_]+)__$/u, "$1").trim();
+    current = current.replace(/^\*([^*]+)\*$/u, "$1").trim();
+    current = current.replace(/^_([^_]+)_$/u, "$1").trim();
+    current = current.replace(/^~~([^~]+)~~$/u, "$1").trim();
   }
   return current;
 }
