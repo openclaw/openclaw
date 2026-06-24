@@ -918,37 +918,8 @@ function classifyFailoverReasonFromCode(params: {
     case "OVERLOADED_ERROR":
       return "overloaded";
   }
-  if (providerId === "openai") {
-    if (normalized === "SERVER_ERROR") {
-      return "server_error";
-    }
-    if (normalized === "INSUFFICIENT_QUOTA") {
-      return "billing";
-    }
-  }
-  if (
-    providerId === "google" ||
-    providerId === "google-antigravity" ||
-    providerId === "google-vertex"
-  ) {
-    if (normalized === "UNAVAILABLE") {
-      return "overloaded";
-    }
-    if (normalized === "DEADLINE_EXCEEDED") {
-      return "timeout";
-    }
-    if (normalized === "INTERNAL") {
-      return "server_error";
-    }
-  }
-  if (providerId === "anthropic") {
-    if (normalized === "RATE_LIMIT_ERROR") {
-      return "rate_limit";
-    }
-    if (normalized === "API_ERROR") {
-      return "timeout";
-    }
-  }
+  // Provider-specific code classification now lives in each provider's
+  // classifyFailoverReason hook; the core classifier stays generic.
   return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
 }
 
