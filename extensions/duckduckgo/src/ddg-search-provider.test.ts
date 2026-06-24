@@ -194,6 +194,7 @@ describe("duckduckgo web search provider", () => {
       "How to escape &lt; in HTML",
     );
     expect(ddgClientTesting.decodeHtmlEntities("a&amp;#39;b")).toBe("a&#39;b");
+    expect(ddgClientTesting.decodeHtmlEntities("a&#x26;amp;b")).toBe("a&amp;b");
   });
 
   it("parses results when href appears before class", () => {
