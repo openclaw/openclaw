@@ -11,6 +11,7 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getHeader } from "./http-utils.js";
+import { resolveAttachGrant } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -113,14 +114,22 @@ function resolveMcpSender(params: {
   req: IncomingMessage;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | undefined {
+}): { senderIsOwner: boolean; boundSessionKey?: string } | undefined {
   const authHeader = getHeader(params.req, "authorization") ?? "";
   const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
   const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  if (!ownerTokenMatched && !nonOwnerTokenMatched) {
-    return undefined;
+  if (ownerTokenMatched || nonOwnerTokenMatched) {
+    return { senderIsOwner: ownerTokenMatched };
   }
-  return { senderIsOwner: ownerTokenMatched };
+  // Attach grant: an external/interactive harness presents a per-session grant token (mcp-grant-store).
+  // Always non-owner, and its scope is bound to the grant's sessionKey so a grant holder cannot widen
+  // scope via the x-session-key header — resolveMcpRequestContext honors boundSessionKey instead.
+  const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
+  if (grant) {
+    return { senderIsOwner: false, boundSessionKey: grant.sessionKey };
+  }
+  return undefined;
 }
 
 export function validateMcpLoopbackRequest(params: {
@@ -129,7 +138,7 @@ export function validateMcpLoopbackRequest(params: {
   ownerToken: string;
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
-}): { senderIsOwner: boolean } | null {
+}): { senderIsOwner: boolean; boundSessionKey?: string } | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -245,7 +254,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner: sender.senderIsOwner };
+  return { senderIsOwner: sender.senderIsOwner, boundSessionKey: sender.boundSessionKey };
 }
 
 export async function readMcpHttpBody(
@@ -358,8 +367,30 @@ export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefine
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
+  auth: { senderIsOwner: boolean; boundSessionKey?: string },
 ): McpRequestContext {
+  // An attach grant is a lower-trust boundary: bind the session server-side AND ignore every
+  // caller-supplied delivery/action context header (message channel, account, current channel/
+  // thread/message, inbound-audio, event-kind, source-reply mode, explicit-target). Those headers
+  // feed scoped tools and the message tool, so a grant holder must not be able to spoof them —
+  // only the grant's pinned sessionKey is trusted. Owner/non-owner (the cooperative, gateway-
+  // launched cli-backend) keep header-driven context.
+  if (auth.boundSessionKey) {
+    return {
+      sessionKey: auth.boundSessionKey,
+      sessionId: undefined,
+      messageProvider: undefined,
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      requireExplicitMessageTarget: undefined,
+      senderIsOwner: auth.senderIsOwner,
+    };
+  }
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
