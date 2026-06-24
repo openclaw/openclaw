@@ -28,10 +28,14 @@ function readDefaultPublicFunctionExportBudget() {
 
 describe("plugin SDK surface report", () => {
   it("rejects unknown CLI options before collecting SDK stats", () => {
-    const result = spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--chekc"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/plugin-sdk-surface-report.mjs", "--chekc"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -40,10 +44,14 @@ describe("plugin SDK surface report", () => {
   });
 
   it("prints help before collecting SDK stats", () => {
-    const result = spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/plugin-sdk-surface-report.mjs", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node scripts/plugin-sdk-surface-report.mjs");

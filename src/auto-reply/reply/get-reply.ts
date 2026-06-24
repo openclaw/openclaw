@@ -494,6 +494,7 @@ export async function getReplyFromConfig(
   const {
     sessionCtx,
     sessionEntry,
+    sessionEntryHandle,
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -534,6 +535,7 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
         sessionEntry.pendingFinalDeliveryLastError = undefined;
         sessionEntry.pendingFinalDeliveryContext = undefined;
+        sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
@@ -570,6 +572,7 @@ export async function getReplyFromConfig(
       sessionCtx,
       ctx: finalized,
       sessionEntry,
+      sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
@@ -741,6 +744,7 @@ export async function getReplyFromConfig(
         resetTriggered,
         systemSent,
         sessionEntry,
+        sessionEntryHandle,
         sessionStore,
         sessionKey,
         sessionId,

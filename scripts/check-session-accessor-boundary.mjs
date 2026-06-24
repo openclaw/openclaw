@@ -74,11 +74,18 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "src/acp/runtime/session-meta.ts",
+  "src/agents/acp-spawn.ts",
+  "src/agents/auth-profiles/session-override.ts",
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.ts",
   "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+  "src/agents/live-model-switch.ts",
+  "src/agents/subagent-control.ts",
+  "src/agents/subagent-registry-helpers.ts",
+  "src/auto-reply/reply/abort.ts",
   "src/auto-reply/reply/agent-runner-helpers.ts",
   "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/commands-subagents/action-info.ts",
@@ -97,6 +104,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/cron/service/timer.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-history-state.ts",
+  "src/gateway/sessions-history-http.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/managed-image-attachments.ts",
   "src/gateway/server-methods/artifacts.ts",
@@ -109,6 +117,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/infra/outbound/message-action-tts.ts",
   "src/agents/tools/embedded-gateway-stub.ts",
   "src/agents/tools/sessions-list-tool.ts",
+  "src/plugins/host-hook-state.ts",
   "src/status/status-message.ts",
   "src/tui/embedded-backend.ts",
 ]);
@@ -116,15 +125,22 @@ export const migratedSessionAccessorFiles = new Set([
 export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
+  "extensions/memory-core/src/dreaming-narrative.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
 ]);
 
 export const migratedSessionAccessorWriteFiles = new Set([
+  "src/acp/runtime/session-meta.ts",
+  "src/agents/auth-profiles/session-override.ts",
   "src/agents/command/attempt-execution.shared.ts",
   "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
+  "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
+  "src/auto-reply/reply/abort.ts",
+  "src/agents/subagent-control.ts",
+  "src/agents/subagent-registry-helpers.ts",
   "src/auto-reply/reply/abort-cutoff.runtime.ts",
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
@@ -134,6 +150,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/body.ts",
   "src/auto-reply/reply/commands-acp/lifecycle.ts",
   "src/auto-reply/reply/commands-reset.ts",
+  "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
   "src/auto-reply/reply/directive-handling.persist.ts",
   "src/auto-reply/reply/dispatch-from-config.runtime.ts",
@@ -146,7 +163,9 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
+  "src/gateway/server-node-events.ts",
   "src/plugins/host-hook-cleanup.ts",
+  "src/plugins/host-hook-state.ts",
   "src/tui/embedded-backend.ts",
 ]);
 
@@ -527,7 +546,9 @@ export async function main() {
   const readSourceRoots = resolveSourceRoots(repoRoot, [
     "packages/memory-host-sdk/src/host",
     "extensions/discord/src/monitor",
+    "extensions/memory-core/src",
     "extensions/telegram/src",
+    "src/acp",
     "src/agents",
     "src/auto-reply",
     "src/commands",
@@ -535,13 +556,16 @@ export async function main() {
     "src/cron",
     "src/gateway",
     "src/infra",
+    "src/plugins",
     "src/tui",
   ]);
   const writeSourceRoots = resolveSourceRoots(repoRoot, [
+    "src/acp",
     "src/agents",
     "src/auto-reply",
     "src/commands",
     "src/config/sessions",
+    "src/gateway",
     "src/plugins",
     "src/tui",
   ]);
