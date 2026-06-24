@@ -278,7 +278,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    attemptedDelivery = true;
     const send = await sendDurableMessageBatch({
       cfg,
       channel: channelId,
@@ -315,6 +314,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
+    attemptedDelivery = send.status !== "suppressed";
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
