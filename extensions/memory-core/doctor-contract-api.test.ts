@@ -653,6 +653,51 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("does not infer agent ownership from configured sidecar filenames", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "shared.sqlite");
+    const mainAgentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const sharedAgentPath = path.join(
+      stateDir,
+      "agents",
+      "shared",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    await writeLegacyMemorySidecar(legacyPath);
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: legacyPath,
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const migration = legacyMemoryIndexMigration();
+    const preview = await migration.detectLegacyState(migrationParams(config));
+    expect(preview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${legacyPath} -> ${mainAgentPath}`,
+    ]);
+
+    const result = await migration.migrateLegacyState(migrationParams(config));
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(mainAgentPath).chunks).toEqual([
+      { id: "chunk-1", text: "remember this" },
+    ]);
+    await expect(fs.access(sharedAgentPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
   it("ignores transient memory SQLite files when discovering default sidecars", async () => {
     const stateDir = path.join(rootDir, "state");
     const lockPath = path.join(stateDir, "memory", "main.sqlite.reindex-lock.sqlite");
@@ -730,6 +775,41 @@ describe("memory-core doctor dreaming migration", () => {
     );
     const rows = await searchMigratedVectorRows(agentPath);
     expect(rows.map((row) => row.id)).toEqual(["chunk-1"]);
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("archives empty legacy vector sidecars when sqlite-vec cannot load", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { vector: true });
+    const db = new DatabaseSync(legacyPath);
+    try {
+      db.exec("DELETE FROM chunks_vec");
+    } finally {
+      db.close();
+    }
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              vector: {
+                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
+              },
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 

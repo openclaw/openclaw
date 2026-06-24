@@ -165,9 +165,7 @@ function readLegacySidecarCounts(
     ? hasLegacyVectorTable(db, schema)
       ? tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
       : 0
-    : tableExists(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
-      ? undefined
-      : 0;
+    : readLegacyVectorEntriesWithoutCopy(db, schema);
   return {
     sources: tableRowCount(db, schema, "files"),
     chunks: tableRowCount(db, schema, "chunks"),
@@ -176,6 +174,20 @@ function readLegacySidecarCounts(
       : 0,
     vectorEntries,
   };
+}
+
+function readLegacyVectorEntriesWithoutCopy(db: DatabaseSync, schema: string): number | undefined {
+  if (!tableExists(db, schema, LEGACY_MEMORY_VECTOR_TABLE)) {
+    return 0;
+  }
+  try {
+    if (!hasLegacyVectorTable(db, schema)) {
+      return undefined;
+    }
+    return tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE);
+  } catch {
+    return undefined;
+  }
 }
 
 function formatLegacyVectorRows(count: number | undefined): string {
@@ -630,11 +642,8 @@ async function collectLegacyMemorySidecarSources(params: {
         const retryIndex = stem.indexOf(retryMarker);
         const rawAgentId = retryIndex === -1 ? stem : stem.slice(0, retryIndex);
         const agentId = normalizeAgentId(rawAgentId);
-        if (rawAgentId === agentId) {
-          agentIds.add(agentId);
-          if (retryIndex !== -1) {
-            retrySidecars.push({ agentId, legacyPath: path.join(legacyDir, entry.name) });
-          }
+        if (retryIndex !== -1 && rawAgentId === agentId && agentIds.has(agentId)) {
+          retrySidecars.push({ agentId, legacyPath: path.join(legacyDir, entry.name) });
         }
       }
     }
