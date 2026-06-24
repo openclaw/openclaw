@@ -1053,9 +1053,11 @@ describe("before_tool_call requireApproval handling", () => {
             ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
             approvalCapability: {
               native: {},
-              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
+              getActionAvailabilityState: () => ({ kind: "disabled" as const }),
               getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
               describeExecApprovalSetup: () =>
+                "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
+              describePluginApprovalSetup: () =>
                 "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
             },
           },
@@ -1077,6 +1079,33 @@ describe("before_tool_call requireApproval handling", () => {
               getActionAvailabilityState: () => ({ kind: "disabled" as const }),
               getExecInitiatingSurfaceState: () => ({ kind: "enabled" as const }),
               describeExecApprovalSetup: () => "Telegram exec approval setup text",
+            },
+          },
+        },
+      ]),
+    );
+  }
+
+  function registerSplitRouteApprovalCapabilityWithoutPluginSetup(): void {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: ({
+                approvalKind,
+              }: {
+                approvalKind?: "exec" | "plugin";
+              }) =>
+                approvalKind === "plugin"
+                  ? { kind: "disabled" as const }
+                  : { kind: "enabled" as const },
+              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
+              describeExecApprovalSetup: () => "iMessage exec approval setup text",
             },
           },
         },
@@ -1700,6 +1729,36 @@ describe("before_tool_call requireApproval handling", () => {
         sessionKey: "main",
         turnSourceChannel: "telegram",
         turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Plugin approval unavailable (no approval route)");
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+    ]);
+  });
+
+  it("does not reuse exec setup guidance for split-route plugin approval failures", async () => {
+    registerSplitRouteApprovalCapabilityWithoutPluginSetup();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route",
+        description: "Needs plugin approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-split-route", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "imessage",
+        turnSourceTo: "imessage:chat",
         turnSourceAccountId: "default",
       },
     });
