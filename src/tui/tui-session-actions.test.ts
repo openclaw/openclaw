@@ -597,6 +597,46 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("loadHistory reports whether an in-flight run was adopted", async () => {
+    // The post-connect startup path (client.onConnected in tui.ts) clears the
+    // "starting up" status to idle only when loadHistory returns false. When
+    // loadHistory adopts an in-flight run it sets "streaming" itself, so the
+    // return value must be true to stop the caller from clobbering it.
+    const withInFlight = vi.fn().mockResolvedValue({
+      sessionId: "session-bg",
+      messages: [],
+      inFlightRun: { runId: "run-bg", text: "still working in the background" },
+    });
+    const withoutInFlight = vi.fn().mockResolvedValue({ sessionId: "session-x", messages: [] });
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      updateAssistant: vi.fn(),
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+
+    const { loadHistory: loadHistoryAdopted } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory: withInFlight } as unknown as TuiBackend,
+      chatLog,
+      state: createBaseState({ currentSessionKey: "agent:main:main" }),
+      setActivityStatus: vi.fn(),
+    });
+    await expect(loadHistoryAdopted()).resolves.toBe(true);
+
+    const { loadHistory: loadHistoryIdle } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory: withoutInFlight } as unknown as TuiBackend,
+      chatLog,
+      state: createBaseState({ currentSessionKey: "agent:main:main" }),
+      setActivityStatus: vi.fn(),
+    });
+    await expect(loadHistoryIdle()).resolves.toBe(false);
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

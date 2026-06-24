@@ -1557,8 +1557,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       updateAutocompleteProvider();
-      await loadHistory();
-      setActivityStatus("idle");
+      const adoptedInFlightRun = await loadHistory();
+      // Only drop the startup "starting up" status to idle when loadHistory did
+      // not adopt an in-flight run. When it did, loadHistory already set the
+      // status to "streaming" for the resumed run; clearing to idle here would
+      // hide that active work and make the UI look frozen — the same symptom
+      // this loader fix targets.
+      if (!adoptedInFlightRun) {
+        setActivityStatus("idle");
+      }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
