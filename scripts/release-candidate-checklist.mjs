@@ -87,72 +87,64 @@ export function parseArgs(argv) {
     windowsNodeInstallerDigests: "",
     outputDir: "",
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
   parseArgv: for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
       case "--":
         break parseArgv;
       case "--tag":
-        setOnce(arg, "tag", requireValue(args, ++index, arg));
+        options.tag = requireValue(args, ++index, arg);
         break;
       case "--workflow-ref":
-        setOnce(arg, "workflowRef", requireValue(args, ++index, arg));
+        options.workflowRef = requireValue(args, ++index, arg);
         break;
       case "--repo":
-        setOnce(arg, "repo", requireValue(args, ++index, arg));
+        options.repo = requireValue(args, ++index, arg);
         break;
       case "--full-release-run":
-        setOnce(arg, "fullReleaseRunId", requireValue(args, ++index, arg));
+        options.fullReleaseRunId = requireValue(args, ++index, arg);
         break;
       case "--npm-preflight-run":
-        setOnce(arg, "npmPreflightRunId", requireValue(args, ++index, arg));
+        options.npmPreflightRunId = requireValue(args, ++index, arg);
         break;
       case "--windows-node-tag":
-        setOnce(arg, "windowsNodeTag", requireValue(args, ++index, arg));
+        options.windowsNodeTag = requireValue(args, ++index, arg);
         break;
       case "--skip-dispatch":
-        setOnce(arg, "skipDispatch", true);
+        options.skipDispatch = true;
         break;
       case "--skip-local-generated-check":
-        setOnce(arg, "skipLocalGeneratedCheck", true);
+        options.skipLocalGeneratedCheck = true;
         break;
       case "--skip-parallels":
-        setOnce(arg, "skipParallels", true);
+        options.skipParallels = true;
         break;
       case "--skip-telegram":
-        setOnce(arg, "skipTelegram", true);
+        options.skipTelegram = true;
         break;
       case "--telegram-provider-mode":
-        setOnce(arg, "telegramProviderMode", requireValue(args, ++index, arg));
+        options.telegramProviderMode = requireValue(args, ++index, arg);
         break;
       case "--provider":
-        setOnce(arg, "provider", requireValue(args, ++index, arg));
+        options.provider = requireValue(args, ++index, arg);
         break;
       case "--mode":
-        setOnce(arg, "mode", requireValue(args, ++index, arg));
+        options.mode = requireValue(args, ++index, arg);
         break;
       case "--release-profile":
-        setOnce(arg, "releaseProfile", requireValue(args, ++index, arg));
+        options.releaseProfile = requireValue(args, ++index, arg);
         break;
       case "--npm-dist-tag":
-        setOnce(arg, "npmDistTag", requireValue(args, ++index, arg));
+        options.npmDistTag = requireValue(args, ++index, arg);
         break;
       case "--plugin-publish-scope":
-        setOnce(arg, "pluginPublishScope", requireValue(args, ++index, arg));
+        options.pluginPublishScope = requireValue(args, ++index, arg);
         break;
       case "--plugins":
-        setOnce(arg, "plugins", requireValue(args, ++index, arg));
+        options.plugins = requireValue(args, ++index, arg);
         break;
       case "--output-dir":
-        setOnce(arg, "outputDir", requireValue(args, ++index, arg));
+        options.outputDir = requireValue(args, ++index, arg);
         break;
       case "-h":
       case "--help":
@@ -230,14 +222,11 @@ function githubApiTimeoutMs() {
   if (!raw) {
     return DEFAULT_GITHUB_API_TIMEOUT_MS;
   }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer");
-  }
   const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer");
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive number");
   }
-  return value;
+  return Math.trunc(value);
 }
 
 function githubApiTimedOut(error) {
