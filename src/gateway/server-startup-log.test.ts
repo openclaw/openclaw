@@ -8,7 +8,8 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-registry-contributions.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
 }));
@@ -101,7 +102,34 @@ describe("gateway startup log", () => {
 
     expect(warn.mock.calls).toEqual([
       [
-        "configured channel warning: channels.slack is configured but no channel plugin is loadable (untrusted-plugin). Run `openclaw doctor --fix` or update plugins.allow/plugins.entries before relying on this channel.",
+        'configured channel warning: channels.slack: channel is configured, but external plugin "slack" is installed without explicit trust. Add plugins.entries.slack.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+      ],
+    ]);
+  });
+
+  it("warns when a configured channel has no owning plugin", async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          "missing-chat": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn.mock.calls).toEqual([
+      [
+        "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
       ],
     ]);
   });
@@ -138,7 +166,7 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    expect(warn.mock.calls[0]?.[0]).toContain("channels.slack is configured");
+    expect(warn.mock.calls[0]?.[0]).toContain("channels.slack: channel is configured");
     expect(warn.mock.calls[0]?.[0]).not.toContain(String.fromCharCode(0x1b));
   });
 

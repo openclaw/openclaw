@@ -1096,6 +1096,7 @@ export async function startGatewayPostAttachRuntime(
       debug?: (msg: string) => void;
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
+    activationSourceConfig: OpenClawConfig;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1176,7 +1177,7 @@ export async function startGatewayPostAttachRuntime(
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
-      activationSourceConfig: params.gatewayPluginConfigAtStart,
+      activationSourceConfig: params.activationSourceConfig,
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,
