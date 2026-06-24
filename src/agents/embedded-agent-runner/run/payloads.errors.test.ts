@@ -525,11 +525,22 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
+  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled and assistant reply exists", () => {
+    // Use message_tool delivery to signal hasUserFacingReply without creating payloads
     expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command not found" },
       suppressToolErrorWarnings: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      didDeliverSourceReplyViaMessageTool: true,
     });
+  });
+
+  it("does NOT suppress mutating tool error warning when it is the only reply", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found" },
+      suppressToolErrorWarnings: true,
+    });
+    expect(payloads.length).toBeGreaterThan(0);
   });
 
   it.each([
