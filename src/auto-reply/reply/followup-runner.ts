@@ -1444,7 +1444,7 @@ export function createFollowupRunner(params: {
         usage,
         lastCallUsage,
       });
-      const responseUsageLine = resolveResponseUsageLine({
+      const responseUsageLine = await resolveResponseUsageLine({
         config: runtimeConfig,
         sessionRaw: responseUsageSessionRaw,
         channel: resolveOriginMessageProvider({
@@ -1456,6 +1456,9 @@ export function createFollowupRunner(params: {
         model: modelUsed,
         preserveUserFacingSessionState,
         replyUsageState,
+        authMode: runResult.meta?.requestShaping?.authMode,
+        agentDir: run.agentDir,
+        workspaceDir: run.workspaceDir,
       });
       if (responseUsageLine) {
         deliveryPayloads = appendUsageLine(deliveryPayloads, responseUsageLine);

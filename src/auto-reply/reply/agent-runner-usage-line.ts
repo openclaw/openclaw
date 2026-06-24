@@ -149,7 +149,7 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
 };
 
-export const resolveResponseUsageLine = (params: {
+export const resolveResponseUsageLine = async (params: {
   config: OpenClawConfig;
   sessionRaw?: string | null;
   channel?: string;
@@ -201,9 +201,12 @@ export const resolveResponseUsageLine = (params: {
     return undefined;
   }
 
+  const configuredProviders = params.config.models?.providers;
+  const hasConfiguredProvider =
+    configuredProviders && params.provider && params.provider in configuredProviders;
   const authLabel =
     params.authMode ??
-    (params.config.models?.providers && params.provider && params.provider in params.config.models.providers
+    (hasConfiguredProvider
       ? (resolveModelAuthMode(params.provider, params.config, undefined, {
           workspaceDir: params.workspaceDir,
         }) ?? undefined)

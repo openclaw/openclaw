@@ -2883,6 +2883,35 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("Premium");
   });
 
+  it("keeps the full usage footer when provider quota loading never resolves", async () => {
+    loadProviderUsageSummaryMock.mockReturnValueOnce(new Promise(() => {}));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "github-copilot",
+          model: "gpt-5.5",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const resPromise = createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      config: copilotTokenConfig,
+    });
+
+    const res = await resPromise;
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("↕️ 12/3");
+    expect(text).not.toContain("Premium");
+  });
+
   it("adds active provider quota windows when responseUsage=tokens", async () => {
     mockCopilotQuotaWindows();
     runEmbeddedAgentMock.mockResolvedValueOnce({
