@@ -268,10 +268,26 @@ function escapeContentDispositionFilename(filename: string): string {
   return filename.replace(/[\r\n]/g, "_").replace(/["\\]/g, "\\$&");
 }
 
+function toAsciiContentDispositionFilename(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_");
+  return ascii.trim() ? ascii : "assistant-media";
+}
+
+function encodeContentDispositionFilenameStar(filename: string): string {
+  return encodeURIComponent(filename).replace(
+    /[!'()*]/g,
+    (value) => `%${value.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
 function buildAssistantMediaContentDisposition(filePath: string, mime: string): string {
   const disposition = mime.startsWith("image/") ? "inline" : "attachment";
-  const filename = path.basename(filePath) || "assistant-media";
-  return `${disposition}; filename="${escapeContentDispositionFilename(filename)}"`;
+  const filename = (path.basename(filePath) || "assistant-media").replace(/[\r\n]/g, "_");
+  const fallbackFilename = toAsciiContentDispositionFilename(filename);
+  const base = `${disposition}; filename="${escapeContentDispositionFilename(fallbackFilename)}"`;
+  return fallbackFilename === filename
+    ? base
+    : `${base}; filename*=UTF-8''${encodeContentDispositionFilenameStar(filename)}`;
 }
 
 function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefined {

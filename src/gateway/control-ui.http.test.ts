@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import { validateHeaderValue, type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -424,6 +424,29 @@ describe("handleControlUiHttpRequest", () => {
         expect(responseHeader(setHeader, "Content-Disposition")).toBe(
           'attachment; filename="report.docx"',
         );
+      },
+    });
+  });
+
+  it("serves unicode assistant document filenames with an ASCII fallback", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-unicode-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "報告.pdf");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-pdf"));
+        const { res, setHeader, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        const disposition = responseHeader(setHeader, "Content-Disposition");
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(disposition).toBe(
+          "attachment; filename=\"__.pdf\"; filename*=UTF-8''%E5%A0%B1%E5%91%8A.pdf",
+        );
+        expect(() => validateHeaderValue("Content-Disposition", String(disposition))).not.toThrow();
       },
     });
   });
