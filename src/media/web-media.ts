@@ -33,6 +33,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { extractOriginalFilename } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -1075,6 +1076,9 @@ async function loadWebMediaInternal(
     });
   }
   let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  if (fileName) {
+    fileName = extractOriginalFilename(fileName);
+  }
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

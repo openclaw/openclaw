@@ -573,6 +573,16 @@ describe("loadWebMedia", () => {
     expect(result.fileName).toBe("fake.png");
   });
 
+  it("strips internal media-store UUID suffix from outbound fileName", async () => {
+    const stagedName = "narahari_resume---a1b2c3d4-5678-90ab-cdef-1234567890ab.png";
+    const stagedFile = path.join(fixtureRoot, stagedName);
+    await fs.writeFile(stagedFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    const result = await loadWebMedia(stagedFile, createLocalWebMediaOptions());
+
+    expect(result.fileName).toBe("narahari_resume.png");
+  });
+
   it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
     const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
       maxBytes: 1024 * 1024,
