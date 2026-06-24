@@ -2678,6 +2678,58 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
+  it("allows gateway TTS output for loopback env overrides with stale SSH remote config", async () => {
+    const gatewayConnection = await import("../gateway/connection-details.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tts-output-"));
+    const source = path.join(dir, "source.mp3");
+    const output = path.join(dir, "output.mp3");
+    await fs.writeFile(source, "audio");
+    mocks.loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "env OPENCLAW_GATEWAY_URL",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      audioPath: source,
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    } as never);
+
+    try {
+      await runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "tts",
+          "convert",
+          "--gateway",
+          "--text",
+          "hello",
+          "--output",
+          output,
+          "--json",
+        ],
+      });
+
+      await expect(fs.readFile(output, "utf8")).resolves.toBe("audio");
+      expect(firstJsonOutput()?.outputs).toEqual([
+        { path: output, format: "mp3", voiceCompatible: false },
+      ]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses only embedding providers for embedding creation", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
