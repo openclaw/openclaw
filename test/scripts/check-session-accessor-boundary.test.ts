@@ -3,6 +3,7 @@ import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
+  findEmbeddedAgentSessionTargetViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
@@ -11,6 +12,7 @@ import {
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
   migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
@@ -95,7 +97,14 @@ describe("session accessor boundary guard", () => {
         "extensions/telegram/src/bot.ts",
         "extensions/telegram/src/bot-message-dispatch.ts",
         "extensions/telegram/src/bot-native-commands.ts",
+        "extensions/voice-call/src/response-generator.ts",
       ]),
+    );
+  });
+
+  it("ratchets only files migrated to embedded-agent session targets", () => {
+    expect(migratedEmbeddedAgentSessionTargetFiles).toEqual(
+      new Set(["extensions/voice-call/src/response-generator.ts"]),
     );
   });
 
@@ -516,6 +525,50 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorBoundaryViolations(`
         // loadSessionStore and readSessionEntries used to be called here.
         const description = "loadSessionStore";
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
+    expect(
+      findEmbeddedAgentSessionTargetViolations(`
+        const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, entry);
+        agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey,
+          sessionFile,
+        });
+        runEmbeddedAgent({
+          sessionId,
+          sessionFile: transcriptPath,
+        });
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'references legacy embedded-agent session file resolver "resolveSessionFilePath"',
+      },
+      {
+        line: 6,
+        reason:
+          'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
+      },
+      {
+        line: 10,
+        reason:
+          'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
+      },
+    ]);
+  });
+
+  it("allows embedded-agent calls that pass sessionTarget identity", () => {
+    expect(
+      findEmbeddedAgentSessionTargetViolations(`
+        agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey,
+          sessionTarget: { agentId, sessionId, sessionKey, storePath },
+        });
       `),
     ).toEqual([]);
   });
