@@ -153,15 +153,18 @@ describe("noteSessionLockHealth", () => {
       staleMs: 30_000,
       readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
     });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
 
-    expect(sessionLockToHealthFinding(lock!)).toEqual(
+    expect(sessionLockToHealthFinding(lock)).toEqual(
       expect.objectContaining({
         checkId: "core/doctor/session-locks",
         severity: "warning",
         path: lockPath,
       }),
     );
-    expect(sessionLockToRepairEffect(lock!)).toEqual({
+    expect(sessionLockToRepairEffect(lock)).toEqual({
       kind: "state",
       action: "would-remove-stale-session-lock",
       target: lockPath,
@@ -180,11 +183,14 @@ describe("noteSessionLockHealth", () => {
       staleMs: 30_000,
       readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
     });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
 
-    expect(lock?.staleReasons).toEqual(["missing-pid", "invalid-createdAt"]);
-    expect(lock?.removable).toBe(false);
-    expect(sessionLockToHealthFinding(lock!).fixHint).toContain("after the cleanup grace period");
-    expect(sessionLockToRepairEffect(lock!)).toEqual({
+    expect(lock.staleReasons).toEqual(["missing-pid", "invalid-createdAt"]);
+    expect(lock.removable).toBe(false);
+    expect(sessionLockToHealthFinding(lock).fixHint).toContain("after the cleanup grace period");
+    expect(sessionLockToRepairEffect(lock)).toEqual({
       kind: "state",
       action: "would-preserve-mtime-gated-stale-session-lock",
       target: malformedLock,
@@ -235,12 +241,15 @@ describe("noteSessionLockHealth", () => {
       staleMs: 30_000,
       readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
     });
+    if (!lock) {
+      throw new Error("expected stale session lock");
+    }
 
-    expect(lock?.staleReasons).toEqual(["too-old"]);
-    expect(sessionLockToHealthFinding(lock!).fixHint).toBe(
+    expect(lock.staleReasons).toEqual(["too-old"]);
+    expect(sessionLockToHealthFinding(lock).fixHint).toBe(
       "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck.",
     );
-    expect(sessionLockToRepairEffect(lock!)).toEqual({
+    expect(sessionLockToRepairEffect(lock)).toEqual({
       kind: "state",
       action: "would-preserve-report-only-stale-session-lock",
       target: reportOnlyLock,

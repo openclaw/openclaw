@@ -752,9 +752,11 @@ describe("CORE_HEALTH_CHECKS", () => {
   it("registers stale session locks as a legacy-owned structured check", async () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
 
-    expect(check.repair).toBeTypeOf("function");
+    if (typeof check.repair !== "function") {
+      throw new Error("expected session lock check repair");
+    }
     await expect(
-      check.repair?.(
+      check.repair(
         {
           mode: "fix",
           runtime,
