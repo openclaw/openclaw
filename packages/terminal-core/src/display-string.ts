@@ -73,11 +73,48 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 
+function isPathSegmentChar(char: string | undefined): boolean {
+  return Boolean(char && /[\p{L}\p{M}\p{N}._~$-]/u.test(char));
+}
+
+function hasPathBoundaryBefore(input: string, index: number): boolean {
+  return index === 0 || !isPathSegmentChar(input[index - 1]);
+}
+
+function hasPathBoundaryAfter(input: string, index: number): boolean {
+  return index >= input.length || !isPathSegmentChar(input[index]);
+}
+
+function replaceHomePath(input: string, home: string, prefix: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < input.length) {
+    const index = input.indexOf(home, cursor);
+    if (index === -1) {
+      result += input.slice(cursor);
+      break;
+    }
+
+    const end = index + home.length;
+    if (hasPathBoundaryBefore(input, index) && hasPathBoundaryAfter(input, end)) {
+      result += input.slice(cursor, index) + prefix;
+      cursor = end;
+      continue;
+    }
+
+    result += input.slice(cursor, end);
+    cursor = end;
+  }
+
+  return result;
+}
+
 /** Replace the effective home path with "~" or "$OPENCLAW_HOME" for terminal display. */
 export function displayString(input: string): string {
   if (!input) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
-  return display ? input.split(display.home).join(display.prefix) : input;
+  return display ? replaceHomePath(input, display.home, display.prefix) : input;
 }
