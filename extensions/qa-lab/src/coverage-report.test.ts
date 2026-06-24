@@ -7,7 +7,7 @@ import {
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { buildQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+import { buildQaScorecardTaxonomyReport, type QaMaturityTaxonomy } from "./scorecard-taxonomy.js";
 
 const TEST_EXECUTABLE_CATEGORY_ID = "agent-runtime-and-provider-execution.agent-turn-execution";
 const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
@@ -21,15 +21,17 @@ function testMaturityTaxonomy(params?: {
   coverageIds?: readonly string[];
   featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
+  includeArchivedSurface?: boolean;
   profileCategoryIds?: readonly string[];
-}) {
+}): QaMaturityTaxonomy {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
   const firstDot = categoryId.indexOf(".");
   const surfaceId = firstDot === -1 ? categoryId : categoryId.slice(0, firstDot);
   const categoryLocalId = firstDot === -1 ? categoryId : categoryId.slice(firstDot + 1);
   return {
-    version: 1,
+    version: 1 as const,
     title: "Test taxonomy",
+    levels: [],
     profiles: [
       {
         id: "smoke-ci",
@@ -52,10 +54,15 @@ function testMaturityTaxonomy(params?: {
       {
         id: surfaceId,
         name: "Test surface",
+        family: "test",
+        level: "experimental",
         categories: [
           {
             id: categoryLocalId,
             name: "Test category",
+            category_note: "test-category.md",
+            docs: [],
+            search_anchors: [],
             features: (
               params?.featureCoverageIds ??
               (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => [
@@ -68,6 +75,27 @@ function testMaturityTaxonomy(params?: {
           },
         ],
       },
+      ...(params?.includeArchivedSurface
+        ? [
+            {
+              id: "archived-surface",
+              name: "Archived surface",
+              family: "test",
+              level: "experimental",
+              archived: true,
+              categories: [
+                {
+                  id: "legacy-category",
+                  name: "Legacy category",
+                  category_note: "legacy-category.md",
+                  docs: [],
+                  search_anchors: [],
+                  features: [{ name: "legacy.feature", coverageIds: ["legacy.feature"] }],
+                },
+              ],
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -129,7 +157,7 @@ describe("qa coverage report", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
+    expect(inventory.scorecardTaxonomy.profileCount).toBe(3);
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
@@ -140,6 +168,14 @@ describe("qa coverage report", () => {
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release"),
     ).toMatchObject({
       channelDriver: "live",
+    });
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "all"),
+    ).toMatchObject({
+      channelDriver: "live",
+      categoryIds: expect.arrayContaining([
+        "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
+      ]),
     });
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
@@ -227,7 +263,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("- Evidence refs:");
     expect(report).toContain("- Scenario coverage IDs:");
     expect(report).toContain(
-      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: release, smoke-ci; coverage IDs:",
+      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: all, release, smoke-ci; coverage IDs:",
     );
     expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
@@ -431,6 +467,7 @@ describe("qa coverage report", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         includeAllCategories: true,
+        includeArchivedSurface: true,
       }),
       repoRoot: process.cwd(),
       scenarios: [],
@@ -440,6 +477,10 @@ describe("qa coverage report", () => {
       TEST_EXECUTABLE_CATEGORY_ID,
     ]);
     expect(report.requiredCategoryCount).toBe(1);
+    expect(report.categoryCount).toBe(1);
+    expect(report.profiles.find((profile) => profile.id === "release")?.categoryIds).not.toContain(
+      "archived-surface.legacy-category",
+    );
   });
 
   it("reports profile categories missing primary coverage evidence", () => {

@@ -13,6 +13,7 @@ import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -49,22 +50,15 @@ let ws: WebSocket;
 let port: number;
 
 async function withoutSupervisorHints<T>(fn: () => Promise<T>): Promise<T> {
-  const previousEnv = new Map<string, string | undefined>();
+  const envSnapshot = captureEnv([...SUPERVISOR_HINT_ENV_VARS]);
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
-    previousEnv.set(key, process.env[key]);
-    delete process.env[key];
+    deleteTestEnvValue(key);
   }
 
   try {
     return await fn();
   } finally {
-    for (const [key, value] of previousEnv) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    envSnapshot.restore();
   }
 }
 

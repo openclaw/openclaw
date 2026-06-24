@@ -2,10 +2,6 @@
 import path from "node:path";
 import type { Bot } from "grammy";
 import {
-  appendSessionTranscriptMessage,
-  emitSessionTranscriptUpdate,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
   DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
@@ -57,6 +53,10 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import {
+  appendAssistantMirrorMessageByIdentity,
+  readLatestAssistantTextByIdentity,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -73,13 +73,10 @@ import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
-  readLatestAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
-  updateSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
@@ -247,6 +244,7 @@ type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
 type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
+type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 type FreshTelegramSessionStoreLoader = ((agentId: string) => {
   storePath: string;
   store: TelegramSessionStore;
@@ -317,85 +315,53 @@ function resolveTelegramMirroredTranscriptText(
   return text ? text : null;
 }
 
+function resolveTelegramScopedTranscriptSession(params: {
+  agentId: string;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  sessionKey: string;
+}): TelegramScopedTranscriptSession | undefined {
+  const { store, storePath } = params.loadFreshSessionStore(params.agentId);
+  const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+  const sessionId = entry?.sessionId?.trim();
+  return sessionId ? { sessionId, storePath } : undefined;
+}
+
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
+  idempotencyKey: string;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
   route: TelegramMessageContext["route"];
   sessionKey: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
   payload: TelegramTranscriptMirrorPayload;
 }) {
   const text = resolveTelegramMirroredTranscriptText(params.payload);
   if (!text) {
     return;
   }
-  const { storePath, store } = params.loadFreshSessionStore(params.route.agentId);
-  const sessionEntry = resolveSessionStoreEntry({
-    store,
+  const session = resolveTelegramScopedTranscriptSession({
+    agentId: params.route.agentId,
+    loadFreshSessionStore: params.loadFreshSessionStore,
     sessionKey: params.sessionKey,
-  }).existing;
-  if (!sessionEntry?.sessionId) {
+  });
+  if (!session) {
     return;
   }
-  const { sessionFile } = await resolveAndPersistSessionFile({
-    sessionId: sessionEntry.sessionId,
-    sessionKey: params.sessionKey,
-    sessionStore: store,
-    storePath,
-    sessionEntry,
+  const appended = await appendAssistantMirrorMessageByIdentity({
     agentId: params.route.agentId,
-    sessionsDir: path.dirname(storePath),
-  });
-  const message = {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    usage: {
-      input: 0,
-      output: 0,
-      total: 0,
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-      cache: {
-        read: 0,
-        write: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
-  const {
-    appended,
-    messageId,
-    message: appendedMessage,
-  } = await appendSessionTranscriptMessage({
-    transcriptPath: sessionFile,
-    message,
     config: params.cfg,
-  });
-  if (appended) {
-    const transcriptMarkerUpdatedAt = Date.now();
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: params.sessionKey,
-      update: (current) =>
-        current.sessionId === sessionEntry.sessionId
-          ? { updatedAt: transcriptMarkerUpdatedAt }
-          : null,
-    });
-  }
-  emitSessionTranscriptUpdate({
-    sessionFile,
+    idempotencyKey: params.idempotencyKey,
+    deliveryMirror: {
+      kind: "channel-final",
+      sourceMessageId: params.idempotencyKey,
+    },
+    sessionId: session.sessionId,
     sessionKey: params.sessionKey,
-    agentId: params.route.agentId,
-    message: appendedMessage,
-    messageId,
+    storePath: session.storePath,
+    text,
   });
+  if (!appended.ok && appended.code !== "session-rebound") {
+    logVerbose(`telegram transcript mirror append failed: ${appended.reason}`);
+  }
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -1493,29 +1459,24 @@ export const dispatchTelegramMessage = async ({
     );
   const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
+  let transcriptMirrorSequence = 0;
+  const transcriptMirrorTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
     if (!sessionKey) {
       return undefined;
     }
     try {
-      const { storePath, store } = loadFreshSessionStore(route.agentId);
-      const sessionEntry = resolveSessionStoreEntry({
-        store,
-        sessionKey,
-      }).existing;
+      const { store, storePath } = loadFreshSessionStore(route.agentId);
+      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       if (!sessionEntry?.sessionId) {
         return undefined;
       }
-      const { sessionFile } = await resolveAndPersistSessionFile({
+      const latest = await readLatestAssistantTextByIdentity({
+        agentId: route.agentId,
         sessionId: sessionEntry.sessionId,
         sessionKey,
-        sessionStore: store,
         storePath,
-        sessionEntry,
-        agentId: route.agentId,
-        sessionsDir: path.dirname(storePath),
       });
-      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
@@ -1550,11 +1511,13 @@ export const dispatchTelegramMessage = async ({
     replyQuoteByMessageId,
     transcriptMirror: sessionKey
       ? async (payload: TelegramTranscriptMirrorPayload) => {
+          const idempotencyKey = `telegram-final:${sessionKey}:${transcriptMirrorTurnId}:${transcriptMirrorSequence++}`;
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
+            idempotencyKey,
+            loadFreshSessionStore,
             route,
             sessionKey,
-            loadFreshSessionStore,
             payload,
           });
         }

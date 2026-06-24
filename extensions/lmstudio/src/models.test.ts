@@ -31,6 +31,21 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+function jsonResponse(payload: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+}
+
+function malformedJsonResponse(): Response {
+  return new Response("{ nope", {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
@@ -72,33 +87,26 @@ describe("lmstudio-models", () => {
     loadedContextLength?: number;
     maxContextLength?: number;
   }) =>
-    vi.fn(async (url: string | URL, init?: RequestInit) => {
+    vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const key = params?.key ?? "qwen3-8b-instruct";
       if (String(url).endsWith("/api/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [
-              {
-                type: "llm",
-                key,
-                max_context_length: params?.maxContextLength,
-                variants: params?.variants,
-                selected_variant: params?.selectedVariant,
-                loaded_instances: params?.loadedContextLength
-                  ? [{ id: "inst-1", config: { context_length: params.loadedContextLength } }]
-                  : [],
-              },
-            ],
-          }),
-        };
+        return jsonResponse({
+          models: [
+            {
+              type: "llm",
+              key,
+              max_context_length: params?.maxContextLength,
+              variants: params?.variants,
+              selected_variant: params?.selectedVariant,
+              loaded_instances: params?.loadedContextLength
+                ? [{ id: "inst-1", config: { context_length: params.loadedContextLength } }]
+                : [],
+            },
+          ],
+        });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return {
-          ok: true,
-          json: async () => ({ status: "loaded" }),
-          requestInit: init,
-        };
+        return jsonResponse({ status: "loaded" });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -296,9 +304,8 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
-      ok: true,
-      json: async () => ({
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse({
         models: [
           {
             type: "llm",
@@ -330,7 +337,7 @@ describe("lmstudio-models", () => {
           },
         ],
       }),
-    }));
+    );
 
     const models = await discoverLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -386,13 +393,7 @@ describe("lmstudio-models", () => {
   });
 
   it("reports malformed model list JSON with an owned error", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => {
-        throw new SyntaxError("bad json");
-      },
-    }));
+    const fetchMock = vi.fn(async () => malformedJsonResponse());
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -405,11 +406,7 @@ describe("lmstudio-models", () => {
 
   it("reports wrong-shaped model list payloads with owned errors", async () => {
     for (const payload of [[], { models: {} }, { models: [null] }]) {
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => payload,
-      }));
+      const fetchMock = vi.fn(async () => jsonResponse(payload));
 
       const result = await fetchLmstudioModels({
         baseUrl: "http://localhost:1234/v1",
@@ -424,12 +421,9 @@ describe("lmstudio-models", () => {
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => ({
-      ok: true,
-      status: 200,
-      requestInit: init,
-      json: async () => ({ models: [] }),
-    }));
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse({ models: [] }),
+    );
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -521,20 +515,17 @@ describe("lmstudio-models", () => {
     const variantKey = `${canonicalKey}@q4_k_m`;
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [
-              {
-                type: "llm",
-                key: canonicalKey,
-                variants: [variantKey],
-                selected_variant: variantKey,
-                loaded_instances: [],
-              },
-            ],
-          }),
-        };
+        return jsonResponse({
+          models: [
+            {
+              type: "llm",
+              key: canonicalKey,
+              variants: [variantKey],
+              selected_variant: variantKey,
+              loaded_instances: [],
+            },
+          ],
+        });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
         return new Response("load failed", { status: 503 });
@@ -575,20 +566,12 @@ describe("lmstudio-models", () => {
   it("reports malformed model load JSON with an owned error", async () => {
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
-          }),
-        };
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return {
-          ok: true,
-          json: async () => {
-            throw new SyntaxError("bad json");
-          },
-        };
+        return malformedJsonResponse();
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -608,12 +591,9 @@ describe("lmstudio-models", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
-          }),
-        };
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
         return tracked.response;

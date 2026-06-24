@@ -31,7 +31,7 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci` or `--qa-profile release`.                                                                                                                           |
+| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci`, `--qa-profile release`, or `--qa-profile all`.                                                                                                      |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
@@ -68,15 +68,17 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --category channel-framework.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
 Crabline fake provider servers. Use `release` for Stable/LTS proof against live
-channels. When a command also needs an OpenClaw root profile, put the root
-profile before the QA command:
+channels. Use `all` only for explicit full-taxonomy evidence runs; it selects
+every active maturity category and can be dispatched through the `QA Profile
+Evidence` workflow with `qa_profile=all`. When a command also needs an OpenClaw
+root profile, put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -964,6 +966,7 @@ output and whose artifact paths are resolved relative to that producer
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
+For scorecard context, see [Maturity scorecard](/maturity/scorecard).
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -1021,6 +1024,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Maturity scorecard](/maturity/scorecard)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)

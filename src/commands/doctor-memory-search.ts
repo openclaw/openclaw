@@ -473,6 +473,11 @@ export async function noteMemorySearchHealth(
       return;
     }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
+    const hasUnavailableConfiguredLocalModel =
+      Boolean(normalizeOptionalString(resolved.local.modelPath)) && !hasExplicitLocalModel;
+    if (opts?.gatewayMemoryProbe?.skipped && !hasUnavailableConfiguredLocalModel) {
+      return;
+    }
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
       [

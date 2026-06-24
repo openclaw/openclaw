@@ -70,6 +70,8 @@ const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
+  suiteIsolation: z.literal("isolated").optional(),
+  isolationReason: z.string().trim().min(1).optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
