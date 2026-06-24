@@ -2450,6 +2450,74 @@ function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
 }
 
+/**
+ * Emit a model.usage diagnostic event after an ingress agent run completes.
+ *
+ * Unlike channel/cron paths which emit model.usage in runReplyAgent /
+ * finalizeCronRun, the ingress path has no such existing emission — without
+ * this every diagnostics consumer (Langfuse bridge, @openclaw/diagnostics-otel,
+ * diagnostics-prometheus) sees usage/cost only for webchat/cli/cron turns
+ * and is blind to HTTP API traffic (POST /v1/responses, POST /v1/chat/completions,
+ * and node-event dispatch).
+ */
+function emitIngressModelUsageDiagnostic(
+  result: NonNullable<Awaited<ReturnType<typeof agentCommandInternal>>>,
+  opts: AgentCommandIngressOpts,
+): void {
+  const cfg = getRuntimeConfig();
+  if (!isDiagnosticsEnabled(cfg)) return;
+  const agentMeta = result.meta?.agentMeta;
+  const usage = agentMeta?.usage;
+  if (!agentMeta || !hasNonzeroUsage(usage)) return;
+
+  const providerUsed = agentMeta.provider ?? "";
+  const modelUsed = agentMeta.model ?? "";
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const usagePromptTokens = input + cacheRead + cacheWrite;
+  const totalTokens = usage.total ?? usagePromptTokens + output;
+  const hasBillableUsageBuckets =
+    usage.input !== undefined ||
+    usage.output !== undefined ||
+    usage.cacheRead !== undefined ||
+    usage.cacheWrite !== undefined;
+  const costConfig = resolveModelCostConfig({
+    provider: providerUsed,
+    model: modelUsed,
+    config: cfg,
+  });
+  const costUsd = hasBillableUsageBuckets
+    ? estimateUsageCost({ usage, cost: costConfig })
+    : undefined;
+
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    sessionKey: opts.sessionKey,
+    sessionId: agentMeta.sessionId,
+    channel: ingressDiagnosticChannel(opts),
+    agentId: opts.agentId,
+    provider: providerUsed,
+    model: modelUsed,
+    usage: {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      promptTokens: usagePromptTokens,
+      total: totalTokens,
+    },
+    lastCallUsage: agentMeta.lastCallUsage,
+    context: {
+      limit: agentMeta.contextTokens,
+      ...(agentMeta.promptTokens !== undefined ? { used: agentMeta.promptTokens } : {}),
+    },
+    costUsd,
+    durationMs: result.meta?.durationMs,
+  });
+}
+
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
@@ -2472,67 +2540,8 @@ export async function agentCommandFromIngress(
       deps,
     );
 
-    // Emit model.usage diagnostic for HTTP ingress traffic (POST /v1/responses,
-    // POST /v1/chat/completions, and node-event dispatch). Unlike channel/cron
-    // paths which emit model.usage in runReplyAgent / finalizeCronRun, the
-    // ingress path has no such existing emission — without this, every
-    // diagnostics consumer (Langfuse bridge, @openclaw/diagnostics-otel,
-    // diagnostics-prometheus) sees usage/cost only for webchat/cli/cron turns
-    // and is blind to HTTP API traffic.
     if (result) {
-      const cfg = getRuntimeConfig();
-      if (isDiagnosticsEnabled(cfg)) {
-        const agentMeta = result.meta?.agentMeta;
-        const usage = agentMeta?.usage;
-        if (agentMeta && hasNonzeroUsage(usage)) {
-          const providerUsed = agentMeta.provider ?? "";
-          const modelUsed = agentMeta.model ?? "";
-          const input = usage.input ?? 0;
-          const output = usage.output ?? 0;
-          const cacheRead = usage.cacheRead ?? 0;
-          const cacheWrite = usage.cacheWrite ?? 0;
-          const usagePromptTokens = input + cacheRead + cacheWrite;
-          const totalTokens = usage.total ?? usagePromptTokens + output;
-          const hasBillableUsageBuckets =
-            usage.input !== undefined ||
-            usage.output !== undefined ||
-            usage.cacheRead !== undefined ||
-            usage.cacheWrite !== undefined;
-          const costConfig = resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          });
-          const costUsd = hasBillableUsageBuckets
-            ? estimateUsageCost({ usage, cost: costConfig })
-            : undefined;
-
-          emitTrustedDiagnosticEvent({
-            type: "model.usage",
-            sessionKey: opts.sessionKey,
-            sessionId: agentMeta.sessionId,
-            channel: ingressDiagnosticChannel(opts),
-            agentId: opts.agentId,
-            provider: providerUsed,
-            model: modelUsed,
-            usage: {
-              input,
-              output,
-              cacheRead,
-              cacheWrite,
-              promptTokens: usagePromptTokens,
-              total: totalTokens,
-            },
-            lastCallUsage: agentMeta.lastCallUsage,
-            context: {
-              limit: agentMeta.contextTokens,
-              ...(agentMeta.promptTokens !== undefined ? { used: agentMeta.promptTokens } : {}),
-            },
-            costUsd,
-            durationMs: result.meta?.durationMs,
-          });
-        }
-      }
+      emitIngressModelUsageDiagnostic(result, opts);
     }
 
     return result;
@@ -2543,6 +2552,8 @@ export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
+  ingressDiagnosticChannel,
+  emitIngressModelUsageDiagnostic,
 };
 
 /** @deprecated Use `testing`. */
