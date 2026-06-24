@@ -1048,8 +1048,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
           if (callCount === 1) {
-            // First call: stream emits a recoverable thinking error before any output
-            stream.push({ type: "error", reason: "error", error: anthropicThinkingError });
+            stream.push({ type: "error", reason: "error", error: createTestStreamErrorMessage(terminalThinkingSignatureError) });
             stream.end();
           } else {
             // Retry: success
