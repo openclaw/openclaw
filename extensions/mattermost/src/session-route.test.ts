@@ -1,14 +1,12 @@
 // Mattermost tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-
 function expectRoute(route: ReturnType<typeof resolveMattermostOutboundSessionRoute>) {
   if (!route) {
     throw new Error("Expected Mattermost route");
   }
   return route;
 }
-
 describe("mattermost session route", () => {
   it("builds direct-message routes for user targets", () => {
     const route = resolveMattermostOutboundSessionRoute({
@@ -17,14 +15,12 @@ describe("mattermost session route", () => {
       accountId: "acct-1",
       target: "@user123",
     });
-
     const directRoute = expectRoute(route);
     expect(directRoute.peer.kind).toBe("direct");
     expect(directRoute.peer.id).toBe("user123");
     expect(directRoute.from).toBe("mattermost:user123");
     expect(directRoute.to).toBe("user:user123");
   });
-
   it("builds threaded channel routes for channel targets", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
@@ -33,7 +29,6 @@ describe("mattermost session route", () => {
       target: "mattermost:channel:chan123",
       threadId: "thread456",
     });
-
     const channelRoute = expectRoute(route);
     expect(channelRoute.peer.kind).toBe("channel");
     expect(channelRoute.peer.id).toBe("chan123");
@@ -42,7 +37,6 @@ describe("mattermost session route", () => {
     expect(channelRoute.threadId).toBe("thread456");
     expect(channelRoute.sessionKey).toContain("thread456");
   });
-
   it("recovers channel thread routes from currentSessionKey", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
@@ -51,7 +45,6 @@ describe("mattermost session route", () => {
       target: "mattermost:channel:chan123",
       currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
     });
-
     const recoveredRoute = expectRoute(route);
     expect(recoveredRoute.sessionKey).toBe(
       "agent:main:mattermost:channel:chan123:thread:root-post",
@@ -59,7 +52,6 @@ describe("mattermost session route", () => {
     expect(recoveredRoute.baseSessionKey).toBe("agent:main:mattermost:channel:chan123");
     expect(recoveredRoute.threadId).toBe("root-post");
   });
-
   it("keeps explicit replyToId ahead of recovered currentSessionKey thread", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
@@ -69,14 +61,12 @@ describe("mattermost session route", () => {
       replyToId: "explicit-root",
       currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
     });
-
     const replyRoute = expectRoute(route);
     expect(replyRoute.sessionKey).toBe(
       "agent:main:mattermost:channel:chan123:thread:explicit-root",
     );
     expect(replyRoute.threadId).toBe("explicit-root");
   });
-
   it('does not recover currentSessionKey threads for shared dmScope "main" DMs', () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
@@ -85,13 +75,11 @@ describe("mattermost session route", () => {
       target: "@user123",
       currentSessionKey: "agent:main:main:thread:root-post",
     });
-
     const dmRoute = expectRoute(route);
     expect(dmRoute.sessionKey).toBe("agent:main:main");
     expect(dmRoute.baseSessionKey).toBe("agent:main:main");
     expect(dmRoute.threadId).toBeUndefined();
   });
-
   it("returns null when the target is empty after normalization", () => {
     expect(
       resolveMattermostOutboundSessionRoute({
@@ -101,5 +89,33 @@ describe("mattermost session route", () => {
         target: "mattermost:",
       }),
     ).toBeNull();
+  });
+  it("resolves private-channel group target to chatType group [regression]", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:group:grp999",
+      resolvedTarget: { kind: "group" },
+    });
+    const groupRoute = expectRoute(route);
+    expect(groupRoute.chatType).toBe("group");
+    expect(groupRoute.peer.kind).toBe("group");
+    expect(groupRoute.peer.id).toBe("grp999");
+    expect(groupRoute.from).toBe("mattermost:group:grp999");
+    expect(groupRoute.to).toBe("group:grp999");
+  });
+  it("group outbound session uses group namespace not channel namespace [regression]", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:group:grp999",
+      resolvedTarget: { kind: "group" },
+    });
+    const groupRoute = expectRoute(route);
+    expect(groupRoute.from).not.toContain("mattermost:channel:");
+    expect(groupRoute.chatType).not.toBe("channel");
+    expect(groupRoute.peer.kind).not.toBe("channel");
   });
 });
