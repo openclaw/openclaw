@@ -21,6 +21,7 @@ type OpenShellPluginConfig = {
   remoteWorkspaceDir?: string;
   remoteAgentWorkspaceDir?: string;
   timeoutSeconds?: number;
+  env?: Record<string, string>;
 };
 
 export type ResolvedOpenShellPluginConfig = {
@@ -36,6 +37,7 @@ export type ResolvedOpenShellPluginConfig = {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
   timeoutMs: number;
+  env: Record<string, string>;
 };
 
 const DEFAULT_COMMAND = "openshell";
@@ -100,6 +102,43 @@ const OpenShellPluginConfigSchema = z.strictObject({
       error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
     })
     .optional(),
+  env: z
+    .record(z.string(), z.string(), {
+      error: "env must be an object with string keys and values",
+    })
+    .optional()
+    .superRefine((env, ctx) => {
+      if (!env) {
+        return;
+      }
+      for (const key of Object.keys(env)) {
+        const trimmed = key.trim();
+        if (!trimmed) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "env keys must not be empty",
+            path: ["env"],
+          });
+          return;
+        }
+        if (trimmed.startsWith("OPENSHELL_")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `env key "${trimmed}" uses reserved OPENSHELL_ prefix`,
+            path: ["env", trimmed],
+          });
+          return;
+        }
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `env key "${trimmed}" is not a valid environment variable name`,
+            path: ["env", trimmed],
+          });
+          return;
+        }
+      }
+    }),
 });
 
 function isManagedOpenShellRemotePath(value: string): boolean {
@@ -163,6 +202,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
       remoteWorkspaceDir: DEFAULT_REMOTE_WORKSPACE_DIR,
       remoteAgentWorkspaceDir: DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
       timeoutMs: DEFAULT_TIMEOUT_MS,
+      env: {},
     };
   }
 
@@ -197,5 +237,6 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
       typeof cfg.timeoutSeconds === "number"
         ? Math.floor(cfg.timeoutSeconds * 1000)
         : DEFAULT_TIMEOUT_MS,
+    env: cfg.env ?? {},
   };
 }

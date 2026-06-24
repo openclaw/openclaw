@@ -625,6 +625,10 @@ class OpenShellSandboxBackendImpl {
         ? ["--auto-providers"]
         : ["--no-auto-providers"]),
       ...this.params.execContext.config.providers.flatMap((provider) => ["--provider", provider]),
+      ...Object.entries(this.params.execContext.config.env).flatMap(([key, value]) => [
+        "--env",
+        `${key}=${value}`,
+      ]),
       "--",
       "true",
     ];

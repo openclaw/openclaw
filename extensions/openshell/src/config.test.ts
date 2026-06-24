@@ -18,6 +18,7 @@ describe("openshell plugin config", () => {
       remoteWorkspaceDir: "/sandbox",
       remoteAgentWorkspaceDir: "/agent",
       timeoutMs: 120_000,
+      env: {},
     });
   });
 
@@ -60,6 +61,7 @@ describe("openshell plugin config", () => {
       remoteWorkspaceDir: "/sandbox/project",
       remoteAgentWorkspaceDir: "/agent/session",
       timeoutMs: 120_000,
+      env: {},
     });
   });
 
@@ -77,6 +79,18 @@ describe("openshell plugin config", () => {
         timeoutSeconds: 2_147_001,
       }),
     ).toThrow("timeoutSeconds must be a number <= 2147000");
+  });
+
+  it("accepts env vars", () => {
+    expect(
+      resolveOpenShellPluginConfig({
+        env: { FOO: "bar", BAZ: "qux" },
+      }).env,
+    ).toEqual({ FOO: "bar", BAZ: "qux" });
+  });
+
+  it("defaults env to empty object", () => {
+    expect(resolveOpenShellPluginConfig({}).env).toEqual({});
   });
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
