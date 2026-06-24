@@ -152,6 +152,7 @@ let hasAvailableAuthForProvider: typeof import("./model-auth.js").hasAvailableAu
 let hasRuntimeAvailableProviderAuth: typeof import("./model-auth.js").hasRuntimeAvailableProviderAuth;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
+let isAuthModeAllowedForModel: typeof import("./model-auth.js").isAuthModeAllowedForModel;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let getApiKeyForModel: typeof import("./model-auth.js").getApiKeyForModel;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
@@ -176,6 +177,7 @@ beforeAll(async () => {
     hasSyntheticLocalProviderAuthConfig,
     getApiKeyForModel,
     hasUsableCustomProviderApiKey,
+    isAuthModeAllowedForModel,
     requireApiKey,
     resolveApiKeyForProvider,
     resolveAwsSdkEnvVarName,
@@ -1860,5 +1862,37 @@ describe("applyAuthHeaderOverride", () => {
       "X-Custom": "keep",
       Authorization: "Bearer test-api-key",
     });
+  });
+});
+
+describe("OpenAI audio transcription auth mode", () => {
+  it("allows OAuth mode for openai-audio-transcriptions modelApi", () => {
+    expect(
+      isAuthModeAllowedForModel({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        mode: "oauth",
+      }),
+    ).toBe(true);
+  });
+
+  it("still allows API-key mode for openai-audio-transcriptions modelApi (no regression)", () => {
+    expect(
+      isAuthModeAllowedForModel({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        mode: "api-key",
+      }),
+    ).toBe(true);
+  });
+
+  it("still requires API-key for other OpenAI model APIs", () => {
+    expect(
+      isAuthModeAllowedForModel({
+        provider: "openai",
+        modelApi: "openai-completions",
+        mode: "oauth",
+      }),
+    ).toBe(false);
   });
 });

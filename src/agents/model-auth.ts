@@ -74,6 +74,7 @@ export {
   requireApiKey,
   resolveAwsSdkEnvVarName,
 } from "./model-auth-runtime-shared.js";
+export { isAuthModeAllowedForModel };
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -91,15 +92,18 @@ export type RuntimeProviderAuthLookup = {
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;
   modelApi?: string;
 }): boolean {
+  const modelApiNormalized = normalizeLowercaseStringOrEmpty(params.modelApi);
   return (
     normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
     params.modelApi !== undefined &&
-    normalizeLowercaseStringOrEmpty(params.modelApi) !== OPENAI_CODEX_RESPONSES_API
+    modelApiNormalized !== OPENAI_CODEX_RESPONSES_API &&
+    modelApiNormalized !== OPENAI_AUDIO_TRANSCRIPTIONS_API
   );
 }
 
