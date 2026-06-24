@@ -13,6 +13,7 @@ export {
   stripThoughtSignatures,
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
+  AUTH_INVALID_TOKEN_USER_TEXT,
   BILLING_ERROR_USER_MESSAGE,
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,

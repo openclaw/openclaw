@@ -1,9 +1,14 @@
 // Classifies provider request failures into retry and user-facing categories.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  classifyProviderRuntimeFailureKind,
+} from "../../agents/embedded-agent-helpers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
 export type ProviderRequestErrorCode =
+  | "provider_authentication_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
   | "provider_rate_limit_or_quota_error";
@@ -25,11 +30,20 @@ export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
+export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+
 /** Classifies provider request failures that are actionable for users. */
 export function classifyProviderRequestError(
   err: unknown,
 ): ProviderRequestErrorClassification | undefined {
   const technicalMessage = formatErrorMessage(err);
+  if (classifyProviderRuntimeFailureKind(technicalMessage) === "auth_invalid_token") {
+    return {
+      code: "provider_authentication_error",
+      userMessage: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+      technicalMessage,
+    };
+  }
   if (
     hasHttp429Evidence(err, technicalMessage) &&
     isGenericProviderRuntimeErrorMessage(technicalMessage)
