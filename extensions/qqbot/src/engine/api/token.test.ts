@@ -21,6 +21,33 @@ function mockGuardedTokenResponse(body: BodyInit, init?: ResponseInit): ReturnTy
   return release;
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  release: ReturnType<typeof vi.fn>;
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  const release = vi.fn(async () => {});
+  const response = new Response(stream, init);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+  return {
+    release,
+    response,
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("QQBot token manager", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -57,6 +84,25 @@ describe("QQBot token manager", () => {
       },
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds access token responses without using response.text()", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const tracked = cancelTrackedResponse(`${"qqbot token unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(new TokenManager({ logger }).getAccessToken("app-id", "secret")).rejects.toThrow(
+      "QQBot access_token response was malformed JSON",
+    );
+
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.release).toHaveBeenCalledTimes(1);
+    expect(logger.debug.mock.calls.join("\n")).toContain("qqbot token unavailable");
+    expect(logger.debug.mock.calls.join("\n")).not.toContain("tail");
   });
 
   it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {
@@ -113,42 +159,60 @@ describe("QQBot token manager", () => {
 
   describe("resolveRetryDelayMs", () => {
     it("applies exponential backoff with jitter on consecutive failures", () => {
-      const p1 = { retryDelayMs: 1000, maxRetryDelayMs: 32000, circuitBreakerThreshold: 6, circuitBreakerCooldownMs: 300000, consecutiveRetries: 1 };
+      const p1 = {
+        retryDelayMs: 1000,
+        maxRetryDelayMs: 32000,
+        circuitBreakerThreshold: 6,
+        circuitBreakerCooldownMs: 300000,
+        consecutiveRetries: 1,
+      };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p1);
-        expect(r).toBeGreaterThanOrEqual(700);   // 1000 * 0.7
-        expect(r).toBeLessThanOrEqual(1300);      // 1000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(700); // 1000 * 0.7
+        expect(r).toBeLessThanOrEqual(1300); // 1000 * 1.3
       }
 
       const p2 = { ...p1, consecutiveRetries: 2 };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p2);
-        expect(r).toBeGreaterThanOrEqual(1400);  // 2000 * 0.7
-        expect(r).toBeLessThanOrEqual(2600);     // 2000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(1400); // 2000 * 0.7
+        expect(r).toBeLessThanOrEqual(2600); // 2000 * 1.3
       }
 
       const p3 = { ...p1, consecutiveRetries: 3 };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p3);
-        expect(r).toBeGreaterThanOrEqual(2800);  // 4000 * 0.7
-        expect(r).toBeLessThanOrEqual(5200);     // 4000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(2800); // 4000 * 0.7
+        expect(r).toBeLessThanOrEqual(5200); // 4000 * 1.3
       }
     });
 
     it("caps backoff at maxRetryDelayMs", () => {
-      const params = { retryDelayMs: 1000, maxRetryDelayMs: 5000, circuitBreakerThreshold: 10, circuitBreakerCooldownMs: 300000, consecutiveRetries: 8 };
+      const params = {
+        retryDelayMs: 1000,
+        maxRetryDelayMs: 5000,
+        circuitBreakerThreshold: 10,
+        circuitBreakerCooldownMs: 300000,
+        consecutiveRetries: 8,
+      };
       // 8 < 10 threshold, so 1000 * 2^(8-1) = 128000, capped at 5000
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(params);
-        expect(r).toBeGreaterThanOrEqual(3500);  // 5000 * 0.7
-        expect(r).toBeLessThanOrEqual(6500);     // 5000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(3500); // 5000 * 0.7
+        expect(r).toBeLessThanOrEqual(6500); // 5000 * 1.3
       }
     });
 
     it("trips circuit breaker after threshold", () => {
-      const params = { retryDelayMs: 1000, maxRetryDelayMs: 32000, circuitBreakerThreshold: 6, circuitBreakerCooldownMs: 300000, consecutiveRetries: 7 };
+      const params = {
+        retryDelayMs: 1000,
+        maxRetryDelayMs: 32000,
+        circuitBreakerThreshold: 6,
+        circuitBreakerCooldownMs: 300000,
+        consecutiveRetries: 7,
+      };
       const result = resolveRetryDelayMs(params);
-      expect(result).toBe(300000);  // Exact cooldown, no jitter
+      expect(result).toBe(300000); // Exact cooldown, no jitter
     });
   });
 
