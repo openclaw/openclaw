@@ -42,4 +42,23 @@ describe("OpenAI provider policy artifact", () => {
     expect(lunaLevels).toContain("xhigh");
     expect(lunaLevels).toContain("max");
   });
+
+  it("preserves GPT-5 nano thinking when catalog reasoning metadata is stale", () => {
+    const profile = resolveThinkingProfile({
+      provider: "openai",
+      modelId: "openai/gpt-5-nano",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("minimal");
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+  });
+
+  it("keeps catalog reasoning=false authoritative for OpenAI chat-latest rows", () => {
+    const profile = resolveThinkingProfile({
+      provider: "openai",
+      modelId: "gpt-5.3-chat-latest",
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBeUndefined();
+  });
 });

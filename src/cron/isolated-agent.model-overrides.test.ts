@@ -21,6 +21,18 @@ import {
 } from "./isolated-agent.turn-test-helpers.js";
 import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
+function isKnownOpenAIReasoningModel(modelId: string): boolean {
+  const normalized = modelId
+    .trim()
+    .toLowerCase()
+    .replace(/^openai\//u, "");
+  return (
+    /^gpt-5(?:\.\d+)?(?:$|-(?:mini|nano|pro|codex(?:-|$).*|\d{4}-\d{2}-\d{2}$))/u.test(
+      normalized,
+    ) || /^o(?:1|3|4)(?:-|$)/u.test(normalized)
+  );
+}
+
 function installThinkingTestProviders() {
   const registry = createTestRegistry();
   registry.providers = ["anthropic", "google", "openai", "openrouter"].map(
@@ -31,18 +43,23 @@ function installThinkingTestProviders() {
         id: providerId,
         label: providerId,
         auth: [],
-        resolveThinkingProfile: ({ modelId }) =>
-          providerId === "google" && modelId === "gemini-3-flash-preview"
-            ? {
-                levels: (["off", "minimal", "low", "medium", "adaptive", "high"] as const).map(
-                  (id) => ({ id }),
-                ),
-                preserveWhenCatalogReasoningFalse: true,
-              }
-            : {
-                levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
-                defaultLevel: "off",
-              },
+        resolveThinkingProfile: ({ modelId }) => {
+          if (providerId === "google" && modelId === "gemini-3-flash-preview") {
+            return {
+              levels: (["off", "minimal", "low", "medium", "adaptive", "high"] as const).map(
+                (id) => ({ id }),
+              ),
+              preserveWhenCatalogReasoningFalse: true,
+            };
+          }
+          return {
+            levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+            defaultLevel: "off",
+            ...(providerId === "openai" && isKnownOpenAIReasoningModel(modelId)
+              ? { preserveWhenCatalogReasoningFalse: true }
+              : {}),
+          };
+        },
       },
     }),
   );
@@ -261,6 +278,45 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       const calls = vi.mocked(runEmbeddedAgent).mock.calls;
       const callArgs = calls[calls.length - 1]?.[0];
       expect(callArgs?.thinkLevel).toBe("low");
+    });
+  });
+
+  it("keeps explicit OpenAI GPT-5 nano cron thinking when catalog reasoning metadata is stale", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(loadModelCatalog).mockResolvedValue([
+        {
+          id: "gpt-5-nano",
+          name: "GPT-5 nano",
+          provider: "openai",
+          reasoning: false,
+        },
+      ]);
+
+      await runCronTurn(home, {
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5-nano",
+              workspace: path.join(home, "openclaw"),
+              thinkingDefault: "off",
+            },
+          },
+          ...OPENAI_PI_RUNTIME_CONFIG,
+        },
+        jobPayload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "openai/gpt-5-nano",
+          thinking: "minimal",
+        },
+        mockTexts: ["done"],
+      });
+
+      const calls = vi.mocked(runEmbeddedAgent).mock.calls;
+      const callArgs = calls[calls.length - 1]?.[0];
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5-nano");
+      expect(callArgs?.thinkLevel).toBe("minimal");
     });
   });
 
