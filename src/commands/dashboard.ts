@@ -13,6 +13,7 @@ import {
 } from "./onboard-helpers.js";
 
 type DashboardOptions = {
+  copyToken?: boolean;
   noOpen?: boolean;
   yes?: boolean;
 };
@@ -79,8 +80,11 @@ export async function dashboardCommand(
   const { port, basePath, links, resolvedToken, token, includeTokenInUrl, dashboardUrl } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
-  if (includeTokenInUrl) {
+  if (includeTokenInUrl && !options.copyToken) {
     runtime.log("Token auto-auth included in browser/clipboard URL.");
+  }
+  if (token && options.copyToken) {
+    runtime.log("Token auto-auth URL disabled because --copy-token copies the token separately.");
   }
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
@@ -94,15 +98,32 @@ export async function dashboardCommand(
     );
   }
 
-  const copied = await copyToClipboard(dashboardUrl).catch(() => false);
-  runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
+  let copied = false;
+  if (options.copyToken) {
+    if (token) {
+      copied = await copyToClipboard(token).catch(() => false);
+      runtime.log(
+        copied
+          ? "Gateway token copied to clipboard. Paste it into the Control UI auth prompt."
+          : "Gateway token copy unavailable. Resolve gateway.auth.token or set OPENCLAW_GATEWAY_TOKEN, then paste it into the Control UI auth prompt.",
+      );
+    } else {
+      runtime.log(
+        "Gateway token unavailable. Resolve gateway.auth.token or set OPENCLAW_GATEWAY_TOKEN, then rerun `openclaw dashboard --copy-token`.",
+      );
+    }
+  } else {
+    copied = await copyToClipboard(dashboardUrl).catch(() => false);
+    runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
+  }
 
   let opened = false;
   let hint: string | undefined;
+  const browserUrl = options.copyToken ? links.httpUrl : dashboardUrl;
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(dashboardUrl);
+      opened = await openUrl(browserUrl);
     }
     if (!opened) {
       hint = formatControlUiSshHint({
@@ -111,10 +132,16 @@ export async function dashboardCommand(
       });
     }
   } else {
-    hint =
-      copied && includeTokenInUrl
-        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+    if (options.copyToken) {
+      hint = copied
+        ? "Browser launch disabled (--no-open). Gateway token copied to clipboard."
         : "Browser launch disabled (--no-open). Use the URL above.";
+    } else {
+      hint =
+        copied && includeTokenInUrl
+          ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+          : "Browser launch disabled (--no-open). Use the URL above.";
+    }
   }
 
   const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;

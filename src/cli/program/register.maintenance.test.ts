@@ -172,6 +172,17 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.noOpen).toBe(true);
   });
 
+  it("passes copyToken to dashboard command", async () => {
+    dashboardCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["dashboard", "--copy-token"]);
+
+    expect(dashboardCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(dashboardCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.copyToken).toBe(true);
+  });
+
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);
 
