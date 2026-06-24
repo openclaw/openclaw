@@ -266,7 +266,12 @@ describe("agent-runner-utils", () => {
         Provider: "OpenAI",
         To: "channel-1",
         ChatType: "Channel",
+        NativeChannelId: "native-chat-1",
         SenderId: "sender-1",
+        ChannelContext: {
+          sender: { id: "sender-1", providerUserId: "provider-user-1" },
+          chat: { id: "native-chat-1", topicId: "topic-1" },
+        },
         MemberRoleIds: ["admin", " ", "operator"],
       },
       hasRepliedRef: undefined,
@@ -283,10 +288,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.chatId).toBe("native-chat-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", topicId: "topic-1" },
+      },
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,

@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -219,7 +220,7 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
@@ -860,6 +861,9 @@ function extractToolSearchTarget(text: string): string | null {
 }
 
 function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode && targetTool === "web_search") {
+    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -1254,9 +1258,10 @@ function buildAssistantText(
       ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -1316,11 +1321,20 @@ function buildAssistantText(
   if (whatsAppStickerMarker) {
     return whatsAppStickerMarker;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return promptExactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -1341,7 +1355,10 @@ function buildAssistantText(
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
-    return "QA-STRANDED-85714 is present in this private final reply and I am not calling the message tool. This second sentence makes the omitted delivery substantive enough for the warning check.";
+    return [
+      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
+      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
+    ].join(" ");
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
@@ -1522,49 +1539,57 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
 function buildReleaseAuditJson() {
   return `${JSON.stringify(
     {
-      verified: true,
+      verified: false,
       findings: [
         {
           id: "REL-GATEWAY-417",
           source: "src/gateway/reconnect.ts",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
+          verified: true,
         },
         {
           id: "REL-CHANNEL-238",
           source: "src/channels/delivery.ts",
           status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+          verified: true,
         },
         {
           id: "REL-CRON-904",
           source: "src/scheduling/cron.ts",
           status: "single-run lock verified for restart wakeups",
+          verified: true,
         },
         {
           id: "REL-MEMORY-552",
           source: "src/memory/recall.ts",
           status:
             "fallback summary survives empty memory search; ranking sample needs second reviewer",
+          verified: true,
         },
         {
           id: "REL-PLUGIN-319",
           source: "src/plugins/runtime.ts",
           status: "bundled runtime manifest loads cleanly after restart",
+          verified: true,
         },
         {
           id: "REL-INSTALL-846",
           source: "install/update.ts",
           status: "update smoke passed from previous stable tag",
+          verified: true,
         },
         {
           id: "REL-DOCS-611",
           source: "docs/operator-notes.md",
           status:
             "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+          verified: true,
         },
         {
           id: "REL-UI-BLOCKED",
           source: "ui/control-panel.ts",
           status: "blocked: source file was referenced by checklist but missing from the fixture",
+          verified: false,
         },
       ],
     },
@@ -1937,10 +1962,11 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const exactReplyDirective =
-    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -2304,11 +2330,11 @@ async function buildResponsesPayload(
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return buildAssistantEvents(promptExactMarkerDirective);
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
-    return buildAssistantEvents(exactMarkerDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
@@ -2324,11 +2350,14 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return buildAssistantEvents(exactMarkerDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(

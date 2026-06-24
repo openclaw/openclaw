@@ -2,6 +2,7 @@
  * Claude CLI argument helpers for OpenClaw-managed bundle MCP config.
  */
 import fs from "node:fs/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Find an existing Claude `--mcp-config` argument value. */
@@ -43,10 +44,6 @@ export function injectClaudeMcpConfigArgs(
   }
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
   return next;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Writes the active per-attempt capture token into OpenClaw's generated Claude MCP config. */

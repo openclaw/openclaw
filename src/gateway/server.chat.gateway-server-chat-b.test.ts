@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -1991,7 +1993,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       const sessionId = "sess-claude-cli-backfill";
-      const originalHome = process.env.HOME;
+      const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
       const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
@@ -2029,7 +2031,7 @@ describe("gateway server chat", () => {
         ].join("\n"),
         "utf-8",
       );
-      process.env.HOME = homeDir;
+      setTestEnvValue("HOME", homeDir);
       try {
         await writeSessionStore({
           entries: {
@@ -2057,11 +2059,7 @@ describe("gateway server chat", () => {
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
-        if (originalHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = originalHome;
-        }
+        homeEnvSnapshot.restore();
       }
     });
   });
@@ -2409,6 +2407,76 @@ describe("gateway server chat", () => {
         expect(
           (sendRes.payload as { serverTiming?: unknown } | undefined)?.serverTiming,
         ).toBeUndefined();
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
+  test("chat.send rejects Control UI reconnect resume marker from public WebChat clients", async () => {
+    await withGatewayChatHarness(
+      async ({ ws }) => {
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-public-webchat-resume",
+        });
+        expect(sendRes.ok).toBe(false);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
+  test("chat.send forwards Control UI reconnect resume internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: InternalGetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-requested-session-id",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts?.requestedSessionId).toBe("sess-main");
+        expect(capturedOpts?.resumeRequestedSession).toBe(true);
       },
       {
         headers: { origin: `http://127.0.0.1:${harness.port}` },
