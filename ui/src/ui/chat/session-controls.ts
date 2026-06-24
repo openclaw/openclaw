@@ -567,6 +567,7 @@ function updateChatSessionPickerCachedLabel(
         ? {
             ...row,
             label: label ?? undefined,
+            displayName: label === null ? undefined : row.displayName,
           }
         : row,
     ),
@@ -1021,7 +1022,7 @@ function renderChatSessionPickerPopover(
                   title=${renameLabel}
                   aria-label=${renameLabel}
                   ?disabled=${renameDisabled}
-                  @click=${() => beginChatSessionRename(state, row.key, row.label ?? "")}
+                  @click=${() => beginChatSessionRename(state, row.key, label)}
                 >
                   ${icons.edit}
                 </button>
