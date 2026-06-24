@@ -9,7 +9,11 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
-import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
+import {
+  createLineUserInFlightGuard,
+  createLineWebhookReplayCache,
+  handleLineWebhookEvents,
+} from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -45,6 +49,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       logVerbose("line: no message handler configured");
     });
   const replayCache = createLineWebhookReplayCache();
+  const userInFlightGuard = createLineUserInFlightGuard();
   const groupHistories = new Map<string, HistoryEntry[]>();
 
   const handleWebhook = async (body: webhook.CallbackRequest): Promise<void> => {
@@ -59,6 +64,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       mediaMaxBytes,
       processMessage,
       replayCache,
+      userInFlightGuard,
       groupHistories,
       historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
     });

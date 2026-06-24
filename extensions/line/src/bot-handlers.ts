@@ -66,6 +66,27 @@ function isDownloadableLineMessageType(
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
 
+export type LineUserInFlightGuard = {
+  tryAcquire(key: string): boolean;
+  release(key: string): void;
+};
+
+export function createLineUserInFlightGuard(): LineUserInFlightGuard {
+  const inFlight = new Set<string>();
+  return {
+    tryAcquire(key: string): boolean {
+      if (inFlight.has(key)) {
+        return false;
+      }
+      inFlight.add(key);
+      return true;
+    },
+    release(key: string): void {
+      inFlight.delete(key);
+    },
+  };
+}
+
 interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -75,10 +96,13 @@ interface LineHandlerContext {
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
+  userInFlightGuard?: LineUserInFlightGuard;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
+const LINE_IN_FLIGHT_BUSY_TEXT =
+  "⏳ Your previous message is still being processed. Please wait a moment before sending another.";
 type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
@@ -421,6 +445,62 @@ function hasAnyLineMention(message: MessageEvent["message"]): boolean {
   return getLineMentionees(message).length > 0;
 }
 
+function buildLineInFlightKey(
+  accountId: string,
+  sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean },
+): string {
+  const userId = sourceInfo.userId ?? "unknown";
+  if (sourceInfo.isGroup) {
+    const conversationId = sourceInfo.groupId ?? sourceInfo.roomId ?? "unknown";
+    return `${accountId}|${conversationId}|${userId}`;
+  }
+  return `${accountId}|${userId}`;
+}
+
+async function sendLineBusyReply(params: {
+  replyToken?: string;
+  sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean };
+  context: LineHandlerContext;
+}): Promise<void> {
+  const { replyToken, sourceInfo, context } = params;
+  const sendOpts = {
+    cfg: context.cfg,
+    accountId: context.account.accountId,
+    channelAccessToken: context.account.channelAccessToken,
+  };
+
+  if (replyToken) {
+    try {
+      await replyMessageLine(
+        replyToken,
+        [{ type: "text", text: LINE_IN_FLIGHT_BUSY_TEXT }],
+        sendOpts,
+      );
+      return;
+    } catch {
+      // Reply token expired or already used; fall through to push.
+    }
+  }
+
+  const target = sourceInfo.isGroup
+    ? sourceInfo.groupId
+      ? `line:group:${sourceInfo.groupId}`
+      : sourceInfo.roomId
+        ? `line:room:${sourceInfo.roomId}`
+        : null
+    : sourceInfo.userId
+      ? `line:${sourceInfo.userId}`
+      : null;
+
+  if (target) {
+    try {
+      await pushMessageLine(target, LINE_IN_FLIGHT_BUSY_TEXT, sendOpts);
+    } catch {
+      logVerbose("line: failed to send busy reply");
+    }
+  }
+}
+
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -444,13 +524,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
   if (isGroup && decision.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? message.text : "";
-    const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = sourceInfo.userId ?? "unknown";
+    const senderId = userId ?? "unknown";
     if (historyKey && context.groupHistories) {
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
@@ -506,16 +585,29 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  await processMessage(messageContext);
+  const sourceInfo = { userId, groupId, roomId, isGroup };
+  const inFlightKey = buildLineInFlightKey(account.accountId, sourceInfo);
 
-  if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
-    if (historyKey && context.groupHistories.has(historyKey)) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      });
+  if (context.userInFlightGuard && !context.userInFlightGuard.tryAcquire(inFlightKey)) {
+    logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
+    await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
+    return;
+  }
+
+  try {
+    await processMessage(messageContext);
+
+    if (isGroup && context.groupHistories) {
+      const historyKey = groupId ?? roomId;
+      if (historyKey && context.groupHistories.has(historyKey)) {
+        createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        });
+      }
     }
+  } finally {
+    context.userInFlightGuard?.release(inFlightKey);
   }
 }
 
@@ -564,7 +656,20 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(postbackContext);
+  const sourceInfo = getLineSourceInfo(event.source);
+  const inFlightKey = buildLineInFlightKey(context.account.accountId, sourceInfo);
+
+  if (context.userInFlightGuard && !context.userInFlightGuard.tryAcquire(inFlightKey)) {
+    logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
+    await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
+    return;
+  }
+
+  try {
+    await context.processMessage(postbackContext);
+  } finally {
+    context.userInFlightGuard?.release(inFlightKey);
+  }
 }
 
 export async function handleLineWebhookEvents(
