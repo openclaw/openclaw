@@ -37,13 +37,33 @@ export type ApplicationOverlaySnapshot = {
 export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
-  runUpdate: (sessionKey: string) => Promise<void>;
+  runUpdate: () => Promise<void>;
   dismissUpdate: () => void;
   decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
   dispose: () => void;
 };
 
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
+const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_POLL_MS = 1_000;
+const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
+const PENDING_UPDATE_HANDOFF_REASONS = new Set([
+  UPDATE_HANDOFF_STARTED_REASON,
+  UPDATE_RESTART_HEALTH_PENDING_REASON,
+]);
+
+type UpdateRestartStatusResponse = {
+  sentinel?: {
+    kind?: string;
+    status?: string;
+    stats?: {
+      reason?: string | null;
+      after?: { version?: string | null } | null;
+    } | null;
+  } | null;
+};
 
 function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
@@ -99,9 +119,65 @@ function resolveUpdateStatusBanner(params: {
   };
 }
 
+function resolveUpdateVerificationBanner(params: {
+  expectedVersion: string;
+  actualVersion: string | null;
+}): ApplicationStatusBanner {
+  const actualSuffix = params.actualVersion
+    ? ` Expected v${params.expectedVersion}, running v${params.actualVersion}.`
+    : "";
+  return {
+    tone: "danger",
+    text: `Update installed but running version did not change — restart may have been blocked.${actualSuffix}`,
+  };
+}
+
+function resolvePostRestartUpdateBanner(
+  reason: string | null | undefined,
+): ApplicationStatusBanner {
+  const normalizedReason = reason?.trim() || "restart-unhealthy";
+  const guidance =
+    normalizedReason === "restart-unhealthy"
+      ? "The replacement process never became healthy and the previous process stayed up."
+      : "Check the gateway logs for the replacement failure.";
+  return {
+    tone: "danger",
+    text: `Update error: ${normalizedReason}. ${guidance}`,
+  };
+}
+
+function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+  };
+}
+
+function isPendingUpdateHandoffSentinel(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): boolean {
+  const reason = sentinel?.stats?.reason;
+  return (
+    sentinel?.kind === "update" &&
+    sentinel.status === "skipped" &&
+    typeof reason === "string" &&
+    PENDING_UPDATE_HANDOFF_REASONS.has(reason)
+  );
+}
+
 function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
 }
+
+type UpdateRunResponse = {
+  ok?: boolean;
+  result?: {
+    status?: string;
+    reason?: string;
+    after?: { version?: string | null } | null;
+  };
+  handoff?: { status?: string };
+};
 
 export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
   let snapshot: ApplicationOverlaySnapshot = {
@@ -113,14 +189,19 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     approvalError: null,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
-  const expiryTimers = new Set<ReturnType<typeof globalThis.setTimeout>>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
+  let pendingUpdateExpectedVersion: string | null = null;
+  let pendingUpdateHandoff = false;
+  let updateRunGeneration = 0;
+  let updateVerificationGeneration = 0;
+  let updateVerificationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
     execApprovalQueue: [],
     execApprovalBusy: false,
     execApprovalError: null,
+    execApprovalExpiryTimers: new Map(),
   };
 
   const publish = () => {
@@ -136,46 +217,150 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       listener(snapshot);
     }
   };
+  promptState.execApprovalExpired = publish;
 
-  const scheduleExpiryPublish = (entry: ExecApprovalRequest) => {
-    const timer = globalThis.setTimeout(
-      () => {
-        expiryTimers.delete(timer);
-        if (disposed) {
-          return;
-        }
-        promptState.execApprovalQueue = pruneExecApprovalQueue(promptState.execApprovalQueue);
-        publish();
-      },
-      Math.max(0, entry.expiresAtMs - Date.now() + 500),
-    );
-    expiryTimers.add(timer);
-  };
-
-  const refreshApprovals = async () => {
-    await refreshPendingApprovalQueue(promptState);
-    if (!disposed) {
+  const refreshApprovals = async (client: NonNullable<typeof activeClient>) => {
+    const applied = await refreshPendingApprovalQueue(promptState, {
+      isCurrentClient: (requestClient) =>
+        !disposed &&
+        requestClient === client &&
+        activeClient === client &&
+        gateway.snapshot.client === client &&
+        gateway.snapshot.connected,
+    });
+    if (applied && !disposed) {
       publish();
-      for (const entry of promptState.execApprovalQueue) {
-        scheduleExpiryPublish(entry);
-      }
     }
   };
 
+  const publishUpdateBanner = (updateStatusBanner: ApplicationStatusBanner | null) => {
+    snapshot = { ...snapshot, updateStatusBanner };
+    publish();
+  };
+
+  const cancelUpdateVerification = () => {
+    updateVerificationGeneration += 1;
+    if (updateVerificationTimer !== null) {
+      globalThis.clearTimeout(updateVerificationTimer);
+      updateVerificationTimer = null;
+    }
+  };
+
+  const waitForUpdateVerification = (delayMs: number, generation: number) =>
+    new Promise<boolean>((resolve) => {
+      const timer = globalThis.setTimeout(() => {
+        if (updateVerificationTimer === timer) {
+          updateVerificationTimer = null;
+        }
+        resolve(generation === updateVerificationGeneration && !disposed);
+      }, delayMs);
+      updateVerificationTimer = timer;
+    });
+
+  const verifyPendingUpdateVersion = async (client: NonNullable<typeof activeClient>) => {
+    const generation = updateVerificationGeneration;
+    const expectedVersion = pendingUpdateExpectedVersion?.trim() || null;
+    const pendingHandoff = pendingUpdateHandoff;
+    if (!expectedVersion && !pendingHandoff) {
+      return;
+    }
+    const isCurrentVerification = () =>
+      generation === updateVerificationGeneration &&
+      !disposed &&
+      activeClient === client &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.connected;
+    const deadline =
+      Date.now() +
+      (pendingHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
+    const pollMs = pendingHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
+    while (isCurrentVerification() && Date.now() < deadline) {
+      let response: UpdateRestartStatusResponse | null;
+      try {
+        response = await client.request<UpdateRestartStatusResponse>("update.status", {});
+      } catch {
+        response = null;
+      }
+      if (!isCurrentVerification()) {
+        return;
+      }
+      const sentinel = response?.sentinel;
+      if (isPendingUpdateHandoffSentinel(sentinel)) {
+        if (!(await waitForUpdateVerification(pollMs, generation))) {
+          return;
+        }
+        continue;
+      }
+      if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
+        pendingUpdateExpectedVersion = null;
+        pendingUpdateHandoff = false;
+        publishUpdateBanner(resolvePostRestartUpdateBanner(sentinel.stats?.reason));
+        return;
+      }
+      const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
+      if (
+        sentinel?.kind === "update" &&
+        sentinel.status === "ok" &&
+        !actualVersion &&
+        !expectedVersion
+      ) {
+        pendingUpdateExpectedVersion = null;
+        pendingUpdateHandoff = false;
+        publish();
+        return;
+      }
+      if (sentinel?.kind === "update" && actualVersion) {
+        pendingUpdateExpectedVersion = null;
+        pendingUpdateHandoff = false;
+        publishUpdateBanner(
+          expectedVersion && actualVersion !== expectedVersion
+            ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion })
+            : null,
+        );
+        return;
+      }
+      if (!(await waitForUpdateVerification(pollMs, generation))) {
+        return;
+      }
+    }
+    if (!isCurrentVerification()) {
+      return;
+    }
+    const currentVersion = gateway.snapshot.hello?.server?.version?.trim() || null;
+    pendingUpdateExpectedVersion = null;
+    pendingUpdateHandoff = false;
+    publishUpdateBanner(
+      expectedVersion && currentVersion !== expectedVersion
+        ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
+        : pendingHandoff
+          ? resolvePendingUpdateHandoffTimeoutBanner()
+          : null,
+    );
+  };
+
   const stopGateway = gateway.subscribe((next) => {
+    updateRunGeneration += 1;
+    cancelUpdateVerification();
     const previousClient = activeClient;
     activeClient = next.client;
     promptState.client = next.client;
     if (!next.connected || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalError = null;
-      snapshot = { ...snapshot, updateAvailable: null };
+      snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
+      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
+        globalThis.clearTimeout(timer);
+      }
+      promptState.execApprovalExpiryTimers?.clear();
       publish();
       return;
     }
     snapshot = { ...snapshot, updateAvailable: readUpdateAvailable(next.hello) };
     if (previousClient !== next.client) {
-      void refreshApprovals();
+      void refreshApprovals(next.client);
+      if (next.client) {
+        void verifyPendingUpdateVersion(next.client);
+      }
     } else {
       publish();
     }
@@ -195,7 +380,6 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       const entry = parseExecApprovalRequested(event.payload);
       if (entry) {
         enqueueExecApprovalPrompt(promptState, entry);
-        scheduleExpiryPublish(entry);
         publish();
       }
       return;
@@ -204,7 +388,6 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       const entry = parsePluginApprovalRequested(event.payload);
       if (entry) {
         enqueueExecApprovalPrompt(promptState, entry);
-        scheduleExpiryPublish(entry);
         publish();
       }
       return;
@@ -226,28 +409,43 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async runUpdate(sessionKey) {
+    async runUpdate() {
       const client = gateway.snapshot.client;
       if (!client || !gateway.snapshot.connected || disposed || snapshot.updateRunning) {
         return;
       }
+      const generation = ++updateRunGeneration;
       snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
       publish();
       try {
-        const response = await client.request<{
-          ok?: boolean;
-          result?: { status?: string; reason?: string };
-          handoff?: { status?: string };
-        }>("update.run", { sessionKey });
+        const response = await client.request<UpdateRunResponse>("update.run", {});
+        if (
+          disposed ||
+          generation !== updateRunGeneration ||
+          activeClient !== client ||
+          gateway.snapshot.client !== client
+        ) {
+          return;
+        }
         const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
+        const expectedVersion = response.result?.after?.version?.trim() || null;
         if (
           response.ok === true &&
           status === "skipped" &&
           response.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
           response.handoff?.status === "started"
         ) {
+          pendingUpdateExpectedVersion = expectedVersion;
+          pendingUpdateHandoff = true;
           return;
         }
+        if (response.ok === true && status === "ok") {
+          pendingUpdateExpectedVersion = expectedVersion;
+          pendingUpdateHandoff = false;
+          return;
+        }
+        pendingUpdateExpectedVersion = null;
+        pendingUpdateHandoff = false;
         if (response.ok !== true || status !== "ok") {
           snapshot = {
             ...snapshot,
@@ -258,6 +456,14 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
           };
         }
       } catch (error) {
+        if (
+          disposed ||
+          generation !== updateRunGeneration ||
+          activeClient !== client ||
+          gateway.snapshot.client !== client
+        ) {
+          return;
+        }
         snapshot = {
           ...snapshot,
           updateStatusBanner: {
@@ -266,8 +472,15 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
           },
         };
       } finally {
-        snapshot = { ...snapshot, updateRunning: false };
-        publish();
+        if (
+          !disposed &&
+          generation === updateRunGeneration &&
+          activeClient === client &&
+          gateway.snapshot.client === client
+        ) {
+          snapshot = { ...snapshot, updateRunning: false };
+          publish();
+        }
       }
     },
     dismissUpdate() {
@@ -291,7 +504,14 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
           dismissExecApprovalPrompt(promptState, active.id);
-          await refreshApprovals();
+          const currentClient = activeClient;
+          if (
+            currentClient &&
+            gateway.snapshot.client === currentClient &&
+            gateway.snapshot.connected
+          ) {
+            await refreshApprovals(currentClient);
+          }
           return;
         }
         if (promptState.execApprovalQueue.some((entry) => entry.id === active.id)) {
@@ -304,12 +524,14 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     },
     dispose() {
       disposed = true;
+      updateRunGeneration += 1;
+      cancelUpdateVerification();
       stopGateway();
       stopEvents();
-      for (const timer of expiryTimers) {
+      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
         globalThis.clearTimeout(timer);
       }
-      expiryTimers.clear();
+      promptState.execApprovalExpiryTimers?.clear();
       listeners.clear();
     },
   };
