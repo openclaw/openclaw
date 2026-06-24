@@ -822,8 +822,12 @@ describe("ci workflow guards", () => {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
+    expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(ciWorkflowText).toContain(
+      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
+    );
     expect(runStep.run).toContain("--qa-profile smoke-ci");
     expect(runStep.run).toContain("--concurrency 8");
     expect(runStep.run).not.toContain("--category");
@@ -832,7 +836,10 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain('exit "$qa_exit_code"');
     expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(uploadStep.if).toBe("always() && matrix.task == 'bundled-protocol'");
+    expect(runStep.run).toMatch(
+      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
+    );
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
     expect(uploadStep.with).toMatchObject({
       path: ".artifacts/qa-e2e/smoke-ci-profile/",
       "if-no-files-found": "warn",
