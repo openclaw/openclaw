@@ -1,7 +1,7 @@
 // Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
-import { resolveProcessCwdOrFallback } from "./safe-cwd.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -72,36 +72,57 @@ export function resolveOsHomeDir(
 }
 
 /**
- * Resolves the effective home or falls back to cwd when no home source exists.
+ * Resolves the effective home, or falls back to cwd when no home source exists.
  *
- * This branch only runs when every home source (OPENCLAW_HOME, HOME, USERPROFILE,
- * Termux, os.homedir()) is unavailable, so os.homedir() cannot serve as the
- * fallback here — it is already empty/throwing, and `path.resolve("")` would
- * reach back into process.cwd() and crash on a deleted launch directory.
+ * Home sources are tried first (OPENCLAW_HOME, HOME, USERPROFILE, Termux,
+ * os.homedir()). When none resolve, the launch cwd is used if it still exists.
  *
- * Fall back to the running Node binary's directory instead: it is always
- * non-empty, points at a real existing directory, and is not a shared temp
- * (state writes to a shared tmpdir are a symlink/pre-create attack surface,
- * cf. PR #74994 review). process.cwd() is still preferred when it is valid.
+ * If the cwd has also been deleted, this throws a clear actionable error rather
+ * than silently writing state under the runtime install directory:
+ * resolveStateDir() derives mutable state/config/auth-adjacent paths from this
+ * value, so the Node/Bun binary dir is an unsafe state root (and a read-only
+ * install would fail on the next state write anyway). The no-home + deleted-cwd
+ * combination is unrecoverable, so it is surfaced explicitly instead of masked
+ * with a guessed directory. See issue #73676.
  */
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return (
-    resolveEffectiveHomeDir(env, homedir) ??
-    path.resolve(resolveProcessCwdOrFallback(path.dirname(process.execPath)))
+  const home = resolveEffectiveHomeDir(env, homedir);
+  if (home) {
+    return home;
+  }
+  const cwd = tryProcessCwd();
+  if (cwd) {
+    return path.resolve(cwd);
+  }
+  throw new Error(
+    "OpenClaw could not determine a home directory for state storage: no OPENCLAW_HOME, HOME, or USERPROFILE is set, os.homedir() is unavailable, and the current working directory has been deleted. Set OPENCLAW_HOME (or HOME/USERPROFILE) to an existing directory, or run OpenClaw from a directory that still exists.",
   );
 }
 
-/** Resolves the OS home or falls back to cwd when no OS home source exists. */
+/**
+ * Resolves the OS home, or falls back to cwd when no OS home source exists.
+ *
+ * Like resolveRequiredHomeDir but ignores OPENCLAW_HOME. Throws a clear
+ * actionable error when no OS home source resolves and the cwd is deleted,
+ * for the same state-root safety reason as resolveRequiredHomeDir.
+ */
 export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return (
-    resolveOsHomeDir(env, homedir) ??
-    path.resolve(resolveProcessCwdOrFallback(path.dirname(process.execPath)))
+  const home = resolveOsHomeDir(env, homedir);
+  if (home) {
+    return home;
+  }
+  const cwd = tryProcessCwd();
+  if (cwd) {
+    return path.resolve(cwd);
+  }
+  throw new Error(
+    "OpenClaw could not determine an OS home directory for state storage: no HOME or USERPROFILE is set, os.homedir() is unavailable, and the current working directory has been deleted. Set HOME (or USERPROFILE) to an existing directory, or run OpenClaw from a directory that still exists.",
   );
 }
 

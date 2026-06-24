@@ -8,6 +8,7 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -276,11 +277,12 @@ describe("resolveRequiredHomeDir (deleted cwd)", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to the running Node binary dir when no home source exists and cwd was deleted", () => {
-    // Every home source is unavailable and the launch cwd is gone: os.homedir()
-    // is already empty here (otherwise resolveEffectiveHomeDir would have used
-    // it), so the fallback must be a non-empty, non-shared directory. The Node
-    // binary dir is guaranteed to exist and avoids shared tmpdir state writes.
+  it("throws a clear actionable error when no home source exists and cwd was deleted", () => {
+    // Every home source is unavailable and the launch cwd is gone. Rather than
+    // silently writing state under the Node/Bun binary dir (an unsafe state
+    // root, since resolveStateDir() derives mutable state from this value),
+    // surface the unrecoverable condition with an actionable error. The error
+    // mentions both the missing-home and deleted-cwd causes and how to recover.
     const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
       throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
         code: "ENOENT",
@@ -288,11 +290,34 @@ describe("resolveRequiredHomeDir (deleted cwd)", () => {
     });
 
     try {
-      expect(
+      expect(() =>
         resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
           throw new Error("no home");
         }),
-      ).toBe(path.resolve(path.dirname(process.execPath)));
+      ).toThrow(/could not determine a home directory/);
+      expect(() =>
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toThrow(/Set OPENCLAW_HOME/);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("resolveRequiredOsHomeDir throws a clear actionable error for the same condition", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      expect(() =>
+        resolveRequiredOsHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toThrow(/could not determine an OS home directory/);
     } finally {
       cwdSpy.mockRestore();
     }
