@@ -1,5 +1,12 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  formatUsageWindowSummary,
+  loadProviderUsageSummary,
+  resolveUsageProviderId,
+} from "../../infra/provider-usage.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import {
   estimateUsageCost,
@@ -14,6 +21,88 @@ import type { ReplyPayload } from "../types.js";
 import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
+
+const REPLY_FOOTER_USAGE_TIMEOUT_MS = 2500;
+const REPLY_FOOTER_OAUTH_ONLY_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "google-gemini-cli",
+  "openai",
+]);
+
+function resolveReplyFooterUsageCredentialType(
+  authLabel?: string,
+): "oauth" | "token" | "api_key" | undefined {
+  const auth = normalizeOptionalLowercaseString(authLabel);
+  if (auth?.startsWith("oauth")) {
+    return "oauth";
+  }
+  if (auth?.startsWith("token")) {
+    return "token";
+  }
+  if (auth?.startsWith("api-key") || auth?.startsWith("api key")) {
+    return "api_key";
+  }
+  return undefined;
+}
+
+async function loadReplyFooterUsageWindowLine(params: {
+  provider?: string;
+  authLabel?: string;
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<string | undefined> {
+  const credentialType = resolveReplyFooterUsageCredentialType(params.authLabel);
+  const usageProvider = resolveUsageProviderId(params.provider, { credentialType });
+  if (
+    !usageProvider ||
+    (REPLY_FOOTER_OAUTH_ONLY_PROVIDERS.has(usageProvider) &&
+      credentialType !== "oauth" &&
+      credentialType !== "token")
+  ) {
+    return undefined;
+  }
+
+  try {
+    let usageTimeout: NodeJS.Timeout | undefined;
+    const usageSummary = await Promise.race([
+      loadProviderUsageSummary({
+        timeoutMs: REPLY_FOOTER_USAGE_TIMEOUT_MS,
+        providers: [usageProvider],
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+      }),
+      new Promise<never>((_, reject) => {
+        usageTimeout = setTimeout(
+          () => reject(new Error("reply footer usage timeout")),
+          REPLY_FOOTER_USAGE_TIMEOUT_MS,
+        );
+      }),
+    ]).finally(() => {
+      if (usageTimeout) {
+        clearTimeout(usageTimeout);
+      }
+    });
+    const usageEntry = usageSummary.providers[0];
+    if (
+      !usageEntry ||
+      usageEntry.error ||
+      (usageEntry.windows.length === 0 && !usageEntry.summary?.trim())
+    ) {
+      return undefined;
+    }
+    return (
+      formatUsageWindowSummary(usageEntry, {
+        now: Date.now(),
+        maxWindows: 2,
+      }) ?? undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 export const formatResponseUsageLine = (params: {
   usage?: {
@@ -69,7 +158,10 @@ export const resolveResponseUsageLine = (params: {
   model?: string;
   preserveUserFacingSessionState?: boolean;
   replyUsageState?: PluginHookReplyUsageState;
-}): string | undefined => {
+  authMode?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<string | undefined> => {
   const responseUsageMode = resolveEffectiveResponseUsage(
     params.sessionRaw,
     params.config.messages?.responseUsage,
@@ -104,10 +196,26 @@ export const resolveResponseUsageLine = (params: {
       ? renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel))
       : undefined;
 
-  if (rendered) {
-    return rendered;
+  const line = rendered ?? formatted ?? undefined;
+  if (!line) {
+    return undefined;
   }
-  return formatted ?? undefined;
+
+  const authLabel =
+    params.authMode ??
+    (params.config.models?.providers && params.provider && params.provider in params.config.models.providers
+      ? (resolveModelAuthMode(params.provider, params.config, undefined, {
+          workspaceDir: params.workspaceDir,
+        }) ?? undefined)
+      : undefined);
+  const providerUsageLine = await loadReplyFooterUsageWindowLine({
+    provider: params.provider,
+    authLabel,
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+  });
+  return providerUsageLine ? `${line} · ${providerUsageLine}` : line;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {

@@ -88,6 +88,7 @@ const runtimeErrorMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
+const loadProviderUsageSummaryMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
@@ -106,7 +107,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => ({
   isMissingProviderAuthError: () => false,
-  resolveModelAuthMode: () => "api-key",
+  resolveModelAuthMode: (provider?: string) =>
+    provider === "github-copilot" ? "token" : "api-key",
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => {
@@ -175,6 +177,14 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (provider: string | undefined | null) =>
     provider === "google" || provider === "google-gemini-cli",
 }));
+
+vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
+  return {
+    ...actual,
+    loadProviderUsageSummary: (...args: unknown[]) => loadProviderUsageSummaryMock(...args),
+  };
+});
 
 const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
@@ -276,6 +286,8 @@ beforeEach(() => {
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
+  loadProviderUsageSummaryMock.mockReset();
+  loadProviderUsageSummaryMock.mockResolvedValue({ updatedAt: Date.now(), providers: [] });
   vi.mocked(scheduleFollowupDrain).mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
@@ -2760,6 +2772,33 @@ describe("runReplyAgent response usage footer", () => {
     });
   }
 
+  function mockCopilotQuotaWindows() {
+    loadProviderUsageSummaryMock.mockResolvedValueOnce({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "github-copilot",
+          displayName: "Copilot",
+          windows: [
+            { label: "Premium", usedPercent: 14 },
+            { label: "Chat", usedPercent: 0 },
+          ],
+        },
+      ],
+    });
+  }
+
+  const copilotTokenConfig = {
+    models: {
+      providers: {
+        "github-copilot": {
+          auth: "token",
+          models: [{ id: "gpt-5.5" }],
+        },
+      },
+    },
+  };
+
   it("uses the built-in compact footer when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -2783,13 +2822,75 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it("adds active provider quota windows to the full usage footer", async () => {
+    mockCopilotQuotaWindows();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "amazon-bedrock",
-          model: "us.anthropic.claude-sonnet-4-6",
+          provider: "github-copilot",
+          model: "gpt-5.5",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      config: copilotTokenConfig,
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(loadProviderUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: ["github-copilot"],
+        timeoutMs: 2500,
+      }),
+    );
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("Premium 86% left · Chat 100% left");
+    expect(text).not.toContain("· session ");
+  });
+
+  it("keeps the full usage footer when provider quota loading fails", async () => {
+    loadProviderUsageSummaryMock.mockRejectedValueOnce(new Error("usage endpoint unavailable"));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "github-copilot",
+          model: "gpt-5.5",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      config: copilotTokenConfig,
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("↕️ 12/3");
+    expect(text).not.toContain("Premium");
+  });
+
+  it("adds active provider quota windows when responseUsage=tokens", async () => {
+    mockCopilotQuotaWindows();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "github-copilot",
+          model: "gpt-5.5",
           usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
         },
       },
@@ -2799,28 +2900,15 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({
       responseUsage: "tokens",
       sessionKey,
-      provider: "amazon-bedrock",
-      model: "us.anthropic.claude-sonnet-4-6",
-      config: {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              auth: "aws-sdk",
-              models: [
-                {
-                  id: "us.anthropic.claude-sonnet-4-6",
-                  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-                },
-              ],
-            },
-          },
-        },
-      },
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      config: copilotTokenConfig,
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
     expect(text).toContain("Usage:");
     expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).toContain("Premium 86% left · Chat 100% left");
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });
