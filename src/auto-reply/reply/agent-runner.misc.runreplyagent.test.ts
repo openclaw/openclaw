@@ -3069,7 +3069,7 @@ describe("runReplyAgent transient HTTP retry", () => {
     expect(persisted[sessionKey]?.sessionId).toBe("reset-session");
   });
 
-  it("does not reset when a stalled direct session has buffered block output", async () => {
+  it("does not reset when a stalled direct session has pending block delivery", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stalled-direct-buffered-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -3085,10 +3085,17 @@ describe("runReplyAgent transient HTTP retry", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await saveSessionStore(storePath, sessionStore);
 
-    const onBlockReply = vi.fn();
+    let resolveBlockDelivery: (() => void) | undefined;
+    const blockDelivery = new Promise<void>((resolve) => {
+      resolveBlockDelivery = resolve;
+    });
+    const onBlockReply = vi.fn(() => blockDelivery);
     runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
-      block?.({ text: "Buffered answer" });
+      const block = params.onBlockReply as
+        | ((payload: { text?: string; mediaUrls?: string[] }) => void)
+        | undefined;
+      block?.({ text: "Visible answer", mediaUrls: ["file://visible.png"] });
+      setImmediate(() => resolveBlockDelivery?.());
       return {
         payloads: [{ text: "LLM request failed.", isError: true }],
         meta: {
@@ -3172,7 +3179,7 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Buffered answer" }),
+      expect.objectContaining({ text: expect.stringContaining("Visible answer") }),
       expect.any(Object),
     );
     expect(followupRun.run.sessionId).toBe("stalled-session");

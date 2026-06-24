@@ -3765,6 +3765,7 @@ describe("runAgentTurnWithFallback", () => {
       flush: vi.fn(async () => {}),
       stop: vi.fn(),
       hasBuffered: vi.fn(() => true),
+      hasPendingDelivery: vi.fn(() => false),
       didStream: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
