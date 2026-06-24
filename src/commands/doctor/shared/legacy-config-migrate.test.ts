@@ -2497,6 +2497,22 @@ describe("legacy model compat migrate", () => {
     ).toBe(true);
   });
 
+  it("does not pollute prototypes when merging colliding model ref map keys", () => {
+    const polluted = JSON.parse(
+      '{"agents":{"defaults":{"models":{"openai/gpt-4o":{"streaming":false},"openai/gpt-4":{"__proto__":{"polluted":true},"alias":"legacy-four"}}}}}',
+    );
+    const res = migrateLegacyConfigForTest(polluted);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+      string,
+      unknown
+    >;
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    expect(merged.polluted).toBeUndefined();
+    expect(merged).toEqual({ streaming: false, alias: "legacy-four" });
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {

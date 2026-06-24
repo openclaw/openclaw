@@ -9,6 +9,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isModelThinkingFormat, type ModelDefinitionConfig } from "../../../config/types.models.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 
 const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
@@ -859,7 +860,7 @@ function mergeModelRefMapEntries(
   const merged: Record<string, unknown> = { ...existingRecord };
   const conflicts: string[] = [];
   for (const [field, incomingValue] of Object.entries(incomingRecord)) {
-    if (incomingValue === undefined) {
+    if (incomingValue === undefined || isBlockedObjectKey(field)) {
       continue;
     }
     if (!hasOwnDefinedProperty(existingRecord, field)) {
