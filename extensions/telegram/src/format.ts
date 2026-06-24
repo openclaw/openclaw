@@ -984,7 +984,7 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
     )
     .join("");
   const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
-  return `<table>${head}${body}</table>\n\n`;
+  return `<table bordered>${head}${body}</table>\n\n`;
 }
 
 function renderTelegramRichHtmlDocument(
