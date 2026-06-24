@@ -98,4 +98,12 @@ describe("media-understanding formatMissingProviderHint", () => {
     // No fallback; the legacy prefix is preserved exactly.
     expect(`${legacyPrefix}${hint}`).toBe(legacyPrefix);
   });
+
+  it("returns empty string for an id that is only in the channel catalog (feishu) — prevents misleading install hints", () => {
+    // Feishu is an official external channel (not a media provider), so the
+    // provider-only lookup must skip it. Otherwise a media-provider error
+    // would emit `openclaw plugins install @openclaw/feishu` which is not
+    // the package that owns the missing media surface.
+    expect(formatMissingProviderHint("feishu")).toBe("");
+  });
 });
