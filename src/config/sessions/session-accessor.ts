@@ -541,6 +541,46 @@ export type RestoreSessionFromCompactionCheckpointParams = {
   storePath: string;
 };
 
+export type TemporarySessionMappingPreservationResult<T> = {
+  /** Result returned by the operation while the temporary mapping may exist. */
+  result: T;
+  /** Snapshot failure; callers may continue when temporary cleanup is best-effort. */
+  snapshotFailure?: string;
+  /** Restore/delete failure for the original temporary mapping state. */
+  restoreFailure?: string;
+};
+
+type TemporarySessionMappingSnapshot =
+  | {
+      canRestore: false;
+      sessionKey: string;
+      snapshotFailure: string;
+      storePath: string;
+    }
+  | {
+      canRestore: true;
+      hadEntry: false;
+      sessionKey: string;
+      storePath: string;
+    }
+  | {
+      canRestore: true;
+      entry: SessionEntry;
+      hadEntry: true;
+      sessionKey: string;
+      storePath: string;
+    };
+
+type TemporarySessionMappingOperationResult<T> =
+  | {
+      ok: true;
+      result: T;
+    }
+  | {
+      error: unknown;
+      ok: false;
+    };
+
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;
@@ -1391,6 +1431,37 @@ export async function applyRestartRecoveryLifecycle<T>(params: {
     },
   );
   return writerResult.result;
+}
+
+/**
+ * Runs an operation while preserving one temporary session mapping.
+ * The storage backend snapshots exactly the named key before the operation and
+ * restores that entry, or deletes it when it did not previously exist, after
+ * the operation finishes. SQLite backends can implement the same named
+ * preservation lifecycle without exposing mutable store access to callers.
+ */
+export async function preserveTemporarySessionMapping<T>(
+  scope: SessionAccessScope,
+  operation: () => Promise<T> | T,
+): Promise<TemporarySessionMappingPreservationResult<T>> {
+  const snapshot = snapshotTemporarySessionMapping(scope);
+  let operationResult: TemporarySessionMappingOperationResult<T>;
+  try {
+    operationResult = { ok: true, result: await operation() };
+  } catch (err) {
+    operationResult = { error: err, ok: false };
+  }
+
+  const restoreFailure = await restoreTemporarySessionMapping(snapshot);
+  if (!operationResult.ok) {
+    throw operationResult.error;
+  }
+
+  return {
+    result: operationResult.result,
+    ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
+    ...(restoreFailure ? { restoreFailure } : {}),
+  };
 }
 
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
@@ -2513,6 +2584,53 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
     updatedAt: patch.updatedAt ?? now,
     ...patch,
   };
+}
+
+function snapshotTemporarySessionMapping(
+  scope: SessionAccessScope,
+): TemporarySessionMappingSnapshot {
+  const storePath = resolveAccessStorePath(scope);
+  try {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = store[scope.sessionKey];
+    return {
+      canRestore: true,
+      ...(entry ? { entry: structuredClone(entry), hadEntry: true } : { hadEntry: false }),
+      sessionKey: scope.sessionKey,
+      storePath,
+    };
+  } catch (err) {
+    return {
+      canRestore: false,
+      sessionKey: scope.sessionKey,
+      snapshotFailure: formatErrorMessage(err),
+      storePath,
+    };
+  }
+}
+
+async function restoreTemporarySessionMapping(
+  snapshot: TemporarySessionMappingSnapshot,
+): Promise<string | undefined> {
+  if (!snapshot.canRestore) {
+    return undefined;
+  }
+  try {
+    await updateSessionStore(
+      snapshot.storePath,
+      (store) => {
+        if (snapshot.hadEntry) {
+          store[snapshot.sessionKey] = structuredClone(snapshot.entry);
+          return;
+        }
+        delete store[snapshot.sessionKey];
+      },
+      { activeSessionKey: snapshot.sessionKey },
+    );
+    return undefined;
+  } catch (err) {
+    return formatErrorMessage(err);
+  }
 }
 
 function cleanupPreviousResetTranscripts(params: {
