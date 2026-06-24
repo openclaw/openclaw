@@ -394,6 +394,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
     - `tts.providers` returns the visible TTS provider inventory.
+    - `image.providers` returns the visible image generation provider inventory, including provider id, label, configured state, default model, available models, and capabilities.
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
