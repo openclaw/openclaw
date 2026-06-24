@@ -566,7 +566,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
 };
 
 async function readOptionalUtf8File(params: {
-  absolutePath: string;
+  root: string;
   relativePath: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
@@ -588,9 +588,16 @@ async function readOptionalUtf8File(params: {
       });
       return buffer.toString("utf-8");
     }
-    return await fs.readFile(params.absolutePath, "utf-8");
+    const root = await fsRoot(params.root);
+    const existing = await root.read(params.relativePath, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    return existing.buffer.toString("utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "not-found") {
       return "";
     }
     throw error;
@@ -598,7 +605,6 @@ async function readOptionalUtf8File(params: {
 }
 
 async function appendMemoryFlushContent(params: {
-  absolutePath: string;
   root: string;
   relativePath: string;
   content: string;
@@ -615,7 +621,7 @@ async function appendMemoryFlushContent(params: {
   }
 
   const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
+    root: params.root,
     relativePath: params.relativePath,
     sandbox: params.sandbox,
     signal: params.signal,
@@ -623,26 +629,21 @@ async function appendMemoryFlushContent(params: {
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  if (params.sandbox) {
-    const parent = path.posix.dirname(params.relativePath);
-    if (parent && parent !== ".") {
-      await params.sandbox.bridge.mkdirp({
-        filePath: parent,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-    }
-    await params.sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+  const parent = path.posix.dirname(params.relativePath);
+  if (parent && parent !== ".") {
+    await params.sandbox.bridge.mkdirp({
+      filePath: parent,
       cwd: params.sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
     });
-    return;
   }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, next, "utf-8");
+  await params.sandbox.bridge.writeFile({
+    filePath: params.relativePath,
+    cwd: params.sandbox.root,
+    data: next,
+    mkdir: true,
+    signal: params.signal,
+  });
 }
 
 type PreparedMemoryFlushAppend =
@@ -749,7 +750,7 @@ function prepareDailyMemoryFlushAppend(params: {
 }
 
 async function prepareMemoryFlushAppend(params: {
-  absolutePath: string;
+  root: string;
   relativePath: string;
   content: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
@@ -766,7 +767,7 @@ async function prepareMemoryFlushAppend(params: {
   }
 
   const existingContent = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
+    root: params.root,
     relativePath: params.relativePath,
     sandbox: params.sandbox,
     signal: params.signal,
@@ -813,7 +814,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       }
 
       const preparedAppend = await prepareMemoryFlushAppend({
-        absolutePath: allowedAbsolutePath,
+        root: options.root,
         relativePath: options.relativePath,
         content,
         sandbox: options.sandbox,
@@ -839,7 +840,6 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       }
 
       await appendMemoryFlushContent({
-        absolutePath: allowedAbsolutePath,
         root: options.root,
         relativePath: options.relativePath,
         content: preparedAppend.content,

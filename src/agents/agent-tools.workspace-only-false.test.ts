@@ -405,6 +405,69 @@ describe("FS tools with workspaceOnly=false", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects daily-memory flush duplicate reads through symlink aliases before mutation",
+    async () => {
+      const allowedRelativePath = "memory/2026-03-07.md";
+      const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+      const outsideTarget = path.join(tmpDir, "outside-memory.md");
+      await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+      await fs.writeFile(outsideTarget, "- outside durable note");
+      await fs.symlink(outsideTarget, allowedAbsolutePath);
+
+      const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+        createHostWorkspaceWriteTool(workspaceDir),
+        {
+          root: workspaceDir,
+          relativePath: allowedRelativePath,
+        },
+      );
+
+      await expect(
+        writeTool.execute("test-call-memory-symlink-alias", {
+          path: allowedRelativePath,
+          content: "- new compact note",
+        }),
+      ).rejects.toMatchObject({ code: "symlink" });
+      await expect(fs.readFile(outsideTarget, "utf-8")).resolves.toBe("- outside durable note");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects daily-memory flush duplicate reads through hardlink aliases before mutation",
+    async () => {
+      const allowedRelativePath = "memory/2026-03-07.md";
+      const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+      const outsideTarget = path.join(tmpDir, "outside-memory-hardlink.md");
+      await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+      await fs.writeFile(outsideTarget, "- outside durable note");
+      try {
+        await fs.link(outsideTarget, allowedAbsolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw error;
+      }
+
+      const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+        createHostWorkspaceWriteTool(workspaceDir),
+        {
+          root: workspaceDir,
+          relativePath: allowedRelativePath,
+        },
+      );
+
+      await expect(
+        writeTool.execute("test-call-memory-hardlink-alias", {
+          path: allowedRelativePath,
+          content: "- new compact note",
+        }),
+      ).rejects.toMatchObject({ code: "hardlink" });
+      await expect(fs.readFile(outsideTarget, "utf-8")).resolves.toBe("- outside durable note");
+    },
+  );
+
   it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {
     const allowedRelativePath = "memory/2026-03-08.md";
     const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
