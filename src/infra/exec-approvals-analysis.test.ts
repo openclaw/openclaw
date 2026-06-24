@@ -201,7 +201,7 @@ describe("Windows enforced shell command rendering", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.command).toMatch(/^& .+python3(?:\.\d+)? a\.py$/);
+    expect(result.command).toMatch(/^& (?:"[^"]+python3(?:\.\d+)?"|.+python3(?:\.\d+)?) a\.py$/);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {
