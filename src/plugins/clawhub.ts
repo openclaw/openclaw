@@ -881,7 +881,7 @@ async function resolveCompatiblePackageVersion(params: {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: artifactVersion.compatibility ?? params.detail.package?.compatibility ?? null,
+      compatibility: artifactVersion.compatibility ?? null,
       verification: null,
       clawpack:
         artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
@@ -929,8 +929,7 @@ async function resolveCompatiblePackageVersion(params: {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility:
-        versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+      compatibility: versionDetail.version?.compatibility ?? null,
       verification: null,
       clawpack,
     };
@@ -941,8 +940,7 @@ async function resolveCompatiblePackageVersion(params: {
   return {
     ok: true,
     version: resolvedVersion,
-    compatibility:
-      versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+    compatibility: versionDetail.version?.compatibility ?? null,
     verification: verificationState.verification ?? topLevelLegacyVerification,
     clawpack,
   };
