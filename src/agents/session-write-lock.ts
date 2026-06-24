@@ -667,6 +667,7 @@ function resolveRemainingAcquireTimeoutMs(
 
 async function shouldRetryStaleAcquireFailure(params: {
   lockPath: string;
+  normalizedSessionFile: string;
   lockMissingAtDiagnostics: boolean;
   inspected: LockInspectionDetails;
   heldByThisProcess: boolean;
@@ -674,7 +675,10 @@ async function shouldRetryStaleAcquireFailure(params: {
   nowMs: number;
   orphanPayloadGraceMs: number;
 }): Promise<boolean> {
-  if (params.lockMissingAtDiagnostics) {
+  if (
+    params.lockMissingAtDiagnostics &&
+    !sessionLockHeldByThisProcess(params.normalizedSessionFile)
+  ) {
     return true;
   }
   return !(await shouldReportContendedLockStale({
@@ -1016,6 +1020,7 @@ export async function acquireSessionWriteLock(params: {
           resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now()) > 0 &&
           (await shouldRetryStaleAcquireFailure({
             lockPath: errorLockPath,
+            normalizedSessionFile,
             lockMissingAtDiagnostics,
             inspected,
             heldByThisProcess,
