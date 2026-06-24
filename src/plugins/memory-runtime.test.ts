@@ -70,6 +70,7 @@ function createMemoryRuntimeFixture() {
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     closeMemorySearchManager: vi.fn(async () => {}),
+    releaseMemoryIndexManagers: vi.fn(async () => {}),
   };
 }
 
@@ -356,6 +357,46 @@ describe("memory runtime auto-enable loading", () => {
     await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });
 
     expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
+    expectNoMemoryRuntimeBootstrap();
+  });
+
+  it("routes the index-managers scope to release without retiring the shared manager (#96455)", async () => {
+    const runtime = createMemoryRuntimeFixture();
+    const cfg = { plugins: {} };
+    getMemoryRuntimeMock.mockReturnValue(runtime);
+
+    await closeActiveMemorySearchManager({
+      cfg: cfg as never,
+      agentId: "main",
+      scope: "index-managers",
+    });
+
+    expect(runtime.releaseMemoryIndexManagers).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
+    expect(runtime.closeMemorySearchManager).not.toHaveBeenCalled();
+    expectNoMemoryRuntimeBootstrap();
+  });
+
+  it("falls back to the close hook for runtimes without the narrow index-release hook", async () => {
+    const runtime = createMemoryRuntimeFixture();
+    // A legacy/external memory runtime that has not added releaseMemoryIndexManagers
+    // must keep its prior post-timeout cleanup instead of becoming a no-op (#84048).
+    const { releaseMemoryIndexManagers: _omitted, ...legacyRuntime } = runtime;
+    const cfg = { plugins: {} };
+    getMemoryRuntimeMock.mockReturnValue(legacyRuntime);
+
+    await closeActiveMemorySearchManager({
+      cfg: cfg as never,
+      agentId: "main",
+      scope: "index-managers",
+    });
+
+    expect(legacyRuntime.closeMemorySearchManager).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
     });

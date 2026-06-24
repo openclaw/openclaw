@@ -109,6 +109,9 @@ export type MemoryPluginRuntime = {
     agentId: string;
   }): MemoryRuntimeBackendConfig;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
+  // Request-scoped recall cleanup: releases disposable local index managers
+  // without tearing down the shared agent-scoped search manager (#96455).
+  releaseMemoryIndexManagers?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 

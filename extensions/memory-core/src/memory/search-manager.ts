@@ -444,10 +444,32 @@ export async function closeMemorySearchManager(params: {
       log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
     }
   }
-  if (managerRuntimePromise !== null) {
-    const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
-    await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
+  // Retiring the agent's manager also releases its disposable local index
+  // managers; request-scoped recall cleanup uses releaseMemoryIndexManagers
+  // instead so it can keep the shared QMD manager alive (#96455).
+  await releaseMemoryIndexManagers(params);
+}
+
+// Request-scoped cleanup for a hung active-memory recall: release only the
+// disposable local builtin index/embedding managers a timed-out recall can
+// leave open (#84048). The agent-scoped shared QMD full manager is long-lived
+// and used by chat memory_search plus startup timers/watchers, so a recall
+// timeout must not tear it down, otherwise later chat searches surface
+// "memory search manager is closed" while QMD and CLI search stay healthy
+// (#96455). The recall's own in-flight QMD query is already cancelled via the
+// embedded run abort signal.
+export async function releaseMemoryIndexManagers(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  if (managerRuntimePromise === null) {
+    return;
   }
+  const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
+  await closeMemoryIndexManagersForAgent({
+    cfg: params.cfg,
+    agentId: normalizeAgentId(params.agentId),
+  });
 }
 
 class FallbackMemoryManager implements MemorySearchManager {

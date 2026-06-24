@@ -5,6 +5,7 @@ import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
+  releaseMemoryIndexManagers,
 } from "./memory/index.js";
 
 export const memoryRuntime: MemoryPluginRuntime = {
@@ -23,5 +24,8 @@ export const memoryRuntime: MemoryPluginRuntime = {
   },
   async closeMemorySearchManager(params) {
     await closeMemorySearchManager(params);
+  },
+  async releaseMemoryIndexManagers(params) {
+    await releaseMemoryIndexManagers(params);
   },
 };

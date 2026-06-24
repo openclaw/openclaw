@@ -139,6 +139,7 @@ import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
+  releaseMemoryIndexManagers,
 } from "./search-manager.js";
 const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
@@ -1052,6 +1053,29 @@ describe("getMemorySearchManager caching", () => {
     });
     expect(nextMain.manager).not.toBe(mainManager);
     expect(nextOther.manager).toBe(otherManager);
+  });
+
+  it("releaseMemoryIndexManagers releases local index managers but keeps the shared qmd manager alive (#96455)", async () => {
+    const mainCfg = createQmdCfg("main");
+
+    const main = await getMemorySearchManager({ cfg: mainCfg, agentId: "main" });
+    const mainManager = requireManager(main);
+
+    // Active-memory recall-timeout cleanup must release only the disposable
+    // local index managers (#84048) and leave the long-lived shared QMD manager
+    // open, so concurrent and later chat memory_search calls do not surface
+    // "memory search manager is closed" (#96455).
+    await releaseMemoryIndexManagers({ cfg: mainCfg, agentId: "main" });
+
+    expect(mockPrimary.close).not.toHaveBeenCalled();
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledWith({
+      cfg: mainCfg,
+      agentId: "main",
+    });
+
+    const nextMain = await getMemorySearchManager({ cfg: mainCfg, agentId: "main" });
+    expect(nextMain.manager).toBe(mainManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
   it("closes the requested agent builtin index manager on scoped teardown", async () => {

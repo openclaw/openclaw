@@ -34,10 +34,19 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
   await runtime.closeActiveMemorySearchManagers(cfg);
 }
 
-/** Closes the active memory search manager for one agent. */
+/**
+ * Closes the active memory search manager for one agent.
+ *
+ * `scope` defaults to "manager": retire the agent's shared search manager.
+ * "index-managers" releases only the disposable local index managers and keeps
+ * the shared manager alive — active-memory recall-timeout cleanup uses this so a
+ * request-scoped timeout does not retire the QMD manager used by chat
+ * memory_search (#96455).
+ */
 export async function closeActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  scope?: "manager" | "index-managers";
 }): Promise<void> {
   const runtime = await loadMemoryHostSearchRuntime();
   await runtime.closeActiveMemorySearchManager(params);
