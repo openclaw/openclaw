@@ -44,7 +44,7 @@ const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
 // who can influence the configured endpoint, e.g. via SSRF, could serve an
 // unbounded JSON stream). Cap discovery response bodies before parsing so a
 // hostile or buggy endpoint cannot drive the setup wizard into OOM.
-const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 4 * 1024 * 1024;
+const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAICompatModelsResponse = {
   data?: Array<{

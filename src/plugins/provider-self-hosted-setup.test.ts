@@ -25,7 +25,7 @@ beforeEach(() => {
 
 // Mirrors SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES in the source under test. Kept in
 // sync deliberately so the regression asserts the body is capped, not drained.
-const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 4 * 1024 * 1024;
+const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
 
 /**
