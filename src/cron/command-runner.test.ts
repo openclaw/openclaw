@@ -56,6 +56,40 @@ describe("runCronCommandJob", () => {
     expect(result.summary).toBe("NO_REPLY");
   });
 
+  it("preserves action-critical setup lines when command stdout is truncated", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "process.stdout.write('To sign in, use a web browser to open https://login.microsoft.com/device and enter the code FAKE-CODE-270 to authenticate.\\n')",
+            "for (let i = 0; i < 40; i += 1) process.stdout.write(`CRON-FILLER-270-line-${i}\\n`)",
+            "process.stdout.write('DONE')",
+          ].join(";"),
+        ],
+        timeoutSeconds: 5,
+        outputMaxBytes: 80,
+      }),
+      nowMs: () => 789,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("https://login.microsoft.com/device");
+    expect(result.summary).toContain("FAKE-CODE-270");
+    expect(result.summary).toContain("[openclaw: stdout tail]");
+    expect(result.summary).toMatch(
+      /\[openclaw: stdout omitted \d+ earlier bytes; Recovery: openclaw cron runs --id "command-job"\]/u,
+    );
+    expect(result.diagnostics?.entries[0]).toMatchObject({
+      ts: 789,
+      source: "exec",
+      severity: "info",
+      truncated: true,
+    });
+  });
+
   it("marks non-zero exit codes as cron errors and keeps stderr as summary", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({

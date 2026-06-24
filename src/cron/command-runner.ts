@@ -1,6 +1,7 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { isActionCriticalOutputLine } from "./action-critical-output.js";
 import type { CronRunDiagnostics, CronRunOutcome, CronRunStatus, CronJob } from "./types.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
@@ -24,9 +25,83 @@ function trimOutput(value: string): string | undefined {
   return normalizeOptionalString(value);
 }
 
-function buildCommandSummary(params: { stdout: string; stderr: string }): string | undefined {
-  const stdout = trimOutput(params.stdout);
-  const stderr = trimOutput(params.stderr);
+function formatRecoveryHint(jobId: string): string {
+  return `Recovery: openclaw cron runs --id ${JSON.stringify(jobId)}`;
+}
+
+function uniquePreservedLines(params: { output?: string; lines?: string[] }): string[] {
+  const output = params.output ?? "";
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const line of params.lines ?? []) {
+    const normalized = line.trimEnd();
+    if (!normalized || seen.has(normalized) || output.includes(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    lines.push(normalized);
+  }
+  return lines;
+}
+
+function formatCommandStreamOutput(params: {
+  stream: "stdout" | "stderr";
+  output: string;
+  preservedLines?: string[];
+  truncatedBytes?: number;
+  jobId: string;
+}): string | undefined {
+  const output = trimOutput(params.output);
+  const preservedLines = params.truncatedBytes
+    ? uniquePreservedLines({ output, lines: params.preservedLines })
+    : [];
+  if (!output && preservedLines.length === 0) {
+    return undefined;
+  }
+  if (!params.truncatedBytes) {
+    return output;
+  }
+
+  const sections: string[] = [];
+  if (preservedLines.length > 0) {
+    sections.push(`[openclaw: preserved earlier ${params.stream} lines omitted by output cap]`);
+    sections.push(...preservedLines);
+    if (output) {
+      sections.push(`[openclaw: ${params.stream} tail]`);
+    }
+  }
+  if (output) {
+    sections.push(output);
+  }
+  sections.push(
+    `[openclaw: ${params.stream} omitted ${params.truncatedBytes} earlier bytes; ${formatRecoveryHint(params.jobId)}]`,
+  );
+  return sections.join("\n");
+}
+
+function buildCommandSummary(params: {
+  jobId: string;
+  stdout: string;
+  stderr: string;
+  stdoutPreservedLines?: string[];
+  stderrPreservedLines?: string[];
+  stdoutTruncatedBytes?: number;
+  stderrTruncatedBytes?: number;
+}): string | undefined {
+  const stdout = formatCommandStreamOutput({
+    stream: "stdout",
+    output: params.stdout,
+    preservedLines: params.stdoutPreservedLines,
+    truncatedBytes: params.stdoutTruncatedBytes,
+    jobId: params.jobId,
+  });
+  const stderr = formatCommandStreamOutput({
+    stream: "stderr",
+    output: params.stderr,
+    preservedLines: params.stderrPreservedLines,
+    truncatedBytes: params.stderrTruncatedBytes,
+    jobId: params.jobId,
+  });
   if (stdout && stderr) {
     return `stdout:\n${stdout}\n\nstderr:\n${stderr}`;
   }
@@ -115,6 +190,7 @@ export async function runCronCommandJob(params: {
       ...(payload.env ? { env: payload.env } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(payload.outputMaxBytes !== undefined ? { maxOutputBytes: payload.outputMaxBytes } : {}),
+      preserveOutputLine: ({ line }) => isActionCriticalOutputLine(line),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       killProcessTree: true,
     });
@@ -125,7 +201,15 @@ export async function runCronCommandJob(params: {
       result.termination !== "no-output-timeout" &&
       result.termination !== "signal";
     const status: CronRunStatus = ok ? "ok" : "error";
-    const summary = buildCommandSummary({ stdout: result.stdout, stderr: result.stderr });
+    const summary = buildCommandSummary({
+      jobId: params.job.id,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      stdoutPreservedLines: result.stdoutPreservedLines,
+      stderrPreservedLines: result.stderrPreservedLines,
+      stdoutTruncatedBytes: result.stdoutTruncatedBytes,
+      stderrTruncatedBytes: result.stderrTruncatedBytes,
+    });
     const error = ok
       ? undefined
       : commandErrorMessage({

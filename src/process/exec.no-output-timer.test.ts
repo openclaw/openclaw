@@ -121,6 +121,29 @@ describe("runCommandWithTimeout no-output timer", () => {
     expect(result.termination).toBe("exit");
   });
 
+  it("preserves selected early lines without changing bounded tail output", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeSpawnedChild();
+    spawnMock.mockReturnValue(fake.child);
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+      timeoutMs: 1_000,
+      maxOutputBytes: 5,
+      preserveOutputLine: ({ line }) => line.includes("code"),
+    });
+
+    fake.stdout.emit("data", Buffer.from("enter code ABCD\n"));
+    fake.stdout.emit("data", Buffer.from("abcdef"));
+    fake.stdout.emit("data", Buffer.from("gh"));
+
+    emitProcessExit(fake, { code: 0 });
+    const result = await runPromise;
+
+    expect(result.stdout).toBe("defgh");
+    expect(result.stdoutPreservedLines).toEqual(["enter code ABCD"]);
+    expect(result.stdoutTruncatedBytes).toBe(19);
+  });
+
   it("marks no-output timeout when the spawned child goes silent", async () => {
     vi.useFakeTimers();
     const fake = createFakeSpawnedChild();
