@@ -2953,7 +2953,8 @@ describe("runReplyAgent transient HTTP retry", () => {
     setAgentRunnerSessionResetTestDeps({
       generateSecureUuid: () => "reset-session",
       persistSessionResetLifecycle: async (params) => {
-        await saveSessionStore(params.storePath, { [params.sessionKey]: params.nextEntry });
+        saveSessionStore(params.storePath, { [params.sessionKey]: params.nextEntry });
+        return { replayedMessages: 0 };
       },
     });
 
