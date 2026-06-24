@@ -1,4 +1,7 @@
-import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceProviderPlugin,
+  RealtimeVoiceProviderCapabilities,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { NovaSonicVoiceBridge } from "./bridge.js";
 
@@ -45,10 +48,26 @@ export function buildNovaSonicVoiceProvider(
   const novaSonicConfig = (pluginConfig?.novaSonic ?? {}) as Record<string, unknown>;
   const config = normalizeConfig(novaSonicConfig);
   if (!config.enabled) return null;
+
+  const capabilities: RealtimeVoiceProviderCapabilities = {
+    transports: ["gateway-relay"],
+    inputAudioFormats: [
+      { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+      { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+    ],
+    outputAudioFormats: [
+      { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+      { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+    ],
+    supportsBargeIn: true,
+    supportsToolCalls: true,
+  };
+
   return {
     id: "amazon-nova-sonic",
     label: "Amazon Nova Sonic",
     autoSelectOrder: 15,
+    capabilities,
 
     resolveConfig: ({ rawConfig }) => {
       const raw = (rawConfig as Record<string, unknown>)?.novaSonic ?? rawConfig;

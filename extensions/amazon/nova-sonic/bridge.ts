@@ -5,11 +5,14 @@ import {
   type InvokeModelWithBidirectionalStreamCommandOutput,
 } from "@aws-sdk/client-bedrock-runtime";
 import type {
+  RealtimeVoiceAudioFormat,
+  RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { mulawToPcm16Resampled, pcm16ResampledToMulaw } from "../shared/audio-utils.js";
+import { mulawToPcm16Resampled, pcm16ResampledToMulaw, mulawToPcm16, pcm16ToMulaw, resamplePcm16 } from "../shared/audio-utils.js";
 import { getAwsClient } from "../shared/client-cache.js";
 
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -27,6 +30,7 @@ type NovaSonicBridgeConfig = RealtimeVoiceBridgeCallbacks & {
   tools?: RealtimeVoiceTool[];
   temperature?: number;
   maxTokens?: number;
+  audioFormat?: RealtimeVoiceAudioFormat;
 };
 
 function getBedrockClient(region: string): BedrockRuntimeClient {
@@ -73,8 +77,15 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
 
-    // Convert mu-law (8kHz telephony) to PCM 16-bit at 16kHz for Nova Sonic
-    const pcmAudio = mulawToPcm16Resampled(audio, NOVA_SONIC_INPUT_RATE);
+    // Convert input audio to PCM 16-bit at 16kHz for Nova Sonic
+    let pcmAudio: Buffer;
+    if (this.config.audioFormat?.encoding === "pcm16") {
+      // Input is PCM 24kHz — resample to 16kHz
+      pcmAudio = resamplePcm16(audio, 24000, NOVA_SONIC_INPUT_RATE);
+    } else {
+      // Default: mu-law 8kHz — decode and upsample to 16kHz
+      pcmAudio = mulawToPcm16Resampled(audio, NOVA_SONIC_INPUT_RATE);
+    }
 
     this.enqueueEvent({
       event: {
@@ -114,7 +125,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     });
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(callId: string, result: unknown, _options?: RealtimeVoiceToolResultOptions): void {
     const contentName = randomUUID();
     // Send tool result as a text content block
     this.enqueueEvent({
@@ -490,10 +501,17 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       if (!chunk) {
         return;
       }
-      // Convert PCM output (24kHz) to mu-law (8kHz) for OpenClaw telephony
+      // Convert Nova Sonic PCM output (24kHz) to the requested audio format
       const pcmAudio = Buffer.from(chunk, "base64");
-      const mulawAudio = pcm16ResampledToMulaw(pcmAudio, NOVA_SONIC_OUTPUT_RATE);
-      this.config.onAudio(mulawAudio);
+      let outputAudio: Buffer;
+      if (this.config.audioFormat?.encoding === "pcm16") {
+        // Caller wants PCM 24kHz — Nova Sonic already outputs 24kHz, pass through
+        outputAudio = pcmAudio;
+      } else {
+        // Default: caller wants mu-law 8kHz — downsample and encode
+        outputAudio = pcm16ResampledToMulaw(pcmAudio, NOVA_SONIC_OUTPUT_RATE);
+      }
+      this.config.onAudio(outputAudio);
       if (this.responseStartTimestamp === null) {
         this.responseStartTimestamp = this.latestMediaTimestamp;
       }
@@ -563,7 +581,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private handleBargeIn(): void {
+  handleBargeIn(_options?: RealtimeVoiceBargeInOptions): void {
     this.config.onClearAudio();
     this.markQueue = [];
     this.responseStartTimestamp = null;

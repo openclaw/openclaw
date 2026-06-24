@@ -5,9 +5,9 @@
   "description": "OpenClaw Amazon AWS services plugin (Polly TTS, and more)",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "3.1036.0",
-    "@aws-sdk/client-polly": "3.1036.0",
-    "@aws-sdk/client-transcribe-streaming": "3.1036.0"
+    "@aws-sdk/client-bedrock-runtime": "3.1056.0",
+    "@aws-sdk/client-polly": "3.1056.0",
+    "@aws-sdk/client-transcribe-streaming": "3.1056.0"
   },
   "openclaw": {
     "bundle": {
