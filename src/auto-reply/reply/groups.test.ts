@@ -201,7 +201,7 @@ describe("group runtime loading", () => {
 
     expect(context).toContain("You are in a Mattermost channel.");
     expect(context).toContain("Your text replies are automatically sent to this channel.");
-    expect(context).toContain("do not use the message tool to send to this same destination");
+    expect(context).toContain("do not use the message tool to send to this same channel");
     expect(context).toContain("attachments to this same channel/thread");
     expect(context).not.toContain("group chat");
   });

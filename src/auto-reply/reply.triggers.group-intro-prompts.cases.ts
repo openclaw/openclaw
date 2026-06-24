@@ -95,13 +95,13 @@ export function registerGroupIntroPromptCases(): void {
         },
         expected: [
           "You are in a Mattermost channel.",
-          "Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
-          groupParticipationNote,
+          "Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same channel; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+          channelParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
         ],
-        forbidden: ["Mattermost group chat"],
+        forbidden: ["Mattermost group chat", "this group chat"],
       },
       {
         name: "whatsapp-always-on",
