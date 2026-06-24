@@ -848,6 +848,7 @@ async function runQaRuntimeParitySuite(params: {
     const finishedAt = new Date();
     const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
       {
+        repoRoot: params.repoRoot,
         outputDir: params.outputDir,
         startedAt: params.startedAt,
         finishedAt,
@@ -900,6 +901,7 @@ async function runQaRuntimeParitySuite(params: {
 }
 
 async function writeQaSuiteArtifacts(params: {
+  repoRoot?: string;
   outputDir: string;
   startedAt: Date;
   finishedAt: Date;
@@ -974,6 +976,7 @@ async function writeQaSuiteArtifacts(params: {
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
           providerMode: params.providerMode,
+          repoRoot: params.repoRoot,
           scenarioDefinitions: params.scenarioDefinitions,
           scenarioResults: params.scenarios,
         })
@@ -1296,6 +1299,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         .then(async () => {
           const partialFinishedAt = new Date();
           const { report, reportPath } = await writeQaSuiteArtifacts({
+            repoRoot,
             outputDir,
             startedAt,
             finishedAt: partialFinishedAt,
@@ -1448,6 +1452,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       });
       const { evidence, evidencePath, report, reportPath, summaryPath } =
         await writeQaSuiteArtifacts({
+          repoRoot,
           outputDir,
           startedAt,
           finishedAt,
@@ -1720,6 +1725,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     });
     const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
       {
+        repoRoot,
         outputDir,
         startedAt,
         finishedAt,

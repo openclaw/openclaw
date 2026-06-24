@@ -483,6 +483,27 @@ describe("typing controller", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
+
+  it("can send the first typing signal without periodic keepalive refreshes", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 30_000,
+      keepalive: false,
+    });
+
+    await typing.startTypingLoop();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await typing.startTypingLoop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveTypingMode", () => {
@@ -529,6 +550,17 @@ describe("resolveTypingMode", () => {
           sourceReplyDeliveryMode: "message_tool_only" as const,
         },
         expected: "message",
+      },
+      {
+        name: "configured instant typing mode wins over message-tool-only default",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: true,
+          wasMentioned: false,
+          isHeartbeat: false,
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expected: "instant",
       },
       {
         name: "default mentioned group chat",

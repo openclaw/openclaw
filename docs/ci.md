@@ -30,7 +30,7 @@ or an explicit manual dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs                  |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes                               |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes                               |
-| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, QA Smoke CI, and CI-routing checks                | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes                               |
 | `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes                               |

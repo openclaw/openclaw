@@ -251,7 +251,6 @@ jobs:
               ],
             };
           });
-
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
@@ -285,6 +284,7 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
+              { check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" },
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -922,6 +922,26 @@ jobs:
               pnpm test:bundled
               pnpm protocol:check
               ;;
+            qa-smoke-ci)
+              output_dir=".artifacts/qa-e2e/smoke-ci-profile"
+              export OPENCLAW_BUILD_PRIVATE_QA=1
+              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
+              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
+              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
+              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
+              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
+              qa_exit_code=0
+              pnpm openclaw qa run \
+                --repo-root . \
+                --qa-profile smoke-ci \
+                --concurrency 8 \
+                --output-dir "$output_dir" || qa_exit_code=$?
+              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+              if [ "$qa_exit_code" -ne 0 ]; then
+                echo "::error title=QA smoke profile failed::smoke-ci exited ${qa_exit_code}; evidence upload will still run"
+                exit "$qa_exit_code"
+              fi
+              ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
@@ -937,6 +957,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload QA smoke profile evidence
+        if: always() && matrix.task == 'qa-smoke-ci'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-profile/
+          if-no-files-found: warn
+          retention-days: 7
 
   checks-fast-plugin-contracts-shard:
     permissions:
