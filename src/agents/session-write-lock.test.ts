@@ -730,7 +730,9 @@ describe("acquireSessionWriteLock", () => {
       const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
         stdio: "ignore",
       });
-      if (!owner.pid) throw new Error("missing pid");
+      if (!owner.pid) {
+        throw new Error("missing pid");
+      }
       // Lock is past staleMs (30s > 20s) but within its own maxHoldMs (100000 >> 30s).
       await fs.writeFile(
         lockPath,
