@@ -1002,17 +1002,17 @@ export function convertMessages(
       if (firstUserIndex >= 0) {
         const msg = transformedMessages[firstUserIndex];
         const prefix = normalizeStructuredPromptSection(dynamicSuffix);
-        if (typeof msg.content === "string") {
-          transformedMessages[firstUserIndex] = {
-            ...msg,
-            content: `${prefix}\n\n${msg.content}`,
-          };
-        } else {
-          transformedMessages[firstUserIndex] = {
-            ...msg,
-            content: [{ type: "text", text: prefix }, ...msg.content],
-          };
-        }
+        const userMsg = msg as Extract<(typeof transformedMessages)[number], { role: "user" }>;
+        transformedMessages[firstUserIndex] = {
+          ...userMsg,
+          content:
+            typeof userMsg.content === "string"
+              ? `${prefix}\n\n${userMsg.content}`
+              : [
+                  { type: "text", text: prefix },
+                  ...(userMsg.content as readonly { type: "text"; text: string }[]),
+                ],
+        };
       }
     }
   }
