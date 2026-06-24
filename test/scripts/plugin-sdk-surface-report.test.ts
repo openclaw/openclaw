@@ -43,11 +43,13 @@ function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
   expect(result.status).toBe(0);
   expect(result.stderr).toBe("");
 
-  const totalsMatch =
-    /public package SDK entrypoints:[\s\S]*?\n  exports: (\d+)\n  callable exports: (\d+)/u.exec(
-      result.stdout,
-    );
-  const wildcardsMatch = /public wildcard reexports: (\d+)/u.exec(result.stdout);
+  return parseCurrentPublicCounts(result.stdout);
+}
+
+function parseCurrentPublicCounts(stdout: string): PublicSurfaceCounts {
+  const totalsMatch = /public package SDK entrypoints:[\s\S]*?\n\s{2}exports: (\d+)\n\s{2}callable exports: (\d+)/u
+    .exec(stdout);
+  const wildcardsMatch = /public wildcard reexports: (\d+)/u.exec(stdout);
   if (
     totalsMatch === null ||
     totalsMatch[1] === undefined ||
