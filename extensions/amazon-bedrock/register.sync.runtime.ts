@@ -21,7 +21,10 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
-import { supportsBedrockPromptCaching } from "./bedrock-options.js";
+import {
+  isBedrockNovaPromptCachingModel,
+  supportsBedrockPromptCaching,
+} from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -244,6 +247,7 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
  */
 type BedrockAppProfileTraits = {
   cacheEligible: boolean;
+  longCacheTtlEligible: boolean;
   omitTemperature: boolean;
 };
 
@@ -274,9 +278,12 @@ async function resolveAppProfileTraits(
     });
     const models = resp.models ?? [];
     const modelArns = models.map((model) => model.modelArn ?? "");
+    const cacheEligible =
+      models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn));
     const traits = {
-      cacheEligible:
-        models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
+      cacheEligible,
+      longCacheTtlEligible:
+        cacheEligible && modelArns.every((modelArn) => !isBedrockNovaPromptCachingModel(modelArn)),
       omitTemperature: modelArns.some(isOpus47OrNewerBedrockModelRef),
     };
     appProfileTraitsCache.set(modelId, traits);
@@ -288,6 +295,7 @@ async function resolveAppProfileTraits(
     // return the heuristic fallback but allow retry on the next request.
     return {
       cacheEligible: isAnthropicBedrockModel(modelId),
+      longCacheTtlEligible: !isBedrockNovaPromptCachingModel(modelId),
       omitTemperature: isOpus47OrNewerBedrockModelRef(modelId),
     };
   } finally {
@@ -303,11 +311,14 @@ function hasCachePoint(blocks: BedrockContentBlock[] | undefined): boolean {
   return blocks?.some((b) => b.cachePoint != null) === true;
 }
 
-function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
+function makeCachePoint(
+  cacheRetention: string | undefined,
+  longCacheTtlEligible = true,
+): BedrockCachePoint {
   return {
     cachePoint: {
       type: "default",
-      ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
+      ...(cacheRetention === "long" && longCacheTtlEligible ? { ttl: "1h" } : {}),
     },
   };
 }
@@ -319,11 +330,12 @@ function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
 function injectBedrockCachePoints(
   payload: Record<string, unknown>,
   cacheRetention: string | undefined,
+  options: { longCacheTtlEligible?: boolean } = {},
 ): void {
   if (!cacheRetention || cacheRetention === "none") {
     return;
   }
-  const point = makeCachePoint(cacheRetention);
+  const point = makeCachePoint(cacheRetention, options.longCacheTtlEligible ?? true);
 
   // Inject into system prompt if missing.
   const system = payload.system as BedrockContentBlock[] | undefined;
@@ -409,13 +421,14 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     streamFn,
   }: {
     modelId: string;
-    model?: { params?: Record<string, unknown> };
+    model?: { name?: string; params?: Record<string, unknown> };
     streamFn?: StreamFn;
   }) => {
     const modelRef = { id: modelId, params: model?.params };
     if (
       isAnthropicBedrockModel(modelId) ||
-      resolveClaudeModelIdentity(modelRef).startsWith("claude-")
+      resolveClaudeModelIdentity(modelRef).startsWith("claude-") ||
+      supportsBedrockPromptCaching(modelId, model?.name)
     ) {
       return streamFn;
     }
@@ -692,7 +705,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               if (payload && typeof payload === "object") {
                 const payloadRecord = payload as Record<string, unknown>;
                 if (traits.cacheEligible) {
-                  injectBedrockCachePoints(payloadRecord, cacheRetention);
+                  injectBedrockCachePoints(payloadRecord, cacheRetention, {
+                    longCacheTtlEligible: traits.longCacheTtlEligible,
+                  });
                 }
                 if (shouldPatchMaxThinking) {
                   patchMaxThinkingEffort(payloadRecord);

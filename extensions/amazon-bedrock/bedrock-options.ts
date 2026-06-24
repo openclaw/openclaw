@@ -28,11 +28,35 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
-/** Return whether a Bedrock model is known to support Anthropic prompt caching. */
+const BEDROCK_NOVA_PROMPT_CACHE_MODEL_REFS = [
+  "nova-micro",
+  "nova-lite",
+  "nova-pro",
+  "nova-premier",
+  "nova-2-lite",
+] as const;
+
+/** Return whether a Bedrock model is a Nova generation model with native prompt caching. */
+export function isBedrockNovaPromptCachingModel(modelId: string, modelName?: string): boolean {
+  const candidates = getModelMatchCandidates(modelId, modelName);
+  return candidates.some((candidate) =>
+    BEDROCK_NOVA_PROMPT_CACHE_MODEL_REFS.some(
+      (novaRef) =>
+        candidate === novaRef ||
+        candidate.startsWith(`${novaRef}-`) ||
+        candidate.includes(`amazon-${novaRef}`),
+    ),
+  );
+}
+
+/** Return whether a Bedrock model is known to support explicit prompt cache points. */
 export function supportsBedrockPromptCaching(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   const hasClaudeRef = candidates.some((s) => s.includes("claude"));
   if (!hasClaudeRef) {
+    if (isBedrockNovaPromptCachingModel(modelId, modelName)) {
+      return true;
+    }
     if (typeof process !== "undefined" && process.env.AWS_BEDROCK_FORCE_CACHE === "1") {
       return true;
     }
