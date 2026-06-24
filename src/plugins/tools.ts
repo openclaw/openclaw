@@ -1059,7 +1059,7 @@ export function resolvePluginTools(params: {
   if (!loadState) {
     return [];
   }
-  const { context, env, onlyPluginIds, runtimeOptions, snapshot } = loadState;
+  const { context, env, loadOptions, onlyPluginIds, runtimeOptions, snapshot } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
@@ -1151,6 +1151,12 @@ export function resolvePluginTools(params: {
       }
     }
   }
+  const runtimePluginIdSet = new Set(runtimePluginIds);
+  for (const plugin of snapshot.plugins) {
+    if (plugin.origin === "config" && runtimePluginIdSet.has(plugin.id)) {
+      explicitlyConfiguredPluginIds.add(plugin.id);
+    }
+  }
   const filteredPluginIds = runtimePluginIds.filter(
     (id) => loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id),
   );
@@ -1218,7 +1224,56 @@ export function resolvePluginTools(params: {
   }
 
   const scopedPluginIds = new Set(resolvedPluginIds);
-  const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
+  const registryTools: typeof registry.tools = [];
+  const registryToolPluginIds = new Set<string>();
+  const appendScopedRegistryTools = (sourceRegistry: PluginRegistry | undefined) => {
+    const entriesByPluginId = new Map<string, typeof registry.tools>();
+    for (const entry of sourceRegistry?.tools ?? []) {
+      if (!scopedPluginIds.has(entry.pluginId)) {
+        continue;
+      }
+      const entries = entriesByPluginId.get(entry.pluginId) ?? [];
+      entries.push(entry);
+      entriesByPluginId.set(entry.pluginId, entries);
+    }
+    for (const [pluginId, entries] of entriesByPluginId) {
+      if (registryToolPluginIds.has(pluginId)) {
+        continue;
+      }
+      registryTools.push(...entries);
+      registryToolPluginIds.add(pluginId);
+    }
+  };
+  const hasSelectedConfigOriginPlugin = snapshot.plugins.some(
+    (plugin) => plugin.origin === "config" && scopedPluginIds.has(plugin.id),
+  );
+  appendScopedRegistryTools(registry);
+  if (hasSelectedConfigOriginPlugin) {
+    // Config-origin cold-loads can return only newly materialized path plugins.
+    // Fill missing selected ids from workspace-compatible loaded registries only.
+    for (const pluginId of resolvedPluginIds) {
+      if (registryToolPluginIds.has(pluginId)) {
+        continue;
+      }
+      const lookup = {
+        env,
+        workspaceDir: loadOptions.workspaceDir,
+        requiredPluginIds: [pluginId],
+      };
+      appendScopedRegistryTools(
+        getLoadedRuntimePluginRegistry({
+          ...lookup,
+          surface: "channel",
+        }),
+      );
+      appendScopedRegistryTools(
+        getLoadedRuntimePluginRegistry({
+          ...lookup,
+          surface: "active",
+        }),
+      );
+    }
+  }
   const missingRegistryToolPluginIds = resolvedPluginIds.filter(
     (pluginId) => !registryToolPluginIds.has(pluginId),
   );
@@ -1236,7 +1291,7 @@ export function resolvePluginTools(params: {
   const capturedDescriptorsByPluginId = new Map<string, CachedPluginToolDescriptor[]>();
   const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
-  for (const entry of registry.tools) {
+  for (const entry of registryTools) {
     if (!scopedPluginIds.has(entry.pluginId)) {
       continue;
     }

@@ -1,6 +1,7 @@
 // Verifies optional plugin tool registration and absence handling.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -276,8 +277,8 @@ function createOptionalDemoActiveRegistry() {
 }
 
 function installToolManifestSnapshot(params: {
-  config: ReturnType<typeof createContext>["config"];
-  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
+  config: OpenClawConfig;
+  compatibleConfigs?: OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
   plugin: Record<string, unknown>;
 }) {
@@ -290,8 +291,8 @@ function installToolManifestSnapshot(params: {
 }
 
 function installToolManifestSnapshots(params: {
-  config: ReturnType<typeof createContext>["config"];
-  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
+  config: OpenClawConfig;
+  compatibleConfigs?: OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
   plugins: Record<string, unknown>[];
 }) {
@@ -1010,6 +1011,93 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+  });
+
+  it("cold-loads group-selected config-origin plugins when an unrelated plugin is active", () => {
+    const baseContext = createContext();
+    const config = {
+      ...baseContext.config,
+      plugins: {
+        ...baseContext.config.plugins,
+        allow: undefined,
+        load: { paths: ["/tmp/path-plugin.js"] },
+      },
+    };
+    const loadedFactory = vi.fn(() => makeTool("loaded_tool"));
+    const pathFactory = vi.fn(() => makeTool("path_tool"));
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "loaded-plugin",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["loaded_tool"],
+          },
+        },
+        {
+          id: "path-plugin",
+          origin: "config",
+          enabledByDefault: undefined,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["path_tool"],
+          },
+        },
+      ],
+    });
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "loaded-plugin", status: "loaded" }],
+        tools: [
+          {
+            pluginId: "loaded-plugin",
+            optional: false,
+            source: "/tmp/loaded-plugin.js",
+            names: ["loaded_tool"],
+            factory: loadedFactory,
+          },
+        ],
+        diagnostics: [],
+      } as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "path-plugin",
+          optional: false,
+          source: "/tmp/path-plugin.js",
+          names: ["path_tool"],
+          factory: pathFactory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...baseContext, config } as never,
+        toolAllowlist: ["group:plugins"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["path_tool", "loaded_tool"]);
+    expect(loadedFactory).toHaveBeenCalledTimes(1);
+    expect(pathFactory).toHaveBeenCalledTimes(1);
+    expect(
+      loadOpenClawPluginsMock.mock.calls.map(
+        ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
+      ),
+    ).toStrictEqual([
+      ["loaded-plugin", "path-plugin"],
+      ["loaded-plugin", "path-plugin"],
+    ]);
   });
 
   it("does not reuse a partial active registry for wildcard-selected plugin tools", () => {
