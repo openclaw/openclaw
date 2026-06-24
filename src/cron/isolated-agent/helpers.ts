@@ -294,6 +294,10 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  const hasRecoveredByFinalAnswer =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    normalizedFinalAssistantVisibleText !== undefined;
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
@@ -301,7 +305,8 @@ export function resolveCronPayloadOutcome(params: {
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !hasRecoveredByFinalAnswer;
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual

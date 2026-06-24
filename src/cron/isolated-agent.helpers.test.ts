@@ -150,12 +150,11 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("model provider unreachable");
-    expect(result.outputText).toBe("model provider unreachable");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "model provider unreachable", isError: true },
-    ]);
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("Partial result");
+    expect(result.outputText).toBe("Partial result");
+    expect(result.deliveryPayloads).toEqual([{ text: "Partial result" }]);
   });
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
@@ -333,22 +332,90 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.outputText).toBe("last error");
-    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
-    expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("Recovered final answer");
+    expect(result.outputText).toBe("Recovered final answer");
+    expect(result.deliveryPayloads).toEqual([{ text: "Recovered final answer" }]);
   });
 
-  it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
+  it("lets recovered plain exec errors be non-fatal when final assistant text exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-      finalAssistantVisibleText: "Final weather summary",
+      payloads: [
+        {
+          text: "⚠️ 🛠️ run query.sh xhs → show /tmp/xhs_query.json failed: unknown arg: >",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "Query completed: 12 results for xhs platform.",
+      preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.outputText).toBe("Final weather summary");
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("Query completed: 12 results for xhs platform.");
+    expect(result.outputText).toBe("Query completed: 12 results for xhs platform.");
     expect(result.deliveryPayloads).toEqual([
-      { text: "Working on it..." },
-      { text: "Final weather summary" },
+      { text: "Query completed: 12 results for xhs platform." },
     ]);
+  });
+
+  it("keeps standalone exec errors fatal when no final assistant text exists", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ run query.sh xhs → show /tmp/xhs_query.json failed: unknown arg: >",
+          isError: true,
+        },
+      ],
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      "⚠️ 🛠️ run query.sh xhs → show /tmp/xhs_query.json failed: unknown arg: >",
+    );
+  });
+
+  it("keeps exec errors fatal when run-level error exists even with final assistant text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ run query.sh xhs → show /tmp/xhs_query.json failed: unknown arg: >",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "Query completed: 12 results for xhs platform.",
+      preferFinalAssistantVisibleText: true,
+      runLevelError: { kind: "context_overflow", message: "exceeded context window" },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("unknown arg: >");
+  });
+
+  it("keeps exec errors fatal when fatal failure signal exists even with final assistant text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ run query.sh xhs → show /tmp/xhs_query.json failed: unknown arg: >",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "Query completed: 12 results for xhs platform.",
+      preferFinalAssistantVisibleText: true,
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("unknown arg: >");
   });
 
   it("does not promote narrated denial markers in summary text to fatal errors", () => {
