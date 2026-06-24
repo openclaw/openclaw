@@ -7,6 +7,10 @@ import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import {
+  extractActionCriticalLines,
+  hasActionCriticalContent,
+} from "./action-critical-output.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   decodeWindowsOutputBuffer,
@@ -243,6 +247,11 @@ type CapturedOutputBuffers = {
   chunks: Buffer[];
   bytes: number;
   truncatedBytes: number;
+  /** First N bytes of output (bounded by maxOutputBytes). Used to recover action-critical lines when truncation occurs. */
+  headChunks: Buffer[];
+  headBytes: number;
+  /** Action-critical lines extracted from dropped data during truncation. */
+  preservedActionCritical: string[];
 };
 
 function normalizeMaxOutputBytes(value: number | undefined): number {
@@ -258,7 +267,26 @@ function appendCapturedOutput(
   maxBytes: number,
 ): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+
+  // Track head data (bounded by maxBytes) for action-critical line recovery.
+  if (capture.headBytes < maxBytes) {
+    const headRoom = maxBytes - capture.headBytes;
+    const headChunk = buffer.subarray(0, Math.min(headRoom, buffer.byteLength));
+    capture.headChunks.push(Buffer.from(headChunk));
+    capture.headBytes += headChunk.byteLength;
+  }
+
   if (buffer.byteLength >= maxBytes) {
+    // Single chunk exceeds the limit. Replace the entire tail with the last maxBytes.
+    // Preserve action-critical lines from all accumulated data before replacement.
+    preserveActionCriticalFromCapture(capture, maxBytes);
+
+    // Also scan the current chunk for action-critical lines.
+    const chunkText = buffer.toString();
+    if (hasActionCriticalContent(chunkText)) {
+      capture.preservedActionCritical.push(...extractActionCriticalLines(chunkText));
+    }
+
     capture.chunks = [Buffer.from(buffer.subarray(buffer.byteLength - maxBytes))];
     capture.truncatedBytes += capture.bytes + buffer.byteLength - maxBytes;
     capture.bytes = maxBytes;
@@ -274,13 +302,90 @@ function appendCapturedOutput(
       capture.chunks.shift();
       capture.bytes -= first.byteLength;
       capture.truncatedBytes += first.byteLength;
+      // Scan dropped chunk for action-critical lines.
+      const droppedText = first.toString();
+      if (hasActionCriticalContent(droppedText)) {
+        capture.preservedActionCritical.push(...extractActionCriticalLines(droppedText));
+      }
     } else {
+      const droppedText = first.subarray(0, overflow).toString();
       capture.chunks[0] = Buffer.from(first.subarray(overflow));
       capture.bytes -= overflow;
       capture.truncatedBytes += overflow;
+      // Scan dropped portion for action-critical lines.
+      if (hasActionCriticalContent(droppedText)) {
+        capture.preservedActionCritical.push(...extractActionCriticalLines(droppedText));
+      }
     }
   }
 }
+
+/**
+ * Extract action-critical lines from head (first maxBytes of output) when
+ * truncation has occurred. Used before a single oversized chunk replaces
+ * the entire tail buffer.
+ */
+function preserveActionCriticalFromCapture(
+  capture: CapturedOutputBuffers,
+  maxBytes: number,
+): void {
+  if (capture.chunks.length === 0) {
+    return;
+  }
+  const headText = Buffer.concat(capture.headChunks, capture.headBytes).toString();
+  if (hasActionCriticalContent(headText)) {
+    capture.preservedActionCritical.push(...extractActionCriticalLines(headText));
+  }
+}
+
+/**
+ * Build the final output string from captured buffers.
+ * When truncation occurred, preserved action-critical lines are prepended
+ * and a truncation notice is appended. When no truncation occurred,
+ * the raw tail is returned as-is.
+ */
+function buildCaptureResult(
+  capture: CapturedOutputBuffers,
+  windowsEncoding: string,
+): string {
+  const tail = decodeWindowsOutputBuffer({
+    buffer: Buffer.concat(capture.chunks, capture.bytes),
+    windowsEncoding,
+  });
+
+  if (capture.truncatedBytes > 0 || capture.preservedActionCritical.length > 0) {
+    const recoveryHint =
+      capture.truncatedBytes > 0
+        ? ' For full output, use "openclaw cron runs --id <job> --run-id <run>"'
+        : "";
+    const truncatedNotice = `[output truncated: ${capture.truncatedBytes} bytes]${recoveryHint}`;
+
+    if (
+      capture.preservedActionCritical.length > 0 &&
+      (capture.truncatedBytes > 0 || capture.chunks.length > 0)
+    ) {
+      // Deduplicate preserved lines (they may appear in both head and dropped chunks).
+      const seen = new Set<string>();
+      const uniqueLines = capture.preservedActionCritical.filter((l) => {
+        const key = l.trim().toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      if (uniqueLines.length > 0) {
+        return `${uniqueLines.join("\n")}\n\n${tail}\n${truncatedNotice}`;
+      }
+    }
+
+    // Truncated but no (unique) action-critical lines preserved.
+    return tail + (tail ? "\n" : "") + truncatedNotice;
+  }
+
+  // No truncation — return raw tail as-is.
+  return tail;
+}
+
 export function resolveProcessExitCode(params: {
   explicitCode: number | null | undefined;
   childExitCode: number | null | undefined;
@@ -382,8 +487,22 @@ export async function runCommandWithTimeout(
   });
   // Spawn with inherited stdin (TTY) so interactive tools stay usable when needed.
   return await new Promise((resolve, reject) => {
-    const stdoutCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
-    const stderrCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
+    const stdoutCapture: CapturedOutputBuffers = {
+      chunks: [],
+      bytes: 0,
+      truncatedBytes: 0,
+      headChunks: [],
+      headBytes: 0,
+      preservedActionCritical: [],
+    };
+    const stderrCapture: CapturedOutputBuffers = {
+      chunks: [],
+      bytes: 0,
+      truncatedBytes: 0,
+      headChunks: [],
+      headBytes: 0,
+      preservedActionCritical: [],
+    };
     const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes);
     const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
@@ -598,14 +717,8 @@ export async function runCommandWithTimeout(
           : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
-        stdout: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stdoutCapture.chunks, stdoutCapture.bytes),
-          windowsEncoding,
-        }),
-        stderr: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stderrCapture.chunks, stderrCapture.bytes),
-          windowsEncoding,
-        }),
+        stdout: buildCaptureResult(stdoutCapture, windowsEncoding),
+        stderr: buildCaptureResult(stderrCapture, windowsEncoding),
         stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
         stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
         code: normalizedCode,
