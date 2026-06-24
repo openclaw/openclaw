@@ -127,7 +127,7 @@ describe("runCronIsolatedAgentTurn — result-level fallback wiring", () => {
         model: string;
         attempt: number;
         total: number;
-      }) => unknown | Promise<unknown>;
+      }) => unknown;
       mergeExhaustedResult?: unknown;
     };
     expect(typeof request?.classifyResult).toBe("function");
