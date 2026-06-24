@@ -1237,7 +1237,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents([event2], context);
 
     expect(replyMessageLineMock).toHaveBeenCalledTimes(1);
-    const replyMessages = (replyMessageLineMock.mock.calls[0] as unknown[])?.[1] as
+    const replyMessages = replyMessageLineMock.mock.calls[0]?.[1] as
       | Array<{ text?: string }>
       | undefined;
     expect(replyMessages?.[0]?.text).toContain("still being processed");
