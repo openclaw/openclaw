@@ -931,6 +931,7 @@ jobs:
               pnpm openclaw qa run \
                 --repo-root . \
                 --qa-profile smoke-ci \
+                --concurrency 8 \
                 --output-dir "$output_dir" || qa_exit_code=$?
               echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
               if [ "$qa_exit_code" -ne 0 ]; then

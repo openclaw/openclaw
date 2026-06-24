@@ -825,6 +825,7 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
     expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain("--concurrency 8");
     expect(runStep.run).not.toContain("--category");
     expect(runStep.run).not.toContain("--allow-failures");
     expect(runStep.run).toContain("qa_exit_code=0");
