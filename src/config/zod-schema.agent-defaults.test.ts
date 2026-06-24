@@ -455,6 +455,62 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts SecretRef-backed per-agent exec environments", () => {
+    const parsed = AgentEntrySchema.parse({
+      id: "referrals",
+      tools: {
+        exec: {
+          inheritHostEnv: false,
+          env: {
+            GREENHOUSE_TOKEN: {
+              source: "env",
+              provider: "default",
+              id: "REFERRALS_GREENHOUSE_TOKEN",
+            },
+            REGION: "us-east-1",
+          },
+        },
+      },
+    });
+
+    expect(parsed.tools?.exec?.inheritHostEnv).toBe(false);
+    expect(parsed.tools?.exec?.env?.REGION).toBe("us-east-1");
+  });
+
+  it("rejects unsafe or ambiguous per-agent exec environment keys", () => {
+    const invalidEnvs = [
+      { PATH: "/tmp/bin" },
+      { NODE_OPTIONS: "--require ./inject.js" },
+      { OPENCLAW_CHANNEL_CONTEXT: "spoofed" },
+      { "not-portable": "value" },
+      { TOKEN: "first", token: "second" },
+      Object.fromEntries([["__proto__", "polluted"]]),
+    ];
+
+    for (const env of invalidEnvs) {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", tools: { exec: { env } } }),
+        "tools.exec.env",
+      );
+    }
+  });
+
+  it("keeps exec environment injection agent-scoped", () => {
+    const result = validateConfigObject({
+      tools: {
+        exec: {
+          env: { SHARED_SECRET: "not-allowed" },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected global tools.exec.env to be rejected");
+    }
+    expect(result.issues.some((issue) => issue.path === "tools.exec")).toBe(true);
+  });
+
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),

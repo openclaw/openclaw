@@ -29,6 +29,10 @@ export type ExecToolDefaults = {
   ask?: ExecAsk;
   trigger?: string;
   node?: string;
+  /** Trusted, operator-configured environment scoped to this agent's exec children. */
+  env?: Record<string, unknown>;
+  /** Inherit the Gateway process environment for Gateway-hosted exec (default: true). */
+  inheritHostEnv?: boolean;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;

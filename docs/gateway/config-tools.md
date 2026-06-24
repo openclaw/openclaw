@@ -204,6 +204,55 @@ Controls elevated exec access outside the sandbox:
 }
 ```
 
+Agent entries can inject an environment only into their own `exec` child
+processes. Use a SecretRef for credentials and set `inheritHostEnv: false` when the
+Gateway process environment must not be inherited:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "referrals",
+        tools: {
+          exec: {
+            inheritHostEnv: false,
+            env: {
+              GREENHOUSE_TOKEN: {
+                source: "env",
+                provider: "default",
+                id: "REFERRALS_GREENHOUSE_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+`agents.list[].tools.exec.env` applies to `exec` only; it does not mutate
+`process.env` or automatically inject credentials into model-provider or plugin
+APIs. Trusted in-process plugin code can still inspect the materialized runtime
+config, so this is not a plugin isolation boundary.
+Configured values override same-named per-call values from the model. Trusted
+`resolve_exec_env` hook output and channel context are applied afterward. Host
+exec still rejects `PATH` and dangerous runtime/startup keys. Sandbox exec
+already starts from a minimal environment. With `inheritHostEnv: false`,
+Gateway exec also skips login-shell PATH discovery and cached shell-startup
+state; configure `pathPrepend` or absolute commands when needed. For
+`host: "node"`, configure scoped environment and inheritance isolation on the
+node host. Both this map and `inheritHostEnv: false` are rejected because the
+Gateway cannot clear the remote service environment or safely hold a scoped
+credential back during remote approval preparation.
+
+Treat this map as credential-bearing configuration: every command the agent can
+run can read and exfiltrate these values, and command output can reveal them.
+Plaintext values are reported by `openclaw secrets audit`; prefer SecretRefs.
+Already-running background commands retain the environment captured when they
+started after a config or secret reload.
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.

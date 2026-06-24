@@ -34,8 +34,14 @@ import {
   isDangerousHostEnvVarName,
   normalizeHostOverrideEnvVarKey,
   sanitizeHostExecEnvWithDiagnostics,
+  setCaseInsensitiveEnvValue,
+  validateConfiguredExecEnvKey,
 } from "../infra/host-env-security.js";
-import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import {
+  OPENCLAW_CHANNEL_CONTEXT_ENV_VAR,
+  OPENCLAW_CLI_ENV_VAR,
+} from "../infra/openclaw-exec-env.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -109,7 +115,7 @@ type ExecToolArgs = Record<string, unknown> & {
   node?: string;
 };
 
-const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+const CHANNEL_CONTEXT_ENV_KEY = OPENCLAW_CHANNEL_CONTEXT_ENV_VAR;
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -152,21 +158,86 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   const env: Record<string, string> = {};
   for (const [rawKey, value] of Object.entries(rawEnv)) {
     const key = normalizeHostOverrideEnvVarKey(rawKey);
-    if (!key) {
+    if (!key || isBlockedObjectKey(key)) {
       continue;
     }
     const upperKey = key.toUpperCase();
     if (
       upperKey === "PATH" ||
       upperKey === OPENCLAW_CLI_ENV_VAR ||
+      upperKey === CHANNEL_CONTEXT_ENV_KEY ||
       isDangerousHostEnvVarName(upperKey) ||
       isDangerousHostEnvOverrideVarName(upperKey)
     ) {
       continue;
     }
-    env[key] = value;
+    setCaseInsensitiveEnvValue(env, key, value);
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function resolveMaterializedExecEnv(
+  env: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!env) {
+    return undefined;
+  }
+  const resolved: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const [key, value] of Object.entries(env)) {
+    const validation = validateConfiguredExecEnvKey(key);
+    if (!validation.ok) {
+      throw new Error(`agents.list[].tools.exec.env.${key} ${validation.reason}`);
+    }
+    if (seen.has(validation.caseFoldedKey)) {
+      throw new Error(
+        `agents.list[].tools.exec.env contains duplicate key ${JSON.stringify(key)} (case-insensitive)`,
+      );
+    }
+    seen.add(validation.caseFoldedKey);
+    if (typeof value !== "string") {
+      throw new Error(
+        `agents.list[].tools.exec.env.${key} contains an unresolved SecretRef; use the active runtime config snapshot`,
+      );
+    }
+    setCaseInsensitiveEnvValue(resolved, validation.key, value);
+  }
+  return resolved;
+}
+
+function mergeExecEnvLayers(
+  ...layers: Array<Record<string, string> | undefined>
+): Record<string, string> | undefined {
+  const merged: Record<string, string> = {};
+  let hasLayer = false;
+  for (const layer of layers) {
+    if (layer === undefined) {
+      continue;
+    }
+    hasLayer = true;
+    for (const [key, value] of Object.entries(layer)) {
+      if (isBlockedObjectKey(key)) {
+        throw new Error(`Security Violation: Environment variable '${key}' is forbidden.`);
+      }
+      setCaseInsensitiveEnvValue(merged, key, value);
+    }
+  }
+  return hasLayer ? merged : undefined;
+}
+
+function applyTrustedChannelContextEnv(
+  env: Record<string, string>,
+  channelContextEnv: Record<string, string> | undefined,
+): void {
+  for (const key of Object.keys(env)) {
+    if (key.trim().toUpperCase() === CHANNEL_CONTEXT_ENV_KEY) {
+      delete env[key];
+    }
+  }
+  const trustedValue = channelContextEnv?.[CHANNEL_CONTEXT_ENV_KEY];
+  if (trustedValue !== undefined) {
+    env[CHANNEL_CONTEXT_ENV_KEY] = trustedValue;
+  }
 }
 
 function markResolveExecEnvPrepared<T extends ExecToolArgs>(
@@ -1597,15 +1668,34 @@ export function createExecTool(
       }
       await rejectUnsafeExecControlShellCommand(params.command);
 
-      const inheritedBaseEnv = coerceEnv(process.env);
+      const hasConfiguredEnv = Object.keys(defaults?.env ?? {}).length > 0;
+      if (host === "node" && (defaults?.inheritHostEnv === false || hasConfiguredEnv)) {
+        throw new Error(
+          hasConfiguredEnv
+            ? "agents.list[].tools.exec.env is not supported for host=node; configure scoped environment on the node host"
+            : "tools.exec.inheritHostEnv=false is not supported for host=node; configure environment isolation on the node host",
+        );
+      }
+      const configuredEnv = resolveMaterializedExecEnv(defaults?.env);
+      for (const source of [params.env, configuredEnv]) {
+        if (
+          source &&
+          Object.keys(source).some((key) => key.trim().toUpperCase() === CHANNEL_CONTEXT_ENV_KEY)
+        ) {
+          throw new Error(
+            `Security Violation: Environment variable '${CHANNEL_CONTEXT_ENV_KEY}' is reserved for trusted channel context.`,
+          );
+        }
+      }
+      const inheritedBaseEnv = defaults?.inheritHostEnv === false ? {} : coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
       const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
-      const requestedEnv: Record<string, string> | undefined =
-        params.env !== undefined ||
-        resolvedExecEnvState?.pluginEnv !== undefined ||
-        channelContextEnv !== undefined
-          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
-          : undefined;
+      const requestedEnv = mergeExecEnvLayers(
+        params.env,
+        configuredEnv,
+        resolvedExecEnvState?.pluginEnv,
+        channelContextEnv,
+      );
       const hostEnvResult =
         host === "sandbox"
           ? null
@@ -1658,8 +1748,14 @@ export function createExecTool(
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
+      applyTrustedChannelContextEnv(env, channelContextEnv);
 
-      if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
+      if (
+        !sandbox &&
+        host === "gateway" &&
+        defaults?.inheritHostEnv !== false &&
+        !requestedEnv?.PATH
+      ) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -1722,6 +1818,7 @@ export function createExecTool(
           workdir,
           env,
           pathPrepend: defaultPathPrepend,
+          useShellSnapshot: defaults?.inheritHostEnv !== false,
           requestedEnv,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
@@ -1785,6 +1882,7 @@ export function createExecTool(
         workdir,
         env,
         pathPrepend: defaultPathPrepend,
+        useShellSnapshot: defaults?.inheritHostEnv !== false,
         sandbox,
         containerWorkdir,
         usePty,

@@ -1040,6 +1040,16 @@ describe("config schema", () => {
     expect(schema?.properties).toHaveProperty("vars");
   });
 
+  it("keeps per-agent exec env records discoverable and sensitive", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.tools.exec.env");
+    expect(lookup?.schema?.type).toBe("object");
+    expect(lookup?.schema?.additionalProperties).toBeTypeOf("object");
+    const wildcard = lookup?.children.find((child) => child.key === "*");
+    expect(wildcard?.hasChildren).toBe(true);
+    expect(wildcard?.hintPath).toBe("agents.list[].tools.exec.env.*");
+    expect(wildcard?.hint?.sensitive).toBe(true);
+  });
+
   it("matches wildcard ui hints for concrete lookup paths", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.identity.avatar");
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");

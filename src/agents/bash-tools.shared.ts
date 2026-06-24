@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
@@ -46,10 +47,14 @@ export function buildSandboxEnv(params: {
     HOME: params.containerWorkdir,
   };
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
-    env[key] = value;
+    if (!isBlockedObjectKey(key)) {
+      env[key] = value;
+    }
   }
   for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
-    env[key] = value;
+    if (!isBlockedObjectKey(key)) {
+      env[key] = value;
+    }
   }
   return env;
 }

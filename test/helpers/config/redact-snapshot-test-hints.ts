@@ -6,6 +6,7 @@ import type { ConfigUiHints } from "../../../src/config/schema.js";
 export const redactSnapshotTestHints: ConfigUiHints = {
   "agents.defaults.memorySearch.remote.apiKey": { sensitive: true },
   "agents.list[].memorySearch.remote.apiKey": { sensitive: true },
+  "agents.list[].tools.exec.env.*": { sensitive: true },
   "broadcast.apiToken[]": { sensitive: true },
   "env.GROQ_API_KEY": { sensitive: true },
   "gateway.auth.password": { sensitive: true },

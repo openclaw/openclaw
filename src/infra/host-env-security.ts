@@ -1,7 +1,12 @@
 // Filters host environment variables before passing them to runtimes.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import {
+  markOpenClawExecEnv,
+  OPENCLAW_CHANNEL_CONTEXT_ENV_VAR,
+  OPENCLAW_CLI_ENV_VAR,
+} from "./openclaw-exec-env.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
@@ -138,6 +143,52 @@ export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   return HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
+export type ConfiguredExecEnvKeyValidation =
+  | { ok: true; key: string; caseFoldedKey: string }
+  | { ok: false; reason: string };
+
+/** Validates operator-configured agent exec env keys against the host security boundary. */
+export function validateConfiguredExecEnvKey(rawKey: string): ConfiguredExecEnvKeyValidation {
+  const key = normalizeEnvVarKey(rawKey, { portable: true });
+  if (!key || key !== rawKey) {
+    return { ok: false, reason: "must be a portable environment variable name" };
+  }
+  const upper = key.toUpperCase();
+  if (isBlockedObjectKey(key)) {
+    return { ok: false, reason: "uses a blocked prototype key" };
+  }
+  if (upper === "PATH") {
+    return { ok: false, reason: "PATH is controlled by tools.exec.pathPrepend" };
+  }
+  if (upper === OPENCLAW_CLI_ENV_VAR || upper === OPENCLAW_CHANNEL_CONTEXT_ENV_VAR) {
+    return { ok: false, reason: "is reserved by OpenClaw" };
+  }
+  if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
+    return { ok: false, reason: "is blocked by the host exec environment policy" };
+  }
+  return { ok: true, key, caseFoldedKey: upper };
+}
+
+/** Sets an env value while making later layers win across case variants on every platform. */
+export function setCaseInsensitiveEnvValue(
+  env: Record<string, string>,
+  key: string,
+  value: string,
+): void {
+  const foldedKey = key.toUpperCase();
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey !== key && existingKey.toUpperCase() === foldedKey) {
+      delete env[existingKey];
+    }
+  }
+  Object.defineProperty(env, key, {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value,
+  });
+}
+
 function listNormalizedEnvEntries(
   source: Record<string, string | undefined>,
   options?: { portable?: boolean },
@@ -184,6 +235,9 @@ export function sanitizeHostInheritedEnvEntry(
 ): [string, string] | null {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
+    return null;
+  }
+  if (isBlockedObjectKey(key) || key.toUpperCase() === OPENCLAW_CHANNEL_CONTEXT_ENV_VAR) {
     return null;
   }
   // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
@@ -238,6 +292,10 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
+    if (isBlockedObjectKey(normalized)) {
+      rejectedBlocked.push(normalized);
+      continue;
+    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
     if (blockPathOverrides && upper === "PATH") {
@@ -248,7 +306,7 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       rejectedBlocked.push(upper);
       continue;
     }
-    acceptedOverrides[normalized] = value;
+    setCaseInsensitiveEnvValue(acceptedOverrides, normalized, value);
   }
 
   return {
@@ -272,7 +330,12 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
       continue;
     }
     const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    merged[sanitizedKey] = sanitizedValue;
+    Object.defineProperty(merged, sanitizedKey, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: sanitizedValue,
+    });
   }
 
   const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
@@ -281,7 +344,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   });
   if (overrideResult.acceptedOverrides) {
     for (const [key, value] of Object.entries(overrideResult.acceptedOverrides)) {
-      merged[key] = value;
+      setCaseInsensitiveEnvValue(merged, key, value);
     }
   }
 

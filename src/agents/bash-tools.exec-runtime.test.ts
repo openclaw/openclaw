@@ -11,6 +11,7 @@ const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+const maybeWrapCommandWithShellSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
@@ -24,6 +25,10 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: supervisorMock.spawn,
   }),
+}));
+
+vi.mock("./shell-snapshot.js", () => ({
+  maybeWrapCommandWithShellSnapshot: maybeWrapCommandWithShellSnapshotMock,
 }));
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
@@ -50,6 +55,10 @@ beforeEach(() => {
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
+  maybeWrapCommandWithShellSnapshotMock.mockReset();
+  maybeWrapCommandWithShellSnapshotMock.mockImplementation(
+    async ({ command }: { command: string }) => command,
+  );
 });
 
 function expectExecTarget(
@@ -582,6 +591,42 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("skips shell startup snapshots when host env inheritance is disabled", async () => {
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    await runExecProcess({
+      command: "echo isolated",
+      workdir: process.platform === "win32" ? "C:\\tmp" : "/tmp",
+      env: {},
+      useShellSnapshot: false,
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(maybeWrapCommandWithShellSnapshotMock).not.toHaveBeenCalled();
+    const spawnCall = supervisorMock.spawn.mock.calls[0]?.[0];
+    const command = spawnCall?.argv?.join(" ") ?? spawnCall?.ptyCommand ?? "";
+    expect(command).toContain("echo isolated");
+  });
+
   it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
     supervisorMock.spawn.mockResolvedValue({
       runId: "mock-run",

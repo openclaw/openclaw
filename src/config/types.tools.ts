@@ -376,6 +376,13 @@ export type ExecToolConfig = {
   };
 };
 
+export type AgentExecToolConfig = ExecToolConfig & {
+  /** Environment variables injected only into this agent's exec child processes. */
+  env?: Record<string, SecretInput>;
+  /** Inherit the Gateway process environment for Gateway-hosted exec (default: true). */
+  inheritHostEnv?: boolean;
+};
+
 export type FsToolsConfig = {
   /**
    * Restrict filesystem tools (read/write/edit/apply_patch) to the agent workspace directory.
@@ -416,7 +423,7 @@ export type AgentToolsConfig = {
     allowFrom?: AgentElevatedAllowFromConfig;
   };
   /** Exec tool defaults for this agent. */
-  exec?: ExecToolConfig;
+  exec?: AgentExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */

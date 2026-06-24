@@ -525,6 +525,47 @@ the config fields that accept SecretRefs.
   </Accordion>
 </AccordionGroup>
 
+## Per-agent exec environment variables
+
+`agents.list[].tools.exec.env` supports SecretInput values, so a credential can
+be resolved during Gateway activation and injected only into that agent's
+`exec` child processes:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "referrals",
+        tools: {
+          exec: {
+            inheritHostEnv: false,
+            env: {
+              GREENHOUSE_TOKEN: {
+                source: "env",
+                provider: "default",
+                id: "REFERRALS_GREENHOUSE_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+This surface is exec-specific. It does not mutate the Gateway process
+environment or automatically inject credentials into model-provider or plugin
+APIs. Trusted in-process plugin code can inspect the materialized runtime
+config. An unresolved active ref fails Gateway activation. SecretRefs are
+materialized in the Gateway's protected in-memory config snapshot, so this
+scopes subprocess injection rather than creating a same-process or same-OS-user
+security boundary. Every command available to the agent can read these values,
+command output can reveal them, and plaintext entries are reported by
+`openclaw secrets audit`. Configure scoped environment on a node host itself;
+agent exec env is rejected for `host: "node"`.
+
 ## MCP server environment variables
 
 MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` support SecretInput. This keeps API keys and tokens out of plaintext config:

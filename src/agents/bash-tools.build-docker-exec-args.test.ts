@@ -4,9 +4,26 @@
  * by sandboxed exec calls.
  */
 import { describe, expect, it } from "vitest";
-import { buildDockerExecArgs } from "./bash-tools.shared.js";
+import { buildDockerExecArgs, buildSandboxEnv } from "./bash-tools.shared.js";
 
 describe("buildDockerExecArgs", () => {
+  it("keeps case-distinct sandbox variables separate from PATH and HOME", () => {
+    const env = buildSandboxEnv({
+      defaultPath: "/usr/bin:/bin",
+      containerWorkdir: "/workspace",
+      sandboxEnv: { path: "lower-path", home: "lower-home" },
+      paramsEnv: { Path: "mixed-path" },
+    });
+
+    expect(env).toMatchObject({
+      PATH: "/usr/bin:/bin",
+      HOME: "/workspace",
+      path: "lower-path",
+      home: "lower-home",
+      Path: "mixed-path",
+    });
+  });
+
   it("prepends custom PATH after login shell sourcing to preserve both custom and system tools", () => {
     const args = buildDockerExecArgs({
       containerName: "test-container",

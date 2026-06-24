@@ -60,6 +60,7 @@ function restoreProcessPlatformForTest(): void {
 type ApprovalRequestPayload = {
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  env?: Record<string, string>;
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -175,6 +176,24 @@ describe("exec approval requests", () => {
 
     const payload = requireApprovalRequestPayload(0);
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
+  });
+
+  it("sends only value-free env metadata for gateway approval registration", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: "echo hi",
+      env: { SCOPED_TOKEN: "do-not-serialize", REGION: "us-east-1" },
+      workdir: "/tmp/project",
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload.env).toEqual({ SCOPED_TOKEN: "", REGION: "" });
+    expect(JSON.stringify(payload)).not.toContain("do-not-serialize");
   });
 
   it("does not generate command spans by default", async () => {

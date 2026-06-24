@@ -33,7 +33,9 @@ const mocks = vi.hoisted(() => ({
     requestedEnv?: Record<string, string>;
   }>,
   spawnInputs: [] as Array<{
+    argv?: string[];
     env?: Record<string, string>;
+    ptyCommand?: string;
   }>,
 }));
 
@@ -84,8 +86,17 @@ vi.mock("./bash-tools.exec-host-node.js", () => ({
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
-    spawn: async (input: { env?: Record<string, string>; onStdout?: (chunk: string) => void }) => {
-      mocks.spawnInputs.push({ env: input.env ? { ...input.env } : undefined });
+    spawn: async (input: {
+      argv?: string[];
+      env?: Record<string, string>;
+      onStdout?: (chunk: string) => void;
+      ptyCommand?: string;
+    }) => {
+      mocks.spawnInputs.push({
+        argv: input.argv ? [...input.argv] : undefined,
+        env: input.env ? { ...input.env } : undefined,
+        ptyCommand: input.ptyCommand,
+      });
       input.onStdout?.("ok\n");
       return {
         runId: "mock-run",
@@ -228,6 +239,90 @@ describe("exec resolve_exec_env hook wiring", () => {
       EXISTING: "plugin",
       PLUGIN_SAFE: "yes",
     });
+  });
+
+  it("applies inherited, model, agent, and plugin precedence across key casing", async () => {
+    const inheritedKey = "BREX_CASE_SCOPED_TOKEN";
+    const previous = process.env[inheritedKey];
+    process.env[inheritedKey] = "inherited";
+    installResolveExecEnvHook({ brex_case_scoped_token: "plugin" });
+
+    try {
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        env: { Brex_Case_Scoped_Token: "agent" },
+      });
+      await tool.execute("call-case-precedence", {
+        command: "echo ok",
+        env: { BREX_CASE_SCOPED_TOKEN: "model" },
+        yieldMs: 120_000,
+      });
+
+      const requestedMatches = Object.entries(mocks.gatewayParams[0]?.requestedEnv ?? {}).filter(
+        ([key]) => key.toUpperCase() === inheritedKey,
+      );
+      const effectiveMatches = Object.entries(mocks.gatewayParams[0]?.env ?? {}).filter(
+        ([key]) => key.toUpperCase() === inheritedKey,
+      );
+      expect(requestedMatches).toEqual([["brex_case_scoped_token", "plugin"]]);
+      expect(effectiveMatches).toEqual([["brex_case_scoped_token", "plugin"]]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[inheritedKey];
+      } else {
+        process.env[inheritedKey] = previous;
+      }
+    }
+  });
+
+  it.each(["gateway", "node"] as const)(
+    "drops stale inherited channel context for %s exec without turn context",
+    async (host) => {
+      const previous = process.env[CHANNEL_CONTEXT_ENV_KEY];
+      process.env[CHANNEL_CONTEXT_ENV_KEY] = "stale-channel-context";
+      try {
+        const tool = createExecTool({ host, security: "full", ask: "off" });
+        await tool.execute(`call-stale-context-${host}`, {
+          command: "echo ok",
+          yieldMs: 120_000,
+        });
+
+        const effectiveEnv =
+          host === "node" ? mocks.nodeHostParams[0]?.env : mocks.gatewayParams[0]?.env;
+        expect(effectiveEnv).not.toHaveProperty(CHANNEL_CONTEXT_ENV_KEY);
+      } finally {
+        if (previous === undefined) {
+          delete process.env[CHANNEL_CONTEXT_ENV_KEY];
+        } else {
+          process.env[CHANNEL_CONTEXT_ENV_KEY] = previous;
+        }
+      }
+    },
+  );
+
+  it("drops stale sandbox channel context when the turn has no channel context", async () => {
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      cwd: process.cwd(),
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/workspace",
+        env: { [CHANNEL_CONTEXT_ENV_KEY]: "stale-sandbox-context" },
+      },
+    });
+
+    await tool.execute("call-stale-sandbox-context", {
+      command: "echo ok",
+      yieldMs: 120_000,
+    });
+
+    expect(JSON.stringify(mocks.spawnInputs[0])).not.toContain("stale-sandbox-context");
+    expect(JSON.stringify(mocks.spawnInputs[0])).not.toContain(CHANNEL_CONTEXT_ENV_KEY);
   });
 
   it("forwards filtered plugin env to node host requests", async () => {

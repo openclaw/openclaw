@@ -108,6 +108,35 @@ function collectSkillAssignments(params: {
   }
 }
 
+function collectAgentExecEnvAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  for (const [agentIndex, agent] of (params.config.agents?.list ?? []).entries()) {
+    const env = agent.tools?.exec?.env;
+    if (!env) {
+      continue;
+    }
+    const effectiveHost = agent.tools?.exec?.host ?? params.config.tools?.exec?.host ?? "auto";
+    const active = effectiveHost !== "node";
+    for (const [envKey, envValue] of Object.entries(env)) {
+      collectSecretInputAssignment({
+        value: envValue,
+        path: `agents.list.${agentIndex}.tools.exec.env.${envKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason: "agent exec env is unsupported for host=node.",
+        apply: (value) => {
+          env[envKey] = value as string;
+        },
+      });
+    }
+  }
+}
+
 function collectAgentMemorySearchAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -686,6 +715,7 @@ export function collectCoreConfigAssignments(params: {
     });
   }
 
+  collectAgentExecEnvAssignments(params);
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);

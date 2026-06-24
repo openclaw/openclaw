@@ -46,6 +46,11 @@ function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return execTool;
 }
 
+function printEnvCommand(key: string): string {
+  const script = `process.stdout.write(process.env[${JSON.stringify(key)}] ?? "missing")`;
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+}
+
 describe("Agent-specific exec tool defaults", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -290,5 +295,192 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
+  });
+
+  it("injects configured env only into the selected agent and can drop inherited env", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const key = "OPENCLAW_TEST_AGENT_SCOPED_EXEC_ENV";
+    const previous = process.env[key];
+    process.env[key] = "gateway-value";
+    try {
+      const cfg: OpenClawConfig = {
+        tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+        agents: {
+          list: [
+            {
+              id: "referrals",
+              tools: {
+                exec: {
+                  inheritHostEnv: false,
+                  env: { [key]: "agent-value" },
+                },
+              },
+            },
+            {
+              id: "helper",
+              tools: { exec: { inheritHostEnv: false } },
+            },
+          ],
+        },
+      };
+
+      const referralsExec = requireExecTool(
+        createOpenClawCodingTools({
+          config: cfg,
+          agentId: "referrals",
+          workspaceDir: "/tmp/test-referrals-env",
+          agentDir: "/tmp/agent-referrals-env",
+        }),
+      );
+      const referralsResult = await referralsExec.execute("call-referrals-env", {
+        command: printEnvCommand(key),
+        env: { [key]: "model-value" },
+      });
+      expect((referralsResult.content[0] as { text?: string }).text).toContain("agent-value");
+
+      const helperExec = requireExecTool(
+        createOpenClawCodingTools({
+          config: cfg,
+          agentId: "helper",
+          workspaceDir: "/tmp/test-helper-env",
+          agentDir: "/tmp/agent-helper-env",
+        }),
+      );
+      const helperResult = await helperExec.execute("call-helper-env", {
+        command: printEnvCommand(key),
+      });
+      expect((helperResult.content[0] as { text?: string }).text).toContain("missing");
+    } finally {
+      if (previous === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous;
+      }
+    }
+  });
+
+  it("keeps dangerous configured host env keys behind the existing security filter", async () => {
+    const execTool = requireExecTool(
+      createOpenClawCodingTools({
+        config: {
+          tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: { exec: { env: { PATH: "/tmp/untrusted" } } },
+              },
+            ],
+          },
+        },
+        agentId: "ops",
+        workspaceDir: "/tmp/test-ops-env-filter",
+        agentDir: "/tmp/agent-ops-env-filter",
+      }),
+    );
+
+    await expect(
+      execTool.execute("call-ops-env-filter", { command: "echo blocked" }),
+    ).rejects.toThrow("PATH is controlled by tools.exec.pathPrepend");
+  });
+
+  it("allows source-config tool inspection but rejects unresolved SecretRefs on execution", async () => {
+    const execTool = requireExecTool(
+      createOpenClawCodingTools({
+        config: {
+          tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    env: {
+                      SCOPED_CREDENTIAL: {
+                        source: "env",
+                        provider: "default",
+                        id: "OPS_SCOPED_CREDENTIAL",
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        agentId: "ops",
+        workspaceDir: "/tmp/test-ops-unresolved-env",
+        agentDir: "/tmp/agent-ops-unresolved-env",
+      }),
+    );
+
+    await expect(
+      execTool.execute("call-ops-unresolved-env", { command: "echo blocked" }),
+    ).rejects.toThrow("contains an unresolved SecretRef");
+  });
+
+  it("rejects attempts to spoof trusted channel context through per-call env", async () => {
+    const execTool = requireExecTool(
+      createOpenClawCodingTools({
+        config: { tools: { exec: { host: "gateway", security: "full", ask: "off" } } },
+        agentId: "ops",
+        workspaceDir: "/tmp/test-ops-channel-context-env",
+        agentDir: "/tmp/agent-ops-channel-context-env",
+      }),
+    );
+
+    await expect(
+      execTool.execute("call-ops-channel-context-env", {
+        command: "echo blocked",
+        env: { OPENCLAW_CHANNEL_CONTEXT: "spoofed" },
+      }),
+    ).rejects.toThrow("reserved for trusted channel context");
+  });
+
+  it("rejects host-env minimization when effective exec host is a remote node", async () => {
+    const execTool = requireExecTool(
+      createOpenClawCodingTools({
+        config: {
+          tools: { exec: { host: "node", security: "full", ask: "off" } },
+          agents: {
+            list: [{ id: "ops", tools: { exec: { inheritHostEnv: false } } }],
+          },
+        },
+        agentId: "ops",
+        workspaceDir: "/tmp/test-ops-node-env",
+        agentDir: "/tmp/agent-ops-node-env",
+      }),
+    );
+
+    await expect(
+      execTool.execute("call-ops-node-env", { command: "echo blocked" }),
+    ).rejects.toThrow("configure environment isolation on the node host");
+  });
+
+  it("rejects agent-scoped env before remote-node preparation", async () => {
+    const execTool = requireExecTool(
+      createOpenClawCodingTools({
+        config: {
+          tools: { exec: { host: "node", security: "full", ask: "always" } },
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: { exec: { env: { SCOPED_TOKEN: "must-stay-on-gateway" } } },
+              },
+            ],
+          },
+        },
+        agentId: "ops",
+        workspaceDir: "/tmp/test-ops-node-scoped-env",
+        agentDir: "/tmp/agent-ops-node-scoped-env",
+      }),
+    );
+
+    await expect(
+      execTool.execute("call-ops-node-scoped-env", { command: "echo blocked" }),
+    ).rejects.toThrow("configure scoped environment on the node host");
   });
 });

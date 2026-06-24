@@ -22,7 +22,8 @@ Working directory for the command.
 </ParamField>
 
 <ParamField path="env" type="object">
-Key/value environment overrides merged on top of the inherited environment.
+Key/value environment overrides. Per-agent configured values are applied after
+these model-supplied values.
 </ParamField>
 
 <ParamField path="yieldMs" type="number" default="10000">
@@ -89,6 +90,7 @@ Notes:
   `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command.
   Secret-looking variables are excluded; sandbox and node exec do not use this snapshot. Set
   `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
+  Per-agent `tools.exec.inheritHostEnv: false` also disables it.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
@@ -113,6 +115,8 @@ Notes:
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single "running" notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.timeoutSec` (default: 1800): default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.
+- `agents.list[].tools.exec.env`: credential-oriented environment values injected only into that agent's gateway/sandbox exec children. Values support SecretRefs; node-host exec rejects this map.
+- `agents.list[].tools.exec.inheritHostEnv` (default: true): set false to omit the Gateway process environment and shell-startup snapshot from Gateway-hosted exec. This is rejected for `host=node`; sandbox exec is already minimal.
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
 - `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
 - `tools.exec.ask` (default: `off`)
@@ -141,7 +145,9 @@ Example:
 
 ### PATH handling
 
-- `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are
+- `host=gateway`: normally merges your login-shell `PATH` into the exec environment. With
+  `agents.list[].tools.exec.inheritHostEnv: false`, this merge is skipped; use an absolute command or
+  `tools.exec.pathPrepend`. `env.PATH` overrides are
   rejected for host execution. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`

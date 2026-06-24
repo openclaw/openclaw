@@ -580,6 +580,8 @@ export async function runExecProcess(opts: {
   workdir: string;
   env: Record<string, string>;
   pathPrepend?: string[];
+  /** Whether to restore the Gateway user's cached shell startup state. */
+  useShellSnapshot?: boolean;
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   usePty: boolean;
@@ -764,13 +766,16 @@ export async function runExecProcess(opts: {
       shellRuntimeEnv,
       opts.pathPrepend,
     );
-    const commandWithShellSnapshot = await maybeWrapCommandWithShellSnapshot({
-      command: commandWithPathPrepend,
-      shell,
-      shellArgs,
-      cwd: opts.workdir,
-      env: shellRuntimeEnv,
-    });
+    const commandWithShellSnapshot =
+      opts.useShellSnapshot === false
+        ? commandWithPathPrepend
+        : await maybeWrapCommandWithShellSnapshot({
+            command: commandWithPathPrepend,
+            shell,
+            shellArgs,
+            cwd: opts.workdir,
+            env: shellRuntimeEnv,
+          });
 
     const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
     if (opts.usePty) {

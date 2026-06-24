@@ -300,7 +300,10 @@ async function buildHostApprovalDecisionParams(
     command: params.command,
     commandArgv: params.commandArgv,
     systemRunPlan: params.systemRunPlan,
-    env: params.env,
+    env:
+      params.host === "node" || params.env === undefined
+        ? params.env
+        : Object.fromEntries(Object.keys(params.env).map((key) => [key, ""])),
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,

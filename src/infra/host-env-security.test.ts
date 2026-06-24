@@ -13,7 +13,7 @@ import {
   sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
 } from "./host-env-security.js";
-import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
+import { OPENCLAW_CHANNEL_CONTEXT_ENV_VAR, OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
 
 function findSystemCommandPath(command: string) {
   if (process.platform === "win32") {
@@ -1522,6 +1522,46 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.rejectedOverrideBlockedKeys).toStrictEqual([]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
+  });
+
+  it("drops inherited channel context and applies overrides case-insensitively", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        [OPENCLAW_CHANNEL_CONTEXT_ENV_VAR]: "stale",
+        SCOPED_TOKEN: "inherited",
+      },
+      overrides: {
+        scoped_token: "configured",
+      },
+    });
+
+    expect(result.env).not.toHaveProperty(OPENCLAW_CHANNEL_CONTEXT_ENV_VAR);
+    expect(
+      Object.entries(result.env).filter(([key]) => key.toUpperCase() === "SCOPED_TOKEN"),
+    ).toEqual([["scoped_token", "configured"]]);
+  });
+
+  it("preserves case-distinct inherited variables when no override targets them", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        HTTP_PROXY_ALIAS: "upper",
+        http_proxy_alias: "lower",
+      },
+    });
+
+    expect(result.env.HTTP_PROXY_ALIAS).toBe("upper");
+    expect(result.env.http_proxy_alias).toBe("lower");
+  });
+
+  it("rejects prototype keys without mutating result objects", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {},
+      overrides: Object.fromEntries([["__proto__", "polluted"]]),
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual(["__proto__"]);
+    expect(Object.hasOwn(result.env, "__proto__")).toBe(false);
+    expect(Object.getPrototypeOf(result.env)).toBe(Object.prototype);
   });
 });
 

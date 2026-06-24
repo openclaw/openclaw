@@ -1,6 +1,9 @@
 /** Process env key that marks child commands as launched by the OpenClaw CLI. */
 export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 
+/** Reserved exec env key carrying trusted sender/chat metadata. */
+export const OPENCLAW_CHANNEL_CONTEXT_ENV_VAR = "OPENCLAW_CHANNEL_CONTEXT";
+
 /** Stable marker value used for OpenClaw-launched subprocess detection. */
 export const OPENCLAW_CLI_ENV_VALUE = "1";
 

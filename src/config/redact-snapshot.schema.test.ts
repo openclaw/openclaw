@@ -23,6 +23,18 @@ describe("realredactConfigSnapshot_real", () => {
                 apiKey: "6789",
               },
             },
+            tools: {
+              exec: {
+                env: {
+                  REGION: "exec-secret",
+                  CREDENTIAL: {
+                    source: "env",
+                    provider: "default",
+                    id: "REFERRALS_CREDENTIAL",
+                  },
+                },
+              },
+            },
           },
         ],
       },
@@ -32,9 +44,24 @@ describe("realredactConfigSnapshot_real", () => {
     const config = result.config as typeof snapshot.config;
     expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(config.agents.list[0].memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(config.agents.list[0].tools.exec.env.REGION).toBe(REDACTED_SENTINEL);
+    expect(config.agents.list[0].tools.exec.env.CREDENTIAL).toEqual({
+      source: "env",
+      provider: "default",
+      id: REDACTED_SENTINEL,
+    });
+    expect(result.parsed?.agents.list[0].tools.exec.env.REGION).toBe(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("exec-secret");
+    expect(result.raw).not.toContain("REFERRALS_CREDENTIAL");
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
     expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");
+    expect(restored.agents.list[0].tools.exec.env.REGION).toBe("exec-secret");
+    expect(restored.agents.list[0].tools.exec.env.CREDENTIAL).toEqual({
+      source: "env",
+      provider: "default",
+      id: "REFERRALS_CREDENTIAL",
+    });
   });
 
   it("redacts bundled channel private keys from generated schema hints", () => {

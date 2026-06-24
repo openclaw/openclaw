@@ -37,6 +37,7 @@ Scope intent:
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].tts.providers.*.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
+- `agents.list[].tools.exec.env.*`
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`

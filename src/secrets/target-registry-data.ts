@@ -1,6 +1,6 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -167,6 +167,17 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     targetType: "agents.list[].memorySearch.remote.apiKey",
     configFile: "openclaw.json",
     pathPattern: "agents.list[].memorySearch.remote.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "agents.list[].tools.exec.env.*",
+    targetType: "agents.list[].tools.exec.env.*",
+    configFile: "openclaw.json",
+    pathPattern: "agents.list[].tools.exec.env.*",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,

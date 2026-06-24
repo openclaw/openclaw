@@ -773,6 +773,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.codeMode":
     "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
+  "agents.list[].tools.exec.env":
+    "Environment variables injected only into this agent's exec child processes. Values may be plaintext or SecretRefs; prefer SecretRefs for credentials.",
+  "agents.list[].tools.exec.inheritHostEnv":
+    "Whether Gateway-hosted exec inherits the Gateway process environment. Set false for a minimal environment when isolating agent credentials; sandbox exec is already minimal and node-host inheritance is configured on the node.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.list[].tools.message.crossContext.allowWithinProvider":

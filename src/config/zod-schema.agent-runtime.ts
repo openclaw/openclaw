@@ -10,6 +10,7 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { validateConfiguredExecEnvKey } from "../infra/host-env-security.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
@@ -593,9 +594,55 @@ function addExecPolicyModeConflictIssue(
   });
 }
 
+const AgentExecEnvRecordSchema = z.record(z.string(), SecretInputSchema.register(sensitive));
+
+function buildNestedJsonSchemaMetadata(schema: z.ZodType): Record<string, unknown> {
+  const metadata = {
+    ...schema.toJSONSchema({ target: "draft-07", io: "input", unrepresentable: "any" }),
+  } as Record<string, unknown>;
+  delete metadata.$schema;
+  return metadata;
+}
+
+const AgentExecEnvSchema = z
+  .unknown()
+  // Keep the raw input available for blocked-key validation while preserving
+  // the record shape for config-schema and form consumers.
+  .meta(buildNestedJsonSchemaMetadata(AgentExecEnvRecordSchema))
+  .superRefine((value, ctx) => {
+    if (!isPlainRecord(value)) {
+      return;
+    }
+    const seen = new Map<string, string>();
+    for (const key of Object.keys(value)) {
+      const validation = validateConfiguredExecEnvKey(key);
+      if (!validation.ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `Agent exec environment key ${JSON.stringify(key)} ${validation.reason}.`,
+        });
+        continue;
+      }
+      const previous = seen.get(validation.caseFoldedKey);
+      if (previous) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `Agent exec environment keys ${JSON.stringify(previous)} and ${JSON.stringify(key)} collide case-insensitively.`,
+        });
+        continue;
+      }
+      seen.set(validation.caseFoldedKey, key);
+    }
+  })
+  .pipe(AgentExecEnvRecordSchema);
+
 const AgentToolExecSchema = z
   .object({
     ...ToolExecBaseShape,
+    env: AgentExecEnvSchema.optional(),
+    inheritHostEnv: z.boolean().optional(),
     approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
   })
   .strict()

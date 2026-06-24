@@ -88,6 +88,7 @@ describe("mapSensitivePaths", () => {
       merged: z
         .object({ id: z.string() })
         .and(z.object({ nested: z.string().register(sensitive) })),
+      pipedRecord: z.unknown().pipe(z.record(z.string(), z.string().register(sensitive))),
     });
 
     const result = mapSensitivePaths(GrandSchema, "", {});
@@ -101,6 +102,7 @@ describe("mapSensitivePaths", () => {
     expect(result["headersNested.*.nested"]?.sensitive).toBe(true);
     expect(result["auth.value"]?.sensitive).toBe(true);
     expect(result["merged.nested"]?.sensitive).toBe(true);
+    expect(result["pipedRecord.*"]?.sensitive).toBe(true);
   });
 
   it("should not detect non-sensitive fields nested inside all structural Zod types", () => {
@@ -119,6 +121,7 @@ describe("mapSensitivePaths", () => {
         z.object({ type: z.literal("token"), value: z.string() }),
       ]),
       merged: z.object({ id: z.string() }).and(z.object({ nested: z.string() })),
+      pipedRecord: z.unknown().pipe(z.record(z.string(), z.string())),
     });
 
     const result = mapSensitivePaths(GrandSchema, "", {});
@@ -132,6 +135,7 @@ describe("mapSensitivePaths", () => {
     expect(result["headersNested.*.nested"]?.sensitive).toBe(undefined);
     expect(result["auth.value"]?.sensitive).toBe(undefined);
     expect(result["merged.nested"]?.sensitive).toBe(undefined);
+    expect(result["pipedRecord.*"]?.sensitive).toBe(undefined);
   });
 
   it("maps sensitive fields nested under object catchall schemas", () => {
@@ -188,6 +192,7 @@ describe("mapSensitivePaths", () => {
 
     expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
+    expect(hints["agents.list[].tools.exec.env.*"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.localService.env.*"]?.sensitive).toBe(true);
