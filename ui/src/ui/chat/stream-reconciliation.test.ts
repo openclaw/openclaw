@@ -183,6 +183,72 @@ describe("stream reconciliation", () => {
     expect(next.map(messageText)).toEqual(["latest ask", "before tool\nfinal answer"]);
   });
 
+  it("omits keyed commentary parts when persistCommentary is false (transient mode)", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "first preamble", ts: 2, itemId: "preamble-1" },
+        { text: "second preamble", ts: 3, itemId: "preamble-2" },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "final reply" }], timestamp: 4 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      persistCommentary: false,
+    });
+
+    // Keyed commentary stays live during streaming but is never materialized,
+    // so only the user ask and the final reply remain.
+    expect(next.map(messageText)).toEqual(["latest ask", "final reply"]);
+  });
+
+  it("still materializes the current stream tail when persistCommentary is false", () => {
+    const state = {
+      chatStream: "draft answer",
+      chatStreamStartedAt: 3,
+      chatStreamSegments: [{ text: "transient preamble", ts: 2, itemId: "preamble-1" }],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    const messages = [{ role: "user", content: "latest ask", timestamp: 1 }];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      persistCommentary: false,
+    });
+
+    // The keyed preamble is dropped, but the non-keyed current draft is preserved.
+    expect(next.map(messageText)).toEqual(["latest ask", "draft answer"]);
+  });
+
+  it("materializes keyed commentary parts when persistCommentary is true (persist mode)", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [{ text: "kept preamble", ts: 2, itemId: "preamble-1" }],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "final reply" }], timestamp: 4 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      persistCommentary: true,
+    });
+
+    expect(next.map(messageText)).toEqual(["latest ask", "kept preamble", "final reply"]);
+  });
+
   it("replaces current-stream fallbacks with matching terminal messages", () => {
     const state = {
       chatStream: "draft answer",
