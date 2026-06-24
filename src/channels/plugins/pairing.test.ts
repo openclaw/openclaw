@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     mediaUrl: null,
     result: { messageId: "gw-1" },
   })),
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock("./registry.js", () => ({
@@ -20,6 +21,10 @@ vi.mock("./registry.js", () => ({
 
 vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: mocks.sendMessage,
+}));
+
+vi.mock("../../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: mocks.readChannelAllowFromStore,
 }));
 
 import { createChatChannelPlugin } from "../../plugin-sdk/core.js";
@@ -54,6 +59,7 @@ describe("pairing facade", () => {
       cfg,
     });
 
+    expect(mocks.readChannelAllowFromStore).toHaveBeenCalledWith("whatsapp", process.env, "work");
     expect(mocks.sendMessage).toHaveBeenCalledWith({
       channel: "whatsapp",
       to: "5511999999999",
@@ -61,5 +67,62 @@ describe("pairing facade", () => {
       cfg,
       accountId: "work",
     });
+  });
+
+  it("includes pairing-store approvals in outbound-message notification config", async () => {
+    mocks.readChannelAllowFromStore.mockResolvedValue(["5511999999999"]);
+    const plugin = createChatChannelPlugin({
+      base: {
+        id: "whatsapp",
+        meta: { id: "whatsapp", label: "WhatsApp" },
+      } as never,
+      pairing: {
+        text: {
+          idLabel: "whatsappSenderId",
+          message: "approved",
+          delivery: "outbound-message",
+        },
+      },
+    });
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+          accounts: {
+            work: {
+              allowFrom: ["5511888888888"],
+            },
+          },
+        },
+      },
+    };
+    await notifyPairingApproved({
+      channelId: "whatsapp",
+      id: "5511999999999",
+      accountId: "work",
+      cfg,
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      to: "5511999999999",
+      content: "approved",
+      cfg: {
+        channels: {
+          whatsapp: {
+            enabled: true,
+            accounts: {
+              work: {
+                allowFrom: ["5511888888888", "5511999999999"],
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+    expect(cfg.channels.whatsapp.accounts.work.allowFrom).toEqual(["5511888888888"]);
   });
 });

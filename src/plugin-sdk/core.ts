@@ -202,6 +202,73 @@ type InlineTextPairingOutboundNotify = InlineTextPairingBase & {
 
 type InlineTextPairingOptions = InlineTextPairingAdapterNotify | InlineTextPairingOutboundNotify;
 
+type PairingAllowFromConfig = Record<string, unknown> & {
+  allowFrom?: Array<string | number>;
+  accounts?: Record<string, PairingAllowFromConfig | unknown>;
+};
+
+function isPairingConfigRecord(value: unknown): value is PairingAllowFromConfig {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergePairingAllowFromEntries(
+  current: unknown,
+  storeAllowFrom: string[],
+): Array<string | number> {
+  const entries: Array<string | number> = Array.isArray(current)
+    ? current.filter((entry): entry is string | number => {
+        return typeof entry === "string" || typeof entry === "number";
+      })
+    : [];
+  const seen = new Set(entries.map((entry) => String(entry)));
+  for (const entry of storeAllowFrom) {
+    if (!seen.has(entry)) {
+      entries.push(entry);
+      seen.add(entry);
+    }
+  }
+  return entries;
+}
+
+function withPairingStoreAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+  accountId?: string;
+  storeAllowFrom: string[];
+}): OpenClawConfig {
+  if (params.storeAllowFrom.length === 0) {
+    return params.cfg;
+  }
+  const channels = isPairingConfigRecord(params.cfg.channels) ? params.cfg.channels : {};
+  const currentChannel = channels[params.channelId];
+  const channelConfig = isPairingConfigRecord(currentChannel) ? currentChannel : {};
+  const nextChannel: PairingAllowFromConfig = { ...channelConfig };
+  if (params.accountId) {
+    const accounts = isPairingConfigRecord(nextChannel.accounts) ? nextChannel.accounts : {};
+    const currentAccount = accounts[params.accountId];
+    const accountConfig = isPairingConfigRecord(currentAccount) ? currentAccount : {};
+    nextChannel.accounts = {
+      ...accounts,
+      [params.accountId]: {
+        ...accountConfig,
+        allowFrom: mergePairingAllowFromEntries(accountConfig.allowFrom, params.storeAllowFrom),
+      },
+    };
+  } else {
+    nextChannel.allowFrom = mergePairingAllowFromEntries(
+      channelConfig.allowFrom,
+      params.storeAllowFrom,
+    );
+  }
+  return {
+    ...params.cfg,
+    channels: {
+      ...channels,
+      [params.channelId]: nextChannel,
+    },
+  };
+}
+
 function createInlineTextPairingAdapter(
   params: InlineTextPairingOptions,
   channelId: string,
@@ -211,12 +278,23 @@ function createInlineTextPairingAdapter(
     normalizeAllowEntry: params.normalizeAllowEntry,
     notifyApproval: async (ctx) => {
       if (params.delivery === "outbound-message") {
+        const { readChannelAllowFromStore } = await import("../pairing/pairing-store.js");
         const { sendMessage } = await import("../infra/outbound/message.js");
+        const storeAllowFrom = await readChannelAllowFromStore(
+          channelId as Parameters<typeof readChannelAllowFromStore>[0],
+          process.env,
+          ctx.accountId,
+        );
         await sendMessage({
           channel: channelId,
           to: ctx.id,
           content: params.message,
-          cfg: ctx.cfg,
+          cfg: withPairingStoreAllowFrom({
+            cfg: ctx.cfg,
+            channelId,
+            accountId: ctx.accountId,
+            storeAllowFrom,
+          }),
           ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
         });
         return;
