@@ -539,6 +539,12 @@ export type GatewayServerOptions = {
    * Only valid with `activationMode: "deferred"`.
    */
   activationControlPort?: number;
+  /** Secret required in x-openclaw-activation-token for the activation control port. */
+  activationControlToken?: string;
+  /** Refresh the activation-control token before authorizing a control-port activation. */
+  refreshActivationControlToken?: () => Promise<string | undefined>;
+  /** Revalidate caller-owned startup preconditions immediately before activation. */
+  beforeActivationStart?: () => Promise<void>;
   /**
    * Experimental deferred activation mode for a parked, userless Gateway.
    * This is internal while the activation boundary is proven.
@@ -567,19 +573,43 @@ const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
   return runSetupWizard(...args);
 };
 
+const ACTIVATION_CONTROL_CLOSE_GRACE_MS = 500;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function closeNodeHttpServer(server: NodeHttpServer | null): Promise<void> {
-  if (!server?.listening) {
+  if (!server) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
+  const forceClosable = server as NodeHttpServer & {
+    closeAllConnections?: () => void;
+    closeIdleConnections?: () => void;
+  };
+  forceClosable.closeIdleConnections?.();
+  const closePromise = new Promise<void>((resolve, reject) => {
     server.close((err) => {
-      if (err) {
+      if (err && (err as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
         reject(err);
         return;
       }
       resolve();
     });
   });
+  void closePromise.catch(() => undefined);
+  const closedWithinGrace = await Promise.race([
+    closePromise.then(() => true),
+    delay(ACTIVATION_CONTROL_CLOSE_GRACE_MS).then(() => false),
+  ]);
+  if (closedWithinGrace) {
+    return;
+  }
+  forceClosable.closeAllConnections?.();
+  await Promise.race([
+    closePromise,
+    delay(ACTIVATION_CONTROL_CLOSE_GRACE_MS).then(() => undefined),
+  ]);
 }
 
 async function listenNodeHttpServer(server: NodeHttpServer, port: number): Promise<void> {
@@ -598,48 +628,152 @@ async function listenNodeHttpServer(server: NodeHttpServer, port: number): Promi
   });
 }
 
+function createDeferredGatewayPlaceholderServer(): NodeHttpServer {
+  return createServer((req, res) => {
+    const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+    const isProbeRoute =
+      requestPath === "/health" ||
+      requestPath === "/healthz" ||
+      requestPath === "/ready" ||
+      requestPath === "/readyz";
+    const method = (req.method ?? "GET").toUpperCase();
+    if (isProbeRoute && method !== "GET" && method !== "HEAD") {
+      res.statusCode = 405;
+      res.setHeader("Allow", "GET, HEAD");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return;
+    }
+    const status = requestPath === "/health" || requestPath === "/healthz" ? 200 : 503;
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(method === "HEAD" ? undefined : JSON.stringify({ state: "deferred" }));
+  });
+}
+
+async function listenDeferredGatewayPlaceholderServer(
+  server: NodeHttpServer,
+  port: number,
+): Promise<void> {
+  const { listenGatewayHttpServer } = await import("./server/http-listen.js");
+  await listenGatewayHttpServer({ bindHost: "127.0.0.1", httpServer: server, port });
+}
+
 async function createDeferredGatewayServer(
   port: number,
   opts: GatewayServerOptions,
 ): Promise<GatewayServer> {
   let activationState: GatewayActivationState = "deferred";
-  let activationId: string | null = null;
   let activeServer: GatewayServer | null = null;
+  let gatewayPlaceholderServer: NodeHttpServer | null = null;
   let activationControlServer: NodeHttpServer | null = null;
+  let activationPromise: Promise<void> | null = null;
+  let activationPhase: "idle" | "pre-start" | "starting-server" = "idle";
+  let closeRequested = false;
 
+  const beforeActivationStart = opts.beforeActivationStart;
   const activeOpts: GatewayServerOptions = { ...opts };
   delete activeOpts.activationControlPort;
+  delete activeOpts.activationControlToken;
+  delete activeOpts.refreshActivationControlToken;
   delete activeOpts.activationMode;
+  delete activeOpts.beforeActivationStart;
+  delete activeOpts.startupConfigSnapshotRead;
 
-  const activate = async (input: GatewayActivationInput) => {
-    if (activationState === "closed") {
+  const activate = async (_input: GatewayActivationInput) => {
+    if (activationState === "closed" || closeRequested) {
       throw new Error("Cannot activate a closed Gateway");
     }
-    if (activationState === "active" || activationId !== null) {
+    if (activationState === "active" || activationState === "activating") {
       throw new Error("Gateway is already activated");
     }
     activationState = "activating";
-    activationId = input.activationId;
-    try {
-      activeServer = await startGatewayServer(port, activeOpts);
+    activationPhase = "pre-start";
+    const pending = (async () => {
+      await beforeActivationStart?.();
+      if (closeRequested) {
+        activationState = "closed";
+        throw new Error("Gateway activation closed before startup");
+      }
+      await closeNodeHttpServer(gatewayPlaceholderServer);
+      gatewayPlaceholderServer = null;
+      if (closeRequested) {
+        activationState = "closed";
+        throw new Error("Gateway activation closed before startup");
+      }
+      activationPhase = "starting-server";
+      const nextServer = await startGatewayServer(port, activeOpts);
+      if (closeRequested) {
+        await nextServer.close({ reason: "deferred activation closed before completion" });
+        activationState = "closed";
+        throw new Error("Gateway activation closed before completion");
+      }
+      activeServer = nextServer;
       activationState = "active";
+    })();
+    activationPromise = pending;
+    try {
+      await pending;
     } catch (err) {
-      activationState = "failed";
+      if (!closeRequested) {
+        activationState = "failed";
+        if (!gatewayPlaceholderServer) {
+          gatewayPlaceholderServer = createDeferredGatewayPlaceholderServer();
+          await listenDeferredGatewayPlaceholderServer(gatewayPlaceholderServer, port).catch(() => {
+            gatewayPlaceholderServer = null;
+          });
+        }
+      }
       throw err;
+    } finally {
+      if (activationPromise === pending) {
+        activationPromise = null;
+        activationPhase = "idle";
+      }
     }
   };
 
+  const activationControlToken = opts.activationControlToken?.trim();
+  if (opts.activationControlPort === port) {
+    throw new Error("activation control port must differ from Gateway port");
+  }
+  if (typeof opts.activationControlPort === "number" && !activationControlToken) {
+    throw new Error("activation control token is required when activation control port is set");
+  }
+
+  gatewayPlaceholderServer = createDeferredGatewayPlaceholderServer();
+  await listenDeferredGatewayPlaceholderServer(gatewayPlaceholderServer, port);
+
   if (typeof opts.activationControlPort === "number") {
-    activationControlServer = createServer((req, res) => {
+    activationControlServer = createServer(async (req, res) => {
       const sendJson = (status: number, body: Record<string, unknown>) => {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
       };
+      if (req.method === "GET" && req.url === "/healthz") {
+        sendJson(200, { state: activationState });
+        return;
+      }
       if (req.method === "GET" && req.url === "/readyz") {
         sendJson(activationState === "active" ? 200 : 503, { state: activationState });
         return;
       }
       if (req.method === "POST" && req.url === "/activate") {
+        let expectedActivationToken = activationControlToken;
+        try {
+          if (opts.refreshActivationControlToken) {
+            expectedActivationToken = (await opts.refreshActivationControlToken())?.trim();
+          }
+        } catch (err) {
+          sendJson(500, { error: String(err), state: activationState });
+          return;
+        }
+        if (
+          !expectedActivationToken ||
+          req.headers["x-openclaw-activation-token"] !== expectedActivationToken
+        ) {
+          sendJson(401, { error: "unauthorized", state: activationState });
+          return;
+        }
         let rawBody = "";
         req.setEncoding("utf8");
         req.on("data", (chunk) => {
@@ -662,18 +796,48 @@ async function createDeferredGatewayServer(
       }
       sendJson(404, { error: "not found", state: activationState });
     });
-    await listenNodeHttpServer(activationControlServer, opts.activationControlPort);
+    try {
+      await listenNodeHttpServer(activationControlServer, opts.activationControlPort);
+    } catch (err) {
+      await closeNodeHttpServer(gatewayPlaceholderServer);
+      gatewayPlaceholderServer = null;
+      throw err;
+    }
   }
 
   return {
     activate,
     activationState: () => activationState,
     close: async (closeOpts) => {
+      closeRequested = true;
       try {
+        const preStartDeadline = Date.now() + ACTIVATION_CONTROL_CLOSE_GRACE_MS;
+        while (activationPromise) {
+          const pendingActivation = activationPromise;
+          if (activationPhase === "starting-server") {
+            await pendingActivation.catch(() => undefined);
+            continue;
+          }
+          const remainingMs = preStartDeadline - Date.now();
+          if (remainingMs <= 0) {
+            break;
+          }
+          const completed = await Promise.race([
+            pendingActivation.catch(() => undefined).then(() => true),
+            delay(Math.min(remainingMs, 50)).then(() => false),
+          ]);
+          if (completed) {
+            continue;
+          }
+        }
         await activeServer?.close(closeOpts);
-        await closeNodeHttpServer(activationControlServer);
       } finally {
-        activationState = "closed";
+        try {
+          await closeNodeHttpServer(activationControlServer);
+        } finally {
+          await closeNodeHttpServer(gatewayPlaceholderServer);
+          activationState = "closed";
+        }
       }
     },
   };

@@ -32,7 +32,8 @@ const cleanStaleGatewayProcessesSync = vi.fn(
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
+type GatewayLoopParams = { lockPort?: number; start: GatewayLoopStart };
+const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
 });
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
@@ -362,9 +363,12 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
     return callArg(startGatewayServer, index, 1) as {
       activationControlPort?: number;
+      activationControlToken?: string;
       activationMode?: "deferred";
       auth?: { mode?: string; token?: string; password?: string };
+      refreshActivationControlToken?: () => Promise<string | undefined>;
       bind?: string;
+      beforeActivationStart?: () => Promise<void>;
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
     };
@@ -375,14 +379,433 @@ describe("gateway run option collisions", () => {
   }
 
   it("passes deferred activation control port env into gateway startup", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789" }, async () => {
-      await runGatewayCli(["gateway", "--allow-unconfigured"]);
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway", "--allow-unconfigured"]);
 
-      expect(gatewayStartOptions()).toMatchObject({
-        activationControlPort: 19789,
-        activationMode: "deferred",
-      });
+        expect(gatewayStartOptions()).toMatchObject({
+          activationControlPort: 19789,
+          activationControlToken: "secret-token",
+          activationMode: "deferred",
+        });
+        expect((runGatewayLoop.mock.calls[0]?.[0] as GatewayLoopParams | undefined)?.lockPort).toBe(
+          18789,
+        );
+      },
+    );
+  });
+
+  it("rejects deferred activation when Gateway TLS is enabled", async () => {
+    const config = {
+      gateway: {
+        auth: { mode: "token", token: "safe" },
+        mode: "local",
+        tls: { certFile: "/tmp/cert.pem", enabled: true, keyFile: "/tmp/key.pem" },
+      },
+    };
+    configState.cfg = config;
+    configState.snapshot = {
+      config,
+      exists: true,
+      sourceConfig: config,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await expect(runGatewayCli(["gateway"])).rejects.toThrow("__exit__:78");
+
+        expect(startGatewayServer).not.toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).toContain(
+          "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT is not supported when gateway.tls.enabled=true",
+        );
+      },
+    );
+  });
+
+  it("rejects invalid deferred activation control port as a config error", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "not-a-port",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await expect(runGatewayCli(["gateway", "--allow-unconfigured"])).rejects.toThrow(
+          "__exit__:78",
+        );
+
+        expect(startGatewayServer).not.toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).toContain(
+          "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT must be a valid TCP port",
+        );
+      },
+    );
+  });
+
+  it("rejects deferred activation control port without activation token", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789" }, async () => {
+      await expect(runGatewayCli(["gateway", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+
+      expect(startGatewayServer).not.toHaveBeenCalled();
+      expect(runtimeErrors.join("\n")).toContain(
+        "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN is required",
+      );
     });
+  });
+
+  it("preserves process-env precedence when refreshing deferred activation token", async () => {
+    const config = {
+      env: { vars: { OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "config-token" } },
+      gateway: { auth: { mode: "token", token: "safe" }, mode: "local" },
+    };
+    configState.cfg = config;
+    configState.snapshot = {
+      config,
+      exists: true,
+      sourceConfig: config,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "env-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        expect(options.activationControlToken).toBe("env-token");
+        await expect(options.refreshActivationControlToken?.()).resolves.toBe("env-token");
+      },
+    );
+  });
+
+  it("refreshes config-managed deferred activation token before control authorization", async () => {
+    const initialConfig = {
+      env: { vars: { OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "old-control-token" } },
+      gateway: { auth: { mode: "token", token: "safe" }, mode: "local" },
+    };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: undefined,
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        expect(options.activationControlToken).toBe("old-control-token");
+        expect(typeof options.refreshActivationControlToken).toBe("function");
+
+        const updatedConfig = {
+          env: { vars: { OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "new-control-token" } },
+          gateway: { auth: { mode: "token", token: "safe" }, mode: "local" },
+        };
+        configState.cfg = updatedConfig;
+        configState.snapshot = {
+          config: updatedConfig,
+          exists: true,
+          sourceConfig: updatedConfig,
+          valid: true,
+        };
+
+        await expect(options.refreshActivationControlToken?.()).resolves.toBe("new-control-token");
+      },
+    );
+  });
+
+  it("reapplies fresh config env before deferred activation", async () => {
+    const initialConfig = {
+      env: { vars: { OPENCLAW_GATEWAY_TOKEN: "old-token" } },
+      gateway: { auth: { mode: "token" }, mode: "local" },
+    };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        ...withoutGatewayAuthEnv,
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("old-token");
+
+        const updatedConfig = {
+          env: { vars: { OPENCLAW_GATEWAY_TOKEN: "new-token" } },
+          gateway: { auth: { mode: "token" }, mode: "local" },
+        };
+        configState.cfg = updatedConfig;
+        configState.snapshot = {
+          config: updatedConfig,
+          exists: true,
+          sourceConfig: updatedConfig,
+          valid: true,
+        };
+
+        await options.beforeActivationStart?.();
+
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
+      },
+    );
+  });
+
+  it("rechecks the future config guard before deferred activation", async () => {
+    const initialConfig = { gateway: { mode: "local" } };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        const futureConfig = {
+          gateway: { mode: "local" },
+          meta: { lastTouchedVersion: "9999.1.1" },
+        };
+        configState.cfg = futureConfig;
+        configState.snapshot = {
+          config: futureConfig,
+          exists: true,
+          sourceConfig: futureConfig,
+          valid: true,
+        };
+
+        await expect(options.beforeActivationStart?.()).rejects.toThrow(
+          /run automatic gateway startup migrations/,
+        );
+        expect(runtimeErrors.join("\n")).not.toContain("run automatic gateway startup migrations");
+      },
+    );
+  });
+
+  it("rechecks Gateway TLS before deferred activation", async () => {
+    const initialConfig = { gateway: { auth: { mode: "token", token: "safe" }, mode: "local" } };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        const tlsConfig = {
+          gateway: {
+            auth: { mode: "token", token: "safe" },
+            mode: "local",
+            tls: { certFile: "/tmp/cert.pem", enabled: true, keyFile: "/tmp/key.pem" },
+          },
+        };
+        configState.cfg = tlsConfig;
+        configState.snapshot = {
+          config: tlsConfig,
+          exists: true,
+          sourceConfig: tlsConfig,
+          valid: true,
+        };
+
+        await expect(options.beforeActivationStart?.()).rejects.toThrow(
+          /deferred activation is not supported when gateway\.tls\.enabled=true/,
+        );
+      },
+    );
+  });
+
+  it("rejects fresh non-loopback bind before deferred activation", async () => {
+    const initialConfig = { gateway: { auth: { mode: "token", token: "safe" }, mode: "local" } };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        ...withoutGatewayAuthEnv,
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        const unsafeConfig = {
+          gateway: { auth: { mode: "token", token: "safe" }, bind: "lan", mode: "local" },
+        };
+        configState.cfg = unsafeConfig;
+        configState.snapshot = {
+          config: unsafeConfig,
+          exists: true,
+          sourceConfig: unsafeConfig,
+          valid: true,
+        };
+
+        await expect(options.beforeActivationStart?.()).rejects.toThrow(
+          /deferred activation currently supports loopback Gateway binds only/,
+        );
+      },
+    );
+  });
+
+  it("rechecks the gateway start guard before deferred activation", async () => {
+    const initialConfig = { gateway: { mode: "local" } };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway"]);
+        const options = gatewayStartOptions();
+        expect(typeof options.beforeActivationStart).toBe("function");
+
+        const updatedConfig = { gateway: { mode: "remote" } };
+        configState.cfg = updatedConfig;
+        configState.snapshot = {
+          config: updatedConfig,
+          exists: true,
+          sourceConfig: updatedConfig,
+          valid: true,
+        };
+
+        await expect(options.beforeActivationStart?.()).rejects.toThrow(
+          /Gateway start blocked: set gateway\.mode=local/,
+        );
+      },
+    );
+  });
+
+  it("rejects deferred activation control port when it equals the Gateway port", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "18789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await expect(runGatewayCli(["gateway", "--allow-unconfigured"])).rejects.toThrow(
+          "__exit__:78",
+        );
+
+        expect(startGatewayServer).not.toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).toContain(
+          "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT must differ from gateway.port",
+        );
+      },
+    );
+  });
+
+  it("rejects deferred activation when initial Gateway bind is non-loopback", async () => {
+    const config = {
+      gateway: { auth: { mode: "token", token: "safe" }, bind: "lan", mode: "local" },
+    };
+    configState.cfg = config;
+    configState.snapshot = {
+      config,
+      exists: true,
+      sourceConfig: config,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await expect(runGatewayCli(["gateway"])).rejects.toThrow("__exit__:78");
+
+        expect(startGatewayServer).not.toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).toContain(
+          "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT is supported only when the Gateway bind resolves to loopback",
+        );
+      },
+    );
+  });
+
+  it("does not pass config-derived bind as a deferred activation override", async () => {
+    configState.cfg = { gateway: { bind: "loopback" } };
+    configState.snapshot = {
+      config: configState.cfg,
+      exists: true,
+      sourceConfig: configState.cfg,
+      valid: true,
+    };
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway", "--allow-unconfigured"]);
+
+        expect(gatewayStartOptions().bind).toBeUndefined();
+      },
+    );
+  });
+
+  it("preserves explicit CLI bind as a deferred activation override", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+      },
+      async () => {
+        await runGatewayCli(["gateway", "--allow-unconfigured", "--bind", "loopback"]);
+
+        expect(gatewayStartOptions().bind).toBe("loopback");
+      },
+    );
   });
 
   it("runs the fast-path bootstrap hook before gateway startup", async () => {
@@ -424,6 +847,54 @@ describe("gateway run option collisions", () => {
     const refreshOrder = refreshManagedProxy.mock.invocationCallOrder[0] ?? 0;
     const startOrder = startGatewayServer.mock.invocationCallOrder[0] ?? 0;
     expect(startOrder).toBeGreaterThan(refreshOrder);
+  });
+
+  it("refreshes the managed proxy from fresh config before deferred activation", async () => {
+    const initialConfig = {
+      gateway: { auth: { mode: "token", token: "safe" }, mode: "local" },
+      proxy: { enabled: true, proxyUrl: "http://127.0.0.1:19876" },
+    };
+    configState.cfg = initialConfig;
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      path: "/tmp/openclaw.json",
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+    const uninstall = installGatewayRunRuntimeHooks({ refreshManagedProxy });
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789",
+          OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: "secret-token",
+        },
+        async () => {
+          await runGatewayCli(["gateway"]);
+          const options = gatewayStartOptions();
+          expect(refreshManagedProxy).toHaveBeenCalledWith(initialConfig.proxy);
+
+          const freshConfig = {
+            gateway: { auth: { mode: "token", token: "safe" }, mode: "local" },
+            proxy: { enabled: true, proxyUrl: "http://127.0.0.1:29876" },
+          };
+          configState.cfg = freshConfig;
+          configState.snapshot = {
+            config: freshConfig,
+            exists: true,
+            path: "/tmp/openclaw.json",
+            sourceConfig: freshConfig,
+            valid: true,
+          };
+
+          await options.beforeActivationStart?.();
+
+          expect(refreshManagedProxy).toHaveBeenLastCalledWith(freshConfig.proxy);
+        },
+      );
+    } finally {
+      uninstall();
+    }
   });
 
   it("loads configured shell env fallback before final proxy refresh and gateway startup", async () => {

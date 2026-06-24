@@ -40,7 +40,7 @@ import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
@@ -62,6 +62,7 @@ const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 const GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV =
   "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT";
+const GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV = "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN";
 
 type Awaitable<T> = T | Promise<T>;
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
@@ -181,6 +182,19 @@ function formatModeErrorList(modes: readonly string[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
+}
+
+function createDeferredActivationValidationRuntime(): RuntimeEnv {
+  const errors: string[] = [];
+  return {
+    log: (...args) => gatewayLog.info(args.map(String).join(" ")),
+    error: (...args) => {
+      errors.push(args.map(String).join(" "));
+    },
+    exit: (code) => {
+      throw new Error([...errors, `exit ${code}`].filter(Boolean).join("\n"));
+    },
+  };
 }
 
 function shouldBlockGatewayBindWithoutExplicitAuth(params: {
@@ -367,6 +381,13 @@ function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbac
   return JSON.stringify(plan);
 }
 
+async function resolveDeferredActivationTokenFromConfig(
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const { collectConfigRuntimeEnvVars } = await import("../../config/env-vars.js");
+  return collectConfigRuntimeEnvVars(cfg)[GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV]?.trim();
+}
+
 async function readGatewayStartupConfigWithShellEnv(params: {
   opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
@@ -457,6 +478,7 @@ function normalizeGatewayHealthProbeHost(host: string): string {
 async function probeGatewayHealthz(params: {
   host: string;
   port: number;
+  path?: string;
   timeoutMs?: number;
 }): Promise<boolean> {
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS;
@@ -465,7 +487,7 @@ async function probeGatewayHealthz(params: {
       {
         hostname: normalizeGatewayHealthProbeHost(params.host),
         port: params.port,
-        path: "/healthz",
+        path: params.path ?? "/healthz",
         method: "GET",
         timeout: timeoutMs,
       },
@@ -493,7 +515,9 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   log: GatewayRunLogger;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
+  fallbackHealthProbe?: { host: string; path?: string; port: number };
+  healthPath?: string;
+  probeHealth?: (params: { host: string; path?: string; port: number }) => Promise<boolean>;
   retryMs?: number;
   timeoutMs?: number;
 }) {
@@ -524,7 +548,15 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
         throw err;
       }
 
-      if (await probeHealth({ host: params.healthHost, port: params.port })) {
+      const probeParams = {
+        host: params.healthHost,
+        ...(params.healthPath ? { path: params.healthPath } : {}),
+        port: params.port,
+      };
+      const existingGatewayHealthy =
+        (await probeHealth(probeParams)) ||
+        (params.fallbackHealthProbe ? await probeHealth(params.fallbackHealthProbe) : false);
+      if (existingGatewayHealthy) {
         if (supervisor === "systemd") {
           throw new GatewayLockError(
             "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
@@ -656,6 +688,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   ) {
     return;
   }
+  const deferredActivationTokenHadEnvPrecedence = Boolean(
+    process.env[GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV]?.trim(),
+  );
   if (snapshot) {
     const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
     if (
@@ -718,16 +753,40 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     defaultRuntime.error(
       `${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} must be a valid TCP port.`,
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+  if (deferredActivationControlPort !== null && deferredActivationControlPort === port) {
+    defaultRuntime.error(
+      `${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} must differ from gateway.port.`,
+    );
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+  const initialDeferredActivationTokenFromConfig = snapshot?.sourceConfig
+    ? await resolveDeferredActivationTokenFromConfig(snapshot.sourceConfig)
+    : undefined;
+  if (deferredActivationControlPort !== null && cfg.gateway?.tls?.enabled === true) {
+    defaultRuntime.error(
+      `${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} is not supported when gateway.tls.enabled=true.`,
+    );
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+  const deferredActivationToken = process.env[GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV]?.trim();
+  if (deferredActivationControlPort !== null && !deferredActivationToken) {
+    defaultRuntime.error(
+      `${GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV} is required when ${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} is set.`,
+    );
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
   const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
-  const bindExplicitRawStr = normalizeOptionalString(
-    toOptionString(opts.bind) ?? cfg.gateway?.bind,
-  );
+  const bindOptionRaw = toOptionString(opts.bind);
+  const bindExplicitRawStr = normalizeOptionalString(bindOptionRaw ?? cfg.gateway?.bind);
   if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
     defaultRuntime.error('Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".');
     defaultRuntime.exit(1);
@@ -848,6 +907,146 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     configAuditPath,
     mode,
   });
+  const refreshDeferredActivationConfigEnvironment = async () => {
+    const freshStartupConfig = await readGatewayStartupConfigWithShellEnv({
+      opts,
+      startupTrace,
+    });
+    const freshSnapshot = freshStartupConfig.snapshot;
+    const validationRuntime = createDeferredActivationValidationRuntime();
+    if (
+      !enforceGatewayRunFutureConfigGuard({
+        opts,
+        runtime: validationRuntime,
+        snapshot: freshSnapshot,
+      })
+    ) {
+      throw new Error("Gateway deferred activation rejected by future config guard");
+    }
+    if (freshSnapshot) {
+      const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
+      if (
+        !(await applyFinalGatewayRunConfigEnv({
+          lowerPrecedenceEnv: freshStartupConfig.lowerPrecedenceEnv,
+          runtime: validationRuntime,
+          snapshot: freshSnapshot,
+        }))
+      ) {
+        throw new Error("Gateway deferred activation rejected by final config environment guard");
+      }
+    }
+    return {
+      cfg: freshSnapshot?.valid ? freshSnapshot.config : freshStartupConfig.cfg,
+      snapshot: freshSnapshot,
+    };
+  };
+  const refreshDeferredActivationControlToken = async () => {
+    const freshStartupConfig = await readGatewayStartupConfig({
+      lowerPrecedenceEnv: {},
+      opts,
+      startupTrace,
+    });
+    const freshSnapshot = freshStartupConfig.snapshot;
+    const validationRuntime = createDeferredActivationValidationRuntime();
+    if (
+      !enforceGatewayRunFutureConfigGuard({
+        opts,
+        runtime: validationRuntime,
+        snapshot: freshSnapshot,
+      })
+    ) {
+      throw new Error("Gateway deferred activation rejected by future config guard");
+    }
+    const freshTokenFromConfig = freshSnapshot?.sourceConfig
+      ? await resolveDeferredActivationTokenFromConfig(freshSnapshot.sourceConfig)
+      : undefined;
+    if (deferredActivationTokenHadEnvPrecedence) {
+      return process.env[GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV]?.trim();
+    }
+    if (freshTokenFromConfig || initialDeferredActivationTokenFromConfig) {
+      return freshTokenFromConfig;
+    }
+    return process.env[GATEWAY_DEFERRED_ACTIVATION_TOKEN_ENV]?.trim();
+  };
+  const recheckGatewayStartGuardForDeferredActivation = async () => {
+    const { cfg: freshCfg, snapshot: freshSnapshot } =
+      await refreshDeferredActivationConfigEnvironment();
+    await hooks.refreshManagedProxy?.(freshCfg.proxy);
+    if (freshCfg.gateway?.tls?.enabled === true) {
+      throw new Error(
+        "Gateway deferred activation is not supported when gateway.tls.enabled=true.",
+      );
+    }
+    const freshPort = parsePort(opts.port) ?? resolveGatewayPort(freshCfg);
+    if (freshPort !== port) {
+      throw new Error(
+        `Gateway deferred activation rejected because gateway.port changed from ${port} to ${freshPort}; restart the parked Gateway for the new port.`,
+      );
+    }
+    const freshErrors = getGatewayStartGuardErrors({
+      allowUnconfigured: opts.allowUnconfigured,
+      configExists: freshSnapshot?.exists ?? fs.existsSync(CONFIG_PATH),
+      configAuditPath,
+      mode: freshCfg.gateway?.mode,
+    });
+    if (freshErrors.length > 0) {
+      throw new Error(freshErrors.join("\n"));
+    }
+    const freshEffectiveTailscaleMode = tailscaleMode ?? freshCfg.gateway?.tailscale?.mode ?? "off";
+    const freshBind = (
+      bindOptionRaw !== undefined
+        ? bind
+        : (freshCfg.gateway?.bind ?? defaultGatewayBindMode(freshEffectiveTailscaleMode))
+    ) as "loopback" | "lan" | "auto" | "custom" | "tailnet";
+    const freshBindHost = await resolveGatewayBindHost(freshBind, freshCfg.gateway?.customBindHost);
+    if (!isLoopbackHost(freshBindHost)) {
+      throw new Error(
+        `Gateway deferred activation rejected because gateway.bind resolves to ${freshBindHost}; deferred activation currently supports loopback Gateway binds only.`,
+      );
+    }
+    const { resolveGatewayAuth } = await import("../../gateway/auth.js");
+    const freshResolvedAuth = resolveGatewayAuth({
+      authConfig: freshCfg.gateway?.auth,
+      authOverride,
+      env: process.env,
+      tailscaleMode: freshEffectiveTailscaleMode,
+    });
+    const freshResolvedAuthMode = freshResolvedAuth.mode;
+    const freshHasToken =
+      typeof freshResolvedAuth.token === "string" && freshResolvedAuth.token.trim().length > 0;
+    const freshHasPassword =
+      typeof freshResolvedAuth.password === "string" &&
+      freshResolvedAuth.password.trim().length > 0;
+    const freshTokenConfigured =
+      freshHasToken ||
+      hasConfiguredSecretInput(
+        authOverride?.token ?? freshCfg.gateway?.auth?.token,
+        freshCfg.secrets?.defaults,
+      );
+    const freshPasswordConfigured =
+      freshHasPassword ||
+      hasConfiguredSecretInput(
+        authOverride?.password ?? freshCfg.gateway?.auth?.password,
+        freshCfg.secrets?.defaults,
+      );
+    if (freshResolvedAuthMode === "password" && !freshPasswordConfigured) {
+      throw new Error(
+        "Gateway auth is set to password, but no password is configured. Set gateway.auth.password (or OPENCLAW_GATEWAY_PASSWORD), or pass --password.",
+      );
+    }
+    const freshHasSharedSecret =
+      (freshResolvedAuthMode === "token" && freshTokenConfigured) ||
+      (freshResolvedAuthMode === "password" && freshPasswordConfigured);
+    if (
+      shouldBlockGatewayBindWithoutExplicitAuth({
+        bindHost: freshBindHost,
+        hasSharedSecret: freshHasSharedSecret,
+        resolvedAuthMode: freshResolvedAuthMode,
+      })
+    ) {
+      throw new Error(`Refusing to bind gateway to ${freshBind} without auth.`);
+    }
+  };
   if (guardErrors.length > 0) {
     for (const error of guardErrors) {
       defaultRuntime.error(error);
@@ -921,6 +1120,13 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     );
   }
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  if (deferredActivationControlPort !== null && !isLoopbackHost(healthHost)) {
+    defaultRuntime.error(
+      `${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} is supported only when the Gateway bind resolves to loopback. Current bind resolves to ${healthHost}; disable deferred activation or use gateway.bind=loopback.`,
+    );
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
   if (
     shouldBlockGatewayBindWithoutExplicitAuth({
       bindHost: healthHost,
@@ -965,12 +1171,14 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
-      healthHost,
+      healthHost: deferredActivationControlPort !== null ? "127.0.0.1" : healthHost,
       start: async ({ startupStartedAt } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
-          bind,
+          ...(deferredActivationControlPort === null || bindOptionRaw !== undefined
+            ? { bind }
+            : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
@@ -981,7 +1189,10 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
           ...(deferredActivationControlPort !== null
             ? {
                 activationControlPort: deferredActivationControlPort,
+                activationControlToken: deferredActivationToken,
                 activationMode: "deferred" as const,
+                beforeActivationStart: recheckGatewayStartGuardForDeferredActivation,
+                refreshActivationControlToken: refreshDeferredActivationControlToken,
               }
             : {}),
         });
@@ -994,8 +1205,14 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
       supervisor,
-      port,
-      healthHost,
+      port: deferredActivationControlPort ?? port,
+      healthHost: deferredActivationControlPort !== null ? "127.0.0.1" : healthHost,
+      ...(deferredActivationControlPort !== null
+        ? {
+            fallbackHealthProbe: { host: healthHost, port },
+            healthPath: "/healthz",
+          }
+        : {}),
       log: gatewayLog,
     });
   } catch (err) {
