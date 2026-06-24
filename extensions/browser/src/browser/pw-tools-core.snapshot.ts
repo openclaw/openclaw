@@ -406,6 +406,7 @@ export async function navigateViaPlaywright(opts: {
   }
   await assertBrowserNavigationAllowed({
     url,
+    allowLocalFileNavigation: true,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
       browserProxyMode: opts.browserProxyMode,
     }),
@@ -447,6 +448,7 @@ export async function navigateViaPlaywright(opts: {
       cdpUrl: opts.cdpUrl,
       page,
       response,
+      initialUrl: url,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,

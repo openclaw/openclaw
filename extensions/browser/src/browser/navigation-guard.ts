@@ -15,20 +15,59 @@ import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-run
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
-const LOCAL_FILE_NAVIGATION_PROTOCOLS = new Set(["file:"]);
+const LOCAL_FILE_NAVIGATION_HOSTNAMES = new Set(["", "localhost"]);
+const INERT_LOCAL_FILE_NAVIGATION_EXTENSIONS = new Set([
+  ".csv",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".json",
+  ".jsonl",
+  ".log",
+  ".markdown",
+  ".md",
+  ".png",
+  ".txt",
+  ".tsv",
+  ".webp",
+]);
 
-function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
-  // Kennedy's local unshackled runtime already grants agents filesystem read
-  // access; blocking file:// in the browser only forces brittle localhost
-  // workarounds for local reports. Keep active-content protocols blocked, but
-  // allow explicit local file navigation.
-  return (
-    SAFE_NON_NETWORK_URLS.has(parsed.href) || LOCAL_FILE_NAVIGATION_PROTOCOLS.has(parsed.protocol)
+function isAllowedLocalFileNavigationUrl(parsed: URL): boolean {
+  if (parsed.protocol !== "file:") {
+    return false;
+  }
+  if (!LOCAL_FILE_NAVIGATION_HOSTNAMES.has(normalizeHostname(parsed.hostname))) {
+    return false;
+  }
+  const pathname = parsed.pathname.toLowerCase();
+  return Array.from(INERT_LOCAL_FILE_NAVIGATION_EXTENSIONS).some((extension) =>
+    pathname.endsWith(extension),
   );
+}
+
+function isAllowedNonNetworkNavigationUrl(
+  parsed: URL,
+  opts?: { allowLocalFileNavigation?: boolean },
+): boolean {
+  if (SAFE_NON_NETWORK_URLS.has(parsed.href)) {
+    return true;
+  }
+  return opts?.allowLocalFileNavigation === true && isAllowedLocalFileNavigationUrl(parsed);
 }
 
 function normalizeNavigationUrl(url: string): string {
   return url.trim();
+}
+
+/** Return true when two navigation URL strings resolve to the same browser target. */
+export function isSameBrowserNavigationUrl(left: string, right: string): boolean {
+  try {
+    return (
+      new URL(normalizeNavigationUrl(left)).href === new URL(normalizeNavigationUrl(right)).href
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Raised when a browser navigation URL fails syntax or policy validation. */
@@ -43,6 +82,7 @@ export class InvalidBrowserNavigationUrlError extends Error {
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
+  allowLocalFileNavigation?: boolean;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -126,7 +166,11 @@ export async function assertBrowserNavigationAllowed(
   }
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
-    if (isAllowedNonNetworkNavigationUrl(parsed)) {
+    if (
+      isAllowedNonNetworkNavigationUrl(parsed, {
+        allowLocalFileNavigation: opts.allowLocalFileNavigation,
+      })
+    ) {
       return;
     }
     throw new InvalidBrowserNavigationUrlError(
@@ -192,7 +236,8 @@ export async function assertBrowserNavigationResultAllowed(
   }
   if (
     NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol) ||
-    isAllowedNonNetworkNavigationUrl(parsed)
+    SAFE_NON_NETWORK_URLS.has(parsed.href) ||
+    parsed.protocol === "file:"
   ) {
     await assertBrowserNavigationAllowed(opts);
   }
@@ -202,6 +247,7 @@ export async function assertBrowserNavigationResultAllowed(
 export async function assertBrowserNavigationRedirectChainAllowed(
   opts: {
     request?: BrowserNavigationRequestLike | null;
+    initialUrl?: string;
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
@@ -211,12 +257,14 @@ export async function assertBrowserNavigationRedirectChainAllowed(
     chain.push(current.url());
     current = current.redirectedFrom();
   }
-  for (const url of chain.toReversed()) {
+  for (const [index, url] of chain.toReversed().entries()) {
     await assertBrowserNavigationAllowed({
       url,
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      allowLocalFileNavigation:
+        index === 0 && opts.initialUrl ? isSameBrowserNavigationUrl(url, opts.initialUrl) : false,
     });
   }
 }

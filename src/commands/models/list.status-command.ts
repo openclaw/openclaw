@@ -460,9 +460,9 @@ export async function modelsStatusCommand(
         externalCliProfileIds.add(profileId);
       }
     }
-    for (const usage of providerUses) {
-      externalCliProviderIds.add(usage.provider);
-      externalCliProviderIds.add(resolveProviderIdForAuth(usage.provider, envLookupParams));
+    for (const usage of cliRuntimeAuthUsages) {
+      externalCliProviderIds.add(usage.runtime);
+      externalCliProviderIds.add(resolveProviderIdForAuth(usage.runtime, envLookupParams));
     }
     if (codexRuntimeAuthUsages.length > 0) {
       externalCliProviderIds.add(codexProvider);

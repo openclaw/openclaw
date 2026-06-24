@@ -188,11 +188,13 @@ export type CdpActionTimeouts = {
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
+  allowLocalFileNavigation?: boolean;
   ssrfPolicy?: SsrFPolicy;
   timeouts?: CdpActionTimeouts;
 }): Promise<{ targetId: string }> {
   await assertBrowserNavigationAllowed({
     url: opts.url,
+    allowLocalFileNavigation: opts.allowLocalFileNavigation,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
 

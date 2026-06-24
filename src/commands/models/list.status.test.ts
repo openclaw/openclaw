@@ -589,6 +589,83 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("does not apply Codex CLI auth discovery to custom OpenAI-compatible providers", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    const originalExternalCliImpl =
+      mocks.externalCliDiscoveryForConfigStatus.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+          },
+        },
+      },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {};
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    mocks.externalCliDiscoveryForConfigStatus.mockReturnValue({
+      mode: "none",
+      allowKeychainPrompt: false,
+    });
+
+    try {
+      const storeCallStart = mocks.ensureAuthProfileStore.mock.calls.length;
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      const storeOptions = mocks.ensureAuthProfileStore.mock.calls.find(
+        ([agentDir], index) => index >= storeCallStart && agentDir === "/tmp/openclaw-agent",
+      )?.[1] as
+        | {
+            externalCli?: {
+              mode?: string;
+              providerIds?: Iterable<string>;
+              profileIds?: Iterable<string>;
+            };
+          }
+        | undefined;
+      const providerIds = [...(storeOptions?.externalCli?.providerIds ?? [])];
+      const profileIds = [...(storeOptions?.externalCli?.profileIds ?? [])];
+      expect(storeOptions?.externalCli?.mode).toBe("none");
+      expect(providerIds).toEqual([]);
+      expect(profileIds).toEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual(["openai"]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      if (originalExternalCliImpl) {
+        mocks.externalCliDiscoveryForConfigStatus.mockImplementation(originalExternalCliImpl);
+      } else {
+        mocks.externalCliDiscoveryForConfigStatus.mockReturnValue({
+          mode: "scoped",
+          providerIds: ["openai"],
+          profileIds: ["openai:codex-cli"],
+        });
+      }
+    }
+  });
+
   it("keeps delegated OAuth marker display separate from runtime route usability", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();

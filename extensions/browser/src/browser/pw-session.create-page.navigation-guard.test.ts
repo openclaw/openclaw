@@ -200,12 +200,12 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     const created = await createPageViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
-      url: "file:///tmp/openclaw-report.html",
+      url: "file:///tmp/openclaw-report.txt",
     });
 
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).toHaveBeenCalledWith(
-      "file:///tmp/openclaw-report.html",
+      "file:///tmp/openclaw-report.txt",
       expect.objectContaining({ timeout: expect.any(Number) }),
     );
   });

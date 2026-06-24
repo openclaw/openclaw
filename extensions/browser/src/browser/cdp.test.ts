@@ -22,6 +22,8 @@ import {
 } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
+const TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
   let wsServer: WebSocketServer | null = null;
@@ -212,7 +214,7 @@ describe("cdp", () => {
   });
 
   it("honors configured WebSocket handshake timeouts when creating a target", async () => {
-    wsServer = new WebSocketServer({ noServer: true });
+    wsServer = new WebSocketServer({ noServer: true, maxPayload: TEST_WS_MAX_PAYLOAD_BYTES });
     httpServer = createServer();
     const heldSockets: Duplex[] = [];
     httpServer.on("upgrade", (_req, socket) => {
@@ -454,7 +456,7 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: TEST_WS_MAX_PAYLOAD_BYTES });
     server.on("upgrade", (req, socket, head) => {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);

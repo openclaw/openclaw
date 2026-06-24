@@ -35,19 +35,19 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     const goto = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({
       goto,
-      url: vi.fn(() => "file:///tmp/openclaw-report.html"),
+      url: vi.fn(() => "file:///tmp/openclaw-report.txt"),
     });
 
     await expect(
       mod.navigateViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
-        url: "file:///tmp/openclaw-report.html",
+        url: "file:///tmp/openclaw-report.txt",
       }),
     ).resolves.toBeDefined();
 
     expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalled();
     expect(goto).toHaveBeenCalledWith(
-      "file:///tmp/openclaw-report.html",
+      "file:///tmp/openclaw-report.txt",
       expect.objectContaining({ timeout: expect.any(Number) }),
     );
   });
@@ -78,6 +78,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
+      initialUrl: "https://example.com",
       page,
       response: null,
       ssrfPolicy: { allowPrivateNetwork: true },

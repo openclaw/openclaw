@@ -44,6 +44,7 @@ import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   InvalidBrowserNavigationUrlError,
+  isSameBrowserNavigationUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
@@ -1304,6 +1305,7 @@ export async function assertPageNavigationCompletedSafely(
     cdpUrl: string;
     page: Page;
     response: Response | null;
+    initialUrl?: string;
     targetId?: string;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
@@ -1313,10 +1315,15 @@ export async function assertPageNavigationCompletedSafely(
   try {
     await assertBrowserNavigationRedirectChainAllowed({
       request: opts.response?.request(),
+      initialUrl: opts.initialUrl,
       ...navigationPolicy,
     });
+    const finalUrl = opts.page.url();
     await assertBrowserNavigationResultAllowed({
-      url: opts.page.url(),
+      url: finalUrl,
+      allowLocalFileNavigation: opts.initialUrl
+        ? isSameBrowserNavigationUrl(finalUrl, opts.initialUrl)
+        : false,
       ...navigationPolicy,
     });
   } catch (err) {
@@ -1373,6 +1380,7 @@ export async function gotoPageWithNavigationGuard(
     try {
       await assertBrowserNavigationAllowed({
         url: request.url(),
+        allowLocalFileNavigation: isTopLevel && isSameBrowserNavigationUrl(request.url(), opts.url),
         ...navigationPolicy,
       });
     } catch (err) {
@@ -1757,6 +1765,7 @@ export async function createPageViaPlaywright(
     });
     await assertBrowserNavigationAllowed({
       url: targetUrl,
+      allowLocalFileNavigation: true,
       ...navigationPolicy,
     });
     let response: Response | null = null;
@@ -1782,6 +1791,7 @@ export async function createPageViaPlaywright(
         cdpUrl: opts.cdpUrl,
         page,
         response,
+        initialUrl: targetUrl,
         ssrfPolicy: opts.ssrfPolicy,
         browserProxyMode: opts.browserProxyMode,
         targetId: createdTargetId ?? undefined,

@@ -50,12 +50,48 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("allows file URLs in the local unshackled runtime", async () => {
+  it("blocks file URLs unless local file navigation is explicitly allowed", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "file:///tmp/openclaw-report.txt",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("allows inert local file URLs when explicitly allowed", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "file:///tmp/openclaw-report.txt",
+        allowLocalFileNavigation: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows localhost local file URLs when explicitly allowed", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "file://localhost/tmp/openclaw-report.txt",
+        allowLocalFileNavigation: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks remote-host file URLs even when local file navigation is explicitly allowed", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "file://server/share/openclaw-report.txt",
+        allowLocalFileNavigation: true,
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("blocks active local file documents even when local file navigation is explicitly allowed", async () => {
     await expect(
       assertBrowserNavigationAllowed({
         url: "file:///tmp/openclaw-report.html",
+        allowLocalFileNavigation: true,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
   it("blocks data URLs", async () => {
@@ -270,6 +306,22 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("validates final file URLs after navigation", async () => {
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "file:///tmp/openclaw-report.txt",
+        allowLocalFileNavigation: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "file:///tmp/openclaw-report.html",
+        allowLocalFileNavigation: true,
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
   it("blocks final hostname URLs in strict mode after navigation", async () => {
     await expect(
       assertBrowserNavigationResultAllowed({
@@ -324,6 +376,39 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("allows an explicit inert local file as the initial navigation request", async () => {
+    const finalRequest = {
+      url: () => "file:///tmp/openclaw-report.txt",
+      redirectedFrom: () => null,
+    };
+
+    await expect(
+      assertBrowserNavigationRedirectChainAllowed({
+        request: finalRequest,
+        initialUrl: "file:///tmp/openclaw-report.txt",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks redirects from network URLs into local files", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    const finalRequest = {
+      url: () => "file:///tmp/openclaw-report.txt",
+      redirectedFrom: () => ({
+        url: () => "https://public.example/start",
+        redirectedFrom: () => null,
+      }),
+    };
+
+    await expect(
+      assertBrowserNavigationRedirectChainAllowed({
+        request: finalRequest,
+        initialUrl: "https://public.example/start",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
   it("requires redirect-hop inspection only in explicit strict mode", () => {

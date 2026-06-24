@@ -238,6 +238,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         run: async (profileCtx) => {
           await assertBrowserNavigationAllowed({
             url,
+            allowLocalFileNavigation: true,
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
           await profileCtx.ensureBrowserAvailable();

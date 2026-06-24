@@ -23,6 +23,7 @@ import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  isSameBrowserNavigationUrl,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
@@ -331,14 +332,22 @@ export function registerBrowserAgentSnapshotRoutes(
         run: async ({ profileCtx, tab, cdpUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+            await assertBrowserNavigationAllowed({
+              url,
+              allowLocalFileNavigation: true,
+              ...ssrfPolicyOpts,
+            });
             const result = await navigateChromeMcpPage({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
               url,
             });
-            await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
+            await assertBrowserNavigationResultAllowed({
+              url: result.url,
+              allowLocalFileNavigation: isSameBrowserNavigationUrl(result.url, url),
+              ...ssrfPolicyOpts,
+            });
             return res.json({ ok: true, targetId: tab.targetId, ...result });
           }
           const pw = await requirePwAi(res, "navigate");

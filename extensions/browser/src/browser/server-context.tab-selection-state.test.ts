@@ -134,6 +134,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -178,6 +179,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "about:blank",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -237,6 +239,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "about:blank",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -359,7 +362,7 @@ describe("browser server-context tab selection state", () => {
             {
               id: "FILE",
               title: "Local Report",
-              url: "file:///tmp/openclaw-report.html",
+              url: "file:///tmp/openclaw-report.txt",
               webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/FILE",
               type: "page",
             },
@@ -374,9 +377,9 @@ describe("browser server-context tab selection state", () => {
     const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
-    await expect(openclaw.openTab("file:///tmp/openclaw-report.html")).resolves.toMatchObject({
+    await expect(openclaw.openTab("file:///tmp/openclaw-report.txt")).resolves.toMatchObject({
       targetId: "FILE",
-      url: "file:///tmp/openclaw-report.html",
+      url: "file:///tmp/openclaw-report.txt",
     });
     expect(fetchCallUrls(fetchMock)).toEqual(["http://127.0.0.1:18800/json/list"]);
   });
