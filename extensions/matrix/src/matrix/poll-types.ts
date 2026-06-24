@@ -308,10 +308,9 @@ export function buildPollResultsSummary(params: {
       new Set(
         rawAnswers
           .map((answerId) => normalizeOptionalString(answerId) ?? "")
-          .filter((answerId) => answerIds.has(answerId))
-          .slice(0, parsed.maxSelections),
+          .filter((answerId) => answerIds.has(answerId)),
       ),
-    );
+    ).slice(0, parsed.maxSelections);
     latestVoteBySender.set(senderId, {
       ts: eventTs,
       eventId: typeof event.event_id === "string" ? event.event_id : "",

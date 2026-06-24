@@ -183,6 +183,48 @@ describe("buildPollResultsSummary", () => {
     expect(summary?.totalVotes).toBe(1);
   });
 
+  it("dedupes duplicate answer ids before applying max_selections", () => {
+    const summary = buildPollResultsSummary({
+      pollEventId: "$p",
+      roomId: "!r",
+      sender: "@host:x",
+      senderName: "H",
+      content: {
+        "m.poll.start": {
+          question: { "m.text": "Q" },
+          kind: "m.poll.disclosed",
+          max_selections: 2,
+          answers: [
+            { id: "a1", "m.text": "A1" },
+            { id: "a2", "m.text": "A2" },
+            { id: "a3", "m.text": "A3" },
+          ],
+        },
+      },
+      relationEvents: [
+        {
+          event_id: "$v1",
+          sender: "@bob:x",
+          type: "m.poll.response",
+          origin_server_ts: 1,
+          content: {
+            "m.poll.response": { answers: ["a1", "a1", "a2"] },
+            "m.relates_to": { rel_type: "m.reference", event_id: "$p" },
+          },
+        },
+      ],
+    });
+
+    // Duplicate "a1" must not consume a selection slot: both distinct
+    // selections (within max_selections=2) should be counted.
+    expect(summary?.entries).toEqual([
+      { id: "a1", text: "A1", votes: 1 },
+      { id: "a2", text: "A2", votes: 1 },
+      { id: "a3", text: "A3", votes: 0 },
+    ]);
+    expect(summary?.totalVotes).toBe(1);
+  });
+
   it("formats disclosed poll results with vote totals", () => {
     const text = formatPollResultsAsText({
       eventId: "$poll",
