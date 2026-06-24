@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -11,10 +11,14 @@ import {
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
+  canonicalizeSessionEntryAliases,
   cleanupSessionLifecycleArtifacts,
+  commitReplySessionInitialization,
   createSessionEntryWithTranscript,
   listSessionEntries,
+  loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  markSessionAbortTarget,
   patchSessionEntry,
   persistSessionResetLifecycle,
   persistSessionRolloverLifecycle,
@@ -23,14 +27,17 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionEntryAccessTarget,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
+  updateResolvedSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { loadSessionStore, updateSessionStoreEntry } from "./store.js";
+import * as sessionStore from "./store.js";
+import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -85,6 +92,136 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("marks abort targets while canonicalizing legacy session keys", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:telegram:group:-1001234567890:topic:99": {
+          sessionId: "canonical-session",
+          updatedAt: 10,
+        },
+        "Agent:Main:Telegram:Group:-1001234567890:Topic:99": {
+          sessionId: "legacy-session",
+          updatedAt: 20,
+        },
+      } satisfies Record<string, SessionEntry>),
+      "utf8",
+    );
+    expect(loadSessionStore(storePath)).toHaveProperty(
+      "Agent:Main:Telegram:Group:-1001234567890:Topic:99",
+    );
+
+    const result = await markSessionAbortTarget({
+      scope: {
+        sessionKey: "Agent:Main:Telegram:Group:-1001234567890:Topic:99",
+        storePath,
+      },
+      now: () => 30,
+      resolveAbortCutoff: ({ sessionKey }) => {
+        expect(sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
+        return {
+          messageSid: "55",
+          timestamp: 1234567890000,
+        };
+      },
+    });
+
+    expect(result).toMatchObject({
+      sessionId: "legacy-session",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      entry: {
+        abortedLastRun: true,
+        abortCutoffMessageSid: "55",
+        abortCutoffTimestamp: 1234567890000,
+        sessionId: "legacy-session",
+        updatedAt: 30,
+      },
+    });
+    expect(loadSessionStore(storePath)).toEqual({
+      "agent:main:telegram:group:-1001234567890:topic:99": expect.objectContaining({
+        abortedLastRun: true,
+        abortCutoffMessageSid: "55",
+        abortCutoffTimestamp: 1234567890000,
+        sessionId: "legacy-session",
+        updatedAt: 30,
+      }),
+    });
+  });
+
+  it("does not persist abort target changes when the entry is absent", async () => {
+    const result = await markSessionAbortTarget({
+      scope: {
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      resolveAbortCutoff: () => ({ messageSid: "unused" }),
+    });
+
+    expect(result).toBeNull();
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("canonicalizes alias rows and patches the canonical entry in one accessor write", async () => {
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, '{"type":"session","id":"sess-fresh"}\n', "utf-8");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            label: "canonical-stale",
+            sessionFile: transcriptPath,
+            sessionId: "sess-stale",
+            updatedAt: now,
+          },
+          main: {
+            label: "legacy-fresh",
+            sessionFile: transcriptPath,
+            sessionId: "sess-fresh",
+            updatedAt: now + 1,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await canonicalizeSessionEntryAliases({
+      storePath,
+      target: {
+        canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main", "main"],
+      },
+      update: (entry) => {
+        if (entry) {
+          entry.sessionId = "mutated-callback-copy";
+        }
+        return {
+          lastChannel: "telegram",
+          updatedAt: now + 2,
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      canonicalKey: "agent:main:main",
+      entry: expect.objectContaining({
+        label: "legacy-fresh",
+        lastChannel: "telegram",
+        sessionId: "sess-fresh",
+        updatedAt: now + 2,
+      }),
+    });
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted["agent:main:main"]).toMatchObject({
+      label: "legacy-fresh",
+      lastChannel: "telegram",
+      sessionId: "sess-fresh",
+      updatedAt: now + 2,
+    });
+    expect(persisted.main).toBeUndefined();
   });
 
   it("purges deleted-agent entries from the current locked store", async () => {
@@ -186,6 +323,129 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();
   });
 
+  it("commits reply session initialization with a guarded snapshot", async () => {
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous.jsonl");
+    fs.writeFileSync(
+      previousTranscript,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "previous-session",
+        timestamp: new Date().toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: previousTranscript,
+        sessionId: "previous-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        sessionId: "next-session",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-session.jsonl");
+    expect(committed.sessionStoreView[sessionKey]).toMatchObject({
+      sessionId: "next-session",
+      sessionFile: committed.sessionEntry.sessionFile,
+    });
+    expect(committed.previousSessionTranscript.transcriptArchived).toBe(true);
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+  });
+
+  it("does not reuse the previous transcript file when initialization rotates session ids", async () => {
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-rotation.jsonl");
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: previousTranscript,
+        sessionId: "previous-rotation",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        ...snapshot.currentEntry,
+        sessionFile: snapshot.currentEntry?.sessionFile,
+        sessionId: "next-rotation",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-rotation.jsonl");
+  });
+
+  it("rejects stale reply session initialization snapshots without writing", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "first-session",
+        updatedAt: 10,
+      },
+    );
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "second-session",
+        updatedAt: 20,
+      },
+    );
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "stale-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed).toMatchObject({
+      ok: false,
+      reason: "stale-snapshot",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "second-session",
+    });
+  });
+
   it("can borrow cached entry objects for read-only hot paths", async () => {
     const scope = {
       clone: false,
@@ -203,6 +463,47 @@ describe("session accessor file-backed seam", () => {
     expect(listSessionEntries({ clone: false, storePath })[0]?.entry).toBe(
       cachedStore["agent:main:main"],
     );
+  });
+
+  it("maps latest entry reads to the file backend cache bypass", () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "session-1",
+          model: "gpt-5.4",
+        },
+      }),
+      "utf8",
+    );
+    const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
+
+    try {
+      expect(
+        loadSessionEntry({
+          readConsistency: "latest",
+          sessionKey: "agent:main:main",
+          storePath,
+        })?.model,
+      ).toBe("gpt-5.4");
+      expect(loadSessionStoreSpy).toHaveBeenLastCalledWith(
+        storePath,
+        expect.objectContaining({ skipCache: true }),
+      );
+
+      loadSessionEntry({
+        clone: false,
+        readConsistency: "latest",
+        sessionKey: "agent:main:main",
+        storePath,
+      });
+      expect(loadSessionStoreSpy).toHaveBeenLastCalledWith(
+        storePath,
+        expect.objectContaining({ clone: false, skipCache: true }),
+      );
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+    }
   });
 
   it("resolves canonical entry reads without requiring exact key casing", async () => {
@@ -369,7 +670,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -381,7 +682,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: ({ entries, existingEntry, primaryKey }) => {
         expect(primaryKey).toBe("agent:main:main");
@@ -420,7 +721,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -432,7 +733,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: () => ({
         ok: false as const,
@@ -446,6 +747,88 @@ describe("session accessor file-backed seam", () => {
         sessionId: "legacy-session",
       }),
     });
+  });
+
+  it("updates the freshest matching session entry across discovered agent stores", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+      agents: { list: [{ id: "retired-agent", default: true }] },
+    } satisfies OpenClawConfig;
+    const configuredStorePath = path.join(
+      stateDir,
+      "agents",
+      "retired-agent",
+      "sessions",
+      "sessions.json",
+    );
+    const discoveredStorePath = path.join(
+      stateDir,
+      "agents",
+      "Retired Agent",
+      "sessions",
+      "sessions.json",
+    );
+    fs.mkdirSync(path.dirname(configuredStorePath), { recursive: true });
+    fs.mkdirSync(path.dirname(discoveredStorePath), { recursive: true });
+    fs.writeFileSync(
+      configuredStorePath,
+      JSON.stringify({
+        "agent:retired-agent:main": { sessionId: "configured", updatedAt: 10 },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      discoveredStorePath,
+      JSON.stringify({
+        "agent:retired-agent:main": { sessionId: "discovered", updatedAt: 20 },
+      }),
+      "utf8",
+    );
+
+    const resolved = resolveSessionEntryAccessTarget({
+      cfg,
+      env,
+      sessionKey: "agent:retired-agent:main",
+    });
+
+    expect(resolved.entry?.sessionId).toBe("discovered");
+
+    const updated = await updateResolvedSessionEntry(
+      {
+        cfg,
+        env,
+        sessionKey: "agent:retired-agent:main",
+      },
+      (entry, context) => {
+        expect(context.canonicalKey).toBe("agent:retired-agent:main");
+        expect(context.storeKey).toBe("agent:retired-agent:main");
+        entry.model = "gpt-5.5";
+        entry.updatedAt = Date.now();
+        return entry.sessionId;
+      },
+    );
+
+    expect(updated).toMatchObject({
+      found: true,
+      canonicalKey: "agent:retired-agent:main",
+      result: "discovered",
+    });
+    expect(loadSessionStore(configuredStorePath)["agent:retired-agent:main"]).toMatchObject({
+      sessionId: "configured",
+      updatedAt: 10,
+    });
+    expect(Object.values(loadSessionStore(discoveredStorePath))).toContainEqual(
+      expect.objectContaining({
+        model: "gpt-5.5",
+        sessionId: "discovered",
+        updatedAt: expect.any(Number),
+      }),
+    );
   });
 
   it("applies restart recovery replacements without exposing mutable store rows", async () => {
@@ -594,6 +977,84 @@ describe("session accessor file-backed seam", () => {
     expect(files).toContain("referenced.jsonl");
     expect(fs.existsSync(siblingTranscriptPath)).toBe(true);
     expect(fs.readdirSync(siblingDir)).toEqual(["sibling-lifecycle.jsonl"]);
+  });
+
+  it("preserves fresh lifecycle entries that only have explicit sessionFile metadata", async () => {
+    const nowMs = Date.now();
+    const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
+    const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
+    const freshTranscriptPath = path.join(lifecycleSessionsDir, "session-file-only.jsonl");
+    fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
+    await saveSessionStore(
+      lifecycleStorePath,
+      {
+        "agent:main:lifecycle-cleanup-file-only": {
+          sessionFile: freshTranscriptPath,
+          updatedAt: nowMs,
+        } as SessionEntry,
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(freshTranscriptPath, '{"runId":"lifecycle-marker-file-only"}\n', "utf-8");
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath: lifecycleStorePath,
+      sessionKeySegmentPrefix: "lifecycle-cleanup-",
+      transcriptContentMarker: "lifecycle-marker-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+
+    expect(result).toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+    expect(loadSessionStore(lifecycleStorePath, { skipCache: true })).toHaveProperty(
+      "agent:main:lifecycle-cleanup-file-only",
+    );
+    expect(fs.existsSync(freshTranscriptPath)).toBe(true);
+  });
+
+  it("prefers current generated lifecycle transcripts over stale generated sessionFile metadata", async () => {
+    const nowMs = Date.now();
+    const oldDate = new Date(nowMs - 600_000);
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionId = "22222222-2222-4222-8222-222222222222";
+    const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
+    const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
+    const currentTranscriptPath = path.join(lifecycleSessionsDir, `${currentSessionId}.jsonl`);
+    const staleTranscriptPath = path.join(lifecycleSessionsDir, `${staleSessionId}.jsonl`);
+    fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
+    await saveSessionStore(
+      lifecycleStorePath,
+      {
+        "agent:main:lifecycle-cleanup-current": {
+          sessionFile: staleTranscriptPath,
+          sessionId: currentSessionId,
+          updatedAt: nowMs,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(currentTranscriptPath, '{"runId":"lifecycle-marker-current"}\n', "utf-8");
+    fs.writeFileSync(staleTranscriptPath, '{"runId":"lifecycle-marker-stale"}\n', "utf-8");
+    fs.utimesSync(staleTranscriptPath, oldDate, oldDate);
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath: lifecycleStorePath,
+      sessionKeySegmentPrefix: "lifecycle-cleanup-",
+      transcriptContentMarker: "lifecycle-marker-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+
+    expect(result).toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 1 });
+    expect(loadSessionStore(lifecycleStorePath, { skipCache: true })).toHaveProperty(
+      "agent:main:lifecycle-cleanup-current",
+    );
+    expect(fs.existsSync(currentTranscriptPath)).toBe(true);
+    expect(
+      fs
+        .readdirSync(lifecycleSessionsDir)
+        .filter((file) => file.startsWith(`${staleSessionId}.jsonl.deleted.`)),
+    ).toHaveLength(1);
   });
 
   it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
@@ -1399,8 +1860,14 @@ describe("session accessor file-backed seam", () => {
         agentId: "main",
         message: appended.message,
         messageId: appended.messageId,
+        sessionId: scope.sessionId,
         sessionFile: transcriptPath,
         sessionKey: scope.sessionKey,
+        target: {
+          agentId: "main",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
       },
     ]);
   });

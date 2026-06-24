@@ -387,13 +387,15 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
       ),
-      script.indexOf('echo "📦 Copying Textual resources"'),
+      script.indexOf("running_packaged_app_pids()"),
     );
 
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
     expect(openClawKitBlock).not.toContain("continuing");
+    expect(script).not.toContain("Textual resource bundle");
+    expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
   });
 
   it("does not mask required Info.plist stamp failures", () => {

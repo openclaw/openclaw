@@ -29,6 +29,7 @@ const cliMocks = vi.hoisted(() => ({
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
+let buildOpenShellDirectoryUploadArgs: typeof import("./backend.js").buildOpenShellDirectoryUploadArgs;
 let ensureOpenShellRemoteRealDirectoryScript: typeof import("./backend.js").ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT;
 
 describe("openshell cli helpers", () => {
@@ -172,6 +173,7 @@ describe("openshell backend manager", () => {
       };
     });
     ({
+      buildOpenShellDirectoryUploadArgs,
       ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT: ensureOpenShellRemoteRealDirectoryScript,
       createOpenShellSandboxBackendFactory,
       createOpenShellSandboxBackendManager,
@@ -185,6 +187,30 @@ describe("openshell backend manager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("uploads staged directory snapshots to the managed remote directory itself", () => {
+    expect(
+      buildOpenShellDirectoryUploadArgs({
+        sandboxName: "openclaw-session",
+        localPath: "/tmp/openclaw-upload/sandbox/seed.txt",
+        remotePath: "/sandbox",
+      }),
+    ).toEqual([
+      "sandbox",
+      "upload",
+      "--no-git-ignore",
+      "openclaw-session",
+      "/tmp/openclaw-upload/sandbox/seed.txt",
+      "/sandbox",
+    ]);
+    expect(
+      buildOpenShellDirectoryUploadArgs({
+        sandboxName: "openclaw-session",
+        localPath: "/tmp/openclaw-upload/project",
+        remotePath: "/sandbox/./project",
+      }).at(-1),
+    ).toBe("/sandbox/project");
   });
 
   it.runIf(process.platform !== "win32")(
