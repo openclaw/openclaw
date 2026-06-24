@@ -1,4 +1,6 @@
 // Subagent formatting helpers expose compact durations and status text.
+import { truncateUtf16Safe } from "../utils.js";
+
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
@@ -29,7 +31,9 @@ export function truncateLine(value: string, maxLength: number) {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  // Cut on a code-point boundary so an emoji (surrogate pair) straddling the
+  // limit is dropped whole instead of leaving a lone surrogate before the "...".
+  return `${truncateUtf16Safe(value, maxLength).trimEnd()}...`;
 }
 
 type TokenUsageLike = {
