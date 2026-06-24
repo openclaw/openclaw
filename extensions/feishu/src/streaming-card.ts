@@ -11,6 +11,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { runWithFeishuSendRateLimit } from "./send-rate-limit.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -44,6 +45,10 @@ type StreamingStartOptions = {
   replyInThread?: boolean;
   rootId?: string;
   header?: StreamingCardHeader;
+  sendRateLimit?: {
+    accountId: string;
+    minIntervalMs: number;
+  };
 };
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
@@ -295,34 +300,36 @@ export class FeishuStreamingSession {
     let sendRes;
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
-    if (sendMode === "reply") {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.reply({
-            path: { message_id: sendOptions.replyToMessageId! },
-            data: {
-              msg_type: "interactive",
-              content: cardContent,
-              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    } else if (sendMode === "root_create") {
-      // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: Object.assign(
-              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-              { root_id: sendOptions.rootId },
-            ),
-          }),
-        "Send card failed",
-      );
-    } else {
-      sendRes = await requestFeishuApi(
+    const sendInitialCard = async () => {
+      if (sendMode === "reply") {
+        return requestFeishuApi(
+          () =>
+            this.client.im.message.reply({
+              path: { message_id: sendOptions.replyToMessageId! },
+              data: {
+                msg_type: "interactive",
+                content: cardContent,
+                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+              },
+            }),
+          "Send card failed",
+        );
+      }
+      if (sendMode === "root_create") {
+        // root_id is undeclared in the SDK types but accepted at runtime
+        return requestFeishuApi(
+          () =>
+            this.client.im.message.create({
+              params: { receive_id_type: receiveIdType },
+              data: Object.assign(
+                { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+                { root_id: sendOptions.rootId },
+              ),
+            }),
+          "Send card failed",
+        );
+      }
+      return requestFeishuApi(
         () =>
           this.client.im.message.create({
             params: { receive_id_type: receiveIdType },
@@ -334,7 +341,16 @@ export class FeishuStreamingSession {
           }),
         "Send card failed",
       );
-    }
+    };
+    sendRes = await runWithFeishuSendRateLimit(
+      {
+        accountId: sendOptions.sendRateLimit?.accountId ?? "",
+        receiveId,
+        receiveIdType,
+        minIntervalMs: sendOptions.sendRateLimit?.minIntervalMs ?? 0,
+      },
+      sendInitialCard,
+    );
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }

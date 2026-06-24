@@ -57,6 +57,7 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
+    // nosemgrep: security.opengrep.ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key -- negative schema test intentionally omits encryptKey to prove webhook configs are rejected.
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       verificationToken: "token_top",
@@ -94,6 +95,7 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects account webhook mode without encryptKey", () => {
+    // nosemgrep: security.opengrep.ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key -- negative schema test intentionally omits encryptKey to prove webhook configs are rejected.
     const result = FeishuConfigSchema.safeParse({
       accounts: {
         main: {
