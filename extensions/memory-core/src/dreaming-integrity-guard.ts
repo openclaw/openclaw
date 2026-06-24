@@ -22,7 +22,7 @@ export async function snapshotMemoryDirFiles(
   workspaceDir: string,
 ): Promise<MemoryDirSnapshotResult> {
   const memoryDir = path.join(workspaceDir, "memory");
-  let entries: Dirent<string>[];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(memoryDir, { withFileTypes: true, encoding: "utf-8" });
   } catch (err) {
