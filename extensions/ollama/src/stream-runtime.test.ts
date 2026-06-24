@@ -191,6 +191,72 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     expect(payload.options).toEqual({ num_ctx: 131072 });
   });
 
+  it("keeps OpenAI-compatible replay tool-call arguments string encoded", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: {
+                  name: "gateway",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            function_call: {
+              name: "legacy_gateway",
+              arguments: '{"action":"config.get","path":"gateway.host"}',
+            },
+          },
+        ],
+      });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 131072,
+      params: { num_ctx: 32768 },
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    expect(payload.options).toEqual({ num_ctx: 32768 });
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    const toolCalls = messages[0].tool_calls as Array<{
+      function: { arguments: unknown };
+    }>;
+    const legacyFunctionCall = messages[1].function_call as { arguments: unknown };
+
+    expect(toolCalls[0].function.arguments).toBe('{"action":"config.get","path":"gateway.port"}');
+    expect(legacyFunctionCall.arguments).toBe('{"action":"config.get","path":"gateway.host"}');
+  });
+
   it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
     await withMockNdjsonFetch(
       [
