@@ -1,434 +1,200 @@
-//! OpenClaw Launcher - macOS 启动器
+//! OpenClaw Launcher - 交互式启动菜单
 //!
-//! 使用责任链模式自动检测和安装环境
-//! 功能：
-//! 1. 自动检测环境（Node.js, pnpm, git）
-//! 2. 自动安装缺失组件（使用 Homebrew）
-//! 3. 自动启动 gateway
-//! 4. 启动 TUI/WebUI
-//! 5. 获取 gateway 令牌并自动打开浏览器
+//! 薄包装器，委托给现有的 openclaw CLI 命令：
+//! - `openclaw tui` / `openclaw terminal` - 终端界面
+//! - `openclaw dashboard` - WebUI（自动处理 token）
+//! - `openclaw update` - 更新
+//! - `openclaw gateway start/install` - Gateway 服务管理
+//!
+//! 不重复现有功能，不存储敏感信息，不执行破坏性操作。
 
 use std::env;
-use std::fs;
 use std::io::{self, Write};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{self, Command};
-use std::thread;
-use std::time::Duration;
 
-// 地区配置
-struct RegionConfig {
-    code: String,
-    name: String,
-    npm_mirror: String,
-}
-
-// 环境状态
-#[derive(Debug)]
-struct EnvStatus {
-    node_version: Option<String>,
-    pnpm_version: Option<String>,
-    git_version: Option<String>,
-}
-
-// 责任链：环境安装器
-trait EnvInstaller {
-    fn name(&self) -> &str;
-    fn is_installed(&self) -> bool;
-    fn install(&self, region: &RegionConfig) -> bool;
-}
-
-// Node.js 安装器
-struct NodeInstaller;
-impl EnvInstaller for NodeInstaller {
-    fn name(&self) -> &str { "Node.js" }
-    fn is_installed(&self) -> bool {
-        check_command("node", &["-v"]).is_some()
-    }
-    fn install(&self, _region: &RegionConfig) -> bool {
-        println!("  正在安装 Node.js...");
-        
-        // 尝试 Homebrew
-        if check_command("brew", &["--version"]).is_some() {
-            println!("  使用 Homebrew 安装...");
-            return Command::new("brew")
-                .args(["install", "node@22"])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-        }
-        
-        false
-    }
-}
-
-// pnpm 安装器
-struct PnpmInstaller;
-impl EnvInstaller for PnpmInstaller {
-    fn name(&self) -> &str { "pnpm" }
-    fn is_installed(&self) -> bool {
-        check_command("pnpm", &["-v"]).is_some()
-    }
-    fn install(&self, region: &RegionConfig) -> bool {
-        println!("  正在安装 pnpm...");
-        
-        // 设置镜像
-        if region.code == "cn" {
-            let _ = Command::new("npm")
-                .args(["config", "set", "registry", &region.npm_mirror])
-                .status();
-        }
-        
-        Command::new("npm")
-            .args(["install", "-g", "pnpm"])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-}
-
-// Git 安装器
-struct GitInstaller;
-impl EnvInstaller for GitInstaller {
-    fn name(&self) -> &str { "Git" }
-    fn is_installed(&self) -> bool {
-        check_command("git", &["--version"]).is_some()
-    }
-    fn install(&self, _region: &RegionConfig) -> bool {
-        println!("  正在安装 Git...");
-        
-        if check_command("brew", &["--version"]).is_some() {
-            return Command::new("brew")
-                .args(["install", "git"])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-        }
-        
-        false
-    }
-}
-
-// 环境管理器
-struct EnvManager {
-    installers: Vec<Box<dyn EnvInstaller>>,
-}
-
-impl EnvManager {
-    fn new() -> Self {
-        Self {
-            installers: vec![
-                Box::new(NodeInstaller),
-                Box::new(PnpmInstaller),
-                Box::new(GitInstaller),
-            ],
-        }
-    }
-    
-    fn check_and_install(&self, region: &RegionConfig) -> EnvStatus {
-        let mut status = EnvStatus {
-            node_version: None,
-            pnpm_version: None,
-            git_version: None,
-        };
-        
-        for installer in &self.installers {
-            if installer.is_installed() {
-                println!("  [✓] {} 已安装", installer.name());
-                match installer.name() {
-                    "Node.js" => status.node_version = check_command("node", &["-v"]),
-                    "pnpm" => status.pnpm_version = check_command("pnpm", &["-v"]),
-                    "Git" => status.git_version = check_command("git", &["--version"]),
-                    _ => {}
-                }
-            } else {
-                println!("  [!] {} 未安装，正在自动安装...", installer.name());
-                if installer.install(region) {
-                    println!("  [✓] {} 安装成功", installer.name());
-                    match installer.name() {
-                        "Node.js" => status.node_version = check_command("node", &["-v"]),
-                        "pnpm" => status.pnpm_version = check_command("pnpm", &["-v"]),
-                        "Git" => status.git_version = check_command("git", &["--version"]),
-                        _ => {}
-                    }
-                } else {
-                    println!("  [✗] {} 安装失败", installer.name());
-                }
+/// 查找 openclaw CLI 可执行文件
+fn find_openclaw_cli() -> Option<PathBuf> {
+    // 优先使用 PATH 中的 openclaw
+    if let Ok(output) = Command::new("which")
+        .arg("openclaw")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
             }
         }
-        
-        status
     }
-}
 
-/// 查找项目根目录
-fn find_project_root() -> Option<PathBuf> {
+    // 尝试 pnpm openclaw
+    if let Ok(output) = Command::new("pnpm")
+        .args(["bin", "openclaw"])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
+            }
+        }
+    }
+
+    // 尝试项目根目录的 openclaw.mjs
     let exe_path = env::current_exe().ok()?;
     let mut dir = exe_path.parent()?;
-
-    // macOS .app 结构：Contents/MacOS/openclaw-launcher
-    // 需要向上查找 3 级到 .app 根目录，然后再找 Resources
-    for _ in 0..3 {
-        if dir.join("openclaw.mjs").exists() {
-            return Some(dir.to_path_buf());
+    for _ in 0..5 {
+        let candidate = dir.join("openclaw.mjs");
+        if candidate.exists() {
+            return Some(candidate);
         }
         dir = dir.parent()?;
-    }
-
-    // 尝试 Resources 目录
-    let exe_path = env::current_exe().ok()?;
-    let resources = exe_path.parent()?.parent()?.join("Resources");
-    if resources.join("openclaw.mjs").exists() {
-        return Some(resources);
     }
 
     None
 }
 
-/// 检测系统地区
-fn detect_region() -> RegionConfig {
-    if let Ok(output) = Command::new("defaults")
-        .args(["read", "-g", "AppleLocale"])
+/// 检查 openclaw CLI 是否可用
+fn is_openclaw_available(cli_path: &PathBuf) -> bool {
+    let (cmd, args) = if cli_path.to_string_lossy().ends_with(".mjs") {
+        (
+            "node".to_string(),
+            vec![cli_path.to_string_lossy().to_string(), "--version".to_string()],
+        )
+    } else {
+        (
+            cli_path.to_string_lossy().to_string(),
+            vec!["--version".to_string()],
+        )
+    };
+
+    Command::new(&cmd)
+        .args(&args)
         .output()
-    {
-        let locale = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if locale.starts_with("zh") {
-            return RegionConfig {
-                code: "cn".to_string(),
-                name: "中国大陆".to_string(),
-                npm_mirror: "https://registry.npmmirror.com".to_string(),
-            };
-        }
-    }
-
-    RegionConfig {
-        code: "en".to_string(),
-        name: "English".to_string(),
-        npm_mirror: "https://registry.npmjs.org".to_string(),
-    }
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
-/// 检查命令是否可用
-fn check_command(cmd: &str, args: &[&str]) -> Option<String> {
-    Command::new(cmd)
-        .args(args)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-}
+/// 运行 openclaw 命令
+fn run_openclaw(cli_path: &PathBuf, args: &[&str]) -> bool {
+    let (cmd, cmd_args) = if cli_path.to_string_lossy().ends_with(".mjs") {
+        let mut full_args = vec![cli_path.to_string_lossy().to_string()];
+        full_args.extend(args.iter().map(|s| s.to_string()));
+        ("node".to_string(), full_args)
+    } else {
+        (
+            cli_path.to_string_lossy().to_string(),
+            args.iter().map(|s| s.to_string()).collect(),
+        )
+    };
 
-/// 检查 gateway 端口
-fn is_gateway_running(port: u16) -> bool {
-    let addr = format!("127.0.0.1:{}", port);
-    match addr.parse() {
-        Ok(socket_addr) => {
-            TcpStream::connect_timeout(&socket_addr, Duration::from_millis(500)).is_ok()
-        }
-        Err(_) => false,
-    }
-}
-
-/// 启动 gateway
-fn start_gateway(project_root: &PathBuf) -> bool {
-    println!("  正在启动 gateway...");
-
-    let openclaw_mjs = project_root.join("openclaw.mjs");
-    let mut cmd = Command::new("node");
-    cmd.arg(&openclaw_mjs)
-        .arg("gateway")
-        .current_dir(project_root);
-
-    // macOS: 使用 nohup 后台运行
-    match cmd.spawn() {
-        Ok(_) => true,
+    match Command::new(&cmd).args(&cmd_args).status() {
+        Ok(status) => status.success(),
         Err(e) => {
-            eprintln!("  启动失败：{}", e);
+            eprintln!("  执行失败：{}", e);
             false
         }
     }
 }
 
-/// 等待 gateway 就绪
-fn wait_for_gateway(port: u16, timeout_secs: u32) -> bool {
-    let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(timeout_secs as u64);
-
-    while start.elapsed() < timeout {
-        if is_gateway_running(port) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(500));
-    }
-
-    false
-}
-
-/// 打开浏览器
-fn open_browser(url: &str) -> bool {
-    Command::new("open").arg(url).spawn().is_ok()
-}
-
-/// 获取配置文件路径
-fn get_config_path() -> PathBuf {
-    let exe_path = env::current_exe().unwrap_or_else(|_| PathBuf::from("openclaw-launcher"));
-    exe_path.parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("openclaw-launcher.conf")
-}
-
-/// 读取配置文件
-fn read_config() -> (Option<String>, Option<String>) {
-    let config_path = get_config_path();
-    if !config_path.exists() {
-        return (None, None);
-    }
-    
-    let content = fs::read_to_string(&config_path).unwrap_or_default();
-    let mut token = None;
-    let mut ws_url = None;
-    
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("token=") {
-            token = Some(line[6..].to_string());
-        } else if line.starts_with("ws_url=") {
-            ws_url = Some(line[7..].to_string());
-        }
-    }
-    
-    (token, ws_url)
-}
-
-/// 保存配置到文件
-fn save_config(token: &str, ws_url: &str) {
-    let config_path = get_config_path();
-    let content = format!("token={}\nws_url={}\n", token, ws_url);
-    if let Err(e) = fs::write(&config_path, content) {
-        eprintln!("  警告：无法保存配置：{}", e);
-    } else {
-        println!("  配置已保存到：{}", config_path.display());
-    }
-}
-
-/// 获取 gateway 令牌和 WebSocket URL
-fn get_gateway_token(project_root: &PathBuf) -> Option<(String, String)> {
-    println!("  正在获取 gateway 令牌...");
-    
-    let openclaw_mjs = project_root.join("openclaw.mjs");
-    
-    let output = Command::new("node")
-        .arg(&openclaw_mjs)
-        .arg("dashboard")
-        .arg("--no-open")
-        .current_dir(project_root)
+/// 检查 gateway 是否运行
+fn is_gateway_running() -> bool {
+    Command::new("curl")
+        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "http://127.0.0.1:18789/health"])
         .output()
-        .ok()?;
-    
-    if !output.status.success() {
-        eprintln!("  获取令牌失败");
-        return None;
-    }
-    
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
-    
-    // 从剪贴板读取完整 URL（包含 token）
-    let clipboard_url = Command::new("osascript")
-        .args(["-e", "get the clipboard"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if text.starts_with("http://") || text.starts_with("https://") {
-                Some(text)
-            } else {
-                None
-            }
-        });
-    
-    let mut token = None;
-    let mut ws_url = None;
-    
-    if let Some(clipboard_text) = clipboard_url {
-        println!("  从剪贴板获取 URL");
-        if clipboard_text.contains("token=") {
-            if let Some(token_start) = clipboard_text.find("token=") {
-                let token_value = clipboard_text[token_start + 6..].split('&').next().unwrap_or("");
-                token = Some(token_value.to_string());
-            }
-        }
-        ws_url = Some(clipboard_text.split('?').next().unwrap_or(&clipboard_text).to_string());
-    }
-    
-    if token.is_none() || ws_url.is_none() {
-        for line in combined.lines() {
-            let line = line.trim();
-            if line.contains("Dashboard URL:") || line.starts_with("http://") || line.starts_with("ws://") {
-                if let Some(url_start) = line.find("http://") {
-                    let url = line[url_start..].split_whitespace().next().unwrap_or("");
-                    ws_url = Some(url.to_string());
-                }
-            }
-            if line.contains("token=") {
-                if let Some(token_start) = line.find("token=") {
-                    let token_value = line[token_start + 6..].split_whitespace().next().unwrap_or("");
-                    token = Some(token_value.to_string());
-                }
-            }
-        }
-    }
-    
-    match (token, ws_url) {
-        (Some(t), Some(url)) => {
-            println!("  令牌：{}...", &t[..std::cmp::min(t.len(), 8)]);
-            println!("  URL：{}", url);
-            Some((t, url))
-        }
-        (None, Some(url)) => {
-            println!("  URL：{} (无令牌)", url);
-            Some((String::new(), url))
-        }
-        _ => None,
-    }
-}
-
-/// 自动安装依赖
-fn install_deps(project_root: &PathBuf) -> bool {
-    println!("  正在安装项目依赖...");
-    Command::new("pnpm")
-        .arg("install")
-        .current_dir(project_root)
-        .status()
-        .map(|s| s.success())
+        .map(|o| {
+            let code = String::from_utf8_lossy(&o.stdout);
+            code.trim() == "200"
+        })
         .unwrap_or(false)
 }
 
+/// 启动 gateway（使用 openclaw gateway start）
+fn start_gateway(cli_path: &PathBuf) -> bool {
+    println!("  正在启动 gateway 服务...");
+    run_openclaw(cli_path, &["gateway", "start"])
+}
+
+/// 安装 gateway 服务（launchd/systemd/schtasks）
+fn install_gateway_service(cli_path: &PathBuf) -> bool {
+    println!("  正在安装 gateway 服务...");
+    run_openclaw(cli_path, &["gateway", "install"])
+}
+
+/// 打开 WebUI（使用 openclaw dashboard）
+fn open_webui(cli_path: &PathBuf) {
+    println!();
+    println!("正在打开 WebUI...");
+
+    // 检查 gateway 是否运行
+    if !is_gateway_running() {
+        println!("Gateway 未运行，正在启动...");
+        if !start_gateway(cli_path) {
+            eprintln!("  Gateway 启动失败，请手动运行: openclaw gateway start");
+            return;
+        }
+        println!("  等待 gateway 就绪...");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+
+    // 使用 openclaw dashboard 打开浏览器（自动处理 token）
+    println!("  正在打开浏览器...");
+    if run_openclaw(cli_path, &["dashboard"]) {
+        println!("  ✓ WebUI 已打开");
+    } else {
+        eprintln!("  ✗ 打开失败，请手动运行: openclaw dashboard");
+    }
+
+    println!();
+    println!("按 Enter 键返回菜单...");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap_or(0);
+}
+
+/// 启动 TUI
+fn start_tui(cli_path: &PathBuf) {
+    println!();
+    println!("正在启动 TUI...");
+
+    // 检查 gateway 是否运行
+    if !is_gateway_running() {
+        println!("Gateway 未运行，正在启动...");
+        if !start_gateway(cli_path) {
+            eprintln!("  Gateway 启动失败，请手动运行: openclaw gateway start");
+            return;
+        }
+        println!("  等待 gateway 就绪...");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+
+    // 使用 openclaw tui
+    run_openclaw(cli_path, &["tui"]);
+}
+
+/// 更新（使用 openclaw update）
+fn update(cli_path: &PathBuf) {
+    println!();
+    println!("正在检查更新...");
+    run_openclaw(cli_path, &["update"]);
+}
+
 /// 显示菜单
-fn show_menu(region: &RegionConfig, env: &EnvStatus) {
+fn show_menu(openclaw_version: &str) {
     println!();
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║                    OpenClaw Launcher                       ║");
-    println!("╠════════════════════════════════════════════════════════════╣");
-    println!("║  地区：{:<52} ║", region.name);
-    println!("║  Node.js: {:<48} ║", env.node_version.as_deref().unwrap_or("未安装"));
-    println!("║  pnpm: {:<51} ║", env.pnpm_version.as_deref().unwrap_or("未安装"));
-    println!("║  Git: {:<52} ║", env.git_version.as_deref().unwrap_or("未安装"));
-    println!("╠════════════════════════════════════════════════════════════╣");
+    println!("════════════════════════════════════════════════════════════╣");
+    println!("║  OpenClaw: {:<45} ║", openclaw_version);
+    println!("║  Gateway:  {:<45} ║", if is_gateway_running() { "运行中" } else { "未运行" });
+    println!("════════════════════════════════════════════════════════════╣");
     println!("║                                                            ║");
     println!("║  请选择操作：                                               ║");
-    println!("║                                                            ");
-    println!("║  [1] 启动 TUI 终端界面                                     ║");
-    println!("║  [2] 启动 WebUI 网页界面                                   ║");
-    println!("║  [3] 检查并更新代码                                        ║");
-    println!("║  [4] 重新检测并安装环境                                    ║");
+    println!("║                                                            ║");
+    println!("║  [1] 启动 TUI 终端界面     (openclaw tui)                  ║");
+    println!("║  [2] 启动 WebUI 网页界面   (openclaw dashboard)            ║");
+    println!("║  [3] 检查并更新            (openclaw update)               ║");
+    println!("║  [4] Gateway 服务管理      (openclaw gateway)              ║");
     println!("║  [0] 退出                                                  ║");
     println!("║                                                            ║");
     println!("════════════════════════════════════════════════════════════╝");
@@ -444,250 +210,142 @@ fn read_input() -> String {
     input.trim().to_string()
 }
 
-/// 更新代码
-fn update_code(project_root: &PathBuf, region: &RegionConfig) {
-    println!();
-    println!("正在检查更新...");
+/// Gateway 服务管理子菜单
+fn gateway_menu(cli_path: &PathBuf) {
+    loop {
+        println!();
+        println!("╔════════════════════════════════════════════════════════════╗");
+        println!("║                  Gateway 服务管理                          ║");
+        println!("╠════════════════════════════════════════════════════════════╣");
+        println!("║  状态：{:<50} ║", if is_gateway_running() { "运行中" } else { "未运行" });
+        println!("════════════════════════════════════════════════════════════╣");
+        println!("║                                                            ║");
+        println!("║  [1] 查看状态          (openclaw gateway status)           ║");
+        println!("║  [2] 启动服务          (openclaw gateway start)            ║");
+        println!("║  [3] 停止服务          (openclaw gateway stop)             ║");
+        println!("║  [4] 重启服务          (openclaw gateway restart)          ║");
+        println!("║  [5] 安装服务          (openclaw gateway install)          ║");
+        println!("║  [6] 卸载服务          (openclaw gateway uninstall)        ║");
+        println!("║  [0] 返回主菜单                                            ║");
+        println!("║                                                            ║");
+        println!("════════════════════════════════════════════════════════════╝");
+        println!();
+        print!("请输入选项 (0-6): ");
+        io::stdout().flush().unwrap();
 
-    let git_status = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(project_root)
-        .output()
-        .ok();
-
-    if let Some(status) = git_status {
-        if !status.stdout.is_empty() {
-            println!("检测到本地修改，请先提交或暂存更改");
-            return;
+        let input = read_input();
+        match input.as_str() {
+            "0" => break,
+            "1" => { run_openclaw(cli_path, &["gateway", "status"]); }
+            "2" => { run_openclaw(cli_path, &["gateway", "start"]); }
+            "3" => { run_openclaw(cli_path, &["gateway", "stop"]); }
+            "4" => { run_openclaw(cli_path, &["gateway", "restart"]); }
+            "5" => { install_gateway_service(cli_path); }
+            "6" => { run_openclaw(cli_path, &["gateway", "uninstall"]); }
+            _ => { println!("无效选项"); }
         }
     }
-
-    if region.code == "cn" {
-        println!("使用 GitHub 镜像加速...");
-        let _ = Command::new("git")
-            .args(["remote", "set-url", "origin", "https://ghproxy.com/https://github.com/openclaw/openclaw.git"])
-            .current_dir(project_root)
-            .status();
-    }
-
-    println!("正在拉取最新代码...");
-    let result = Command::new("git")
-        .args(["pull", "--rebase", "origin", "main"])
-        .current_dir(project_root)
-        .status();
-
-    match result {
-        Ok(s) if s.success() => {
-            println!("代码更新成功！");
-            println!("正在安装依赖...");
-            install_deps(project_root);
-        }
-        _ => {
-            println!("更新失败，请检查网络连接");
-        }
-    }
-}
-
-/// 启动 TUI
-fn start_tui(project_root: &PathBuf) {
-    let gateway_port = 18789;
-
-    println!();
-    println!("正在启动 TUI...");
-
-    if !is_gateway_running(gateway_port) {
-        println!("Gateway 未运行，正在启动...");
-        
-        if start_gateway(project_root) {
-            println!("等待 gateway 就绪 (最多 30 秒)...");
-            if wait_for_gateway(gateway_port, 30) {
-                println!("✓ Gateway 已启动");
-            } else {
-                eprintln!(" Gateway 启动超时");
-                return;
-            }
-        } else {
-            eprintln!("✗ 无法启动 gateway");
-            return;
-        }
-    } else {
-        println!("✓ Gateway 已在运行");
-    }
-
-    println!();
-    println!("正在启动 TUI 界面...");
-    let openclaw_mjs = project_root.join("openclaw.mjs");
-    let _ = Command::new("node")
-        .arg(&openclaw_mjs)
-        .arg("tui")
-        .current_dir(project_root)
-        .status();
-}
-
-/// 启动 WebUI
-fn start_webui(project_root: &PathBuf) {
-    let gateway_port = 18789;
-
-    println!();
-    println!("正在启动 WebUI...");
-
-    if !is_gateway_running(gateway_port) {
-        println!("Gateway 未运行，正在启动...");
-        
-        if start_gateway(project_root) {
-            println!("等待 gateway 就绪 (最多 30 秒)...");
-            if wait_for_gateway(gateway_port, 30) {
-                println!("✓ Gateway 已启动");
-            } else {
-                eprintln!(" Gateway 启动超时");
-                return;
-            }
-        } else {
-            eprintln!("✗ 无法启动 gateway");
-            return;
-        }
-    } else {
-        println!("✓ Gateway 已在运行");
-    }
-
-    let (token, full_url) = match read_config() {
-        (Some(token), Some(url)) => {
-            println!("✓ 使用已保存的令牌");
-            (token, url)
-        }
-        _ => {
-            match get_gateway_token(project_root) {
-                Some((token, url)) => {
-                    save_config(&token, &url);
-                    (token, url)
-                }
-                None => {
-                    eprintln!("  无法获取令牌，使用基础 URL");
-                    let url = format!("http://127.0.0.1:{}", gateway_port);
-                    (String::new(), url)
-                }
-            }
-        }
-    };
-
-    let browser_url = if !token.is_empty() && !full_url.contains("token=") {
-        if full_url.contains("?") {
-            format!("{}&token={}", full_url, token)
-        } else {
-            format!("{}?token={}", full_url, token)
-        }
-    } else {
-        full_url.clone()
-    };
-
-    println!("正在打开浏览器...");
-    
-    if open_browser(&browser_url) {
-        println!("✓ 浏览器已打开");
-        println!("  URL: {}", browser_url);
-    } else {
-        eprintln!(" 无法打开浏览器");
-        eprintln!("请手动访问：{}", browser_url);
-    }
-    
-    println!();
-    println!("按 Enter 键返回菜单...");
-    read_input();
 }
 
 fn main() {
-    let region = detect_region();
-    let env_manager = EnvManager::new();
-    
     let args: Vec<String> = env::args().skip(1).collect();
 
-    let project_root = match find_project_root() {
-        Some(root) => root,
+    // 查找 openclaw CLI
+    let cli_path = match find_openclaw_cli() {
+        Some(path) => path,
         None => {
-            eprintln!("错误：无法找到项目根目录");
+            eprintln!("错误：未找到 openclaw CLI");
+            eprintln!("请确保已安装 openclaw: npm install -g openclaw@latest");
             process::exit(1);
         }
     };
 
+    // 获取版本
+    let version = Command::new("node")
+        .args([&cli_path.to_string_lossy(), "--version"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
     // 命令行模式
     if !args.is_empty() {
-        println!("OpenClaw Launcher - 自动模式");
-        println!();
-        
-        println!("正在检测环境...");
-        let env = env_manager.check_and_install(&region);
-        
-        if env.node_version.is_none() {
-            eprintln!("错误：Node.js 安装失败");
-            process::exit(1);
-        }
-        
-        println!("Node.js 版本：{}", env.node_version.as_ref().unwrap());
-        
         match args[0].as_str() {
             "tui" => {
-                install_deps(&project_root);
-                start_tui(&project_root);
+                if !is_gateway_running() {
+                    println!("Gateway 未运行，正在启动...");
+                    start_gateway(&cli_path);
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+                run_openclaw(&cli_path, &["tui"]);
             }
-            "webui" => {
-                install_deps(&project_root);
-                start_webui(&project_root);
+            "webui" | "dashboard" => {
+                open_webui(&cli_path);
             }
-            "--update" | "-u" => update_code(&project_root, &region),
-            "--help" | "-h" => {
+            "update" | "--update" | "-u" => {
+                update(&cli_path);
+            }
+            "gateway" => {
+                if args.len() > 1 {
+                    // 保留 "gateway" 前缀: openclaw-launcher gateway start -> openclaw gateway start
+                    let mut gw_args = vec!["gateway"];
+                    gw_args.extend(args[1..].iter().map(|s| s.as_str()).collect::<Vec<&str>>());
+                    run_openclaw(&cli_path, &gw_args);
+                } else {
+                    gateway_menu(&cli_path);
+                }
+            }
+            "--help" | "-h" | "help" => {
+                println!("OpenClaw Launcher - 交互式启动菜单");
+                println!();
                 println!("用法:");
-                println!("  openclaw-launcher           显示交互式菜单");
-                println!("  openclaw-launcher tui       启动 TUI 界面");
-                println!("  openclaw-launcher webui     启动 WebUI");
-                println!("  openclaw-launcher --update  更新代码");
+                println!("  openclaw-launcher              显示交互式菜单");
+                println!("  openclaw-launcher tui          启动 TUI 界面");
+                println!("  openclaw-launcher webui        启动 WebUI");
+                println!("  openclaw-launcher update       检查并更新");
+                println!("  openclaw-launcher gateway      Gateway 服务管理");
+                println!();
+                println!("所有命令委托给现有的 openclaw CLI，不重复现有功能。");
             }
             _ => {
-                eprintln!("未知命令：{}", args[0]);
-                process::exit(1);
+                // 透传所有其他参数给 openclaw CLI
+                let passthrough: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                run_openclaw(&cli_path, &passthrough);
             }
         }
         return;
     }
 
     // 交互式菜单模式
-    println!("OpenClaw Launcher - 自动环境检测");
-    println!();
-    println!("正在检测环境...");
-    let mut env = env_manager.check_and_install(&region);
-    
-    if env.node_version.is_none() {
-        eprintln!();
-        eprintln!("错误：Node.js 安装失败，请手动安装");
-        eprintln!("下载地址：https://nodejs.org/");
-        process::exit(1);
-    }
+    println!("OpenClaw Launcher");
+    println!("版本：{}", version);
 
     loop {
-        show_menu(&region, &env);
+        show_menu(&version);
         let input = read_input();
-        
+
         match input.as_str() {
             "0" => {
                 println!("再见！");
                 break;
             }
             "1" => {
-                start_tui(&project_root);
+                start_tui(&cli_path);
             }
             "2" => {
-                start_webui(&project_root);
+                open_webui(&cli_path);
             }
             "3" => {
-                if env.git_version.is_some() {
-                    update_code(&project_root, &region);
-                } else {
-                    println!("Git 未安装，无法更新代码");
-                }
+                update(&cli_path);
             }
             "4" => {
-                println!();
-                println!("重新检测环境...");
-                env = env_manager.check_and_install(&region);
+                gateway_menu(&cli_path);
             }
             _ => {
                 println!("无效选项，请重新输入");
