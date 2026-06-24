@@ -477,10 +477,15 @@ export async function waitForAgentJob(params: {
         return;
       }
       const pendingTimeout = getPendingAgentRunTimeout(runId);
-      // Only forward hard timeouts (preflight / provider / post_turn).
-      // Soft phases like queue and gateway_draining remain correctable
-      // via the pending timeout grace timer.
-      if (pendingTimeout && isHardAgentRunTimeoutPhase(pendingTimeout.snapshot.timeoutPhase)) {
+      // Mirror the terminal-outcome hard-timeout contract: forward when the
+      // phase is hard (preflight / provider / post_turn) OR when the snapshot
+      // reached provider-started with a timeout status.
+      if (
+        pendingTimeout &&
+        (isHardAgentRunTimeoutPhase(pendingTimeout.snapshot.timeoutPhase) ||
+          (pendingTimeout.snapshot.status === "timeout" &&
+            pendingTimeout.snapshot.providerStarted === true))
+      ) {
         finish(pendingTimeout.snapshot);
         return;
       }
