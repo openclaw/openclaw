@@ -668,89 +668,91 @@ describe("acquireSessionWriteLock", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
-  it("acquireSessionWriteLock bounds maxHoldMs by timeoutMs", async () => {
-    // When no explicit maxHoldMs is provided, the effective hold limit must
-    // be bounded by timeoutMs so a holder cannot block other acquirers past
-    // their acquire timeout.  Previously the default maxHoldMs (300 s) was
-    // used even when the acquire timeout was only 60 s, causing
-    // SessionWriteLockTimeoutError for concurrent operations.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-"));
+  it("reclaims a live OpenClaw-owned lock that exceeded its own maxHoldMs", async () => {
+    // A live holder past its own recorded maxHoldMs is overdue by its own contract and must
+    // be reclaimable by a contender.  This covers the case where a holder's event loop is wedged
+    // (e.g. synchronous CPU loop) so its in-process watchdog cannot fire. (#87483)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-reclaim-"));
     const sessionFile = path.join(root, "session.jsonl");
-    await fs.writeFile(sessionFile, "", "utf8");
+    const lockPath = `${sessionFile}.lock`;
+    writeFileSync(sessionFile, "", "utf8");
     try {
-      const lock = await acquireSessionWriteLock({
-        sessionFile,
-        timeoutMs: 60_000,
+      // Spawn a process that holds the lock, then write the lock file with its PID.
+      // The process just sleeps — simulating a live OpenClaw process that is alive but wedged.
+      const { spawn } = await import("node:child_process");
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
       });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      // Live OpenClaw owner, within staleMs but past its own recorded maxHoldMs: a stuck
+      // holder whose in-process watchdog can never fire must still be reclaimable.
+      writeFileSync(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 30_000).toISOString(),
+          maxHoldMs: 1_000,
+        }),
+        "utf8",
+      );
+
       try {
-        // maxHoldMs must be bounded by timeoutMs (≈60 s), not the old 300 s
-        // default.
-        const payload = await import("node:fs/promises").then((m) =>
-          m.readFile(`${sessionFile}.lock`, "utf8"),
-        );
-        const parsed = JSON.parse(payload) as { maxHoldMs?: number };
-        expect(parsed.maxHoldMs).toBeLessThanOrEqual(60_001);
-        expect(parsed.maxHoldMs).toBeLessThan(300_000);
-      } finally {
+        // Before the fix this throws SessionWriteLockStaleError because
+        // "hold-exceeded" was report-only. After the fix the lock is reclaimed.
+        const lock = await acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 500,
+          staleMs: 600_000,
+        });
+        const payload = JSON.parse(readFileSync(lockPath, "utf8"));
+        // The lock was reclaimed: createdAt is now recent (the old 30s-old value is gone).
+        const ageMs = Date.now() - new Date(payload.createdAt).getTime();
+        expect(ageMs).toBeLessThan(5_000);
         await lock.release();
+      } finally {
+        owner.kill("SIGTERM");
       }
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("acquireSessionWriteLock respects explicit maxHoldMs below the timeout-derived bound", async () => {
-    // If the caller explicitly requests a maxHoldMs below the timeout-derived
-    // bound, the lower value must be honored.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-explicit-"));
+  it("does NOT reclaim a live OpenClaw-owned lock merely past global staleMs but within its own maxHoldMs", async () => {
+    // "too-old" stays report-only: a live holder within its own maxHoldMs must not have its
+    // lock stolen on the global staleMs heuristic alone.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-live-"));
     const sessionFile = path.join(root, "session.jsonl");
-    await fs.writeFile(sessionFile, "", "utf8");
+    const lockPath = `${sessionFile}.lock`;
+    writeFileSync(sessionFile, "", "utf8");
     try {
-      const lock = await acquireSessionWriteLock({
-        sessionFile,
-        timeoutMs: 60_000,
-        maxHoldMs: 5_000,
+      // Spawn a child as the lock owner so isPidAlive + isOpenClawSessionOwnerArgv succeed.
+      const { spawn } = await import("node:child_process");
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
       });
-      try {
-        const payload = await import("node:fs/promises").then((m) =>
-          m.readFile(`${sessionFile}.lock`, "utf8"),
-        );
-        const parsed = JSON.parse(payload) as { maxHoldMs?: number };
-        expect(parsed.maxHoldMs).toBe(5_000);
-      } finally {
-        await lock.release();
-      }
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+      if (!owner.pid) throw new Error("missing pid");
+      // Lock is past staleMs (30s > 20s) but within its own maxHoldMs (100000 >> 30s).
+      writeFileSync(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 30_000).toISOString(),
+          maxHoldMs: 100_000,
+        }),
+        "utf8",
+      );
 
-  it("acquireSessionWriteLock caps configured maxHoldMs at timeoutMs", async () => {
-    // If the caller sets maxHoldMs above the acquire timeout, the cap lowers
-    // it to approximately timeoutMs so a holder cannot block waiters past
-    // their timeout.  This is intentional: operators should configure
-    // maxHoldMs ≤ timeoutMs.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-high-"));
-    const sessionFile = path.join(root, "session.jsonl");
-    await fs.writeFile(sessionFile, "", "utf8");
-    try {
-      const lock = await acquireSessionWriteLock({
-        sessionFile,
-        timeoutMs: 60_000,
-        maxHoldMs: 500_000,
-      });
       try {
-        const payload = await import("node:fs/promises").then((m) =>
-          m.readFile(`${sessionFile}.lock`, "utf8"),
-        );
-        const parsed = JSON.parse(payload) as { maxHoldMs?: number };
-        expect(parsed.maxHoldMs).toBeLessThanOrEqual(60_001);
-        expect(parsed.maxHoldMs).toBeLessThan(500_000);
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 20_000 }),
+        ).rejects.toThrow(/stale/);
       } finally {
-        await lock.release();
+        owner.kill("SIGTERM");
       }
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

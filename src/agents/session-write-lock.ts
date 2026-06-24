@@ -51,7 +51,11 @@ const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
-const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
+// "too-old" (past global staleMs) stays report-only — a live holder may still be within its own
+// maxHoldMs. "hold-exceeded" (past the holder's OWN recorded maxHoldMs) is overdue by contract and
+// reclaimable; acquire's remove-if-unchanged still skips a lock whose file changed (e.g. a release).
+// (#87483)
+const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old"]);
 
 /**
  * Yield control to the event loop so other sessions can make progress
@@ -895,33 +899,7 @@ export async function acquireSessionWriteLock(params: {
     allowInfinity: true,
   });
   const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
-  // Bound maxHoldMs by the acquire timeout so a holder cannot block other
-  // acquirers past their timeout.  Without this, a plugin hook that runs a
-  // long operation (e.g. active-memory sub-agent) while a session lock
-  // controller holds the write lock would hold it for the full default
-  // maxHoldMs (5 min) even though other acquirers time out after 60 s,
-  // producing SessionWriteLockTimeoutError for every other operation that
-  // shares the lock (e.g. mirrorCodexAppServerTranscript).
-  //
-  // Compatibility: this cap applies to ALL callers, including operators who
-  // configured a high maxHoldMs via config.session.writeLock.maxHoldMs or
-  // OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.  If your workload needs a hold
-  // longer than the acquire timeout, increase the acquire timeout instead —
-  // holding the lock past the acquire timeout causes other writers to fail.
-  //
-  // Note: pass minMs=1 and graceMs=1 because resolveSessionLockMaxHoldFromTimeout
-  // defaults minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s) and
-  // resolvePositiveMs rejects values ≤ 0, which would make the cap a no-op for
-  // the common case of a 60 s acquire timeout.
-  const maxHoldFromTimeout = resolveSessionLockMaxHoldFromTimeout({
-    timeoutMs,
-    minMs: 1,
-    graceMs: 1,
-  });
-  const maxHoldMs = Math.min(
-    resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs),
-    maxHoldFromTimeout,
-  );
+  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
   const orphanPayloadGraceMs = resolveOrphanLockPayloadGraceMs(timeoutMs);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
