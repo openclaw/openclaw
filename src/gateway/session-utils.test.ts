@@ -809,6 +809,86 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Alice");
   });
 
+  test("buildGatewaySessionRow projects effectiveResponseUsage from a bare config default", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { responseUsage: "tokens" },
+    } as OpenClawConfig;
+    const entry = { sessionId: "s1", updatedAt: 1 } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:main": entry },
+      key: "agent:main:main",
+      entry,
+    });
+    // Session has no explicit override → inherits the configured default.
+    expect(row.responseUsage).toBeUndefined();
+    expect(row.effectiveResponseUsage).toBe("tokens");
+  });
+
+  test("buildGatewaySessionRow effectiveResponseUsage respects a per-channel responseUsage map", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: {
+        responseUsage: { default: "off", discord: "full", telegram: "tokens" },
+      },
+    } as OpenClawConfig;
+    const discordEntry = { sessionId: "d1", updatedAt: 1, channel: "discord" } as SessionEntry;
+    const discordRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:discord:direct:1": discordEntry },
+      key: "agent:main:discord:direct:1",
+      entry: discordEntry,
+    });
+    expect(discordRow.effectiveResponseUsage).toBe("full");
+
+    const telegramEntry = { sessionId: "t1", updatedAt: 1, channel: "telegram" } as SessionEntry;
+    const telegramRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:1": telegramEntry },
+      key: "agent:main:telegram:direct:1",
+      entry: telegramEntry,
+    });
+    expect(telegramRow.effectiveResponseUsage).toBe("tokens");
+
+    // A channel with no entry falls back to the config "default" (off).
+    const slackEntry = { sessionId: "x1", updatedAt: 1, channel: "slack" } as SessionEntry;
+    const slackRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:direct:1": slackEntry },
+      key: "agent:main:slack:direct:1",
+      entry: slackEntry,
+    });
+    expect(slackRow.effectiveResponseUsage).toBe("off");
+  });
+
+  test("buildGatewaySessionRow effectiveResponseUsage keeps an explicit session off over a channel default", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { responseUsage: { default: "full", discord: "full" } },
+    } as OpenClawConfig;
+    const entry = {
+      sessionId: "d1",
+      updatedAt: 1,
+      channel: "discord",
+      responseUsage: "off",
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:discord:direct:1": entry },
+      key: "agent:main:discord:direct:1",
+      entry,
+    });
+    // Explicit off persists and wins over the per-channel default.
+    expect(row.responseUsage).toBe("off");
+    expect(row.effectiveResponseUsage).toBe("off");
+  });
+
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },

@@ -14,6 +14,11 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
+  detectStaleSessionLocks,
+  sessionLockToHealthFinding,
+  sessionLockToRepairEffect,
+} from "../commands/doctor-session-locks.js";
+import {
   disableUnavailableSkillsInConfig,
   formatMissingSkillSummary,
 } from "../commands/doctor-skills-core.js";
@@ -31,6 +36,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
+import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -42,6 +48,7 @@ const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profil
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -729,6 +736,33 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
+const sessionLocksCheck: SplitHealthCheckInput = {
+  id: SESSION_LOCKS_CHECK_ID,
+  kind: "core",
+  description: "Stale session lock files are represented as structured findings.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToHealthFinding,
+    );
+  },
+  async repair(ctx) {
+    const effects = (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToRepairEffect,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor session lock contribution owns cleanup",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -974,13 +1008,16 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   };
 }
 
-function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+function createConvertedWorkflowChecks(
+  deps: CoreHealthCheckDeps,
+): readonly SplitHealthCheckInput[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     codexSessionRoutesCheck,
+    sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
@@ -1015,7 +1052,7 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly HealthCheck[] {
+): readonly SplitHealthCheckInput[] {
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
@@ -1026,4 +1063,4 @@ export function createCoreHealthChecks(
   ];
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();

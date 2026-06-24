@@ -1875,6 +1875,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.usageTemplate":
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
+  "messages.responseUsage":
+    'Default per-reply usage footer mode ("off"|"tokens"|"full") seeded into sessions that have not chosen one via /usage. Also accepts "on" as a legacy alias for "tokens". Accepts a bare mode or a per-channel map with a "default" fallback. Precedence: session value -> channel entry -> default -> off; an explicit /usage choice (including off) is persisted and overrides the default. Use /usage reset (aliases: inherit, clear, default) to clear a session override and re-inherit this configured default.',
   "messages.groupChat":
     "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
   "messages.groupChat.mentionPatterns":
