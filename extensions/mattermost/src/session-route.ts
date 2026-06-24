@@ -28,12 +28,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
-  // Prefer the monitor-backed cache kind over the potentially lossy resolvedTarget.kind
-  // so that public channels that happen to carry a "group" resolved kind are not pulled
-  // into the group session namespace.
+  // Only trust the process-level cache here; resolvedTarget.kind is NOT an authoritative
+  // private-channel signal because the Mattermost directory emits kind:"group" for both
+  // public O and private P channels, so falling back to it on a cache miss would route
+  // cold public-channel deliveries under the group session namespace.
   const cachedKind = peekMattermostChannelKind(rawId);
-  const effectiveKind = cachedKind ?? resolvedKind;
-  const isGroup = !isUser && effectiveKind === "group";
+  const isGroup = !isUser && cachedKind === "group";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
