@@ -133,6 +133,39 @@ function fetchRequest(index = 0): {
   };
 }
 
+function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunk = new Uint8Array(params.chunkSize);
+  let readCount = 0;
+  let canceled = false;
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
+
 function expectSingleSearchResultUrl(results: unknown, url: string) {
   if (!Array.isArray(results)) {
     throw new Error("Expected search results array");
@@ -404,6 +437,26 @@ describe("ollama web search provider", () => {
         query: "openclaw",
       }),
     ).rejects.toThrow("Ollama web search returned malformed JSON");
+  });
+
+  it("bounds successful Ollama web search JSON bodies instead of buffering the whole response", async () => {
+    const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: streamed.response,
+      release,
+    });
+
+    await expect(
+      runOllamaWebSearch({
+        config: createOllamaConfig(),
+        query: "openclaw",
+      }),
+    ).rejects.toThrow("Ollama web search: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("warns when Ollama is not reachable during setup without cancelling", async () => {

@@ -5,6 +5,7 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   enablePluginInConfig,
   readPositiveIntegerParam,
@@ -68,8 +69,11 @@ type OllamaWebSearchAttempt = {
 
 async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
   try {
-    return (await response.json()) as OllamaWebSearchResponse;
+    return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
   } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("JSON response exceeds")) {
+      throw cause;
+    }
     throw new Error("Ollama web search returned malformed JSON", { cause });
   }
 }
