@@ -1443,6 +1443,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-services",
       label: "Gateway services",
       healthCheckIds: [
+        "core/doctor/default-account-routing",
         "core/doctor/gateway-services/extra",
         "core/doctor/gateway-services/platform-notes",
       ],
