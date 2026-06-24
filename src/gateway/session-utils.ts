@@ -55,7 +55,10 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import {
+  listThinkingLevelOptions,
+  resolveEffectiveResponseUsage,
+} from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -2193,6 +2196,15 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
+    // Project the resolved effective usage mode (session override → per-channel
+    // config entry → default → off) so list-sourced rows carry it consistently
+    // with the session-event path. `channel` is the session's reply channel
+    // (entry.channel or parsed from the key).
+    effectiveResponseUsage: resolveEffectiveResponseUsage(
+      entry?.responseUsage,
+      cfg.messages?.responseUsage,
+      channel,
+    ),
     modelProvider: rowModelProvider,
     model: rowModel,
     agentRuntime,

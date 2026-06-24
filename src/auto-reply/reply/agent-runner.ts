@@ -65,7 +65,10 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import {
+  resolveEffectiveResponseUsage,
+  type VerboseLevel,
+} from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildUsageContract } from "../usage-bar/contract.js";
@@ -2270,10 +2273,14 @@ export async function runReplyAgent(params: {
       });
     }
 
-    const responseUsageRaw =
+    const responseUsageSessionRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    const responseUsageMode = resolveEffectiveResponseUsage(
+      responseUsageSessionRaw,
+      cfg.messages?.responseUsage,
+      replyToChannel,
+    );
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,

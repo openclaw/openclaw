@@ -221,9 +221,11 @@ export function buildSessionPresentation(params: {
       id: ACP_RESPONSE_USAGE_CONFIG_ID,
       name: "Usage detail",
       description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: normalizeOptionalString(row.responseUsage) || "off",
-      values: ["off", "tokens", "full"],
+        "Controls how much usage information OpenClaw attaches to responses for the session. 'inherit' follows the configured default; 'off' explicitly disables it for this session.",
+      // Unset must read as "inherit" (follows the configured default), NOT "off" —
+      // an unset session inheriting a non-off default would otherwise misreport as off.
+      currentValue: normalizeOptionalString(row.responseUsage) || "inherit",
+      values: ["inherit", "off", "tokens", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,

@@ -182,6 +182,64 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+/**
+ * Config shape for `messages.responseUsage`: either a bare default mode, or a
+ * per-channel map carrying an optional `default` fallback.
+ */
+export type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+export type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+/**
+ * Resolve the configured default `responseUsage` for a reply channel from
+ * `messages.responseUsage`. Returns `undefined` when nothing is configured, so a
+ * caller's `??` chain falls through to the session value / `off` (i.e. unchanged
+ * behavior when unset). Precedence within the config: channel entry → `default`.
+ */
+export function resolveMessagesResponseUsageDefault(
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): ResponseUsageInput | undefined {
+  if (typeof configured === "string") {
+    return configured;
+  }
+  if (configured && typeof configured === "object") {
+    return (channel ? configured[channel] : undefined) ?? configured.default;
+  }
+  return undefined;
+}
+
+/**
+ * Single source-of-truth resolver for the *effective* responseUsage mode.
+ *
+ * Precedence: session override → channel config entry → config default → off.
+ *
+ * Three distinct session states are respected:
+ *  - `undefined` / absent  → "unset/inherit": falls through to the config default.
+ *  - `"off"`               → explicit off (persisted); always returns `"off"` regardless
+ *                            of config defaults, so a user who ran `/usage off` stays off.
+ *  - `"tokens"` / `"full"` → explicit on value; wins over any config default.
+ *
+ * @param sessionRaw    Raw `responseUsage` field from the session entry (may be absent).
+ * @param configured    `messages.responseUsage` from the gateway/config object (optional).
+ * @param channel       Reply-channel identifier used to select per-channel config entries.
+ */
+export function resolveEffectiveResponseUsage(
+  sessionRaw: string | undefined | null,
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): UsageDisplayLevel {
+  // Session override (includes explicit "off") wins when set.
+  const sessionNormalized = normalizeUsageDisplay(sessionRaw);
+  if (sessionNormalized !== undefined) {
+    return sessionNormalized;
+  }
+  // Session is unset → inherit from config.
+  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  return resolveResponseUsageMode(configDefault);
+}
+
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {

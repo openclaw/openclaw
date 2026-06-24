@@ -1592,7 +1592,10 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch?: Record<string, string | boolean>;
+    // null lets a control clear a session override (e.g. responseUsage "inherit" →
+    // delete → follow the configured default); the gateway sessions.patch handler
+    // treats null as "clear/inherit".
+    patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1630,11 +1633,15 @@ export class AcpGatewayAgent implements Agent {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
-      case ACP_RESPONSE_USAGE_CONFIG_ID:
+      case ACP_RESPONSE_USAGE_CONFIG_ID: {
+        // "inherit" clears the session override so the session follows the
+        // configured default (distinct from an explicit "off"): null → delete.
+        const next = value === "inherit" ? null : value;
         return {
-          patch: { responseUsage: value },
-          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+          patch: { responseUsage: next },
+          overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
+      }
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },

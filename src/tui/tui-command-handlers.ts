@@ -11,6 +11,7 @@ import {
 } from "../auto-reply/reply/commands-goal.js";
 import {
   formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -604,19 +605,46 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+        const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
+        const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized && !isReset) {
+          chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
           break;
         }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
+        if (isReset) {
+          // Clear the session override so this session inherits the config default.
+          try {
+            const result = await client.patchSession({
+              ...currentSessionPatchTarget(),
+              responseUsage: null,
+            });
+            chatLog.addSystem("usage footer: reset to default");
+            applySessionInfoFromPatch(result);
+            // The gateway deletes the responseUsage field on reset; the patch result
+            // entry omits both the raw override and the resolved effective mode, and
+            // applySessionInfoFromPatch skips absent fields. Clear both stale local
+            // values so the toggle/display isn't stale; refreshSessionInfo() (which now
+            // carries effectiveResponseUsage from the sessions.list row) repopulates the
+            // inherited default below.
+            delete state.sessionInfo.responseUsage;
+            delete state.sessionInfo.effectiveResponseUsage;
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`usage failed: ${String(err)}`);
+          }
+          break;
+        }
+        // Cycle from the effective mode (session override → config default → off) so
+        // an unset session value with a configured default cycles from the default,
+        // matching the behavior of the chat-channel /usage toggle.
+        const current =
+          state.sessionInfo.effectiveResponseUsage ?? resolveResponseUsageMode(state.sessionInfo.responseUsage);
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            responseUsage: next === "off" ? null : next,
+            responseUsage: next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
           applySessionInfoFromPatch(result);

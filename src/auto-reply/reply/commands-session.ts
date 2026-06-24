@@ -39,7 +39,7 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
-  resolveResponseUsageMode,
+  resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
@@ -352,24 +352,47 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  if (rawArgs && !requested) {
+  // "reset"/"inherit"/"clear" clears the session override so the config default takes over.
+  const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+  if (rawArgs && !requested && !isReset) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|reset|cost" },
     };
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (isReset) {
+    // Clear the session-level override so this session inherits the config default.
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      delete targetSessionEntry.responseUsage;
+      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage footer: reset to default." },
+    };
+  }
+
+  // Resolve the *effective* current mode (session override → config default → off) so the
+  // no-arg cycle starts from what the user actually sees, not just the stored session value.
+  const replyChannel = params.command.channel;
   const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
+  const current = resolveEffectiveResponseUsage(
+    currentRaw,
+    params.cfg.messages?.responseUsage,
+    replyChannel,
+  );
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete targetSessionEntry.responseUsage;
-    } else {
-      targetSessionEntry.responseUsage = next;
-    }
+    // Persist an explicit "off" so a configured messages.responseUsage default
+    // can't re-enable the footer the user just turned off; clear-to-inherit is a
+    // separate action ("reset").
+    targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }

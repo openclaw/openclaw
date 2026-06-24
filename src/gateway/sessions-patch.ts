@@ -438,17 +438,15 @@ export async function projectSessionsPatchEntry(params: {
   if ("responseUsage" in patch) {
     const raw = patch.responseUsage;
     if (raw === null) {
+      // Explicit clear → inherit the messages.responseUsage default.
       delete next.responseUsage;
     } else if (raw !== undefined) {
       const normalized = normalizeUsageDisplay(raw);
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
-      if (normalized === "off") {
-        delete next.responseUsage;
-      } else {
-        next.responseUsage = normalized;
-      }
+      // Persist explicit "off" too, so a configured default can't re-enable it.
+      next.responseUsage = normalized;
     }
   }
 
