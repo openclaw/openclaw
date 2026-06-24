@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 

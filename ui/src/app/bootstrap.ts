@@ -26,6 +26,7 @@ import type {
   ApplicationTheme,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { createApplicationOverlays } from "./overlays.ts";
 import { createRouterOutletSnapshot, type RouterOutletSnapshotStore } from "./router-outlet.ts";
 import { createApplicationSessions } from "./sessions.ts";
 import {
@@ -351,6 +352,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const settings = startup.settings;
   const gateway = createApplicationGateway(settings, startup.password ?? "");
   const sessions = createApplicationSessions(gateway);
+  const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   applyStartupPresentation(settings);
@@ -412,6 +414,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     assistantName: identity.name || "OpenClaw",
     gateway,
     sessions,
+    overlays,
     navigation,
     theme,
     navigate,
@@ -436,6 +439,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       router.stop();
       gateway.stop();
       sessions.dispose();
+      overlays.dispose();
       theme.dispose();
     },
   };

@@ -2,13 +2,13 @@
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
-import { t } from "../i18n/index.ts";
-import "./modal-dialog.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
-} from "../ui/controllers/exec-approval.ts";
+} from "../app/exec-approval.ts";
+import "./modal-dialog.ts";
+import { t } from "../i18n/index.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",

@@ -22,6 +22,7 @@ import type {
   StatusSummary,
   ToolsCatalogResult,
 } from "../api/types.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UiSettings } from "../app/settings.ts";
 import type { ThemeTransitionContext } from "../app/theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "../app/theme.ts";
@@ -54,7 +55,6 @@ import type {
 } from "../pages/skills/data.ts";
 import type { SessionLogEntry } from "../pages/usage/view.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";

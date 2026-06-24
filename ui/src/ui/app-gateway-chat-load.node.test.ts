@@ -179,7 +179,7 @@ vi.mock("../pages/nodes/devices.ts", () => ({
   loadDevices: loadDevicesMock,
 }));
 
-vi.mock("./controllers/exec-approval.ts", () => ({
+vi.mock("../app/exec-approval.ts", () => ({
   addExecApproval: vi.fn((queue, entry) => [...queue, entry]),
   clearResolvedExecApprovalPrompt: vi.fn(),
   enqueueExecApprovalPrompt: vi.fn(),
@@ -219,7 +219,7 @@ afterAll(() => {
   vi.doUnmock("./controllers/assistant-identity.ts");
   vi.doUnmock("./controllers/control-ui-bootstrap.ts");
   vi.doUnmock("../pages/nodes/devices.ts");
-  vi.doUnmock("./controllers/exec-approval.ts");
+  vi.doUnmock("../app/exec-approval.ts");
   vi.doUnmock("./controllers/health.ts");
   vi.doUnmock("./controllers/model-auth-status.ts");
   vi.doUnmock("../pages/nodes/data.ts");

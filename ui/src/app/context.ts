@@ -2,6 +2,7 @@ import { createContext } from "@lit/context";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import type { RouteLocation } from "../router/types.ts";
+import type { ApplicationOverlays } from "./overlays.ts";
 import type { ApplicationSessions } from "./sessions.ts";
 import type { ThemeMode } from "./theme.ts";
 
@@ -55,6 +56,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly assistantName: string;
   readonly gateway: ApplicationGateway;
   readonly sessions: ApplicationSessions;
+  readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;

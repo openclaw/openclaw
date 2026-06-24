@@ -6,8 +6,10 @@ import { pathForRoute, type RouteId } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/command-palette.ts";
+import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
+import "../components/update-banner.ts";
 import { CommandPalette } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
@@ -28,10 +30,16 @@ import {
 } from "../lib/session-key.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
+import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 import { type RouterOutletSelection } from "./router-outlet.ts";
 import "./router-outlet.ts";
 
 const ACTIVE_ROUTE_IDS = ["chat"] as const;
+
+function resolveOnboardingMode(): boolean {
+  const raw = new URLSearchParams(globalThis.location?.search ?? "").get("onboarding");
+  return raw !== null && /^(?:1|true|yes|on)$/iu.test(raw.trim());
+}
 
 export class OpenClawApp extends LitElement {
   @state() private gatewayConnected = false;
@@ -43,6 +51,7 @@ export class OpenClawApp extends LitElement {
   @state() private loginShowGatewayToken = false;
   @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
+  @state() private onboarding = resolveOnboardingMode();
 
   private runtime: ApplicationRuntime | undefined;
   private context: ApplicationContext<RouteId> | undefined;
@@ -160,13 +169,14 @@ export class OpenClawApp extends LitElement {
     }
     return html`
       ${gatewayUrlConfirmation}
-      <openclaw-app-shell .runtime=${runtime}></openclaw-app-shell>
+      <openclaw-app-shell .runtime=${runtime} .onboarding=${this.onboarding}></openclaw-app-shell>
     `;
   }
 }
 
 class OpenClawShell extends LitElement {
   @property({ attribute: false }) runtime?: ApplicationRuntime;
+  @property({ attribute: false }) onboarding = false;
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext<RouteId>;
 
@@ -184,12 +194,21 @@ class OpenClawShell extends LitElement {
     pending: undefined,
     showPending: false,
   };
+  @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
+    updateAvailable: null,
+    updateRunning: false,
+    updateStatusBanner: null,
+    approvalQueue: [],
+    approvalBusy: false,
+    approvalError: null,
+  };
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
 
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
   private stopSessionsSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
+  private stopOverlaySubscription: (() => void) | undefined;
 
   private readonly nativeTitleTooltipPointerOver = (event: PointerEvent) => {
     promoteNativeTitleTooltip(event.target, this, "pointer");
@@ -234,7 +253,8 @@ class OpenClawShell extends LitElement {
       this.stopGatewaySubscription ||
       this.stopNavigationSubscription ||
       this.stopSessionsSubscription ||
-      this.stopRouteSubscription
+      this.stopRouteSubscription ||
+      this.stopOverlaySubscription
     ) {
       return;
     }
@@ -254,6 +274,10 @@ class OpenClawShell extends LitElement {
     this.stopRouteSubscription = runtime.routeSnapshot.subscribe((selection) => {
       this.routeSelection = selection;
     });
+    this.overlaySnapshot = context.overlays.snapshot;
+    this.stopOverlaySubscription = context.overlays.subscribe((snapshot) => {
+      this.overlaySnapshot = snapshot;
+    });
   }
 
   protected override willUpdate() {
@@ -269,6 +293,8 @@ class OpenClawShell extends LitElement {
     this.stopSessionsSubscription = undefined;
     this.stopRouteSubscription?.();
     this.stopRouteSubscription = undefined;
+    this.stopOverlaySubscription?.();
+    this.stopOverlaySubscription = undefined;
     this.removeEventListener("pointerover", this.nativeTitleTooltipPointerOver);
     this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOut);
     this.removeEventListener("focusin", this.nativeTitleTooltipFocusIn);
@@ -402,7 +428,9 @@ class OpenClawShell extends LitElement {
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${this.navCollapsed
           ? "shell--nav-collapsed"
-          : ""} ${this.navDrawerOpen ? "shell--nav-drawer-open" : ""}"
+          : ""} ${this.navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
+          ? "shell--onboarding"
+          : ""}"
         @theme-change=${this.handleThemeChange}
       >
         <button
@@ -419,6 +447,7 @@ class OpenClawShell extends LitElement {
           .searchDisabled=${false}
           .navDrawerOpen=${this.navDrawerOpen}
           .themeMode=${context.theme.mode}
+          .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${() => (this.navDrawerOpen = !this.navDrawerOpen)}
           .onNavigate=${(routeId: string) => this.navigate(routeId)}
@@ -509,6 +538,17 @@ class OpenClawShell extends LitElement {
           ></openclaw-app-sidebar>
         </div>
         <main class="content ${activeRoute === "chat" ? "content--chat" : ""}">
+          <openclaw-update-banner
+            .props=${{
+              statusBanner: this.overlaySnapshot.updateStatusBanner,
+              updateAvailable: this.overlaySnapshot.updateAvailable,
+              updateRunning: this.overlaySnapshot.updateRunning,
+              connected: this.gatewayConnected,
+              onUpdate: () =>
+                context.overlays.runUpdate(routeSessionKey || context.gateway.snapshot.sessionKey),
+              onDismiss: () => context.overlays.dismissUpdate(),
+            }}
+          ></openclaw-update-banner>
           <openclaw-router-outlet
             .router=${runtime.router}
             .snapshot=${runtime.routeSnapshot}
@@ -516,6 +556,15 @@ class OpenClawShell extends LitElement {
             .onNotFound=${() => context.replace("chat")}
           ></openclaw-router-outlet>
         </main>
+        <openclaw-exec-approval
+          .props=${{
+            queue: this.overlaySnapshot.approvalQueue,
+            busy: this.overlaySnapshot.approvalBusy,
+            error: this.overlaySnapshot.approvalError,
+            onDecision: (decision: Parameters<typeof context.overlays.decideApproval>[0]) =>
+              context.overlays.decideApproval(decision),
+          }}
+        ></openclaw-exec-approval>
       </div>
     `;
   }

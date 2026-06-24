@@ -14,6 +14,15 @@ import type {
 } from "../api/types.ts";
 import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import {
+  clearResolvedExecApprovalPrompt,
+  enqueueExecApprovalPrompt,
+  parseExecApprovalRequested,
+  parseExecApprovalResolved,
+  parsePluginApprovalRequested,
+  pruneExecApprovalQueue,
+} from "../app/exec-approval.ts";
 import type { UiSettings } from "../app/settings.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -86,15 +95,6 @@ import {
   type AssistantIdentityState,
 } from "./controllers/assistant-identity.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import {
-  clearResolvedExecApprovalPrompt,
-  enqueueExecApprovalPrompt,
-  parseExecApprovalRequested,
-  parseExecApprovalResolved,
-  parsePluginApprovalRequested,
-  pruneExecApprovalQueue,
-} from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
   loadModelAuthStatusState,

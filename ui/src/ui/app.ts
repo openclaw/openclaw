@@ -28,6 +28,12 @@ import type {
 } from "../api/types.ts";
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
+import {
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
+  type ExecApprovalRequest,
+} from "../app/exec-approval.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "../app/settings.ts";
 import {
@@ -155,12 +161,6 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
-import {
-  dismissExecApprovalPrompt,
-  isStaleApprovalResolutionError,
-  refreshPendingApprovalQueue,
-  type ExecApprovalRequest,
-} from "./controllers/exec-approval.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 

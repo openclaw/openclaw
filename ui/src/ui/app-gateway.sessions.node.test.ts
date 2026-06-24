@@ -106,7 +106,7 @@ vi.mock("../pages/chat/gateway.ts", () => ({
 vi.mock("../pages/nodes/devices.ts", () => ({
   loadDevices: vi.fn(),
 }));
-vi.mock("./controllers/exec-approval.ts", () => ({
+vi.mock("../app/exec-approval.ts", () => ({
   addExecApproval: vi.fn(),
   clearResolvedExecApprovalPrompt: vi.fn(),
   enqueueExecApprovalPrompt: vi.fn(),
@@ -131,9 +131,8 @@ vi.mock("./gateway.ts", () => ({
 }));
 
 const { handleGatewayEvent } = await import("./app-gateway.ts");
-const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
-  "./controllers/exec-approval.ts",
-);
+const { addExecApproval } =
+  await vi.importActual<typeof import("../app/exec-approval.ts")>("../app/exec-approval.ts");
 
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
@@ -145,7 +144,7 @@ afterAll(() => {
   vi.doUnmock("./controllers/assistant-identity.ts");
   vi.doUnmock("../pages/chat/gateway.ts");
   vi.doUnmock("../pages/nodes/devices.ts");
-  vi.doUnmock("./controllers/exec-approval.ts");
+  vi.doUnmock("../app/exec-approval.ts");
   vi.doUnmock("../pages/nodes/data.ts");
   vi.doUnmock("../pages/sessions/data.ts");
   vi.doUnmock("./gateway.ts");
