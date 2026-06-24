@@ -131,6 +131,7 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/memory-core/src/dreaming-narrative.ts",
   "extensions/mattermost/src/mattermost/model-picker.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
+  "extensions/telegram/src/bot.ts",
 ]);
 
 export const migratedSessionAccessorWriteFiles = new Set([
