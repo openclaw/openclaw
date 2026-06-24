@@ -1428,6 +1428,11 @@ async function agentCommandInternal(
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+            directUserIds: [
+              sessionEntry?.origin?.nativeDirectUserId,
+              sessionEntry?.origin?.from,
+              sessionEntry?.origin?.to,
+            ],
           })
         : null;
     const normalizedChannelOverride = channelModelOverride

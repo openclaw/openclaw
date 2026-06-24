@@ -1,5 +1,5 @@
 /** Shared helpers for model commands that read or mutate model config. */
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -161,6 +161,19 @@ export function resolveKnownAgentId(params: {
     );
   }
   return agentId;
+}
+
+/** Resolves the selected model-command agent and its profile directory. */
+export function resolveModelsTargetAgent(
+  cfg: OpenClawConfig,
+  rawAgentId?: string,
+): {
+  agentId: string;
+  agentDir: string;
+} {
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId }) ?? resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */

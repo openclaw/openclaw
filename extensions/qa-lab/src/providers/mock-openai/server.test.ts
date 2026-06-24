@@ -122,11 +122,34 @@ function explicitSessionsSpawnPrompt(token: string) {
   return [
     "Use sessions_spawn for this QA check.",
     `task="${threadSubagentTask(token)}"`,
-    "label=qa-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+    "label=qa-thread-subagent thread=true mode=session",
   ].join(" ");
 }
 
 describe("qa mock openai server", () => {
+  it("retains enough debug requests for long shared QA runs", async () => {
+    const server = await startMockServer();
+
+    for (let index = 0; index < 250; index += 1) {
+      await expectResponsesJson(server, {
+        stream: false,
+        model: "gpt-5.5",
+        input: [makeUserInput(`debug retention request ${index}`)],
+      });
+    }
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    const requestLog = requireArray(await requests.json(), "debug requests");
+    expect(requestLog).toHaveLength(250);
+    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
+      "debug retention request 0",
+    );
+    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
+      "debug retention request 249",
+    );
+  });
+
   it("serves health and streamed responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -217,6 +240,27 @@ describe("qa mock openai server", () => {
     );
     expect(String(debugPayload.allInputText)).toContain("ok do it.");
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("returns a substantive private final fixture for the message-tool warning scenario", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(
+          "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool.",
+        ),
+      ],
+    });
+
+    const text = body.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("QA-STRANDED-85714");
+    expect(text.length).toBeGreaterThanOrEqual(120);
+    expect(text.match(/[.!?]+(?:\s|$)/g)).toHaveLength(2);
   });
 
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
@@ -640,6 +684,62 @@ describe("qa mock openai server", () => {
       'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
     );
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Read large-cache-fixture.txt, verify it contains CACHE-FIXTURE-1600, then reply exactly QA-LARGE-CACHE-WARMUP-OK.";
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      input: [makeUserInput(prompt)],
+    });
+    expect(toolPlan).toContain('"name":"read"');
+    expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"large-cache-fixture.txt\\"}"');
+
+    const completion = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: "CACHE-FIXTURE-1600 stable tool-result evidence.",
+        },
+      ],
+    });
+
+    expect(outputText(completion)).toBe("QA-LARGE-CACHE-WARMUP-OK");
+  });
+
+  it("preserves unquoted repo-scoped read targets", async () => {
+    const server = await startMockServer();
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      input: [makeUserInput("Read repo/qa/scenarios/index.yaml before continuing.")],
+    });
+
+    expect(toolPlan).toContain('"name":"read"');
+    expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"repo/qa/scenarios/index.yaml\\"}"');
+  });
+
+  it("does not treat natural reply-exactly-with phrasing as a marker token", async () => {
+    const server = await startMockServer();
+    const response = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else.",
+        ),
+      ],
+    });
+
+    expect(outputText(response)).toBe("VISIBLE-SKILL-OK");
   });
 
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
@@ -1560,6 +1660,7 @@ describe("qa mock openai server", () => {
     expect(spawnArgs.label).toBe("qa-direct-fallback-worker");
     expect(spawnArgs.thread).toBe(false);
     expect(spawnArgs.mode).toBe("run");
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
 
     const body = await expectResponsesText(server, {
       stream: true,
@@ -1626,7 +1727,6 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
-            runTimeoutSeconds: 30,
           }),
         },
         {
@@ -1663,7 +1763,6 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
-            runTimeoutSeconds: 30,
           }),
         },
         {
@@ -2876,6 +2975,41 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("QA_CANARY_TEST");
   });
 
+  it("prefers Matrix exact marker prompts over quoted silent-reply guidance", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      instructions: [
+        "You are in a Matrix group chat.",
+        'If no response is needed, reply with exactly "NO_REPLY" and nothing else.',
+      ].join(" "),
+      input: [
+        makeUserInput(
+          "@qa-sut-f28c143f:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_14C3958A",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("MATRIX_QA_CANARY_14C3958A");
+  });
+
+  it("lets current exact replies beat stale exact marker history", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput("Earlier turn: reply with only this exact marker: STALE_MARKER"),
+        makeUserInput("Reply exactly: CURRENT_REPLY"),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("CURRENT_REPLY");
+  });
+
   it("uses WhatsApp location markers only for the matching coordinate body", async () => {
     const server = await startMockServer();
     const setupInput = makeUserInput(
@@ -3146,6 +3280,47 @@ describe("qa mock openai server", () => {
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
+  it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_tool_search_code_1",
+          output: JSON.stringify({
+            ok: true,
+            value: {
+              tool: {
+                id: `openclaw:tool-search-e2e-fixture:${targetTool}`,
+                source: "openclaw",
+                sourceName: "tool-search-e2e-fixture",
+                name: targetTool,
+                description: "x".repeat(260),
+              },
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"code"}`,
+                  },
+                ],
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -3162,7 +3337,7 @@ describe("qa mock openai server", () => {
     const toolPlanOutput = outputItem(await response.json());
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("web_search");
-    expect(String(toolPlanOutput.arguments)).toContain("denied-input");
+    expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
   });
 
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
@@ -3825,7 +4000,7 @@ describe("qa mock openai server", () => {
     expect(toolUseBlock?.input.label).toBe("qa-thread-subagent");
     expect(toolUseBlock?.input.thread).toBe(true);
     expect(toolUseBlock?.input.mode).toBe("session");
-    expect(toolUseBlock?.input.runTimeoutSeconds).toBe(30);
+    expect(toolUseBlock?.input).not.toHaveProperty("runTimeoutSeconds");
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);

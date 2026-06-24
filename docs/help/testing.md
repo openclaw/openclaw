@@ -190,7 +190,10 @@ inside every shard.
   - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
     selected taxonomy profile scorecard in the same `qa-evidence.json`.
     `smoke-ci` writes slim evidence, which sets `evidenceMode: "slim"` and omits
-    per-entry `execution`.
+    per-entry `execution`. `release` covers the curated release-readiness slice;
+    `all` selects every active maturity category and is intended for explicit QA
+    Profile Evidence workflow dispatches when a full scorecard artifact is
+    needed.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker

@@ -15,6 +15,11 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.usage",
   "tool.execution_start",
   "tool.execution_complete",
+  "session.plan_changed",
+  "exit_plan_mode.requested",
+  "subagent.started",
+  "subagent.completed",
+  "subagent.failed",
   "session.compaction_start",
   "session.compaction_complete",
   "session.idle",
@@ -453,6 +458,78 @@ describe("attachEventBridge", () => {
         total: 9,
       },
     });
+  });
+
+  it("projects Copilot plan events through the generic plan stream", async () => {
+    const session = createFakeSession();
+    const onAgentEvent = vi.fn().mockResolvedValue(undefined);
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAgentEvent,
+    });
+
+    session.emit(
+      "session.plan_changed",
+      makeEvent("session.plan_changed", { operation: "update" }),
+    );
+    session.emit(
+      "exit_plan_mode.requested",
+      makeEvent("exit_plan_mode.requested", {
+        actions: ["approve", "edit"],
+        planContent: "# Plan\n- inspect\n- patch",
+        recommendedAction: "approve",
+        requestId: "request-1",
+        summary: "Plan ready",
+      }),
+    );
+
+    await bridge.awaitAgentEventChain();
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        operation: "update",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        explanation: "Plan ready",
+        steps: ["# Plan", "inspect", "patch"],
+        actions: ["approve", "edit"],
+        requestId: "request-1",
+        recommendedAction: "approve",
+      },
+    });
+  });
+
+  it("forwards native Copilot subagent lifecycle events to the adapter", () => {
+    const session = createFakeSession();
+    const onNativeSubagentEvent = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onNativeSubagentEvent,
+    });
+    const event = makeEvent("subagent.started", {
+      agentDescription: "inspect the repository",
+      agentDisplayName: "Researcher",
+      agentName: "researcher",
+      toolCallId: "call-1",
+    });
+
+    session.emit("subagent.started", event);
+
+    expect(onNativeSubagentEvent).toHaveBeenCalledWith(event);
+    bridge.detach();
   });
 
   it("preserves all-zero usage snapshot after an invalid assistant.usage event", () => {

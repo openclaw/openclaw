@@ -16,6 +16,7 @@ import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
+import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -125,6 +126,9 @@ function buildRecoveredManagedNpmInstallRecordsForRoot(
       continue;
     }
     if (!stat.isDirectory()) {
+      continue;
+    }
+    if (hasRetainedManagedNpmInstallMarker(packageDir)) {
       continue;
     }
     const pluginId = resolveRecoveredManagedNpmPluginId({ packageName, packageDir });

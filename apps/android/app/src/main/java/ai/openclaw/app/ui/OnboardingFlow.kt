@@ -1378,7 +1378,12 @@ private fun rememberPermissionState(
       photosGranted = permissions[photosPermission] ?: photosGranted
       contactsGranted = permissions[Manifest.permission.READ_CONTACTS] ?: contactsGranted
       calendarGranted = permissions[Manifest.permission.READ_CALENDAR] ?: calendarGranted
-      notificationsGranted = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: notificationsGranted
+      notificationsGranted =
+        if (Build.VERSION.SDK_INT >= 33) {
+          permissions[Manifest.permission.POST_NOTIFICATIONS] ?: notificationsGranted
+        } else {
+          true
+        }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
       smsGranted =
         (permissions[Manifest.permission.SEND_SMS] ?: smsGranted) &&

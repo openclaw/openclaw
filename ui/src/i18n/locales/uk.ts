@@ -63,7 +63,6 @@ export const uk: TranslationMap = {
     docs: "Документація",
     theme: "Тема",
     colorMode: "Колірний режим",
-    colorModeOption: "Колірний режим: {mode}",
     resources: "Ресурси",
     search: "Пошук",
     save: "Зберегти",
