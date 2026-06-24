@@ -94,6 +94,19 @@ let capturedReplyOptions:
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        title?: string;
+        explanation?: string;
+        steps?: string[];
+      }) => Promise<void> | void;
+      onApprovalEvent?: (payload: {
+        phase?: string;
+        title?: string;
+        command?: string;
+        reason?: string;
+        message?: string;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     }
   | undefined;
@@ -183,6 +196,21 @@ let mockedReplyOptionEvents: Array<
       name?: string;
       status?: string;
       exitCode?: number | null;
+    }
+  | {
+      kind: "plan";
+      phase?: string;
+      title?: string;
+      explanation?: string;
+      steps?: string[];
+    }
+  | {
+      kind: "approval";
+      phase?: string;
+      title?: string;
+      command?: string;
+      reason?: string;
+      message?: string;
     }
   | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
@@ -505,13 +533,39 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       event?: string;
       itemId?: string;
       toolCallId?: string;
+      phase?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
       status?: string;
       exitCode?: number | null;
+      command?: string;
+      reason?: string;
+      message?: string;
+      explanation?: string;
+      steps?: string[];
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
     }) => {
+      if (params.event === "plan") {
+        return {
+          kind: "plan",
+          text: params.explanation ?? params.steps?.[0] ?? params.title ?? "planning",
+          label: "Update plan",
+          toolName: "update_plan",
+        };
+      }
+      if (params.event === "approval") {
+        return {
+          kind: "approval",
+          text: params.command ?? params.message ?? params.reason ?? params.title ?? "approval",
+          label: "Approval",
+          status: "requested",
+          toolName: "approval",
+        };
+      }
       if (params.event === "command-output") {
         const status =
           params.exitCode === 0
@@ -529,6 +583,22 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
           toolName: params.name ?? "exec",
         };
       }
+      if (params.event === "patch") {
+        return {
+          kind: "patch",
+          ...((params.itemId ?? params.toolCallId)
+            ? { id: params.itemId ?? params.toolCallId }
+            : {}),
+          text:
+            params.summary ??
+            params.added?.[0] ??
+            params.modified?.[0] ??
+            params.deleted?.[0] ??
+            "patch",
+          label: params.name ?? "apply_patch",
+          toolName: params.name ?? "apply_patch",
+        };
+      }
       const text = params.progressText ?? params.summary ?? params.title ?? params.name;
       return text
         ? {
@@ -538,6 +608,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
               : {}),
             text,
             label: params.title ?? params.name ?? "Update",
+            ...(params.name ? { toolName: params.name } : {}),
           }
         : undefined;
     },
@@ -553,12 +624,14 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         itemId?: string;
         toolCallId?: string;
         itemKind?: string;
+        phase?: string;
         args?: Record<string, unknown>;
         meta?: string;
         progressText?: string;
         summary?: string;
         title?: string;
         name?: string;
+        status?: string;
       },
     ) => {
       if (params.event === "tool") {
@@ -611,6 +684,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
             ...(id ? { id } : {}),
             text,
             label: params.title ?? params.name ?? "Update",
+            ...(params.status ? { status: params.status } : {}),
+            ...(params.name ? { toolName: params.name } : {}),
           }
         : undefined;
     },
@@ -988,6 +1063,19 @@ vi.mock("../reply.runtime.js", () => ({
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        title?: string;
+        explanation?: string;
+        steps?: string[];
+      }) => Promise<void> | void;
+      onApprovalEvent?: (payload: {
+        phase?: string;
+        title?: string;
+        command?: string;
+        reason?: string;
+        message?: string;
+      }) => Promise<void> | void;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
@@ -1043,6 +1131,21 @@ vi.mock("../reply.runtime.js", () => ({
             modified: entry.modified,
             deleted: entry.deleted,
             summary: entry.summary,
+          });
+        } else if (entry.kind === "plan") {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: entry.phase,
+            title: entry.title,
+            explanation: entry.explanation,
+            steps: entry.steps,
+          });
+        } else if (entry.kind === "approval") {
+          await params.replyOptions?.onApprovalEvent?.({
+            phase: entry.phase,
+            title: entry.title,
+            command: entry.command,
+            reason: entry.reason,
+            message: entry.message,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -1136,6 +1239,19 @@ vi.mock("../reply.runtime.js", () => ({
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        title?: string;
+        explanation?: string;
+        steps?: string[];
+      }) => Promise<void> | void;
+      onApprovalEvent?: (payload: {
+        phase?: string;
+        title?: string;
+        command?: string;
+        reason?: string;
+        message?: string;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
@@ -1177,6 +1293,21 @@ vi.mock("../reply.runtime.js", () => ({
             modified: entry.modified,
             deleted: entry.deleted,
             summary: entry.summary,
+          });
+        } else if (entry.kind === "plan") {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: entry.phase,
+            title: entry.title,
+            explanation: entry.explanation,
+            steps: entry.steps,
+          });
+        } else if (entry.kind === "approval") {
+          await params.replyOptions?.onApprovalEvent?.({
+            phase: entry.phase,
+            title: entry.title,
+            command: entry.command,
+            reason: entry.reason,
+            message: entry.message,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -1756,6 +1887,37 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(removeReactionCall[2]).toBe("hourglass_flowing_sand");
     expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
       "xoxb-test",
+    );
+  });
+
+  it("updates Slack assistant thread status from tool progress callbacks", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "exec", phase: "start" },
+      { kind: "tool_start", name: "web_search", phase: "start" },
+      { kind: "item", name: "Read", phase: "update", progressText: "package.json" },
+      {
+        kind: "command_output",
+        name: "exec",
+        phase: "end",
+        exitCode: 0,
+      },
+      { kind: "approval", phase: "requested", command: "rm -rf build" },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackThreadStatus }));
+    await requireCapturedTyping().stop?.();
+
+    expect(setSlackThreadStatus.mock.calls.map(([payload]) => payload.status)).toEqual([
+      "Running command...",
+      "Searching the web...",
+      "Reading files...",
+      "Waiting for approval...",
+      "",
+    ]);
+    expect(setSlackThreadStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Exec..." }),
     );
   });
 

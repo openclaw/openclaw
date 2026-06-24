@@ -126,6 +126,49 @@ const SLACK_REASONING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
 const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|_))/iu;
+const SLACK_TOOL_STATUS_LABELS: Record<string, string> = {
+  apply_patch: "Applying patch",
+  bash: "Running command",
+  exec: "Running command",
+  message: "Sending message",
+  memory_search: "Checking memory",
+  read: "Reading files",
+  tts: "Converting to speech",
+  update_plan: "Updating plan",
+  web_fetch: "Fetching URL",
+  web_search: "Searching the web",
+};
+
+function normalizeSlackToolStatusName(name: string | undefined): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(name)?.replace(/-/g, "_");
+  return normalized || undefined;
+}
+
+function sentenceCaseSlackStatus(value: string): string {
+  const normalized = value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Working";
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function buildSlackToolStatusText(line: ChannelProgressDraftLine | undefined): string | undefined {
+  if (!line) {
+    return undefined;
+  }
+  if (line.kind === "approval") {
+    return "Waiting for approval...";
+  }
+  const status = normalizeOptionalLowercaseString(line.status);
+  if (status === "completed" || status === "failed" || status?.startsWith("exit ")) {
+    return undefined;
+  }
+  const normalizedToolName = normalizeSlackToolStatusName(line.toolName);
+  const label =
+    (normalizedToolName ? SLACK_TOOL_STATUS_LABELS[normalizedToolName] : undefined) ??
+    sentenceCaseSlackStatus(line.label || line.toolName || line.text);
+  return `${label}...`;
+}
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
@@ -670,6 +713,24 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
     },
   });
+  const updateSlackThreadStatusFromProgressLine = async (
+    line: ChannelProgressDraftLine | undefined,
+    options?: { phase?: string },
+  ) => {
+    if (!statusThreadTs || options?.phase === "end") {
+      return;
+    }
+    const status = buildSlackToolStatusText(line);
+    if (!status) {
+      return;
+    }
+    didSetStatus = true;
+    await ctx.setSlackThreadStatus({
+      channelId: message.channel,
+      threadTs: statusThreadTs,
+      status,
+    });
+  };
 
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
@@ -1897,103 +1958,102 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLineForEntry(
-              account.config,
-              {
-                event: "tool",
-                itemId: payload.itemId,
-                toolCallId: payload.toolCallId,
-                name: payload.name,
-                phase: payload.phase,
-                args: payload.args,
-              },
-              payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-            ),
-            { toolName: payload.name },
-          );
-        },
-        onItemEvent: async (payload) => {
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLineForEntry(account.config, {
-              event: "item",
+          const line = buildChannelProgressDraftLineForEntry(
+            account.config,
+            {
+              event: "tool",
               itemId: payload.itemId,
               toolCallId: payload.toolCallId,
-              itemKind: payload.kind,
-              title: payload.title,
               name: payload.name,
               phase: payload.phase,
-              status: payload.status,
-              summary: payload.summary,
-              progressText: payload.progressText,
-              meta: payload.meta,
-            }),
+              args: payload.args,
+            },
+            payload.detailMode ? { detailMode: payload.detailMode } : undefined,
           );
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line, { toolName: payload.name });
+        },
+        onItemEvent: async (payload) => {
+          const line = buildChannelProgressDraftLineForEntry(account.config, {
+            event: "item",
+            itemId: payload.itemId,
+            toolCallId: payload.toolCallId,
+            itemKind: payload.kind,
+            title: payload.title,
+            name: payload.name,
+            phase: payload.phase,
+            status: payload.status,
+            summary: payload.summary,
+            progressText: payload.progressText,
+            meta: payload.meta,
+          });
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line);
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {
             return;
           }
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase,
-              title: payload.title,
-              explanation: payload.explanation,
-              steps: payload.steps,
-            }),
-          );
+          const line = buildChannelProgressDraftLine({
+            event: "plan",
+            phase: payload.phase,
+            title: payload.title,
+            explanation: payload.explanation,
+            steps: payload.steps,
+          });
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line);
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {
             return;
           }
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLine({
-              event: "approval",
-              phase: payload.phase,
-              title: payload.title,
-              command: payload.command,
-              reason: payload.reason,
-              message: payload.message,
-            }),
-          );
+          const line = buildChannelProgressDraftLine({
+            event: "approval",
+            phase: payload.phase,
+            title: payload.title,
+            command: payload.command,
+            reason: payload.reason,
+            message: payload.message,
+          });
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line);
         },
         onCommandOutput: async (payload) => {
           if (payload.phase !== "end") {
             return;
           }
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLine({
-              event: "command-output",
-              itemId: payload.itemId,
-              toolCallId: payload.toolCallId,
-              phase: payload.phase,
-              title: payload.title,
-              name: payload.name,
-              status: payload.status,
-              exitCode: payload.exitCode,
-            }),
-          );
+          const line = buildChannelProgressDraftLine({
+            event: "command-output",
+            itemId: payload.itemId,
+            toolCallId: payload.toolCallId,
+            phase: payload.phase,
+            title: payload.title,
+            name: payload.name,
+            status: payload.status,
+            exitCode: payload.exitCode,
+          });
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line);
         },
         onPatchSummary: async (payload) => {
           if (payload.phase !== "end") {
             return;
           }
-          await pushPreviewToolProgress(
-            buildChannelProgressDraftLine({
-              event: "patch",
-              itemId: payload.itemId,
-              toolCallId: payload.toolCallId,
-              phase: payload.phase,
-              title: payload.title,
-              name: payload.name,
-              added: payload.added,
-              modified: payload.modified,
-              deleted: payload.deleted,
-              summary: payload.summary,
-            }),
-          );
+          const line = buildChannelProgressDraftLine({
+            event: "patch",
+            itemId: payload.itemId,
+            toolCallId: payload.toolCallId,
+            phase: payload.phase,
+            title: payload.title,
+            name: payload.name,
+            added: payload.added,
+            modified: payload.modified,
+            deleted: payload.deleted,
+            summary: payload.summary,
+          });
+          await updateSlackThreadStatusFromProgressLine(line, { phase: payload.phase });
+          await pushPreviewToolProgress(line);
         },
       },
     });
