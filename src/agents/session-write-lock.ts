@@ -902,6 +902,13 @@ export async function acquireSessionWriteLock(params: {
   // maxHoldMs (5 min) even though other acquirers time out after 60 s,
   // producing SessionWriteLockTimeoutError for every other operation that
   // shares the lock (e.g. mirrorCodexAppServerTranscript).
+  //
+  // Compatibility: this cap applies to ALL callers, including operators who
+  // configured a high maxHoldMs via config.session.writeLock.maxHoldMs or
+  // OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.  If your workload needs a hold
+  // longer than the acquire timeout, increase the acquire timeout instead —
+  // holding the lock past the acquire timeout causes other writers to fail.
+  //
   // Note: pass minMs=1 and graceMs=1 because resolveSessionLockMaxHoldFromTimeout
   // defaults minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s) and
   // resolvePositiveMs rejects values ≤ 0, which would make the cap a no-op for
