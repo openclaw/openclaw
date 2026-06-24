@@ -625,11 +625,22 @@ function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): 
 }
 
 function readMemorySearchVectorEnabled(config: unknown, agentId: string): boolean {
+  if (readMemorySearchProvider(config, agentId) === "none") {
+    return false;
+  }
   const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
   const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
   const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
   const raw = agentVector?.enabled ?? defaultVector?.enabled ?? topLevelVector?.enabled;
   return typeof raw === "boolean" ? raw : true;
+}
+
+function readMemorySearchProvider(config: unknown, agentId: string): string | undefined {
+  const raw =
+    readAgentMemorySearch(config, agentId)?.provider ??
+    readDefaultMemorySearch(config)?.provider ??
+    readTopLevelMemorySearch(config)?.provider;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 function readLegacyMemorySearchStorePath(config: unknown, agentId: string): string | undefined {
