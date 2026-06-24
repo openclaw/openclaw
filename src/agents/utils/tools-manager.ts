@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import chalk from "chalk";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import {
@@ -30,6 +31,7 @@ import { APP_NAME, getBinDir } from "../config.js";
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const GITHUB_API_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -154,7 +156,11 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const bytes = await readResponseWithLimit(response, GITHUB_API_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`GitHub API release response exceeds ${maxBytes} bytes`),
+    });
+    const data = JSON.parse(new TextDecoder().decode(bytes)) as { tag_name: string };
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
