@@ -37,6 +37,14 @@ import {
   type ThemeName,
 } from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
+import {
+  clearActiveFloatingTooltips,
+  prepareActiveFloatingTooltipsForRender,
+  promoteNativeTitleTooltip,
+  refreshActiveFloatingTooltip,
+  restoreNativeTitleTooltip,
+} from "../lib/dom-tooltips.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
@@ -146,7 +154,6 @@ import {
   type FallbackStatus,
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import {
   dismissExecApprovalPrompt,
@@ -154,13 +161,6 @@ import {
   refreshPendingApprovalQueue,
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
-import {
-  clearActiveFloatingTooltips,
-  prepareActiveFloatingTooltipsForRender,
-  promoteNativeTitleTooltip,
-  refreshActiveFloatingTooltip,
-  restoreNativeTitleTooltip,
-} from "./dom-tooltips.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 

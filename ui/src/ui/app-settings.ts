@@ -4,6 +4,7 @@ import type { SettingsHost } from "../app/app-host.ts";
 import { syncCustomThemeStyleTag } from "../app/custom-theme.ts";
 import {
   normalizeTextScale,
+  resolveApplicationStartupSettings,
   saveLocalUserIdentity,
   saveSettings,
   type LocalUserIdentity,
@@ -67,122 +68,33 @@ function applySessionSelection(host: SettingsHost, session: string) {
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
-declare global {
-  interface Window {
-    __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
-      gatewayUrl?: string | null;
-      token?: string | null;
-      password?: string | null;
-    };
-  }
-}
-
-function applyNativeControlAuth(host: SettingsHost) {
-  const nativeAuth = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
-  if (!nativeAuth) {
-    return;
-  }
-  try {
-    delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
-  } catch {
-    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
-  }
-
-  const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
-  const token = normalizeOptionalString(nativeAuth.token);
-  const password = normalizeOptionalString(nativeAuth.password);
-  const nextSettings = {
-    ...host.settings,
-    ...(gatewayUrl ? { gatewayUrl } : {}),
-    ...(token ? { token } : {}),
-  };
-  if (gatewayUrl || (token && token !== host.settings.token)) {
-    applySettings(host, nextSettings);
-  }
-  if (password && password !== host.password) {
-    host.password = password;
-  }
-}
-
 export function applySettingsFromUrl(host: SettingsHost) {
-  applyNativeControlAuth(host);
-  if (!window.location.search && !window.location.hash) {
-    return;
+  const startup = resolveApplicationStartupSettings(host.settings, {
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+  });
+  if (startup.changed) {
+    applySettings(host, startup.settings);
+    host.sessionKey = startup.settings.sessionKey;
   }
-  const url = new URL(window.location.href);
-  const params = new URLSearchParams(url.search);
-  const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-
-  const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
-  const nextGatewayUrl = normalizeOptionalString(gatewayUrlRaw) ?? "";
-  const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== host.settings.gatewayUrl);
-  // Prefer fragment tokens over query tokens. Fragments avoid server-side request
-  // logs and referrer leakage; query-param tokens remain a one-time legacy fallback
-  // for compatibility with older deep links.
-  const queryToken = params.get("token");
-  const hashToken = hashParams.get("token");
-  const hasTokenParam = hashToken != null || queryToken != null;
-  const token = normalizeOptionalString(hashToken ?? queryToken);
-  const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
-  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
-  let shouldCleanUrl = false;
-
-  if (params.has("token")) {
-    params.delete("token");
-    shouldCleanUrl = true;
+  if (startup.password !== null) {
+    host.password = startup.password;
   }
-
-  if (hasTokenParam) {
-    if (queryToken != null) {
-      warnQueryToken = true;
-      console.warn(
-        "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
-      );
-    }
-    if (token && gatewayUrlChanged) {
-      host.pendingGatewayToken = token;
-    } else if (token && token !== host.settings.token) {
-      applySettings(host, { ...host.settings, token });
-    }
-    hashParams.delete("token");
-    shouldCleanUrl = true;
+  host.pendingGatewayUrl = startup.pendingGatewayUrl;
+  host.pendingGatewayToken = startup.pendingGatewayToken;
+  warnQueryToken = startup.queryTokenUsed;
+  if (
+    startup.location.pathname !== window.location.pathname ||
+    startup.location.search !== window.location.search ||
+    startup.location.hash !== window.location.hash
+  ) {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.pathname = startup.location.pathname;
+    nextUrl.search = startup.location.search;
+    nextUrl.hash = startup.location.hash;
+    updateBrowserHistory(nextUrl, true);
   }
-
-  if (shouldResetSessionForToken) {
-    host.sessionKey = "main";
-    applySettings(host, {
-      ...host.settings,
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    });
-  }
-
-  if (params.has("password") || hashParams.has("password")) {
-    // Never hydrate password from URL params; strip only.
-    params.delete("password");
-    hashParams.delete("password");
-    shouldCleanUrl = true;
-  }
-
-  if (session) {
-    applySessionSelection(host, session);
-  }
-
-  if (gatewayUrlRaw != null) {
-    host.pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    host.pendingGatewayToken = gatewayUrlChanged ? (token ?? null) : null;
-    params.delete("gatewayUrl");
-    hashParams.delete("gatewayUrl");
-    shouldCleanUrl = true;
-  }
-
-  if (!shouldCleanUrl) {
-    return;
-  }
-  url.search = params.toString();
-  const nextHash = hashParams.toString();
-  url.hash = nextHash ? `#${nextHash}` : "";
-  updateBrowserHistory(url, true);
 }
 
 function applyThemeTransition(

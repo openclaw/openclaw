@@ -34,7 +34,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { refreshChatCommands } from "../pages/chat/data.ts";
+import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { resetChatStateForSessionSwitch } from "../pages/chat/session-switch.ts";
 import { runUpdate } from "../pages/config/data.ts";
 import {
@@ -44,6 +44,7 @@ import {
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
 
 function isSidebarSessionBusy(state: AppViewState) {
   return (
@@ -220,7 +221,10 @@ function renderConnectedApp(
         query: state.paletteQuery,
         activeIndex: state.paletteActiveIndex,
         onOpen: () => {
-          void refreshChatCommands(state).finally(requestHostUpdate);
+          void refreshSlashCommands({
+            client: state.client,
+            agentId: resolveAgentIdForSession(state as never),
+          }).finally(requestHostUpdate);
         },
         onToggle: () => {
           state.paletteOpen = !state.paletteOpen;

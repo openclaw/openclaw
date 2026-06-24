@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { clearActiveFloatingTooltips, promoteNativeTitleTooltip } from "./dom-tooltips.ts";
+import { clearActiveFloatingTooltips, promoteNativeTitleTooltip } from "../lib/dom-tooltips.ts";
 
 afterEach(() => {
   clearActiveFloatingTooltips();
