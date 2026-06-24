@@ -1,9 +1,11 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ImageContent } from "../llm/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -219,6 +221,9 @@ export type MsgContext = {
   Transcript?: string;
   MediaUnderstanding?: MediaUnderstandingOutput[];
   MediaUnderstandingDecisions?: MediaUnderstandingDecision[];
+  /** Inline images derived during current-turn preprocessing, such as PDF page renders. */
+  CurrentTurnImages?: ImageContent[];
+  CurrentTurnImageOrder?: PromptImageOrderEntry[];
   LinkUnderstanding?: string[];
   Prompt?: string;
   MaxChars?: number;

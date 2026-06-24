@@ -1192,6 +1192,38 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
+  it("forwards PDF page images extracted during media understanding into ACP runtime turns", async () => {
+    setReadyAcpResolution();
+    const extractedPdfPage = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("pdf-page").toString("base64"),
+    };
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockImplementationOnce(async (params) => {
+      const ctx = (
+        params as { ctx: { CurrentTurnImages?: unknown; CurrentTurnImageOrder?: unknown } }
+      ).ctx;
+      ctx.CurrentTurnImages = [extractedPdfPage];
+      ctx.CurrentTurnImageOrder = ["inline"];
+    });
+
+    await runDispatch({
+      bodyForAgent: '<file name="scan.pdf">[PDF content rendered to images]</file>',
+      ctxOverrides: {
+        MediaPath: "/tmp/scan.pdf",
+        MediaType: "application/pdf",
+      },
+    });
+
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: extractedPdfPage.data,
+      },
+    ]);
+  });
+
   it("preserves chat.send inline image attachments over recent history images", async () => {
     setReadyAcpResolution();
     const image = {

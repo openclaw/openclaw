@@ -5,19 +5,20 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import type { ImageContent } from "../llm/types.js";
+import { renderFileContextBlock } from "../media/file-context.js";
+import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -47,6 +48,11 @@ type ApplyMediaUnderstandingResult = {
   appliedAudio: boolean;
   appliedVideo: boolean;
   appliedFile: boolean;
+};
+
+type FileExtractionBlocksResult = {
+  blocks: string[];
+  images: ImageContent[];
 };
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
@@ -109,6 +115,17 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
+}
+
+function appendCurrentTurnImages(ctx: MsgContext, images: ImageContent[]): void {
+  if (images.length === 0) {
+    return;
+  }
+  ctx.CurrentTurnImages = [...(ctx.CurrentTurnImages ?? []), ...images];
+  ctx.CurrentTurnImageOrder = [
+    ...(ctx.CurrentTurnImageOrder ?? []),
+    ...images.map(() => "inline" as const),
+  ];
 }
 
 function wrapUntrustedAttachmentContent(content: string): string {
@@ -383,12 +400,13 @@ async function extractFileBlocks(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
-}): Promise<string[]> {
+}): Promise<FileExtractionBlocksResult> {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
-    return [];
+    return { blocks: [], images: [] };
   }
   const blocks: string[] = [];
+  const images: ImageContent[] = [];
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
@@ -493,11 +511,15 @@ async function extractFileBlocks(params: {
       }
       continue;
     }
+    const extractedImages = extracted?.images ?? [];
+    if (extractedImages.length > 0) {
+      images.push(...extractedImages);
+    }
     const text = extracted?.text?.trim() ?? "";
     let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
     if (!blockText) {
-      if (extracted?.images && extracted.images.length > 0) {
-        blockText = "[PDF content rendered to images; images not forwarded to model]";
+      if (extractedImages.length > 0) {
+        blockText = "[PDF content rendered to images]";
       } else {
         blockText = "[No extractable text]";
       }
@@ -511,7 +533,7 @@ async function extractFileBlocks(params: {
       }),
     );
   }
-  return blocks;
+  return { blocks, images };
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -670,20 +692,21 @@ export async function applyMediaUnderstanding(params: {
         )
         .map((output) => output.attachmentIndex),
     );
-    const fileBlocks = await extractFileBlocks({
+    const fileExtraction = await extractFileBlocks({
       attachments,
       cache,
       cfg,
       limits: resolveFileExtractionLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
     });
-    if (fileBlocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, fileBlocks);
+    if (fileExtraction.blocks.length > 0) {
+      ctx.Body = appendFileBlocks(ctx.Body, fileExtraction.blocks);
     }
-    if (outputs.length > 0 || fileBlocks.length > 0) {
+    appendCurrentTurnImages(ctx, fileExtraction.images);
+    if (outputs.length > 0 || fileExtraction.blocks.length > 0) {
       finalizeInboundContext(ctx, {
         forceBodyForAgent: true,
-        forceBodyForCommands: outputs.length > 0 || fileBlocks.length > 0,
+        forceBodyForCommands: outputs.length > 0 || fileExtraction.blocks.length > 0,
       });
     }
 
@@ -693,7 +716,7 @@ export async function applyMediaUnderstanding(params: {
       appliedImage: outputs.some((output) => output.kind === "image.description"),
       appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
       appliedVideo: outputs.some((output) => output.kind === "video.description"),
-      appliedFile: fileBlocks.length > 0,
+      appliedFile: fileExtraction.blocks.length > 0,
     };
   } finally {
     await cache.cleanup();
