@@ -2034,6 +2034,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
                   sessionFile: undefined,
+                  sessionClosedAt: undefined,
                 }
               : {}),
           };

@@ -133,6 +133,9 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
+    resolveCompactionSessionFile: (params: { entry?: SessionEntry; newSessionId: string }) =>
+      params.entry?.sessionFile?.replace(params.entry.sessionId, params.newSessionId) ??
+      pathLocal.join("/tmp", `${params.newSessionId}.jsonl`),
     canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {
       sessionFile?: string;
@@ -874,6 +877,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
       expect(result.sessionEntry?.status).toBe("done");
       expect(result.sessionEntry?.endedAt).toBe(now - 100);
+    });
+  });
+
+  it("clears closed-session markers after command-session rollover", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        session: {
+          store: storePath,
+          mainKey: "main",
+          resetByType: { thread: { mode: "idle", idleMinutes: 0 } },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:discord:channel:redacted:thread:closed";
+      const closedAt = Date.now();
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "closed-command-session",
+              updatedAt: closedAt,
+              sessionStartedAt: closedAt,
+              lastInteractionAt: closedAt,
+              sessionClosedAt: closedAt,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const first = resolveSession({ cfg, sessionKey });
+
+      expect(first.isNewSession).toBe(true);
+      expect(first.sessionId).not.toBe("closed-command-session");
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId: first.sessionId,
+        sessionKey: first.sessionKey!,
+        storePath: first.storePath,
+        sessionStore: first.sessionStore!,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        result: {
+          payloads: [],
+          meta: { agentMeta: { provider: "openai", model: "gpt-4o" } },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.sessionId).toBe(first.sessionId);
+      expect(persisted?.sessionClosedAt).toBeUndefined();
+
+      const second = resolveSession({ cfg, sessionKey });
+      expect(second.isNewSession).toBe(false);
+      expect(second.sessionId).toBe(first.sessionId);
     });
   });
 

@@ -132,6 +132,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
   };
   if (entry.sessionId !== sessionId) {
+    delete next.sessionClosedAt;
     next.sessionFile =
       activeSessionFile ??
       resolveCompactionSessionFile({
@@ -284,6 +285,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
+  if (!preserveUserFacingRunState && entry.sessionId !== sessionId) {
+    metadataPatch.sessionClosedAt = undefined;
+  }
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {
