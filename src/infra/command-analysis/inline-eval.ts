@@ -172,7 +172,9 @@ function stripInterpreterVersionSuffix(value: string): string {
 
 function interpreterNameVariants(value: string): readonly string[] {
   const stripped = stripInterpreterVersionSuffix(value);
-  return stripped === value ? [value] : [value, stripped];
+  // Do not synthesize one-letter interpreter names: commands like r2 can use
+  // their own eval flags and must not be mistaken for R inline execution.
+  return stripped === value || stripped.length < 2 ? [value] : [value, stripped];
 }
 
 function specNamesInclude(names: readonly string[], normalizedExecutable: string): boolean {

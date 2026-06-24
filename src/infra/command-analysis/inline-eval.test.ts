@@ -70,6 +70,7 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["node", "script.js"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-name", "*.ts"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["xargs", "-0"])).toBeNull();
@@ -90,6 +91,7 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("pypy3.10")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/node")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("Rscript")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("r2")).toBe(false);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/awk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/gawk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/mawk")).toBe(true);
