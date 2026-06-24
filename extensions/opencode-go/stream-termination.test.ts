@@ -182,6 +182,82 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
+  it("keeps a live stream open when block boundaries arrive between deltas", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    let abortCalled = false;
+
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper({ provider: "opencode-go", id: "glm-4.6" } as any, {} as any, {} as any),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const received: AnyEvent[] = [];
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        received.push(event);
+      }
+    })();
+
+    const partial = {
+      role: "assistant",
+      content: [{ type: "toolCall", partialJson: "{", arguments: {}, name: "gateway" }],
+      stopReason: undefined,
+    };
+    controller.emit({ type: "start", partial } as any);
+    controller.emit({ type: "toolcall_delta", contentIndex: 0, delta: "{", partial } as any);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    controller.emit({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: { type: "toolCall", id: "call-1", name: "gateway", arguments: {} },
+      partial,
+    } as any);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    controller.emit({ type: "toolcall_start", contentIndex: 1, partial } as any);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(abortCalled).toBe(false);
+
+    controller.emit({
+      type: "done",
+      reason: "stop",
+      message: {
+        ...partial,
+        content: [{ type: "text", text: "final answer" }],
+        stopReason: "stop",
+      },
+    } as any);
+    controller.end();
+    await consumer;
+
+    expect(received.some((event) => event.type === "done")).toBe(true);
+    expect(
+      received.some(
+        (event) => event.type === "error" && (event as any).error?.stopReason === "error",
+      ),
+    ).toBe(false);
+  });
+
   it("uses a longer first-event timeout than the inter-event idle timeout", async () => {
     const { stream: baseStream } = createFakeBaseStream();
     let abortCalled = false;

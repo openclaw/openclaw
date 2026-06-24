@@ -51,11 +51,20 @@ function resolveTimeoutMs(model: unknown, fallbackMs: number): number {
   return validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? fallbackMs;
 }
 
-function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
+function isProviderDeltaEvent(event: AssistantMessageEvent): boolean {
   return (
     event.type === "text_delta" ||
     event.type === "thinking_delta" ||
     event.type === "toolcall_delta"
+  );
+}
+
+function isProviderBoundaryLivenessEvent(event: AssistantMessageEvent): boolean {
+  return (
+    event.type === "text_end" ||
+    event.type === "thinking_end" ||
+    event.type === "toolcall_start" ||
+    event.type === "toolcall_end"
   );
 }
 
@@ -200,8 +209,8 @@ function synthesizeMinimalAssistantMessage(
  *
  * Behavior:
  * - Provider-scoped: only applies when `model.provider === options.provider`.
- * - Idle-based: the timer covers stream creation, first event delivery, and
- *   every gap after provider progress begins; if no event arrives within
+ * - Idle-based: the timer covers stream creation, first provider delta, and
+ *   every gap after provider progress begins; if no live event arrives within
  *   `idleTimeoutMs`, the wrapper calls `controller.abort()` on the AbortSignal
  *   injected into the underlying call (so the OpenAI SDK request is genuinely
  *   interrupted, not just the iterator) and pushes a terminal `error` event
@@ -210,7 +219,8 @@ function synthesizeMinimalAssistantMessage(
  *   wrapper forwards the event, clears all timers, and ends the stream.
  *
  * The wrapper never shortens the natural end of a normal completion, because
- * provider progress refreshes the idle timer and a terminal event cancels it entirely.
+ * provider deltas and later block boundaries refresh the idle timer and a terminal event cancels
+ * it entirely.
  */
 export function createOpencodeGoStalledStreamWrapper(
   underlying: ProviderStreamFn,
@@ -246,6 +256,7 @@ export function createOpencodeGoStalledStreamWrapper(
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let lastSeenPartial: AssistantMessage | undefined;
     let settled = false;
+    let sawProviderDelta = false;
     let baseIterator: AsyncIterator<AssistantMessageEvent> | undefined;
 
     const clearIdleTimer = () => {
@@ -353,7 +364,10 @@ export function createOpencodeGoStalledStreamWrapper(
           }
           trackPartial(event);
           output.push(event);
-          if (isProviderProgressEvent(event)) {
+          if (isProviderDeltaEvent(event)) {
+            sawProviderDelta = true;
+            armIdleTimer();
+          } else if (sawProviderDelta && isProviderBoundaryLivenessEvent(event)) {
             armIdleTimer();
           }
         }
