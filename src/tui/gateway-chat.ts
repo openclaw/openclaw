@@ -320,35 +320,79 @@ export async function resolveGatewayConnection(
         url: connectionDetails.url,
         urlSource: connectionDetails.urlSource,
       });
-  const url = ssh?.url ?? connectionDetails.url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
+  try {
+    const url = ssh?.url ?? connectionDetails.url;
+    const allowInsecureLocalOperatorUi = (() => {
+      if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
+        return false;
+      }
+      try {
+        return isLoopbackHost(new URL(url).hostname);
+      } catch {
+        return false;
+      }
+    })();
+
+    if (urlOverride) {
+      return {
+        url,
+        token: explicitAuth.token,
+        password: explicitAuth.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi,
+      };
     }
+
+    if (isRemoteMode) {
+      const resolved = await resolveGatewayInteractiveSurfaceAuth({
+        config,
+        env,
+        explicitAuth,
+        surface: "remote",
+      });
+      if (resolved.failureReason) {
+        throwGatewayAuthResolutionError(resolved.failureReason);
+      }
+      return {
+        url,
+        token: resolved.token,
+        password: resolved.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi: false,
+      };
+    }
+
+    if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
+      const resolved = await resolveGatewayInteractiveSurfaceAuth({
+        config,
+        env,
+        explicitAuth,
+        surface: "local",
+      });
+      return {
+        url,
+        token: resolved.token,
+        password: resolved.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi,
+      };
+    }
+
     try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
+      assertExplicitGatewayAuthModeWhenBothConfigured(config);
+    } catch (err) {
+      throwGatewayAuthResolutionError(formatErrorMessage(err));
     }
-  })();
 
-  if (urlOverride) {
-    return {
-      url,
-      token: explicitAuth.token,
-      password: explicitAuth.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-      sshTunnel: ssh?.tunnel,
-      allowInsecureLocalOperatorUi,
-    };
-  }
-
-  if (isRemoteMode) {
     const resolved = await resolveGatewayInteractiveSurfaceAuth({
       config,
       env,
       explicitAuth,
-      surface: "remote",
+      suppressEnvAuthFallback: preferConfiguredAuth,
+      surface: "local",
     });
     if (resolved.failureReason) {
       throwGatewayAuthResolutionError(resolved.failureReason);
@@ -358,49 +402,10 @@ export async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-      sshTunnel: ssh?.tunnel,
-      allowInsecureLocalOperatorUi: false,
-    };
-  }
-
-  if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
-    const resolved = await resolveGatewayInteractiveSurfaceAuth({
-      config,
-      env,
-      explicitAuth,
-      surface: "local",
-    });
-    return {
-      url,
-      token: resolved.token,
-      password: resolved.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-      sshTunnel: ssh?.tunnel,
       allowInsecureLocalOperatorUi,
     };
-  }
-
-  try {
-    assertExplicitGatewayAuthModeWhenBothConfigured(config);
   } catch (err) {
-    throwGatewayAuthResolutionError(formatErrorMessage(err));
+    await ssh?.tunnel.stop().catch(() => undefined);
+    throw err;
   }
-
-  const resolved = await resolveGatewayInteractiveSurfaceAuth({
-    config,
-    env,
-    explicitAuth,
-    suppressEnvAuthFallback: preferConfiguredAuth,
-    surface: "local",
-  });
-  if (resolved.failureReason) {
-    throwGatewayAuthResolutionError(resolved.failureReason);
-  }
-  return {
-    url,
-    token: resolved.token,
-    password: resolved.password,
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-    allowInsecureLocalOperatorUi,
-  };
 }

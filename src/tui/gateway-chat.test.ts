@@ -393,6 +393,29 @@ describe("resolveGatewayConnection", () => {
     expect(result.allowInsecureLocalOperatorUi).toBe(false);
   });
 
+  it("stops the configured SSH tunnel when remote TUI auth resolution fails", async () => {
+    const stopTunnel = vi.fn(async () => undefined);
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: { stop: stopTunnel },
+    });
+
+    await expect(resolveGatewayConnection({})).rejects.toThrow();
+
+    expect(stopTunnel).toHaveBeenCalledTimes(1);
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves file-backed SecretRef token for local mode",
     async () => {
