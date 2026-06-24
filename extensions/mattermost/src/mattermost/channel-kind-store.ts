@@ -7,7 +7,15 @@ import type { ChatType } from "./runtime-api.js";
 /** Maximum number of channel-kind entries kept in the process-wide cache. */
 const MAX_CHANNEL_KIND_CACHE_SIZE = 2_000;
 
-const channelKinds = new Map<string, ChatType>();
+/** TTL in ms — entries older than this are treated as expired and re-classified. */
+const CHANNEL_KIND_CACHE_TTL_MS = 30 * 60 * 1_000; // 30 minutes
+
+interface CachedKindEntry {
+  kind: ChatType;
+  expiresAt: number;
+}
+
+const channelKinds = new Map<string, CachedKindEntry>();
 
 /** Records the last known chat type for a Mattermost channel id. */
 export function rememberMattermostChannelKind(channelId: string, kind: ChatType): void {
@@ -22,10 +30,19 @@ export function rememberMattermostChannelKind(channelId: string, kind: ChatType)
       channelKinds.delete(oldest);
     }
   }
-  channelKinds.set(trimmed, kind);
+  channelKinds.set(trimmed, { kind, expiresAt: Date.now() + CHANNEL_KIND_CACHE_TTL_MS });
 }
 
-/** Returns the last known chat type for a Mattermost channel id, if seen before. */
+/** Returns the last known chat type for a Mattermost channel id, if seen and not expired. */
 export function peekMattermostChannelKind(channelId: string): ChatType | undefined {
-  return channelKinds.get(channelId.trim());
+  const trimmed = channelId.trim();
+  const entry = channelKinds.get(trimmed);
+  if (!entry) {
+    return undefined;
+  }
+  if (Date.now() > entry.expiresAt) {
+    channelKinds.delete(trimmed);
+    return undefined;
+  }
+  return entry.kind;
 }
