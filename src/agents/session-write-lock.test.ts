@@ -680,19 +680,17 @@ describe("acquireSessionWriteLock", () => {
     try {
       const lock = await acquireSessionWriteLock({
         sessionFile,
-        timeoutMs: 1_000,
+        timeoutMs: 60_000,
       });
       try {
-        // The lock was acquired with a bounded hold.  If the holder exceeds
-        // timeoutMs + graceMs without releasing, the watchdog is allowed to
-        // force-release it rather than letting it block other acquirers
-        // indefinitely.
+        // The bound must equal timeoutMs + DEFAULT_TIMEOUT_GRACE_MS (120 s),
+        // NOT the old default maxHoldMs (300 s).
         const payload = await import("node:fs/promises").then((m) =>
           m.readFile(`${sessionFile}.lock`, "utf8"),
         );
         const parsed = JSON.parse(payload) as { maxHoldMs?: number };
-        expect(parsed.maxHoldMs).toBeLessThanOrEqual(1_000 + 120_000);
-        expect(parsed.maxHoldMs).toBeGreaterThan(0);
+        expect(parsed.maxHoldMs).toBe(60_000 + 120_000);
+        expect(parsed.maxHoldMs).toBeLessThan(300_000);
       } finally {
         await lock.release();
       }
