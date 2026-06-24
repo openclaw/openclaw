@@ -204,7 +204,7 @@ type InlineTextPairingOptions = InlineTextPairingAdapterNotify | InlineTextPairi
 
 type PairingAllowFromConfig = Record<string, unknown> & {
   allowFrom?: Array<string | number>;
-  accounts?: Record<string, PairingAllowFromConfig | unknown>;
+  accounts?: Record<string, unknown>;
 };
 
 function isPairingConfigRecord(value: unknown): value is PairingAllowFromConfig {
