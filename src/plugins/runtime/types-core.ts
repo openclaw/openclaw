@@ -65,6 +65,7 @@ type RuntimeSessionStoreReadParams = {
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
+  readConsistency?: "latest";
   storePath?: string;
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;

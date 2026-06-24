@@ -221,7 +221,7 @@ describe("Mattermost model picker", () => {
       const storePath = path.join(testDir, "{agentId}.json");
       const supportStorePath = path.join(testDir, "support.json");
       const parentSessionKey = "agent:support:mattermost:default:channel-1";
-      const childSessionKey = `${parentSessionKey}:thread:root-1`;
+      const childSessionKey = "agent:support:mattermost:default:child-with-explicit-parent";
       const directSessionKey = "agent:support:mattermost:default:direct-1";
       fs.writeFileSync(
         supportStorePath,

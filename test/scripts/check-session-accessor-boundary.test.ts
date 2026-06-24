@@ -79,14 +79,22 @@ describe("session accessor boundary guard", () => {
   it("ratchets only the bundled plugin files migrated by this slice", () => {
     expect(migratedBundledPluginSessionAccessorFiles).toEqual(
       new Set([
+        "extensions/codex/src/conversation-binding.ts",
+        "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
         "extensions/feishu/src/reasoning-preview.ts",
         "extensions/memory-core/src/dreaming-phases.ts",
         "extensions/memory-core/src/dreaming-narrative.ts",
         "extensions/mattermost/src/mattermost/model-picker.ts",
+        "extensions/matrix/src/matrix/monitor/handler.ts",
+        "extensions/matrix/src/session-route.ts",
+        "extensions/slack/src/monitor/slash.ts",
+        "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
         "extensions/telegram/src/bot.ts",
+        "extensions/telegram/src/bot-message-dispatch.ts",
+        "extensions/telegram/src/bot-native-commands.ts",
       ]),
     );
   });
