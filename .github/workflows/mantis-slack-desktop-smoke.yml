@@ -458,7 +458,7 @@ jobs:
           name: mantis-slack-desktop-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token

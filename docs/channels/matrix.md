@@ -389,7 +389,7 @@ If the homeserver requires UIA to upload cross-signing keys, OpenClaw tries no-a
 Useful flags:
 
 - `--recovery-key-stdin` (pair with `printf '%s\n' "$MATRIX_RECOVERY_KEY" | …`) or `--recovery-key <key>`
-- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only)
+- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only; requires the active recovery key to be stored or supplied with `--recovery-key-stdin`)
 
 ### Room-key backup
 

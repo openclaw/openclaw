@@ -10,12 +10,14 @@ type WrapperCase = readonly [scriptPath: string, args: readonly string[], option
 function runScript(
   scriptPath: string,
   args: readonly string[],
+  extraEnv: NodeJS.ProcessEnv = {},
 ): { ok: boolean; stdout: string; stderr: string } {
   const scriptArgs =
     process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
   try {
     const stdout = execFileSync(BASH_BIN, [...scriptArgs, ...args], {
       cwd: process.cwd(),
+      env: { ...process.env, ...extraEnv },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -52,4 +54,20 @@ describe("iOS release shell wrapper arguments", () => {
       expect(result.stdout).toBe("");
     },
   );
+
+  it("rejects App Store release relay URL overrides before release work", () => {
+    const result = runScript(
+      path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
+      ["--build-number", "7"],
+      {
+        IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
+        OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("custom relay URL overrides are not allowed");
+    expect(result.stderr).not.toContain("fastlane");
+    expect(result.stdout).toBe("");
+  });
 });

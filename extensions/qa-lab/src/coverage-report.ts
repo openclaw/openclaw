@@ -27,6 +27,7 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
+  requiredChannelDriver?: string;
   requiredProvider?: string;
   requiredModel?: string;
 };
@@ -144,6 +145,7 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
+    requiredChannelDriver: stringifyConfigValue(config.requiredChannelDriver),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
   };
@@ -447,6 +449,7 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
     match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
+    match.requiredChannelDriver ? `channelDriver=${match.requiredChannelDriver}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",
   ].filter(Boolean);

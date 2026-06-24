@@ -169,6 +169,26 @@ describe("getToolResultTextLength", () => {
     expect(getToolResultTextLength(msg)).toBe(8);
   });
 
+  it("counts Codex protocol toolResult content blocks", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      isError: false,
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          text: "codex output",
+          content: "codex output",
+        },
+      ],
+      timestamp: nextTimestamp(),
+    } as unknown as ToolResultMessage;
+
+    expect(getToolResultTextLength(msg)).toBe("codex output".length);
+  });
+
   it("returns zero for non-toolResult messages", () => {
     expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
   });
@@ -194,6 +214,39 @@ describe("truncateToolResultMessage", () => {
       throw new Error("expected toolResult");
     }
     expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
+  });
+
+  it("truncates Codex protocol toolResult content blocks and mirrored content", () => {
+    const oversized = "x".repeat(50_000);
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          text: oversized,
+          content: oversized,
+        },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    } as unknown as ToolResultMessage;
+
+    const result = truncateToolResultMessage(msg, 10_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const firstBlock = result.content[0] as unknown as { text?: unknown; content?: unknown };
+    expect(typeof firstBlock.text).toBe("string");
+    expect(firstBlock.text).toContain("[persist-truncated]");
+    expect(String(firstBlock.text).length).toBeLessThan(oversized.length);
+    expect(firstBlock.content).toBe(firstBlock.text);
   });
 });
 

@@ -118,6 +118,13 @@ function isExecutableFile(path, platform) {
 function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
+    const nodeShim = resolveNodeCmdShim(command, platform);
+    if (nodeShim) {
+      return {
+        command: nodeShim.node,
+        args: [...nodeShim.args, ...commandArgs],
+      };
+    }
     return {
       command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
@@ -125,6 +132,56 @@ function spawnInvocation(command, commandArgs, env, platform) {
     };
   }
   return { command, args: commandArgs };
+}
+
+function resolveNodeCmdShim(command, platform) {
+  let content;
+  try {
+    content = readFileSync(command, "utf8");
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const match = /^"([^"]+node(?:\.exe)?)"\s+"%~dp0([^"]+)"\s+%\*$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const script = resolve(dirname(command), match[2]);
+    if (!isExecutableFile(script, platform)) {
+      continue;
+    }
+    return { node: match[1], args: [script] };
+  }
+  const npmCmdShim = resolveNpmNodeCmdShim(command, content, platform);
+  if (npmCmdShim) {
+    return npmCmdShim;
+  }
+  return null;
+}
+
+function resolveNpmNodeCmdShim(command, content, platform) {
+  const lines = content.split(/\r?\n/u).map((line) => line.trim());
+  if (
+    !lines.some((line) => /^IF EXIST "%dp0%\\node\.exe" \($/iu.test(line)) ||
+    !lines.some((line) => /^SET "_prog=node(?:\.exe)?"$/iu.test(line))
+  ) {
+    return null;
+  }
+  const invocation = lines.find((line) => line.includes('"%_prog%"') && line.endsWith("%*"));
+  if (!invocation) {
+    return null;
+  }
+  const match = /(?:^|&)\s*"%_prog%"\s+(.*?)"(%dp0%\\[^"]+)"\s+%\*$/iu.exec(invocation);
+  if (!match || match[1].trim()) {
+    return null;
+  }
+  const script = resolve(dirname(command), match[2].replace(/^%dp0%\\/iu, ""));
+  if (!isExecutableFile(script, platform)) {
+    return null;
+  }
+  const localNode = resolve(dirname(command), "node.exe");
+  return { node: isExecutableFile(localNode, platform) ? localNode : "node", args: [script] };
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
@@ -141,6 +198,20 @@ const jsRuntimeEntrypoints = new Set([
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
 const awsMacosBunVersion = "1.3.14";
+const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
+const awsMacosSwiftScriptTargets = new Set([
+  "mac:package",
+  "mac:restart",
+  "scripts/build-and-run-mac.sh",
+  "scripts/package-mac-app.sh",
+  "scripts/package-mac-dist.sh",
+  "scripts/restart-mac.sh",
+]);
+const awsMacosPackageManagerScriptTargets = new Set([
+  "scripts/package-mac-app.sh",
+  "scripts/package-mac-dist.sh",
+  "scripts/restart-mac.sh",
+]);
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -708,6 +779,39 @@ function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
   return normalizedArgs;
 }
 
+function ensureNativeWindowsHydrateJob(commandArgs) {
+  if (
+    commandArgs[0] !== "actions" ||
+    commandArgs[1] !== "hydrate" ||
+    !isNativeWindowsRemoteTarget(commandArgs)
+  ) {
+    return commandArgs;
+  }
+
+  const currentJob = optionValue(commandArgs, "--job");
+  if (currentJob && currentJob !== "hydrate") {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const replacementJob = "hydrate-windows-daemon";
+  const optionEnd = commandOptionEnd(normalizedArgs);
+  for (let index = 0; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg === "--job" || arg === "-job") {
+      normalizedArgs[index + 1] = replacementJob;
+      return normalizedArgs;
+    }
+    if (arg.startsWith("--job=") || arg.startsWith("-job=")) {
+      normalizedArgs[index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
+      return normalizedArgs;
+    }
+  }
+
+  normalizedArgs.splice(optionEnd, 0, "--job", replacementJob);
+  return normalizedArgs;
+}
+
 const localPathRunOptions = new Set([
   "capture-stderr",
   "capture-stdout",
@@ -944,29 +1048,174 @@ function commandWordsShellEntrypoint(wordsInput) {
   return shellInlineCommandInterpreters.has(first) ? first : "";
 }
 
-function commandNeedsAwsMacosPackageManager(commandArgs) {
+function commandNeedsAwsMacosPackageManager(commandArgs, options = {}) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
   }
-  return commandNeedsEntrypoint(commandArgs, awsMacosCorepackEntrypoints);
+  if (commandNeedsEntrypoint(commandArgs, awsMacosCorepackEntrypoints, options)) {
+    return true;
+  }
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some(
+      (words) => commandWordsNeedAwsMacosPackageManager(words, options),
+    );
+  }
+  return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs), options);
 }
 
 function commandNeedsAwsMacosBun(commandArgs) {
   return commandNeedsEntrypoint(commandArgs, awsMacosBunEntrypoints);
 }
 
-function commandNeedsEntrypoint(commandArgs, entrypoints) {
+function commandNeedsAwsMacosSwiftToolchain(commandArgs) {
   if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some((words) =>
-      commandWordsNeedEntrypoint(words, entrypoints),
-    );
+    return shellCommandWordCandidates(commandArgs[0]).some(commandWordsNeedAwsMacosSwiftToolchain);
   }
-  return commandWordsNeedEntrypoint(normalizedCommandWords(commandArgs), entrypoints);
+  return commandWordsNeedAwsMacosSwiftToolchain(normalizedCommandWords(commandArgs));
 }
 
-function commandWordsNeedEntrypoint(wordsInput, entrypoints) {
+function commandWordsNeedAwsMacosSwiftToolchain(wordsInput) {
   let words = wordsInput;
   words = normalizeExecutableWords(words);
+  const first = (words[0] ?? "").split("/").pop();
+  if (isSupportedSystemEnvCommand(first)) {
+    const targetWords = [...words];
+    if (stripEnvCommandOptions(targetWords, { canShimIgnoreEnvironment: true })) {
+      return commandWordsNeedAwsMacosSwiftToolchain(targetWords);
+    }
+  }
+  if (awsMacosSwiftEntrypoints.has(first)) {
+    return true;
+  }
+
+  if (first === "pnpm") {
+    const scriptName = words[1] === "run" ? words[2] : words[1];
+    if (awsMacosSwiftScriptTargets.has(scriptName)) {
+      return true;
+    }
+  }
+
+  if (isAwsMacosSwiftScriptTarget(words[0])) {
+    return true;
+  }
+
+  if (commandWordsRunAwsMacosSwiftScript(words)) {
+    return true;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return false;
+  }
+  return shellCommandWordCandidates(inlineCommand).some(commandWordsNeedAwsMacosSwiftToolchain);
+}
+
+function commandWordsNeedAwsMacosPackageManager(wordsInput, options = {}) {
+  let words = wordsInput;
+  const originalFirst = shellWordBasename(normalizedCommandWords(wordsInput)[0]);
+  const canShimIgnoreEnvironment = options.canShimIgnoreEnvironment !== false;
+  words = normalizeExecutableWords(words);
+  const first = (words[0] ?? "").split("/").pop();
+  if (isSupportedSystemEnvCommand(first)) {
+    const targetWords = [...words];
+    if (
+      stripEnvCommandOptions(targetWords, {
+        canShimIgnoreEnvironment:
+          canShimIgnoreEnvironment && isSupportedSystemEnvCommand(originalFirst),
+      })
+    ) {
+      return commandWordsNeedAwsMacosPackageManager(targetWords, options);
+    }
+  }
+
+  if (isAwsMacosPackageManagerScriptTarget(words[0])) {
+    return true;
+  }
+
+  if (commandWordsRunAwsMacosPackageManagerScript(words)) {
+    return true;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return false;
+  }
+  return shellCommandWordCandidates(inlineCommand).some((candidateWords) =>
+    commandWordsNeedAwsMacosPackageManager(candidateWords, options),
+  );
+}
+
+function isAwsMacosSwiftScriptTarget(word) {
+  if (!word) {
+    return false;
+  }
+  const normalized = word.replace(/^\.\//u, "");
+  return (
+    awsMacosSwiftScriptTargets.has(normalized) ||
+    awsMacosSwiftScriptTargets.has(normalized.split("/").pop() ?? "")
+  );
+}
+
+function isAwsMacosPackageManagerScriptTarget(word) {
+  if (!word) {
+    return false;
+  }
+  const normalized = word.replace(/^\.\//u, "");
+  return (
+    awsMacosPackageManagerScriptTargets.has(normalized) ||
+    awsMacosPackageManagerScriptTargets.has(normalized.split("/").pop() ?? "")
+  );
+}
+
+function commandWordsRunScriptTarget(words, isScriptTarget) {
+  const first = (words[0] ?? "").split("/").pop();
+  if (!shellInlineCommandInterpreters.has(first)) {
+    return false;
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return false;
+    }
+    if (word === "--") {
+      continue;
+    }
+    if (word === "-c" || /^-[^-]*c/u.test(word)) {
+      return false;
+    }
+    if (shellInlineCommandOptionConsumesNextValue(word)) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-") || word.startsWith("+")) {
+      continue;
+    }
+    return isScriptTarget(word);
+  }
+  return false;
+}
+
+function commandWordsRunAwsMacosSwiftScript(words) {
+  return commandWordsRunScriptTarget(words, isAwsMacosSwiftScriptTarget);
+}
+
+function commandWordsRunAwsMacosPackageManagerScript(words) {
+  return commandWordsRunScriptTarget(words, isAwsMacosPackageManagerScriptTarget);
+}
+
+function commandNeedsEntrypoint(commandArgs, entrypoints, options = {}) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some((words) =>
+      commandWordsNeedEntrypoint(words, entrypoints, options),
+    );
+  }
+  return commandWordsNeedEntrypoint(normalizedCommandWords(commandArgs), entrypoints, options);
+}
+
+function commandWordsNeedEntrypoint(wordsInput, entrypoints, options = {}) {
+  let words = wordsInput;
+  words = normalizeExecutableWords(words, options);
   const first = (words[0] ?? "").split("/").pop();
   if (entrypoints.has(first)) {
     return true;
@@ -977,7 +1226,7 @@ function commandWordsNeedEntrypoint(wordsInput, entrypoints) {
     return false;
   }
   return shellCommandWordCandidates(inlineCommand).some((candidateWords) =>
-    commandWordsNeedEntrypoint(candidateWords, entrypoints),
+    commandWordsNeedEntrypoint(candidateWords, entrypoints, options),
   );
 }
 
@@ -1806,6 +2055,10 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
   );
 }
 
+function isHydratedNativeWindowsProvider(providerName) {
+  return providerName === "aws" || providerName === "azure";
+}
+
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
     "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
@@ -1823,7 +2076,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerNa
   const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
   if (
     commandArgs[0] !== "run" ||
-    providerName !== "aws" ||
+    !isHydratedNativeWindowsProvider(providerName) ||
     !isNativeWindowsRemoteTarget(commandArgs) ||
     !hasOption(commandArgs, "--id") ||
     !runtimeEntrypoint
@@ -1950,13 +2203,13 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
     '-[!-]*i*) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
     '-u|--unset|-C|--chdir) openclaw_env_args+=("$1"); shift; if [ "$#" -gt 0 ]; then openclaw_env_args+=("$1"); shift; fi ;;',
     '--unset=*|--chdir=*) openclaw_env_args+=("$1"); shift ;;',
-    'PATH=*) if [ "$openclaw_env_ignore" = "1" ]; then openclaw_env_args+=("PATH=$PATH:${1#PATH=}"); else openclaw_env_args+=("$1"); fi; openclaw_env_path_seen=1; shift ;;',
+    'PATH=*) if [ "$openclaw_env_ignore" = "1" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}:${1#PATH=}"); else openclaw_env_args+=("$1"); fi; openclaw_env_path_seen=1; shift ;;',
     '[A-Za-z_]*=*) openclaw_env_args+=("$1"); shift ;;',
     '--) openclaw_env_args+=("--"); shift; break ;;',
     "*) break ;;",
     "esac;",
     "done;",
-    'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=$PATH"); fi;',
+    'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}"); fi;',
     'command env "${openclaw_env_args[@]}" "$@";',
     "};",
   ];
@@ -2006,6 +2259,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
       "bun --version >&2 || return 1;",
     );
   }
+  bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
   bootstrap.push("};", "openclaw_crabbox_bootstrap_macos_js");
   return bootstrap.join(" ");
 }
@@ -2021,19 +2275,250 @@ function scopedAwsMacosEnvCommand(commandArgs) {
   }
 
   const targetEntrypoint = shellWordBasename(targetWords[0]);
+  const needsPackageManager =
+    awsMacosCorepackEntrypoints.has(targetEntrypoint) ||
+    commandWordsNeedAwsMacosPackageManager(targetWords);
+  const needsRuntime = jsRuntimeEntrypoints.has(targetEntrypoint);
+  const needsBun = awsMacosBunEntrypoints.has(targetEntrypoint);
   if (
-    !jsRuntimeEntrypoints.has(targetEntrypoint) &&
-    !awsMacosCorepackEntrypoints.has(targetEntrypoint)
+    !needsRuntime &&
+    !needsPackageManager &&
+    !needsBun
   ) {
     return null;
   }
 
   return {
-    runtimeEntrypoint: targetEntrypoint,
-    packageManager: awsMacosCorepackEntrypoints.has(targetEntrypoint),
-    bun: awsMacosBunEntrypoints.has(targetEntrypoint),
+    runtimeEntrypoint: needsRuntime ? targetEntrypoint : "",
+    packageManager: needsPackageManager,
+    bun: needsBun,
     shellCommand: `openclaw_crabbox_env ${shellJoin(commandArgs.slice(1))}`,
   };
+}
+
+function scopedAwsMacosShellEnvCommand(command) {
+  const candidates = shellCommandWordCandidates(command);
+  if (candidates.length < 1) {
+    return null;
+  }
+
+  const eligibleSegments = new Set();
+  const scoped = {
+    runtimeEntrypoint: "",
+    packageManager: false,
+    bun: false,
+  };
+  for (const words of candidates) {
+    const candidateScoped = scopedAwsMacosEnvCommand(words);
+    if (!candidateScoped) {
+      continue;
+    }
+    eligibleSegments.add(shellWordsKey(words));
+    scoped.runtimeEntrypoint ||= candidateScoped.runtimeEntrypoint;
+    scoped.packageManager ||= candidateScoped.packageManager;
+    scoped.bun ||= candidateScoped.bun;
+  }
+  if (eligibleSegments.size < 1) {
+    return null;
+  }
+
+  const shellCommand = shellCommandWithEnvShim(command, eligibleSegments);
+  return shellCommand ? { ...scoped, shellCommand } : null;
+}
+
+function shellWordsKey(words) {
+  return JSON.stringify(words);
+}
+
+function shellCommandWithEnvShim(command, eligibleSegments) {
+  let changed = false;
+  let rewritten = "";
+  let copiedUntil = 0;
+  for (const segment of shellCommandSegmentsWithBounds(command)) {
+    const envToken = leadingShellEnvCommandToken(command, segment.start);
+    if (!envToken || envToken.start >= segment.end) {
+      continue;
+    }
+    const words = normalizedShellSegmentWords(command.slice(segment.start, segment.end));
+    if (!eligibleSegments.has(shellWordsKey(words))) {
+      continue;
+    }
+    rewritten += command.slice(copiedUntil, envToken.start);
+    rewritten += "openclaw_crabbox_env";
+    copiedUntil = envToken.end;
+    changed = true;
+  }
+  return changed ? `${rewritten}${command.slice(copiedUntil)}` : "";
+}
+
+function shellCommandSegmentsWithBounds(command) {
+  const segments = [];
+  const ignoredRanges = shellHeredocBodyRanges(command);
+  let ignoredRangeIndex = 0;
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const ignoredRange = ignoredRanges[ignoredRangeIndex];
+    if (ignoredRange && index >= ignoredRange.start) {
+      if (start < ignoredRange.start) {
+        segments.push({ start, end: ignoredRange.start });
+      }
+      index = ignoredRange.end - 1;
+      start = ignoredRange.end;
+      ignoredRangeIndex += 1;
+      continue;
+    }
+    const char = command[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char !== "\n" && char !== ";" && char !== ")" && char !== "&" && char !== "|") {
+      continue;
+    }
+    if (
+      char === "&" &&
+      (command[index - 1] === ">" || command[index - 1] === "<" || command[index + 1] === ">")
+    ) {
+      continue;
+    }
+
+    segments.push({ start, end: index });
+    if ((char === "&" || char === "|") && command[index + 1] === char) {
+      index += 1;
+    }
+    start = index + 1;
+  }
+  segments.push({ start, end: command.length });
+  return segments;
+}
+
+function shellHeredocBodyRanges(command) {
+  const ranges = [];
+  const pendingDelimiters = [];
+  let lineStart = 0;
+  for (;;) {
+    const newlineIndex = command.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex >= 0 ? newlineIndex : command.length;
+    const nextLineStart = newlineIndex >= 0 ? newlineIndex + 1 : command.length;
+    const line = command.slice(lineStart, lineEnd);
+
+    if (pendingDelimiters.length > 0) {
+      ranges.push({ start: lineStart, end: nextLineStart });
+      const current = pendingDelimiters[0];
+      const candidate = current.stripTabs ? line.replace(/^\t+/u, "") : line;
+      if (candidate === current.delimiter) {
+        pendingDelimiters.shift();
+      }
+    } else {
+      pendingDelimiters.push(...lineHeredocDelimiters(line));
+    }
+
+    if (newlineIndex < 0) {
+      return ranges;
+    }
+    lineStart = nextLineStart;
+  }
+}
+
+function leadingShellEnvCommandToken(command, start = 0) {
+  let index = start;
+  for (;;) {
+    while (/\s/u.test(command[index] ?? "")) {
+      index += 1;
+    }
+    if (command[index] === "(" || command[index] === "{") {
+      index += 1;
+      continue;
+    }
+    const token = readLeadingShellWord(command, index);
+    if (!token) {
+      return null;
+    }
+    if (shellControlCommandPrefixes.has(token.word)) {
+      index = token.end;
+      continue;
+    }
+    if (token.word === "time") {
+      index = skipLeadingTimeCommand(command, token.end);
+      continue;
+    }
+    if (isSupportedSystemEnvCommand(token.word)) {
+      return { start: index, end: token.end };
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/u.test(token.word)) {
+      return null;
+    }
+    index = token.end;
+  }
+}
+
+function skipLeadingTimeCommand(command, start) {
+  let index = start;
+  for (;;) {
+    while (/\s/u.test(command[index] ?? "")) {
+      index += 1;
+    }
+    const token = readLeadingShellWord(command, index);
+    if (!token) {
+      return index;
+    }
+    if (token.word === "--" || token.word.startsWith("-")) {
+      index = token.end;
+      continue;
+    }
+    return index;
+  }
+}
+
+function readLeadingShellWord(command, start) {
+  let word = "";
+  let quote = "";
+  let escaped = false;
+  for (let index = start; index < command.length; index += 1) {
+    const char = command[index];
+    if (escaped) {
+      word += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        word += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char) || /[;&|()<>]/u.test(char)) {
+      return word ? { word, end: index } : null;
+    }
+    word += char;
+  }
+  return word ? { word, end: command.length } : null;
 }
 
 function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
@@ -2041,9 +2526,24 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const directScopedEnvCommand = hasOption(commandArgs, "--shell")
     ? null
     : scopedAwsMacosEnvCommand(runArgs);
+  const shellScopedEnvCommand =
+    hasOption(commandArgs, "--shell") && runArgs.length === 1
+      ? scopedAwsMacosShellEnvCommand(runArgs[0])
+      : null;
+  const scopedEnvCommand = directScopedEnvCommand ?? shellScopedEnvCommand;
+  const packageManagerFallbackNeeded =
+    scopedEnvCommand
+      ? commandNeedsAwsMacosPackageManager(runArgs)
+      : commandNeedsAwsMacosPackageManager(runArgs, { canShimIgnoreEnvironment: false });
+  const packageManagerNeeded =
+    scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
+  const bunNeeded = scopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs);
   const runtimeEntrypoint =
-    directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
-  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || !runtimeEntrypoint) {
+    scopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    (!runtimeEntrypoint && !packageManagerNeeded && !bunNeeded)
+  ) {
     return commandArgs;
   }
 
@@ -2055,15 +2555,74 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const normalizedArgs = [...commandArgs];
   const remoteCommand = normalizedArgs.slice(start);
   const originalShellCommand =
-    directScopedEnvCommand?.shellCommand ??
+    scopedEnvCommand?.shellCommand ??
     (hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
       ? remoteCommand[0]
       : shellJoin(remoteCommand));
   const shellCommand = `${remoteAwsMacosJsBootstrap({
-    packageManager:
-      directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
-    bun: directScopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs),
+    packageManager: packageManagerNeeded,
+    bun: bunNeeded,
   })} && { ${originalShellCommand}\n}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
+}
+
+function remoteAwsMacosSwiftBootstrap() {
+  return [
+    "openclaw_crabbox_require_macos_swift_62() {",
+    'openclaw_xcode="";',
+    'for openclaw_candidate in /Applications/Xcode_26.1.app /Applications/Xcode_26*.app /Applications/Xcode-26*.app; do if [ -d "$openclaw_candidate" ]; then openclaw_xcode="$openclaw_candidate"; fi; done;',
+    'if [ -n "$openclaw_xcode" ]; then openclaw_developer="$openclaw_xcode/Contents/Developer"; if [ ! -d "$openclaw_developer" ]; then openclaw_developer="$openclaw_xcode"; fi; sudo xcode-select -s "$openclaw_developer" || return 1; fi;',
+    'openclaw_swift_version="$(swift --version 2>&1)" || { status=$?; printf "%s\\n" "$openclaw_swift_version" >&2; return "$status"; };',
+    'printf "%s\\n" "$openclaw_swift_version" >&2;',
+    'openclaw_swift_major_minor="$(printf "%s\\n" "$openclaw_swift_version" | sed -nE "s/.*Apple Swift version ([0-9]+)\\.([0-9]+).*/\\1 \\2/p" | head -n 1)";',
+    'if [ -z "$openclaw_swift_major_minor" ]; then echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+; unable to parse swift --version." >&2; return 2; fi;',
+    "set -- $openclaw_swift_major_minor;",
+    'if [ "$1" -lt 6 ] || { [ "$1" -eq 6 ] && [ "$2" -lt 2 ]; }; then',
+    'echo "[crabbox] OpenClaw macOS app proof requires Swift tools 6.2+ (Xcode 26.x)." >&2;',
+    'echo "[crabbox] current Swift is $1.$2; select/install Xcode 26.x or use a Blacksmith macOS runner with Xcode_26.1.app." >&2;',
+    "return 2;",
+    "fi;",
+    'openclaw_xcodebuild_version="$(xcodebuild -version 2>&1)" || { printf "%s\\n" "$openclaw_xcodebuild_version" >&2; echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; active developer directory does not provide usable xcodebuild." >&2; return 2; };',
+    'printf "%s\\n" "$openclaw_xcodebuild_version" >&2;',
+    'openclaw_xcode_major="$(printf "%s\\n" "$openclaw_xcodebuild_version" | sed -nE "s/^Xcode ([0-9]+)(\\..*)?$/\\1/p" | head -n 1)";',
+    'if [ "$openclaw_xcode_major" != "26" ]; then echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; current xcodebuild is ${openclaw_xcode_major:-unknown}." >&2; return 2; fi;',
+    "};",
+    "openclaw_crabbox_require_macos_swift_62",
+  ].join(" ");
+}
+
+function injectRemoteAwsMacosSwiftBootstrap(commandArgs, providerName, force = false) {
+  const runArgs = runCommandArgs(commandArgs);
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    (!force && !commandNeedsAwsMacosSwiftToolchain(runArgs))
+  ) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteAwsMacosSwiftBootstrap()} && { ${originalShellCommand}\n}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
     normalizedArgs.splice(optionEnd, 0, "--shell");
@@ -2136,11 +2695,11 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
 function createAwsMacosScriptStdinWrapper(script) {
   const requirements = awsMacosScriptBootstrapRequirements(script);
   if (!script.startsWith("#!")) {
-    return `${remoteAwsMacosJsBootstrap(requirements)} || exit $?\n${script}`;
+    return `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?\n${script}`;
   }
   const delimiterValue = uniqueHereDocDelimiter(script);
   return [
-    `${remoteAwsMacosJsBootstrap(requirements)} || exit $?`,
+    `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?`,
     'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
     'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
     "trap cleanup_openclaw_crabbox_script EXIT",
@@ -2153,22 +2712,33 @@ function createAwsMacosScriptStdinWrapper(script) {
   ].join("\n");
 }
 
+function remoteAwsMacosScriptBootstrap(requirements) {
+  const bootstraps = [remoteAwsMacosJsBootstrap(requirements)];
+  if (requirements.swift) {
+    bootstraps.push(remoteAwsMacosSwiftBootstrap());
+  }
+  return bootstraps.join(" && ");
+}
+
 function awsMacosScriptBootstrapRequirements(script) {
-  const requirements = { packageManager: false, bun: false };
+  const requirements = { packageManager: false, bun: false, swift: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
     const words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
     requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
     requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    requirements.swift = commandWordsNeedAwsMacosSwiftToolchain(words);
     if (commandWordsShellEntrypoint(words)) {
       const body = script.slice(firstLine.length).replace(/^\r?\n/u, "");
       requirements.packageManager ||= commandNeedsAwsMacosPackageManager([body]);
       requirements.bun ||= commandNeedsAwsMacosBun([body]);
+      requirements.swift ||= commandNeedsAwsMacosSwiftToolchain([body]);
     }
     return requirements;
   }
   requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);
   requirements.bun = commandNeedsAwsMacosBun([script]);
+  requirements.swift = commandNeedsAwsMacosSwiftToolchain([script]);
   return requirements;
 }
 
@@ -2423,6 +2993,20 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   return false;
 }
 
+function injectFullCheckoutLeaseReclaim(commandArgs) {
+  if (
+    commandArgs[0] !== "run" ||
+    !hasOption(commandArgs, "--id") ||
+    hasOption(commandArgs, "--reclaim")
+  ) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { optionEnd } = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(optionEnd, 0, "--reclaim");
+  return normalizedArgs;
+}
+
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
@@ -2520,7 +3104,7 @@ const provider = selectedProvider(args, providers);
 const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensureAzureWindowsProvider(args, provider, providers),
+  ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
   provider,
 );
 
@@ -2604,6 +3188,7 @@ try {
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
+    normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
@@ -2677,15 +3262,26 @@ if (
 }
 
 const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
+const remoteMarkedNeedsAwsMacosSwift =
+  isAwsMacosRemoteTarget(remoteMarkedArgs, provider) &&
+  commandNeedsAwsMacosSwiftToolchain(runCommandArgs(remoteMarkedArgs));
 const childArgs =
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
-        injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+        injectRemoteAwsMacosSwiftBootstrap(
+          injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+          provider,
+          remoteMarkedNeedsAwsMacosSwift,
+        ),
         provider,
       )
     : injectRemoteChangedGateGitBootstrap(
         injectRemoteWindowsHydratedNodeModulesBootstrap(
-          injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+          injectRemoteAwsMacosSwiftBootstrap(
+            injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+            provider,
+            remoteMarkedNeedsAwsMacosSwift,
+          ),
           provider,
         ),
         remoteChangedGateBase,

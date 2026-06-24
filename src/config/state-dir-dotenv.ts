@@ -88,11 +88,6 @@ function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
   return { entries, skippedShellReferenceKeys };
 }
 
-/** Reads a specific state directory `.env` as managed service env vars. */
-export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
-}
-
 /**
  * Read and parse the state-dir `.env`, returning both the persisted entries and
  * the keys that were skipped because they held unresolved shell references. The
@@ -117,7 +112,7 @@ export function readStateDirDotEnvVars(
   env: Record<string, string | undefined>,
 ): Record<string, string> {
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvVarsFromStateDir(stateDir);
+  return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
 
 /** Split view of durable gateway service env sources before precedence is applied. */

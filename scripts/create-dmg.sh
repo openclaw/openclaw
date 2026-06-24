@@ -84,10 +84,20 @@ require_positive_integer() {
   fi
 }
 
+require_nonnegative_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^(0|[1-9][0-9]*)$ || "${#raw}" -gt 9 ]]; then
+    echo "Error: $name must be a finite non-negative integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
 require_integer_list DMG_WINDOW_BOUNDS "$DMG_WINDOW_BOUNDS" 4
 require_integer_list DMG_APP_POS "$DMG_APP_POS" 2
 require_integer_list DMG_APPS_POS "$DMG_APPS_POS" 2
 require_positive_integer DMG_ICON_SIZE "$DMG_ICON_SIZE"
+require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"
 
 to_applescript_list4() {
   local raw="$1"
