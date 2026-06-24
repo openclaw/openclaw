@@ -166,7 +166,7 @@ function createNoProxyAwareEnvDispatcher(envProxyDispatcher: UndiciDispatcher): 
           // (which includes ALL_PROXY) instead of the SSRF-safe
           // HTTP(S)-only shouldUseEnvHttpProxyForUrl, because the
           // EnvHttpProxyAgent already resolves ALL_PROXY.
-          if (origin && hasEnvHttpProxyAgentConfigured() && !matchesNoProxy(origin)) {
+          if (origin && hasEnvHttpProxyAgentConfigured() && matchesNoProxy(origin)) {
             return resolveSharedDirectAgent().dispatch(options, handler);
           }
           return target.dispatch(options, handler);
