@@ -17,6 +17,10 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   extractLastOpenClawVersionFromLog,
@@ -54,6 +58,7 @@ import { testing as packageArtifactTesting } from "../../scripts/e2e/parallels/p
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import {
   posixCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
   windowsCodexPlatformPackageRepairFunction,
 } from "../../scripts/e2e/parallels/plugin-isolation.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
@@ -226,6 +231,7 @@ describe("Parallels smoke model selection", () => {
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let duplicateNpmUpdatePlatformResult: ReturnType<typeof spawnNodeEvalSync>;
 
   it("parses macOS dscl user homes with spaces on mounted volumes", () => {
     expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
@@ -302,6 +308,10 @@ describe("Parallels smoke model selection", () => {
       `process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S = "12.5"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
+    duplicateNpmUpdatePlatformResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.npmUpdate}", "--platform", "macos,macos"]; await import("./${TS_PATHS.npmUpdate}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
   });
 
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
@@ -351,6 +361,25 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
+  it("rejects short flags as Parallels smoke option values", () => {
+    const cases = [
+      [TS_PATHS.linux, "--mode", "-h"],
+      [TS_PATHS.macos, "--vm", "-h"],
+      [TS_PATHS.windows, "--model", "-h"],
+      [TS_PATHS.npmUpdate, "--target-tarball", "-h"],
+    ];
+
+    for (const [scriptPath, flag, value] of cases) {
+      const result = spawnNodeEvalSync(
+        `process.argv = ["node", "${scriptPath}", "${flag}", "${value}"]; await import("./${scriptPath}");`,
+        { env: process.env, imports: ["tsx"] },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`error: ${flag} requires a value`);
+    }
+  });
+
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
@@ -382,6 +411,21 @@ describe("Parallels smoke model selection", () => {
     }
     expect(posixRepair).toContain("repair_missing_codex_platform_package");
     expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
+  });
+
+  it("keeps Windows provider-only plugin isolation temp scripts per run", () => {
+    const script = windowsProviderOnlyPluginIsolationScript({
+      fallbackPluginId: "openai",
+      modelId: "openai/gpt-5.5",
+    });
+
+    expect(script).toContain("[guid]::NewGuid().ToString('N')");
+    expect(script).toContain("openclaw-parallels-plugin-isolation-");
+    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
+    expect(script).toContain("try {");
+    expect(script).toContain("} finally {");
+    expect(script).toContain("Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue");
+    expect(script).toContain("Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION");
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
@@ -1251,6 +1295,24 @@ if (isPrlctl) {
     }
   });
 
+  it("clamps oversized phase timers before scheduling", async () => {
+    const runDir = makeTempDir(tempDirs, "openclaw-parallels-phase-timeout-");
+    const phaseRunner = new PhaseRunner(runDir, 128);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      await expect(
+        phaseRunner.phase("oversized", MAX_TIMER_TIMEOUT_SECONDS + 1, () => undefined),
+      ).resolves.toBeUndefined();
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(readFileSync(join(runDir, "phase-timings.json"), "utf8")).toContain(
+        `"timeoutSeconds": ${MAX_TIMER_TIMEOUT_SECONDS + 1}`,
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("runs POSIX guest shell scripts with a normal install umask", () => {
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
@@ -1293,8 +1355,9 @@ if (isPrlctl) {
     expect(windowsGit.indexOf('"MinGit-2.53.0.2-64-bit.zip"')).toBeLessThan(
       windowsGit.indexOf('"MinGit-2.53.0.2-arm64.zip"'),
     );
-    expect(combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g))
-      .toHaveLength(2);
+    expect(
+      combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
+    ).toHaveLength(2);
     expect(script).toContain("Invoke-RestMethod -Uri");
     expect(script).toContain("-TimeoutSec 120");
     expect(windowsGit).toContain('if "-64-bit." in name:');
@@ -1444,6 +1507,16 @@ if (isPrlctl) {
 
     expect(result.status).toBe(124);
     expect(result.stdout).toBeTypeOf("string");
+  });
+
+  it("clamps oversized timed host command wrapper timeouts", () => {
+    const result = run(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
+      check: false,
+      quiet: true,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    expect(result.status).toBe(0);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1661,6 +1734,21 @@ setInterval(() => {}, 1000);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized streaming host command timeouts before arming timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await expect(
+        runStreaming(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
+          quiet: true,
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        }),
+      ).resolves.toBe(0);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
   });
 
@@ -1907,6 +1995,18 @@ setInterval(() => {}, 1000);
     });
   });
 
+  it("ignores ambient ComSpec for Windows host batch commands", () => {
+    expect(
+      resolveHostCommandInvocation("C:\\Tools\\helper.cmd", ["build"], {
+        env: {
+          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+          SystemRoot: "D:\\Windows",
+        },
+        platform: "win32",
+      }).command,
+    ).toBe("D:\\Windows\\System32\\cmd.exe");
+  });
+
   it("runs the Windows agent turn through the detached done-file runner", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
 
@@ -1993,6 +2093,11 @@ setInterval(() => {}, 1000);
     expect(invalidWindowsUpdateTimeoutResult.status).toBe(1);
     expect(invalidWindowsUpdateTimeoutResult.stderr).toContain(
       "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
+    );
+
+    expect(duplicateNpmUpdatePlatformResult.status).toBe(1);
+    expect(duplicateNpmUpdatePlatformResult.stderr).toContain(
+      "duplicate --platform entry: macos",
     );
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(

@@ -1,11 +1,19 @@
 #!/usr/bin/env -S node --import tsx
 // Telegram User Crabbox Proof script supports OpenClaw repository automation.
 
-import { type ChildProcess, spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
+import {
+  type ChildProcess,
+  spawn,
+  spawnSync,
+  type SpawnOptionsWithoutStdio,
+} from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
@@ -229,6 +237,11 @@ function trimToValue(value: string | undefined) {
 }
 
 const positiveIntegerPattern = /^[1-9]\d*$/u;
+const SHORT_OPTION_TOKENS = new Set(["-h"]);
+
+function isMissingOptionValue(value: string | undefined) {
+  return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
+}
 
 function parsePositiveInteger(value: string, label: string) {
   const trimmed = value.trim();
@@ -242,6 +255,14 @@ function parsePositiveInteger(value: string, label: string) {
   return parsed;
 }
 
+function resolveTelegramProofTimerTimeoutMs(value: number) {
+  return clampTimerTimeoutMs(value) ?? 1;
+}
+
+function parsePositiveTimerMs(value: string, label: string) {
+  return resolveTelegramProofTimerTimeoutMs(parsePositiveInteger(value, label));
+}
+
 function parseTcpPort(value: string, label: string) {
   const parsed = parsePositiveInteger(value, label);
   if (parsed > 65_535) {
@@ -250,7 +271,11 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
-function parseArgs(argvInput: string[]): Options {
+function createTelegramProofRunId() {
+  return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
+}
+
+export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
@@ -265,7 +290,6 @@ function parseArgs(argvInput: string[]): Options {
     "view",
   ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
     crabboxClass: "standard",
     command,
@@ -279,7 +303,7 @@ function parseArgs(argvInput: string[]): Options {
     keepBox: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
-    outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
+    outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
     previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
@@ -302,12 +326,19 @@ function parseArgs(argvInput: string[]): Options {
     argv = argv.slice(0, commandSeparator);
   }
   let expectWasPassed = false;
+  const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = () => {
+    const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (isMissingOptionValue(value)) {
         usage();
+      }
+      if (!options.repeatable) {
+        if (seenSingleValueOptions.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueOptions.add(arg);
       }
       index += 1;
       return value;
@@ -327,7 +358,7 @@ function parseArgs(argvInput: string[]): Options {
         opts.expect = [];
         expectWasPassed = true;
       }
-      opts.expect.push(readValue());
+      opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
@@ -383,7 +414,7 @@ function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--text") {
       opts.text = readValue();
     } else if (arg === "--timeout-ms") {
-      opts.timeoutMs = parsePositiveInteger(readValue(), "--timeout-ms");
+      opts.timeoutMs = parsePositiveTimerMs(readValue(), "--timeout-ms");
     } else if (arg === "--ttl") {
       opts.ttl = readValue();
     } else if (arg === "--user-driver-script") {
@@ -587,12 +618,43 @@ function timedOutError(message: string) {
 const activeCommandChildren = new Set<ChildProcess>();
 let commandCleanupHandlersInstalled = false;
 
-function signalCommandTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.pid && process.platform !== "win32") {
+type CommandTreeTarget = Pick<ChildProcess, "kill" | "pid">;
+
+export function signalCommandTree(
+  child: CommandTreeTarget,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: typeof spawnSync;
+    useProcessGroup?: boolean;
+  } = {},
+) {
+  if (child.pid && useProcessGroup) {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
   }
   child.kill(signal);
 }
@@ -705,8 +767,10 @@ export function runCommand(params: {
     let timeoutError: Error | null = null;
     let forceKillAt: number | undefined;
     let killTimer: NodeJS.Timeout | undefined;
-    const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
+    const timeoutMs = resolveTelegramProofTimerTimeoutMs(params.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    const timeoutKillGraceMs = resolveTelegramProofTimerTimeoutMs(
+      params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
+    );
     const clearTimers = () => {
       clearTimeout(timeout);
       if (killTimer) {
@@ -846,11 +910,14 @@ function waitForOutput(
   timeoutMs: number,
 ) {
   return new Promise<void>((resolve, reject) => {
+    const resolvedTimeoutMs = resolveTelegramProofTimerTimeoutMs(timeoutMs);
     const timeout = setTimeout(() => {
       reject(
-        new Error(`${label} did not become ready within ${timeoutMs}ms\n${output().slice(-4000)}`),
+        new Error(
+          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${output().slice(-4000)}`,
+        ),
       );
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     const onData = () => {
       if (pattern.test(output())) {
         cleanup();
@@ -1937,6 +2004,7 @@ const FULL_ARTIFACT_JSON_NAMES = new Set([
   "telegram-user-crabbox-session-summary.json",
 ]);
 const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const FULL_ARTIFACT_PROOF_REPORT = "telegram-user-crabbox-proof.md";
 const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
 
 function isFullArtifactJsonName(name: string) {
@@ -1944,6 +2012,10 @@ function isFullArtifactJsonName(name: string) {
 }
 
 export function stageFullSessionArtifacts(outputDir: string) {
+  if (!fs.existsSync(path.join(outputDir, FULL_ARTIFACT_PROOF_REPORT))) {
+    throw new Error(`Missing proof report. Run finish first: ${FULL_ARTIFACT_PROOF_REPORT}`);
+  }
+
   const publishDir = path.join(outputDir, "publish-full-artifacts");
   fs.rmSync(publishDir, { force: true, recursive: true });
   fs.mkdirSync(publishDir, { recursive: true });

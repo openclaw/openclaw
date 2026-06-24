@@ -172,6 +172,7 @@ export type QaTransportAdapter = {
   }) => Promise<void>;
   buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+    to?: string;
     replyChannel: string;
     replyTo: string;
   };
@@ -182,6 +183,7 @@ export type QaTransportAdapter = {
     accountId?: string | null;
   }) => Promise<unknown>;
   createReportNotes: (params: QaTransportReportParams) => string[];
+  cleanup?: () => Promise<void>;
 };
 
 export abstract class QaStateBackedTransportAdapter implements QaTransportAdapter {
@@ -230,6 +232,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }) => Promise<void>;
   abstract buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+    to?: string;
     replyChannel: string;
     replyTo: string;
   };

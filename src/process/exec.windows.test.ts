@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
+  getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
@@ -496,7 +497,7 @@ describe("windows command wrapper behavior", () => {
         expect(child.kill).not.toHaveBeenCalled();
         expect(spawnMock).toHaveBeenCalledTimes(2);
         const taskkillCall = requireSpawnCall(1);
-        expect(taskkillCall[0]).toBe("taskkill");
+        expect(taskkillCall[0]).toBe(getWindowsSystem32ExePath("taskkill.exe"));
         expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
         expect(taskkillCall[2]).toEqual({
           stdio: "ignore",

@@ -23,6 +23,10 @@ private struct WatchChatPreview {
     var statusText: String?
 }
 
+private struct ExecApprovalGatewayEventPayload: Decodable {
+    var id: String
+}
+
 /// Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -83,6 +87,11 @@ final class NodeAppModel {
         }
     }
 
+    struct NotificationPermissionGuidancePrompt: Identifiable, Equatable {
+        let id = UUID()
+        let approvalId: String
+    }
+
     private enum ExecApprovalResolutionOutcome {
         case resolved
         case stale
@@ -96,6 +105,8 @@ final class NodeAppModel {
     }
 
     private let deepLinkLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "DeepLink")
+    private nonisolated static let execApprovalNotificationGuidanceSuppressedKey =
+        "notifications.execApprovalGuidance.suppressed"
     private let pushWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PushWake")
     private let pendingActionLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PendingAction")
     private let locationWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "LocationWake")
@@ -156,6 +167,7 @@ final class NodeAppModel {
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
     private var pendingExecApprovalPromptRequestGeneration: Int = 0
+    private(set) var pendingNotificationPermissionGuidancePrompt: NotificationPermissionGuidancePrompt?
     private var queuedAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var lastAgentDeepLinkPromptAt: Date = .distantPast
     @ObservationIgnored private var queuedAgentDeepLinkPromptTask: Task<Void, Never>?
@@ -895,24 +907,48 @@ final class NodeAppModel {
             for await evt in stream {
                 if Task.isCancelled { return }
                 guard let payload = evt.payload else { continue }
-                switch evt.event {
-                case "voicewake.changed":
-                    struct Payload: Decodable { var triggers: [String] }
-                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
-                    let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
-                    VoiceWakePreferences.saveTriggerWords(triggers)
-                case "talk.mode":
-                    struct Payload: Decodable {
-                        var enabled: Bool
-                        var phase: String?
-                    }
-                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
-                    self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
-                default:
-                    continue
-                }
+                await self.handleOperatorGatewayServerEvent(evt)
             }
         }
+    }
+
+    private func handleOperatorGatewayServerEvent(_ evt: EventFrame) async {
+        guard let payload = evt.payload else { return }
+        switch evt.event {
+        case "voicewake.changed":
+            struct Payload: Decodable { var triggers: [String] }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
+            let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
+            VoiceWakePreferences.saveTriggerWords(triggers)
+        case "talk.mode":
+            struct Payload: Decodable {
+                var enabled: Bool
+                var phase: String?
+            }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
+            self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
+        case ExecApprovalNotificationBridge.requestedKind:
+            guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+            await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(approvalId: approvalId)
+            await self.presentExecApprovalNotificationPrompt(
+                ExecApprovalNotificationPrompt(approvalId: approvalId))
+        case ExecApprovalNotificationBridge.resolvedKind:
+            guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
+            await self.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+        default:
+            return
+        }
+    }
+
+    private nonisolated static func execApprovalEventID(from payload: AnyCodable) -> String? {
+        guard let decoded = try? GatewayPayloadDecoding.decode(
+            payload,
+            as: ExecApprovalGatewayEventPayload.self)
+        else {
+            return nil
+        }
+        let approvalId = decoded.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return approvalId.isEmpty ? nil : approvalId
     }
 
     private func applyTalkModeSync(enabled: Bool, phase: String?) {
@@ -1332,8 +1368,8 @@ final class NodeAppModel {
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty notification"))
         }
 
-        let finalStatus = await self.requestNotificationAuthorizationIfNeeded()
-        guard finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral else {
+        let status = await self.notificationAuthorizationStatus()
+        guard Self.isNotificationAuthorizationAllowed(status) else {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -1385,9 +1421,18 @@ final class NodeAppModel {
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty chat.push text"))
         }
 
-        let finalStatus = await self.requestNotificationAuthorizationIfNeeded()
+        let shouldSpeak = params.speak ?? true
+        let status = await self.notificationAuthorizationStatus()
+        let notificationsAllowed = Self.isNotificationAuthorizationAllowed(status)
+        if !notificationsAllowed, !shouldSpeak {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .unavailable, message: "NOT_AUTHORIZED: notifications"))
+        }
+
         let messageId = UUID().uuidString
-        if finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral {
+        if notificationsAllowed {
             let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
                 let content = UNMutableNotificationContent()
                 content.title = "OpenClaw"
@@ -1408,7 +1453,7 @@ final class NodeAppModel {
             }
         }
 
-        if params.speak ?? true {
+        if shouldSpeak {
             let toSpeak = text
             Task { @MainActor in
                 try? await TalkSystemSpeechSynthesizer.shared.speak(text: toSpeak)
@@ -1418,26 +1463,6 @@ final class NodeAppModel {
         let payload = OpenClawChatPushPayload(messageId: messageId)
         let json = try Self.encodePayload(payload)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-    }
-
-    private func requestNotificationAuthorizationIfNeeded() async -> NotificationAuthorizationStatus {
-        let status = await self.notificationAuthorizationStatus()
-        guard status == .notDetermined else { return status }
-
-        // Avoid hanging invoke requests if the permission prompt is never answered.
-        _ = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
-            _ = try await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
-        }
-
-        let updatedStatus = await self.notificationAuthorizationStatus()
-        if Self.isNotificationAuthorizationAllowed(updatedStatus) {
-            // Refresh APNs registration immediately after the first permission grant so the
-            // gateway can receive a push registration without requiring an app relaunch.
-            await MainActor.run {
-                UIApplication.shared.registerForRemoteNotifications()
-            }
-        }
-        return updatedStatus
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -1461,6 +1486,29 @@ final class NodeAppModel {
         case .denied, .notDetermined:
             false
         }
+    }
+
+    private func presentNotificationPermissionGuidanceForExecApprovalIfNeeded(approvalId: String) async {
+        guard !self.execApprovalNotificationGuidanceSuppressed else { return }
+        let status = await self.notificationAuthorizationStatus()
+        guard !Self.isNotificationAuthorizationAllowed(status) else { return }
+        self.pendingNotificationPermissionGuidancePrompt =
+            NotificationPermissionGuidancePrompt(approvalId: approvalId)
+    }
+
+    var execApprovalNotificationGuidanceSuppressed: Bool {
+        UserDefaults.standard.bool(forKey: Self.execApprovalNotificationGuidanceSuppressedKey)
+    }
+
+    func dismissNotificationPermissionGuidancePrompt(suppressFuture: Bool) {
+        if suppressFuture {
+            UserDefaults.standard.set(true, forKey: Self.execApprovalNotificationGuidanceSuppressedKey)
+        }
+        self.pendingNotificationPermissionGuidancePrompt = nil
+    }
+
+    func resetExecApprovalNotificationGuidanceSuppression() {
+        UserDefaults.standard.removeObject(forKey: Self.execApprovalNotificationGuidanceSuppressedKey)
     }
 
     private func runNotificationCall<T: Sendable>(
@@ -2335,10 +2383,6 @@ extension NodeAppModel {
                 nodeOptions: nodeOptions,
                 sessionBox: sessionBox)
         }
-
-        // QR bootstrap onboarding should surface the system notification permission
-        // prompt immediately so visible APNs alerts work without a second manual step.
-        _ = await self.requestNotificationAuthorizationIfNeeded()
     }
 
     private func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
@@ -3916,11 +3960,15 @@ extension NodeAppModel {
         let hadWatchPrompt = self.watchExecApprovalPromptsByID[normalizedApprovalID] != nil
         let hadPendingPrompt = self.pendingExecApprovalPrompt?.id == normalizedApprovalID
         let hadPendingRecoveryID = self.pendingWatchExecApprovalRecoveryIDs.contains(normalizedApprovalID)
-        guard hadWatchPrompt || hadPendingPrompt || hadPendingRecoveryID else {
+        let hadGuidancePrompt = self.pendingNotificationPermissionGuidancePrompt?.approvalId == normalizedApprovalID
+        let hadApprovalSurface = hadWatchPrompt || hadPendingPrompt || hadPendingRecoveryID
+        guard hadApprovalSurface || hadGuidancePrompt else {
             return
         }
 
-        await self.publishWatchExecApprovalExpired(approvalId: normalizedApprovalID, reason: .resolved)
+        if hadApprovalSurface {
+            await self.publishWatchExecApprovalExpired(approvalId: normalizedApprovalID, reason: .resolved)
+        }
         self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
     }
 
@@ -4054,29 +4102,51 @@ extension NodeAppModel {
     }
 
     private func registerAPNsTokenIfNeeded() async {
-        guard self.gatewayConnected else { return }
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        guard await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport) else {
+            return
+        }
+        guard self.gatewayConnected else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("gateway_offline")
+            }
+            return
+        }
         guard let token = self.apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty
         else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("missing_apns_token")
+            }
             return
         }
-        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
         if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
               !topic.isEmpty
         else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("missing_topic")
+            }
             return
         }
 
         do {
             let gatewayIdentity: PushRelayGatewayIdentity?
             if usesRelayTransport {
-                guard self.operatorConnected else { return }
+                guard self.operatorConnected else {
+                    GatewayDiagnostics.pushRelay.skipped("operator_offline")
+                    return
+                }
+                GatewayDiagnostics.pushRelay.stage("gateway identity request start")
                 gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+                GatewayDiagnostics.pushRelay.stage("gateway identity request complete")
             } else {
                 gatewayIdentity = nil
+            }
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.stage("gateway registration payload start")
             }
             let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
                 apnsTokenHex: token,
@@ -4084,10 +4154,33 @@ extension NodeAppModel {
                 gatewayIdentity: gatewayIdentity)
             await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.stage("gateway registration event published")
+            }
         } catch {
             self.pushWakeLogger.error(
                 "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.failed("registration", error: error)
+            }
         }
+    }
+
+    private func canPublishAPNsRegistration(usesRelayTransport: Bool) async -> Bool {
+        guard PushEnrollmentConsent.disclosureAccepted else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+            }
+            return false
+        }
+        let status = await self.notificationAuthorizationStatus()
+        guard Self.isNotificationAuthorizationAllowed(status) else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("notifications_not_authorized")
+            }
+            return false
+        }
+        return true
     }
 
     private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
@@ -4401,8 +4494,15 @@ extension NodeAppModel {
 
     private func clearPendingExecApprovalPromptIfMatches(_ approvalId: String) {
         let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.clearNotificationPermissionGuidancePromptIfMatches(normalizedApprovalID)
         guard self.pendingExecApprovalPrompt?.id == normalizedApprovalID else { return }
         self.dismissPendingExecApprovalPrompt()
+    }
+
+    private func clearNotificationPermissionGuidancePromptIfMatches(_ approvalId: String) {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.pendingNotificationPermissionGuidancePrompt?.approvalId == normalizedApprovalID else { return }
+        self.pendingNotificationPermissionGuidancePrompt = nil
     }
 
     private nonisolated static func isApprovalNotificationStaleError(_ error: Error) -> Bool {
@@ -5046,6 +5146,10 @@ extension NodeAppModel {
         self.setOperatorConnected(connected)
     }
 
+    func _test_canPublishAPNsRegistration(usesRelayTransport: Bool = true) async -> Bool {
+        await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport)
+    }
+
     nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
         self.makeWatchChatItems(from: raw)
     }
@@ -5110,6 +5214,20 @@ extension NodeAppModel {
         self.pendingExecApprovalPrompt
     }
 
+    func _test_pendingNotificationPermissionGuidancePrompt() -> NotificationPermissionGuidancePrompt? {
+        self.pendingNotificationPermissionGuidancePrompt
+    }
+
+    func _debug_presentNotificationPermissionGuidancePromptForScreenshot() {
+        self.resetExecApprovalNotificationGuidanceSuppression()
+        self.pendingNotificationPermissionGuidancePrompt =
+            NotificationPermissionGuidancePrompt(approvalId: "screenshot-exec-approval")
+    }
+
+    func _test_resetExecApprovalNotificationGuidanceSuppression() {
+        self.resetExecApprovalNotificationGuidanceSuppression()
+    }
+
     func _test_recordPendingWatchExecApprovalRecoveryID(_ approvalId: String) {
         self.appendPendingWatchExecApprovalRecoveryID(approvalId)
     }
@@ -5137,6 +5255,14 @@ extension NodeAppModel {
         self.shouldUseBackgroundAwareExecApprovalReconnect(
             sourceReason: sourceReason,
             isBackgrounded: isBackgrounded)
+    }
+
+    nonisolated static func _test_execApprovalEventID(from payload: AnyCodable) -> String? {
+        self.execApprovalEventID(from: payload)
+    }
+
+    func _test_handleOperatorGatewayServerEvent(_ event: EventFrame) async {
+        await self.handleOperatorGatewayServerEvent(event)
     }
 
     nonisolated static func _test_watchExecApprovalIDsNeedingFetch(
@@ -5234,24 +5360,6 @@ extension NodeAppModel {
 
     func _test_restartGatewaySessionsAfterForegroundStaleConnection() async {
         await self.restartGatewaySessionsAfterForegroundStaleConnection()
-    }
-
-    func _test_handleSuccessfulBootstrapGatewayOnboarding() async {
-        await self.handleSuccessfulBootstrapGatewayOnboarding(
-            url: URL(string: "wss://gateway.example")!,
-            stableID: "test-gateway",
-            token: nil,
-            password: nil,
-            nodeOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: nil),
-            sessionBox: nil)
     }
 }
 #endif

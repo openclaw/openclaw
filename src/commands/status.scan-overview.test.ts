@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
 const mocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(),
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
   readBestEffortConfigSnapshot: vi.fn(),
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -78,7 +78,7 @@ describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
     mocks.readBestEffortConfigSnapshot.mockResolvedValue({
       config: { session: {} },

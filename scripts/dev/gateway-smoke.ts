@@ -49,16 +49,25 @@ function usage(): string {
 }
 
 function validateArgs(argv: readonly string[]): void {
+  const seen = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
+      if (seen.has(arg)) {
+        throw new GatewaySmokeArgError(`${arg} was provided more than once`);
+      }
+      seen.add(arg);
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new GatewaySmokeArgError(`${arg} requires a value`);
       }
+      if (seen.has(arg)) {
+        throw new GatewaySmokeArgError(`${arg} was provided more than once`);
+      }
+      seen.add(arg);
       index += 1;
       continue;
     }
