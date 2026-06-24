@@ -660,6 +660,7 @@ describe("TelegramPollingSession", () => {
 
   afterEach(() => {
     pollingSessionTesting.resetActiveSpooledUpdateHandlersForTests();
+    pollingSessionTesting.resetTelegramSpooledUpdatePoisonStateForTests();
     clearTelegramRuntime();
     closeOpenClawStateDatabaseForTest();
   });
@@ -1858,6 +1859,209 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       stopWorker();
       await runPromise;
+    });
+  });
+
+  it("dead-letters ERR_MODULE_NOT_FOUND failures so later same-lane updates can drain", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "stale module first"),
+        topicUpdate(43, 11, "other topic turn"),
+        topicUpdate(44, 10, "same topic after module error"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            events.push("topic10:first");
+            const err = new Error(
+              "Cannot find module 'directive-handling.impl-BTE_v-hO.js' imported from get-reply-BpFiu3Nn.js",
+            );
+            (err as NodeJS.ErrnoException).code = "ERR_MODULE_NOT_FOUND";
+            throw err;
+          }
+          if (update.update_id === 43) {
+            events.push("topic11");
+            return;
+          }
+          if (update.update_id === 44) {
+            events.push("topic10:second");
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(events).toEqual(["topic10:first", "topic11", "topic10:second"]),
+      );
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable module-not-found");
+      expectLogIncludes(log, "dead-lettered");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters cause-wrapped ERR_MODULE_NOT_FOUND failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wrapped module-not-found")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error("Cannot find module 'foo.js'");
+          (cause as NodeJS.ErrnoException).code = "ERR_MODULE_NOT_FOUND";
+          const err = new Error("Agent turn failed", { cause });
+          throw err;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable module-not-found");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters grammY BotError-wrapped ERR_MODULE_NOT_FOUND failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "bot error wrapped module-not-found"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error("Cannot find module 'foo.js'");
+          (cause as NodeJS.ErrnoException).code = "ERR_MODULE_NOT_FOUND";
+          const middlewareError = new Error("Agent turn failed", { cause });
+          const botError = Object.assign(new Error("Error in middleware: Agent turn failed"), {
+            name: "BotError",
+            error: middlewareError,
+          });
+          throw botError;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable module-not-found");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters unknown retryable failures after the poison retry cap is reached", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "repeating transient first"),
+        topicUpdate(43, 10, "later same-lane turn after poison"),
+      ]);
+
+      let attempt = 0;
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 5,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            attempt += 1;
+            // Always throw a fresh unknown error. A non-retryable classification
+            // would dead-letter immediately, so we deliberately do not include a
+            // harness name or ERR_MODULE_NOT_FOUND code.
+            throw new Error(`transient glitch #${attempt}`);
+          }
+          if (update.update_id === 43) {
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      expect(attempt).toBeGreaterThanOrEqual(3);
+      // First two attempts release for retry (logged as "keeping for retry");
+      // the third trips the poison cap and dead-letters with poison-retry-exceeded.
+      expectLogIncludes(log, "failed 3 consecutive times with signature");
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable poison-retry-exceeded");
+      expectLogIncludes(log, "dead-lettered");
+      // Confirm the last failure was the dead-letter, not another retry. The log
+      // contains both "keeping for retry" (earlier attempts) and the dead-letter
+      // entry; the dead-letter entry must appear after the final retry.
+      const logCalls = log.mock.calls.map((call) => String(call[0]));
+      const finalRetryIndex = logCalls.findLastIndex((entry) =>
+        entry.includes("spooled update 42 failed; keeping for retry"),
+      );
+      const finalDeadLetterIndex = logCalls.findLastIndex((entry) =>
+        entry.includes("spooled update 42 failed with non-retryable poison-retry-exceeded"),
+      );
+      expect(finalDeadLetterIndex).toBeGreaterThan(finalRetryIndex);
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("resets the poison counter once the update finally succeeds", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "two failures then a success")]);
+
+      let attempt = 0;
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 5,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            attempt += 1;
+            if (attempt < 3) {
+              throw new Error(`transient glitch #${attempt}`);
+            }
+            abort.abort();
+          }
+        },
+      });
+
+      await runPromise;
+      expect(attempt).toBe(3);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      // After two failures the in-memory counter held count=2; a successful
+      // run must clear it. The next test in this file would otherwise see a
+      // poisoned update and dead-letter the very first attempt.
+      expect(pollingSessionTesting.getTelegramSpooledUpdatePoisonCountForTests(42)).toBe(0);
+      expectLogExcludes(log, "poison-retry-exceeded");
+      expectLogExcludes(log, "dead-lettered");
+      stopWorker();
     });
   });
 
