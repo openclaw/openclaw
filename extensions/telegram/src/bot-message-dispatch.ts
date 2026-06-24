@@ -69,6 +69,7 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
+import { clipTelegramProgressText } from "./truncate.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -364,22 +365,14 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   }
 }
 
-const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
-
-function clipProgressMarkdownText(text: string): string {
-  if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
-    return text;
-  }
-  return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
-}
 
 function sanitizeProgressMarkdownText(text: string): string {
   return text.replaceAll("`", "'");
 }
 
 function formatProgressAsMarkdownCode(text: string): string {
-  const clipped = clipProgressMarkdownText(text);
+  const clipped = clipTelegramProgressText(text);
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
@@ -399,7 +392,7 @@ function escapeTelegramProgressHtml(text: string): string {
 }
 
 function renderTelegramProgressStringLine(text: string): string {
-  const clipped = clipProgressMarkdownText(text.trim());
+  const clipped = clipTelegramProgressText(text.trim());
   const italic = clipped.match(/^_(.*)_$/u);
   if (italic) {
     return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
@@ -418,7 +411,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
-    parts.push(`<code>${escapeTelegramProgressHtml(clipProgressMarkdownText(detail))}</code>`);
+    parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(detail))}</code>`);
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
