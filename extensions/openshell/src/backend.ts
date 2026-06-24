@@ -45,6 +45,21 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+export function buildOpenShellDirectoryUploadArgs(params: {
+  sandboxName: string;
+  localPath: string;
+  remotePath: string;
+}): string[] {
+  return [
+    "sandbox",
+    "upload",
+    "--no-git-ignore",
+    params.sandboxName,
+    params.localPath,
+    normalizeRemotePath(params.remotePath),
+  ];
+}
+
 export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
@@ -738,26 +753,26 @@ class OpenShellSandboxBackendImpl {
       async ({ dir: tmpDir }) => {
         // Stage a symlink-free snapshot so upload never dereferences host paths
         // outside the mirrored workspace tree.
-        const remoteRootName = path.posix.basename(remotePath);
+        const remoteRootName = path.posix.basename(normalizeRemotePath(remotePath));
         const stagedRoot = path.join(tmpDir, remoteRootName);
         await stageDirectoryContents({
           sourceDir: localPath,
           targetDir: stagedRoot,
         });
-        const result = await runOpenShellCli({
-          context: this.params.execContext,
-          args: [
-            "sandbox",
-            "upload",
-            "--no-git-ignore",
-            this.params.execContext.sandboxName,
-            stagedRoot,
-            path.posix.dirname(remotePath),
-          ],
-          cwd: this.params.createParams.workspaceDir,
-        });
-        if (result.code !== 0) {
-          throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+        const stagedEntries = (await fs.readdir(stagedRoot)).toSorted();
+        for (const entry of stagedEntries) {
+          const result = await runOpenShellCli({
+            context: this.params.execContext,
+            args: buildOpenShellDirectoryUploadArgs({
+              sandboxName: this.params.execContext.sandboxName,
+              localPath: path.join(stagedRoot, entry),
+              remotePath,
+            }),
+            cwd: this.params.createParams.workspaceDir,
+          });
+          if (result.code !== 0) {
+            throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+          }
         }
       },
     );
