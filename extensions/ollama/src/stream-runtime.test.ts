@@ -257,6 +257,113 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     expect(legacyFunctionCall.arguments).toBe('{"action":"config.get","path":"gateway.host"}');
   });
 
+  it("replays the same tool call as object args natively but string args for OpenAI-compat", async () => {
+    // #96441 invariant: identical replayed tool calls must diverge by API. Native
+    // /api/chat expects object arguments; OpenAI-compatible Chat Completions requires
+    // JSON-string arguments. This guards against re-unifying the two normalization paths.
+    const stringArgs = '{"action":"config.get","path":"gateway.port"}';
+
+    const nativeMessages = convertToOllamaMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_gateway", name: "gateway", arguments: stringArgs }],
+      },
+    ]);
+    expect(nativeMessages[0].tool_calls).toEqual([
+      {
+        id: "call_gateway",
+        function: { name: "gateway", arguments: { action: "config.get", path: "gateway.port" } },
+      },
+    ]);
+
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: { name: "gateway", arguments: stringArgs },
+              },
+            ],
+          },
+        ],
+      });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 131072,
+      params: { num_ctx: 32768 },
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    const compatToolCalls = (payload.messages as Array<Record<string, unknown>>)[0]
+      .tool_calls as Array<{
+      function: { arguments: unknown };
+    }>;
+    expect(compatToolCalls[0].function.arguments).toBe(stringArgs);
+  });
+
+  it("injects num_ctx without clobbering existing OpenAI-compat options", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({ options: { temperature: 0.5 } });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 131072,
+      params: { num_ctx: 32768 },
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    const options = requireRecord(payload.options, "patched options");
+    expect(options.temperature).toBe(0.5);
+    expect(options.num_ctx).toBe(32768);
+  });
+
   it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
     await withMockNdjsonFetch(
       [
