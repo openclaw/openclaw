@@ -1,22 +1,40 @@
-import { GatewayBrowserClient, type GatewayHelloOk } from "../api/gateway.ts";
+import {
+  GatewayBrowserClient,
+  type GatewayEventListener,
+  type GatewayHelloOk,
+} from "../api/gateway.ts";
 import {
   createApplicationRouter,
-  createApplicationContext,
   inferBasePathFromPathname,
+  locationForRoute,
   normalizeBasePath,
   startApplicationRouter,
-  type ApplicationContext,
+  type AppRouteModule,
+  type ApplicationRouter,
+  type RouteId,
 } from "../app-routes.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserHistory } from "./browser.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnection,
+  ApplicationNavigationOptions,
   ApplicationGatewaySnapshot,
+  ApplicationContext,
+  ApplicationNavigationPreferences,
+  ApplicationNavigationPreferencesSnapshot,
   ApplicationTheme,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import { loadLocalUserIdentity, loadSettings, saveSettings, type UiSettings } from "./settings.ts";
+import { createRouterOutletSnapshot, type RouterOutletSnapshotStore } from "./router-outlet.ts";
+import { createApplicationSessions } from "./sessions.ts";
+import {
+  loadLocalUserIdentity,
+  loadSettings,
+  resolveApplicationStartupSettings,
+  saveSettings,
+  type UiSettings,
+} from "./settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 
@@ -90,14 +108,58 @@ function createApplicationTheme(
   };
 }
 
+function createApplicationNavigationPreferences(
+  initialSettings: UiSettings,
+): ApplicationNavigationPreferences {
+  let settings = initialSettings;
+  let snapshot: ApplicationNavigationPreferencesSnapshot = {
+    navCollapsed: settings.navCollapsed,
+    navGroupsCollapsed: settings.navGroupsCollapsed,
+    recentSessionsCollapsed: settings.recentSessionsCollapsed ?? false,
+  };
+  const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
+
+  return {
+    get snapshot() {
+      return snapshot;
+    },
+    update(patch) {
+      const nextSnapshot = { ...snapshot, ...patch };
+      if (
+        nextSnapshot.navCollapsed === snapshot.navCollapsed &&
+        nextSnapshot.recentSessionsCollapsed === snapshot.recentSessionsCollapsed &&
+        nextSnapshot.navGroupsCollapsed === snapshot.navGroupsCollapsed
+      ) {
+        return;
+      }
+      settings = {
+        ...settings,
+        navCollapsed: nextSnapshot.navCollapsed,
+        navGroupsCollapsed: nextSnapshot.navGroupsCollapsed,
+        recentSessionsCollapsed: nextSnapshot.recentSessionsCollapsed,
+      };
+      snapshot = nextSnapshot;
+      saveSettings(settings);
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
+  initialPassword = "",
 ): ApplicationGateway {
   let settings = initialSettings;
   let connection: ApplicationGatewayConnection = {
     gatewayUrl: settings.gatewayUrl,
     token: settings.token,
-    password: "",
+    password: initialPassword,
   };
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
@@ -110,6 +172,21 @@ function createApplicationGateway(
   };
   let client: GatewayBrowserClient | null = null;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
+  let stopClientEvents: (() => void) | undefined;
+  const syncClientEvents = (nextClient: GatewayBrowserClient | null) => {
+    stopClientEvents?.();
+    stopClientEvents = undefined;
+    if (!nextClient || eventListeners.size === 0) {
+      return;
+    }
+    const removers = [...eventListeners].map((listener) => nextClient.addEventListener(listener));
+    stopClientEvents = () => {
+      for (const remove of removers) {
+        remove();
+      }
+    };
+  };
   const notify = () => {
     for (const listener of listeners) {
       listener(snapshot);
@@ -130,6 +207,8 @@ function createApplicationGateway(
     };
     saveSettings(settings);
     client?.stop();
+    stopClientEvents?.();
+    stopClientEvents = undefined;
 
     let nextClient!: GatewayBrowserClient;
     nextClient = new GatewayBrowserClient({
@@ -170,6 +249,7 @@ function createApplicationGateway(
       },
     });
     client = nextClient;
+    syncClientEvents(nextClient);
     setSnapshot({
       ...snapshot,
       client: nextClient,
@@ -191,6 +271,8 @@ function createApplicationGateway(
     connect,
     start: () => connect(),
     stop: () => {
+      stopClientEvents?.();
+      stopClientEvents = undefined;
       client?.stop();
       client = null;
       setSnapshot({
@@ -205,6 +287,19 @@ function createApplicationGateway(
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeEvents: (listener) => {
+      eventListeners.add(listener);
+      if (client) {
+        const remove = client.addEventListener(listener);
+        return () => {
+          eventListeners.delete(listener);
+          remove();
+        };
+      }
+      return () => {
+        eventListeners.delete(listener);
+      };
     },
   };
   return gateway;
@@ -224,37 +319,123 @@ function readSessionDefaults(
 }
 
 export type ApplicationRuntime = {
-  readonly context: ApplicationContext;
+  readonly context: ApplicationContext<RouteId>;
+  readonly router: ApplicationRouter;
+  readonly routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>;
+  readonly pendingGatewayConnection: {
+    readonly gatewayUrl: string;
+    readonly token: string;
+  } | null;
+  readonly confirmPendingGatewayConnection: () => void;
+  readonly cancelPendingGatewayConnection: () => void;
   start: () => Promise<void>;
   stop: () => void;
 };
 
 export function bootstrapApplication(): ApplicationRuntime {
-  const settings = loadSettings();
-  const gateway = createApplicationGateway(settings);
+  const initialSettings = loadSettings();
+  const history = createBrowserHistory();
+  const startup = resolveApplicationStartupSettings(initialSettings, history.location());
+  if (startup.changed) {
+    saveSettings(startup.settings);
+  }
+  const currentLocation = history.location();
+  if (
+    currentLocation.pathname !== startup.location.pathname ||
+    currentLocation.search !== startup.location.search ||
+    currentLocation.hash !== startup.location.hash
+  ) {
+    history.replace(startup.location);
+  }
+
+  const settings = startup.settings;
+  const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const sessions = createApplicationSessions(gateway);
+  const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   applyStartupPresentation(settings);
   const basePath = normalizeBasePath(
     inferBasePathFromPathname(globalThis.location?.pathname ?? "/"),
   );
-  const history = createBrowserHistory();
   const identity = loadLocalUserIdentity();
   const router = createApplicationRouter();
-  const context = createApplicationContext(
-    router,
-    gateway,
-    theme,
+  const routeSnapshot = createRouterOutletSnapshot(router);
+  let pendingGatewayConnection =
+    startup.pendingGatewayUrl !== null
+      ? {
+          gatewayUrl: startup.pendingGatewayUrl,
+          token: startup.pendingGatewayToken ?? "",
+        }
+      : null;
+  let context!: ApplicationContext<RouteId>;
+  const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+    const location = locationForRoute(routeId, basePath);
+    if (options?.search !== undefined || options?.hash !== undefined) {
+      return {
+        ...location,
+        search: options?.search ?? "",
+        hash: options?.hash ?? "",
+      };
+    }
+    return location;
+  };
+  const navigate = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+    void router
+      .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
+      .catch((error) => {
+        console.error("[openclaw] route navigation failed", error);
+      });
+  };
+  const replace = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
+    void router
+      .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
+      .catch((error) => {
+        console.error("[openclaw] route replacement failed", error);
+      });
+  };
+  const confirmPendingGatewayConnection = () => {
+    const pending = pendingGatewayConnection;
+    if (!pending) {
+      return;
+    }
+    pendingGatewayConnection = null;
+    gateway.connect({
+      gatewayUrl: pending.gatewayUrl,
+      token: pending.token,
+    });
+  };
+  const cancelPendingGatewayConnection = () => {
+    pendingGatewayConnection = null;
+  };
+  context = {
     basePath,
-    identity.name || "OpenClaw",
-  );
+    assistantName: identity.name || "OpenClaw",
+    gateway,
+    sessions,
+    navigation,
+    theme,
+    navigate,
+    replace,
+    preload: (routeId) => router.preloadRoute(routeId, context),
+  };
   return {
     context,
+    router,
+    routeSnapshot,
+    get pendingGatewayConnection() {
+      return pendingGatewayConnection;
+    },
+    confirmPendingGatewayConnection,
+    cancelPendingGatewayConnection,
     start: async () => {
       gateway.start();
       await startApplicationRouter(router, history, basePath, context);
     },
     stop: () => {
-      context.dispose();
+      routeSnapshot.dispose();
+      router.stop();
+      gateway.stop();
+      sessions.dispose();
       theme.dispose();
     },
   };

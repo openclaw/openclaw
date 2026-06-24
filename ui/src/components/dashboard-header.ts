@@ -1,17 +1,17 @@
 // Control UI component implements the dashboard header element.
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { titleForRoute } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 
 export class DashboardHeader extends LitElement {
   override createRenderRoot() {
     return this;
   }
 
-  @property() routeId?: RouteId;
+  @property() routeId?: NavigationRouteId;
   @property() basePath = "";
   @property() agentLabel = "";
+  @property() overviewHref = "";
 
   private readonly handleOverviewClick = (event: MouseEvent) => {
     if (
@@ -37,13 +37,17 @@ export class DashboardHeader extends LitElement {
     return html`
       <div class="dashboard-header">
         <div class="dashboard-header__breadcrumb">
-          <a
-            class="dashboard-header__breadcrumb-link"
-            href=${pathForRoute("overview", this.basePath)}
-            @click=${this.handleOverviewClick}
-          >
-            OpenClaw
-          </a>
+          ${this.overviewHref
+            ? html`
+                <a
+                  class="dashboard-header__breadcrumb-link"
+                  href=${this.overviewHref}
+                  @click=${this.handleOverviewClick}
+                >
+                  OpenClaw
+                </a>
+              `
+            : html`<span class="dashboard-header__breadcrumb-link">OpenClaw</span>`}
           ${agentLabel
             ? html`
                 <span class="dashboard-header__breadcrumb-segment">
