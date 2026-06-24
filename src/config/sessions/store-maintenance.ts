@@ -41,9 +41,12 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  modelRunPruneAfterMs: number | null;
+  // Optional so external plugin callers that construct a pre-#88632 maintenanceConfig
+  // (without the model-run fields) still compile; the resolver always sets both, and all
+  // internal readers treat an absent value as "unset" (model-run pruning disabled).
+  modelRunPruneAfterMs?: number | null;
   /** True when modelRunPruneAfter was explicitly set instead of using the pressure-gated default. */
-  modelRunPruneAfterConfigured: boolean;
+  modelRunPruneAfterConfigured?: boolean;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
