@@ -132,8 +132,8 @@ const FeishuToolsConfigSchema = z
  * - "group_topic_sender": one session per (group + topic thread + sender),
  *   falls back to (group + sender) if no topic
  *
- * Native topic groups default to "group_topic" when this option is unset.
- * Other group chats default to "group".
+ * Defaults to "group" when unset. Use "group_topic" to isolate native topic
+ * group threads into separate sessions.
  */
 const GroupSessionScopeSchema = z
   .enum(["group", "group_sender", "group_topic", "group_topic_sender"])
@@ -146,8 +146,8 @@ const GroupSessionScopeSchema = z
  * - "disabled": All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
  *
- * Leave unset to use the current default: native topic groups are topic-scoped,
- * while normal groups are chat-scoped unless groupSessionScope says otherwise.
+ * Leave unset to use the current default: group chats, including native topic
+ * groups, are chat-scoped unless groupSessionScope says otherwise.
  *
  * Topic routing uses Feishu topic-group `thread_id` when the event identifies a
  * native topic group, and keeps `root_id` precedence for normal groups so

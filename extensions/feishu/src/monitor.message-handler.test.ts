@@ -171,7 +171,17 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       },
     } as unknown as PluginRuntime["channel"];
     const handler = createFeishuMessageReceiveHandler({
-      cfg: {} as ClawdbotConfig,
+      cfg: {
+        channels: {
+          feishu: {
+            groups: {
+              oc_topic_group: {
+                groupSessionScope: "group_topic",
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig,
       channelRuntime,
       accountId: "default",
       chatHistories: new Map(),
@@ -253,7 +263,17 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       },
     } as unknown as PluginRuntime["channel"];
     const handler = createFeishuMessageReceiveHandler({
-      cfg: {} as ClawdbotConfig,
+      cfg: {
+        channels: {
+          feishu: {
+            groups: {
+              oc_topic_group: {
+                groupSessionScope: "group_topic",
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig,
       channelRuntime,
       accountId: "default",
       chatHistories: new Map(),
@@ -336,7 +356,17 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       },
     } as unknown as PluginRuntime["channel"];
     const handler = createFeishuMessageReceiveHandler({
-      cfg: {} as ClawdbotConfig,
+      cfg: {
+        channels: {
+          feishu: {
+            groups: {
+              oc_topic_group: {
+                groupSessionScope: "group_topic",
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig,
       channelRuntime,
       accountId: "default",
       chatHistories: new Map(),
@@ -415,7 +445,17 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       },
     } as unknown as PluginRuntime["channel"];
     const handler = createFeishuMessageReceiveHandler({
-      cfg: {} as ClawdbotConfig,
+      cfg: {
+        channels: {
+          feishu: {
+            groups: {
+              oc_topic_group: {
+                groupSessionScope: "group_topic",
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig,
       channelRuntime,
       accountId: "default",
       chatHistories: new Map(),

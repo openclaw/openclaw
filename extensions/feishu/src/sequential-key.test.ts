@@ -76,7 +76,7 @@ describe("getFeishuSequentialKey", () => {
     ).toBe("feishu:default:oc_dm_chat:btw");
   });
 
-  it("uses native topic ids as the default lane for Feishu topic groups", () => {
+  it("keeps Feishu topic groups on the chat lane by default", () => {
     expect(
       getFeishuSequentialKey({
         accountId: "default",
@@ -88,10 +88,24 @@ describe("getFeishuSequentialKey", () => {
           threadId: "omt_topic_1",
         }),
       }),
-    ).toBe("feishu:default:oc_topic_group:topic:omt_topic_1");
+    ).toBe("feishu:default:oc_topic_group");
+  });
+
+  it("uses native topic ids when Feishu topic groups opt into topic sessions", () => {
     expect(
       getFeishuSequentialKey({
         accountId: "default",
+        cfg: {
+          channels: {
+            feishu: {
+              groups: {
+                oc_topic_group: {
+                  groupSessionScope: "group_topic",
+                },
+              },
+            },
+          },
+        },
         event: createTextEvent({
           text: "topic two",
           chatId: "oc_topic_group",

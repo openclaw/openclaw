@@ -3214,7 +3214,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(replyRouteRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
   });
 
-  it("routes native topic groups as topic sessions by default", async () => {
+  it("keeps native topic groups chat-scoped by default", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3244,11 +3244,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expectResolvedRouteCall(
-      0,
-      { kind: "group", id: "oc-group:topic:omt_default_topic" },
-      { kind: "group", id: "oc-group" },
-    );
+    expectResolvedRouteCall(0, { kind: "group", id: "oc-group" }, null);
   });
 
   it("keeps native topic groups chat-scoped when groupSessionScope=group", async () => {

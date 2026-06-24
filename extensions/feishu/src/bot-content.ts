@@ -78,11 +78,7 @@ export function resolveConfiguredFeishuGroupSessionScope(params: {
   return (
     params.groupConfig?.groupSessionScope ??
     params.feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ||
-    ((params.chatType === "topic_group" || params.hasThread === true) &&
-      legacyTopicSessionMode !== "disabled")
-      ? "group_topic"
-      : "group")
+    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
   );
 }
 

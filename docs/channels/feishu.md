@@ -639,14 +639,14 @@ conversion fails, OpenClaw falls back to a file attachment and logs the reason.
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
 
-Native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the
-canonical topic session key by default, so different topics run in separate
-sessions while each topic stays serial. Set `groupSessionScope: "group"` or
-`topicSessionMode: "disabled"` to keep a topic group chat-scoped. If a native
-topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before
-routing the turn. Normal group replies that OpenClaw turns into threads keep
-using the reply root message ID (`om_*`) so the first turn and follow-up turn
-stay in the same session.
+Native Feishu/Lark topic groups stay chat-scoped by default. Set
+`groupSessionScope: "group_topic"` or legacy `topicSessionMode: "enabled"` to
+use the event `thread_id` (`omt_*`) as the canonical topic session key, so
+different topics run in separate sessions while each topic stays serial. If a
+native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu
+before routing the turn. Normal group replies that OpenClaw turns into threads
+keep using the reply root message ID (`om_*`) so the first turn and follow-up
+turn stay in the same session.
 
 ---
 
