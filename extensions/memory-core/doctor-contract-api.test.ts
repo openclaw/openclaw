@@ -757,7 +757,7 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     expect(
       readMemoryRows(agentPath)
-        .chunks.map((chunk) => chunk.id)
+        .chunks.map((chunk) => String(chunk.id))
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(["chunk-defaults", "chunk-top"]);
     await expect(fs.access(`${defaultsPath}.migrated`)).resolves.toBeUndefined();
