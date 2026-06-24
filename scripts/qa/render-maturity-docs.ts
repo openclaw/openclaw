@@ -644,6 +644,12 @@ function checkSetTitle(profile: string): string {
 
 function resultCountsText(statuses: StatusCounts): string {
   const parts = [`${statuses.pass} passed`];
+  if (statuses.fail > 0) {
+    parts.push(`${statuses.fail} failed`);
+  }
+  if (statuses.blocked > 0) {
+    parts.push(`${statuses.blocked} blocked`);
+  }
   if (statuses.skipped > 0) {
     parts.push(`${statuses.skipped} skipped`);
   }
@@ -746,7 +752,7 @@ function deriveCoverageScores(
   for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
     categories.set(
       qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
-      qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
+      qaMaturityScoreObjectForScore(Math.round(report.coverageIds.fulfillmentPercent)),
     );
   }
 
@@ -881,7 +887,7 @@ function renderEvidenceSection(
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
-      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} capabilities</span>`,
+      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
   }
@@ -918,7 +924,7 @@ function renderEvidenceSection(
         `  <Accordion title="${markdownEscape(surfaceName)} - ${rows.length} areas">`,
         `    <p className="maturity-readiness-summary">${markdownEscape(summary)}</p>`,
         '    <div className="maturity-readiness-list">',
-        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>',
+        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>',
       );
       for (const { item, category } of rows) {
         const status = readinessStatusText(category.status);
@@ -928,7 +934,7 @@ function renderEvidenceSection(
           `          <span className="maturity-readiness-title">${markdownEscape(category.name)}</span>`,
           `          <span className="maturity-readiness-status maturity-readiness-status-${markdownSlug(status)}">${markdownEscape(status)} - ${markdownEscape(checkSetTitle(item.profile))}</span>`,
           "        </div>",
-          `        <span>${markdownEscape(countText(category.features))}</span>`,
+          `        <span>${markdownEscape(countText(category.features))} / ${markdownEscape(countText(category.coverageIds))}</span>`,
           `        <span>${markdownEscape(followUpText(category.missingCoverageIds))}</span>`,
           "      </div>",
         );
@@ -1206,7 +1212,9 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  if (args.strictInputs) {
+    rejectBlockingEvidence(evidenceSummaries);
+  }
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
