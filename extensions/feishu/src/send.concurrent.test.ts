@@ -326,8 +326,8 @@ describe("Concurrent Feishu sends - configured outbound pacing", () => {
 
     expect(results).toHaveLength(3);
     expect(mockClientCreate).toHaveBeenCalledTimes(3);
-    expect(callTimes[1]! - callTimes[0]!).toBeGreaterThanOrEqual(50);
-    expect(callTimes[2]! - callTimes[1]!).toBeGreaterThanOrEqual(50);
+    expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(50);
+    expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(50);
   });
 
   it("keeps distinct targets independent under a configured send interval", async () => {
@@ -354,7 +354,7 @@ describe("Concurrent Feishu sends - configured outbound pacing", () => {
 
     expect(results).toHaveLength(2);
     expect(mockClientCreate).toHaveBeenCalledTimes(2);
-    expect(calls.map((call) => call.receiveId).sort()).toEqual(["oc_paced_a", "oc_paced_b"]);
-    expect(calls[1]!.at - calls[0]!.at).toBe(0);
+    expect(calls.map((call) => call.receiveId).toSorted()).toEqual(["oc_paced_a", "oc_paced_b"]);
+    expect(calls[1].at - calls[0].at).toBe(0);
   });
 });
