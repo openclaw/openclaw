@@ -204,7 +204,9 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       }),
     );
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(order).toEqual(["omt_thread_1:start", "omt_thread_2:start"]);
 
     releaseSecond.resolve();
@@ -286,7 +288,9 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       }),
     );
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(order).toEqual(["omt_topic_1:start", "omt_topic_2:start"]);
 
     releaseSecond.resolve();
@@ -367,7 +371,9 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       }),
     );
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(order).toEqual(["om_topic_1_first"]);
 
     releaseFirst.resolve();
@@ -423,7 +429,7 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
         return {
           messageId: "om_topic_starter",
           chatId: "oc_topic_group",
-          chatType: "topic_group",
+          chatType: "topic_group" as const,
           content: "starter",
           contentType: "text",
           threadId: "omt_topic_1",
@@ -453,11 +459,15 @@ describe("createFeishuMessageReceiveHandler topic queueing", () => {
       }),
     );
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(order).toEqual([]);
 
     releaseFetch.resolve();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(order).toEqual(["om_topic_starter:start:omt_topic_1"]);
 
     releaseFirst.resolve();

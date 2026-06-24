@@ -362,11 +362,7 @@ export function createFeishuMessageReceiveHandler({
           pendingTopicQueueingByChat.delete(chatKey);
         }
       }
-      try {
-        await taskPromise;
-      } finally {
-        taskPromise = undefined;
-      }
+      await taskPromise;
       return;
     }
 
