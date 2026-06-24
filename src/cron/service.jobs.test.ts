@@ -392,6 +392,63 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears the default toolsAllow flag when editing to an explicit restriction", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-explicit", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toEqual(["read"]);
+      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
+    }
+  });
+
+  it("preserves the default toolsAllow flag when a full payload edit keeps the default list", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-edit", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it later",
+        toolsAllow: ["exec", "read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it later");
+      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(job.payload.toolsAllowIsDefault).toBe(true);
+    }
+  });
+
   it("clears agentTurn payload.toolsAllow when patch requests null", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
@@ -401,6 +458,7 @@ describe("applyJobPatch", () => {
       kind: "agentTurn",
       message: "do it",
       toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
     };
 
     applyJobPatch(job, {
@@ -414,6 +472,7 @@ describe("applyJobPatch", () => {
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.toolsAllow).toBeUndefined();
+      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
     }
   });
 
@@ -524,6 +583,30 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.toolsAllow).toEqual(["exec", "read"]);
+    }
+  });
+
+  it("carries payload.toolsAllow default flag when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["exec", "read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(payload.toolsAllowIsDefault).toBe(true);
     }
   });
 
