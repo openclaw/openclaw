@@ -4025,6 +4025,9 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });

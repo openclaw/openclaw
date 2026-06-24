@@ -21,6 +21,19 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await readFile(pathToCheck, "utf8");
+      return;
+    } catch {
+      await sleep(25);
+    }
+  }
+  throw new Error(`Timed out waiting for ${pathToCheck}`);
+}
+
 describe("Matrix QA CLI runtime", () => {
   it("redacts secret CLI arguments in diagnostic command text", () => {
     expect(
@@ -305,6 +318,110 @@ describe("Matrix QA CLI runtime", () => {
       if (process.platform !== "win32") {
         expect(isProcessRunning(grandchildPid)).toBe(false);
       }
+    } finally {
+      for (const pid of [grandchildPid, childPid]) {
+        if (pid && isProcessRunning(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      }
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("kills ignored-stdio descendants after a timed-out CLI exits gracefully", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-timeout-ignored-stdio-"),
+    );
+    const childPidPath = path.join(root, "child.pid");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(
+        path.join(root, "dist", "index.mjs"),
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
+          "grandchild.unref();",
+          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      const run = runMatrixQaOpenClawCli({
+        args: ["matrix", "verify", "self"],
+        cwd: root,
+        env: process.env,
+        timeoutMs: 500,
+      });
+      await waitForFile(grandchildPidPath, 2_000);
+
+      await expect(run).rejects.toThrow(/timed out after 500ms/u);
+
+      childPid = Number(await readFile(childPidPath, "utf8"));
+      grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+      expect(isProcessRunning(childPid)).toBe(false);
+      expect(isProcessRunning(grandchildPid)).toBe(false);
+    } finally {
+      for (const pid of [grandchildPid, childPid]) {
+        if (pid && isProcessRunning(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      }
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("kills ignored-stdio descendants after manual CLI session kill", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-session-kill-ignored-stdio-"),
+    );
+    const childPidPath = path.join(root, "child.pid");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(
+        path.join(root, "dist", "index.mjs"),
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
+          "grandchild.unref();",
+          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      const session = startMatrixQaOpenClawCli({
+        args: ["matrix", "verify", "self"],
+        cwd: root,
+        env: process.env,
+        timeoutMs: 10_000,
+      });
+      await waitForFile(grandchildPidPath, 2_000);
+      await sleep(300);
+
+      session.kill();
+      await sleep(500);
+
+      childPid = Number(await readFile(childPidPath, "utf8"));
+      grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+      expect(isProcessRunning(childPid)).toBe(false);
+      expect(isProcessRunning(grandchildPid)).toBe(false);
     } finally {
       for (const pid of [grandchildPid, childPid]) {
         if (pid && isProcessRunning(pid)) {

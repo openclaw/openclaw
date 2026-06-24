@@ -3,12 +3,13 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isRunWithEnvHelpRequest,
   parseRunWithEnvArgs,
   resolveForceKillDelayMs,
   resolveSpawnCommand,
+  signalRunWithEnvChild,
 } from "../../scripts/run-with-env.mjs";
 
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
@@ -156,6 +157,31 @@ describe("run-with-env", () => {
     expect(result.stderr).toContain(
       "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
     );
+  });
+
+  it("signals Windows wrapped command trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalRunWithEnvChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalRunWithEnvChild(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(

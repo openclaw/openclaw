@@ -309,9 +309,10 @@ function extractTrailingJsonObject(input) {
   try {
     return JSON.parse(trimmed);
   } catch {
-    // Agent lifecycle diagnostics can surround --json output. Keep the final
-    // complete object so a post-result line does not invalidate a good turn.
+    // Agent lifecycle diagnostics can surround --json output. Prefer an agent
+    // result envelope so a structured post-result diagnostic cannot replace it.
     let lastParsed;
+    let lastAgentResult;
     for (let index = 0; index < trimmed.length; index += 1) {
       if (trimmed[index] !== "{") {
         continue;
@@ -349,10 +350,19 @@ function extractTrailingJsonObject(input) {
       }
       try {
         lastParsed = JSON.parse(trimmed.slice(index, end + 1));
+        if (
+          Array.isArray(lastParsed?.result?.payloads) ||
+          Array.isArray(lastParsed?.payloads)
+        ) {
+          lastAgentResult = lastParsed;
+        }
       } catch {
         // keep scanning
       }
       index = end;
+    }
+    if (lastAgentResult !== undefined) {
+      return lastAgentResult;
     }
     if (lastParsed !== undefined) {
       return lastParsed;

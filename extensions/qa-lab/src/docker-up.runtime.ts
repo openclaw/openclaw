@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements docker up behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
@@ -12,6 +13,7 @@ import {
   type FetchLike,
   type RunCommand,
 } from "./docker-runtime.js";
+import { shellQuote } from "./shell-quote.js";
 
 type QaDockerUpResult = {
   outputDir: string;
@@ -36,6 +38,41 @@ async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
     try {
       await response?.body?.cancel?.();
     } catch {}
+  }
+}
+
+function isMissingCommandError(
+  error: unknown,
+  command: string,
+  seen = new Set<unknown>(),
+): boolean {
+  if (!error || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (typeof error !== "object") {
+    return formatErrorMessage(error).includes(`spawn ${command} ENOENT`);
+  }
+  const candidate = error as { cause?: unknown; code?: unknown; message?: unknown };
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  if (
+    candidate.code === "ENOENT" ||
+    message.includes(`spawn ${command} ENOENT`) ||
+    message.includes(`${command}: command not found`)
+  ) {
+    return true;
+  }
+  return isMissingCommandError(candidate.cause, command, seen);
+}
+
+async function runQaLabBuild(repoRoot: string, runCommand: RunCommand) {
+  try {
+    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+  } catch (error) {
+    if (!isMissingCommandError(error, "pnpm")) {
+      throw error;
+    }
+    await runCommand("corepack", ["pnpm", "qa:lab:build"], repoRoot);
   }
 }
 
@@ -71,7 +108,7 @@ export async function runQaDockerUp(
   const sleepImpl = deps?.sleepImpl ?? sleep;
 
   if (!params.skipUiBuild) {
-    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+    await runQaLabBuild(repoRoot, runCommand);
   }
 
   await writeQaDockerHarnessFiles({
@@ -147,6 +184,6 @@ export async function runQaDockerUp(
     composeFile,
     qaLabUrl,
     gatewayUrl,
-    stopCommand: `docker compose -f ${composeFile} down`,
+    stopCommand: `docker compose -f ${shellQuote(composeFile)} down`,
   };
 }

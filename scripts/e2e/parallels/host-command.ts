@@ -114,6 +114,9 @@ let timedOut = false;
 let killTimer;
 let killDeadlineAt = 0;
 let outputExceeded = false;
+let forwardedSignal;
+let forwardedSignalKillTimer;
+let forwardedSignalPostForceTimer;
 let stderrBytes = 0;
 let stdoutBytes = 0;
 
@@ -189,6 +192,43 @@ function finishTimedOutAfterCleanup() {
   }, Math.max(0, killDeadlineAt - Date.now()));
 }
 
+function finishForwardedSignal() {
+  if (!forwardedSignal) {
+    return;
+  }
+  if (forwardedSignalKillTimer) {
+    clearTimeout(forwardedSignalKillTimer);
+  }
+  if (forwardedSignalPostForceTimer) {
+    clearTimeout(forwardedSignalPostForceTimer);
+  }
+  process.kill(process.pid, forwardedSignal);
+}
+
+function finishForwardedSignalAfterCleanup() {
+  if (!forwardedSignal) {
+    return;
+  }
+  if (!groupAlive()) {
+    finishForwardedSignal();
+    return;
+  }
+  if (forwardedSignalKillTimer) {
+    return;
+  }
+  forwardedSignalKillTimer = setTimeout(() => {
+    if (groupAlive()) {
+      signalGroup("SIGKILL");
+      forwardedSignalPostForceTimer = setTimeout(
+        finishForwardedSignal,
+        Math.max(1, Math.min(25, payload.timeoutKillGraceMs)),
+      );
+    } else {
+      finishForwardedSignal();
+    }
+  }, payload.timeoutKillGraceMs);
+}
+
 function forwardBounded(stream, chunk) {
   const currentBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
   const nextBytes = currentBytes + chunk.byteLength;
@@ -219,8 +259,9 @@ function forwardBounded(stream, chunk) {
 
 for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
+    forwardedSignal ||= signal;
     signalGroup(signal);
-    process.kill(process.pid, signal);
+    finishForwardedSignalAfterCleanup();
   });
 }
 
@@ -257,6 +298,10 @@ child.on("error", (error) => {
 });
 child.on("close", (code, signal) => {
   clearTimeout(timeout);
+  if (forwardedSignal) {
+    finishForwardedSignalAfterCleanup();
+    return;
+  }
   if (timedOut) {
     finishTimedOutAfterCleanup();
     return;
@@ -547,18 +592,63 @@ export async function runStreaming(
       signalStreamingChild("SIGTERM");
     });
     const parentSignalHandlers = new Map<NodeJS.Signals, () => void>();
+    let forwardedParentSignal: NodeJS.Signals | undefined;
+    let parentSignalKillTimer: NodeJS.Timeout | undefined;
+    let parentSignalPostForceTimer: NodeJS.Timeout | undefined;
     const removeParentSignalHandlers = (): void => {
       for (const [signal, handler] of parentSignalHandlers) {
         process.off(signal, handler);
       }
       parentSignalHandlers.clear();
     };
+    const clearParentSignalTimers = (): void => {
+      if (parentSignalKillTimer) {
+        clearTimeout(parentSignalKillTimer);
+        parentSignalKillTimer = undefined;
+      }
+      if (parentSignalPostForceTimer) {
+        clearTimeout(parentSignalPostForceTimer);
+        parentSignalPostForceTimer = undefined;
+      }
+    };
+    const finishParentSignal = (): void => {
+      if (!forwardedParentSignal) {
+        return;
+      }
+      clearParentSignalTimers();
+      removeParentSignalHandlers();
+      process.kill(process.pid, forwardedParentSignal);
+    };
+    const finishParentSignalAfterCleanup = (): void => {
+      if (!forwardedParentSignal) {
+        return;
+      }
+      if (!streamingProcessGroupAlive()) {
+        finishParentSignal();
+        return;
+      }
+      if (parentSignalKillTimer) {
+        return;
+      }
+      parentSignalKillTimer = setTimeout(() => {
+        if (streamingProcessGroupAlive()) {
+          signalHostCommandProcess(childPid, "SIGKILL");
+          parentSignalPostForceTimer = setTimeout(
+            finishParentSignal,
+            HOST_COMMAND_POST_FORCE_KILL_WAIT_MS,
+          );
+        } else {
+          finishParentSignal();
+        }
+      }, HOST_COMMAND_TIMEOUT_KILL_GRACE_MS);
+    };
     if (process.platform !== "win32" && options.timeoutMs != null) {
       for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const) {
         const handler = (): void => {
+          forwardedParentSignal ??= signal;
           signalHostCommandProcess(childPid, signal);
           removeParentSignalHandlers();
-          process.kill(process.pid, signal);
+          finishParentSignalAfterCleanup();
         };
         parentSignalHandlers.set(signal, handler);
         process.once(signal, handler);
@@ -637,6 +727,7 @@ export async function runStreaming(
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      clearParentSignalTimers();
       removeParentSignalHandlers();
       logStream?.destroy();
       reject(error);
@@ -646,6 +737,10 @@ export async function runStreaming(
         if (timer) {
           clearTimeout(timer);
         }
+        if (forwardedParentSignal) {
+          finishParentSignalAfterCleanup();
+          return;
+        }
         removeParentSignalHandlers();
         if (timedOut) {
           await waitForStreamingTimeoutCleanup();
@@ -653,6 +748,7 @@ export async function runStreaming(
         if (killTimer) {
           clearTimeout(killTimer);
         }
+        clearParentSignalTimers();
         if (logStream) {
           logStream.end();
           await finished(logStream);

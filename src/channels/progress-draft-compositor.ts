@@ -119,9 +119,12 @@ export function createChannelProgressDraftCompositor(params: {
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
-    options?: { toolName?: string; startImmediately?: boolean },
+    options?: { toolName?: string; startImmediately?: boolean; allowAfterFinal?: boolean },
   ) => {
-    if (!params.active || finalReplyStarted || finalReplyDelivered) {
+    if (
+      !params.active ||
+      ((finalReplyStarted || finalReplyDelivered) && !options?.allowAfterFinal)
+    ) {
       return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -171,8 +174,12 @@ export function createChannelProgressDraftCompositor(params: {
       return true;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
+      const alreadyStarted = gate.hasStarted;
       await gate.startNow();
-      return gate.hasStarted ? await render() : false;
+      if (!gate.hasStarted) {
+        return false;
+      }
+      return alreadyStarted ? await render() : true;
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();

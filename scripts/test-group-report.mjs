@@ -1,5 +1,5 @@
 // Builds grouped Vitest duration reports or compares two grouped reports.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -232,6 +232,41 @@ function formatSpawnError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function signalTestGroupReportChild(
+  child,
+  signal,
+  {
+    appendDiagnostic = () => {},
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error && error.code !== "ESRCH") {
+        appendDiagnostic(
+          `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
+        );
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
 /**
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
@@ -267,21 +302,8 @@ export function spawnText(command, args, options) {
     let killGraceMessage = null;
     let childClosedResult = null;
     let waitingForKillGrace = false;
-    const signalChild = (signal) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if (error && error.code !== "ESRCH") {
-            appendDiagnostic(
-              `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
-            );
-          }
-        }
-      }
-      child.kill(signal);
-    };
+    const signalChild = (signal) =>
+      signalTestGroupReportChild(child, signal, { appendDiagnostic, useProcessGroup });
     const parentSignalHandlers = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -292,6 +314,7 @@ export function spawnText(command, args, options) {
     const relayParentSignal = (signal) => {
       const handler = () => {
         signalChild(signal);
+        signalChild("SIGKILL");
         cleanupParentSignalHandlers();
         process.kill(process.pid, signal);
       };
@@ -302,6 +325,9 @@ export function spawnText(command, args, options) {
       relayParentSignal("SIGINT");
       relayParentSignal("SIGTERM");
       relayParentSignal("SIGHUP");
+    } else if (process.platform === "win32") {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
     }
     const processGroupIsAlive = () => {
       if (!useProcessGroup || typeof child.pid !== "number") {

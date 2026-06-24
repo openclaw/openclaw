@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: control-ui-locale-refresh
-  cancel-in-progress: false
+  group: control-ui-locale-refresh-${{ github.event_name == 'push' && github.ref || github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'release' && format('release-{0}', github.event.release.tag_name) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   plan:

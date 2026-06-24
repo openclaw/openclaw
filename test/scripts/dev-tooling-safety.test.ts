@@ -1,10 +1,12 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -21,6 +23,68 @@ import {
 } from "../../scripts/lib/dev-tooling-safety.ts";
 
 const tempDirs: string[] = [];
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  throw new Error("timed out waiting for condition");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeFakePromptCli(root: string, descendantPidPath: string): Promise<string> {
+  const fakeCli = path.join(root, "fake-prompt-cli.mjs");
+  const descendantScript = [
+    "process.on('SIGINT', () => {});",
+    "process.on('SIGTERM', () => {});",
+    "setInterval(() => {}, 1000);",
+  ].join("");
+  await fs.writeFile(
+    fakeCli,
+    [
+      "#!/usr/bin/env node",
+      "import childProcess from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "const descendant = childProcess.spawn(process.execPath, [",
+      "  '--input-type=module',",
+      `  '--eval', ${JSON.stringify(descendantScript)},`,
+      "], { stdio: 'ignore' });",
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return fakeCli;
+}
+
+async function waitForChildExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 8_000,
+): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
+  return await Promise.race([
+    new Promise<{ status: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (status, signal) => resolve({ status, signal }));
+    }),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+    }),
+  ]);
+}
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -404,6 +468,49 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+  it("signals Windows TUI PTY watch process trees with taskkill", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "123", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -607,6 +714,94 @@ describe("script-specific dev tooling hardening", () => {
     await fs.rm(keepRoot, { force: true, recursive: true });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "cleans Anthropic direct prompt descendants after timeout",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-tree-"));
+      tempDirs.push(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      let descendantPid = 0;
+      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
+      const probe = spawn(
+        process.execPath,
+        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CLAUDE_BIN: fakeClaudeBin,
+            OPENCLAW_PROMPT_TEXT: "timeout cleanup proof",
+            OPENCLAW_PROMPT_TIMEOUT_MS: "1000",
+            OPENCLAW_PROMPT_TRANSPORT: "direct",
+          },
+          stdio: "ignore",
+        },
+      );
+
+      try {
+        await waitForCondition(() => existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await expect(waitForChildExit(probe)).resolves.toEqual({ status: 0, signal: null });
+        await waitForCondition(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (probe.pid && isProcessAlive(probe.pid)) {
+          process.kill(probe.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans Anthropic direct prompt descendants on parent signal",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-parent-signal-"));
+      tempDirs.push(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      let descendantPid = 0;
+      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
+      const probe = spawn(
+        process.execPath,
+        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            CLAUDE_BIN: fakeClaudeBin,
+            OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
+            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+            OPENCLAW_PROMPT_TRANSPORT: "direct",
+          },
+          stdio: "ignore",
+        },
+      );
+
+      try {
+        await waitForCondition(() => existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const probeExit = waitForChildExit(probe);
+        process.kill(probe.pid!, "SIGTERM");
+        await expect(probeExit).resolves.toEqual({ status: 143, signal: null });
+        await waitForCondition(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (probe.pid && isProcessAlive(probe.pid)) {
+          process.kill(probe.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
     const events = new EventEmitter();
     const signals: NodeJS.Signals[] = [];
@@ -673,6 +868,136 @@ describe("script-specific dev tooling hardening", () => {
     expect(signals).toEqual(["SIGINT", "SIGKILL"]);
     expect(closeCalls).toBe(1);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans Anthropic prompt gateway descendants after leader exit",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-gateway-tree-"));
+      tempDirs.push(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      let descendantPid = 0;
+      const descendantScript = [
+        "process.on('SIGINT', () => {});",
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const leaderScript = [
+        "import childProcess from 'node:child_process';",
+        "import fs from 'node:fs';",
+        "const descendant = childProcess.spawn(process.execPath, [",
+        "  '--input-type=module',",
+        `  '--eval', ${JSON.stringify(descendantScript)},`,
+        "], { stdio: 'ignore' });",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+        "process.on('SIGINT', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const child = spawn(process.execPath, ["--input-type=module", "--eval", leaderScript], {
+        detached: true,
+        stdio: "ignore",
+      });
+      let closeCalls = 0;
+
+      try {
+        await waitForCondition(() => isProcessAlive(child.pid!) && existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const stopped = await promptProbeTesting.stopGatewayPromptChild(
+          child as Parameters<typeof promptProbeTesting.stopGatewayPromptChild>[0],
+          {
+            close: async () => {
+              closeCalls += 1;
+            },
+          },
+          50,
+          1_000,
+        );
+
+        expect(stopped).toBe(true);
+        expect(closeCalls).toBe(1);
+        await waitForCondition(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (child.pid && isProcessAlive(child.pid)) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans Anthropic prompt gateway descendants on parent signal",
+    async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-parent-signal-"));
+      tempDirs.push(tempRoot);
+      const descendantPidPath = path.join(tempRoot, "descendant.pid");
+      const readyPath = path.join(tempRoot, "ready");
+      const runnerPath = path.join(tempRoot, "parent-signal-runner.mjs");
+      let descendantPid = 0;
+      const descendantScript = [
+        "process.on('SIGINT', () => {});",
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const leaderScript = [
+        "import childProcess from 'node:child_process';",
+        "import fs from 'node:fs';",
+        "const descendant = childProcess.spawn(process.execPath, [",
+        "  '--input-type=module',",
+        `  '--eval', ${JSON.stringify(descendantScript)},`,
+        "], { stdio: 'ignore' });",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+        "process.on('SIGINT', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      await fs.writeFile(
+        runnerPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import fs from 'node:fs';",
+          `const { testing } = await import(${JSON.stringify(
+            pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
+          )});`,
+          `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
+          "let stopPromise;",
+          "const stopGateway = () => {",
+          "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 1000);",
+          "  return stopPromise;",
+          "};",
+          "testing.installGatewayPromptParentSignalHandlers(child, stopGateway);",
+          `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        "utf8",
+      );
+      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+        stdio: "ignore",
+      });
+
+      try {
+        await waitForCondition(() => existsSync(readyPath) && existsSync(descendantPidPath));
+        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const runnerExit = waitForChildExit(runner);
+        process.kill(runner.pid!, "SIGTERM");
+        await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+        await waitForCondition(() => !isProcessAlive(descendantPid));
+      } finally {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("waits for Anthropic prompt gateway log writes before closing the log file", async () => {
     let resolveWrite: (() => void) | undefined;

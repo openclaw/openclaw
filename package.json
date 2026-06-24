@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.6.9-nova",
+  "version": "2026.6.10",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -974,6 +974,10 @@
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/session-transcript-runtime": {
+      "types": "./dist/plugin-sdk/session-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
     "./plugin-sdk/sqlite-runtime": {
       "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",

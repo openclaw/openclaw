@@ -167,6 +167,102 @@ const shellInlineCommandOptionsWithNextValue = new Set([
   "--init-file",
   "--rcfile",
 ]);
+const nodeOptionsWithNextValueBeforeScript = new Set([
+  "--allow-fs-read",
+  "--allow-fs-write",
+  "--conditions",
+  "--cpu-prof-dir",
+  "--cpu-prof-interval",
+  "--cpu-prof-name",
+  "--debug-port",
+  "--diagnostic-dir",
+  "--disable-proto",
+  "--disable-warning",
+  "--dns-result-order",
+  "--env-file",
+  "--env-file-if-exists",
+  "--experimental-config-file",
+  "--experimental-loader",
+  "--experimental-test-isolation",
+  "--heap-prof-dir",
+  "--heap-prof-interval",
+  "--heap-prof-name",
+  "--heapsnapshot-near-heap-limit",
+  "--heapsnapshot-signal",
+  "--icu-data-dir",
+  "--import",
+  "--inspect-port",
+  "--inspect-publish-uid",
+  "--initial-old-space-size",
+  "--localstorage-file",
+  "--loader",
+  "--max-http-header-size",
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-semi-space-size",
+  "--network-family-autoselection-attempt-timeout",
+  "--openssl-config",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--require",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--snapshot-blob",
+  "--test-concurrency",
+  "--test-coverage-branches",
+  "--test-coverage-exclude",
+  "--test-coverage-functions",
+  "--test-coverage-include",
+  "--test-coverage-lines",
+  "--test-global-setup",
+  "--test-isolation",
+  "--test-name-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-rerun-failures",
+  "--test-shard",
+  "--test-skip-pattern",
+  "--test-timeout",
+  "--title",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--trace-require-module",
+  "--unhandled-rejections",
+  "--use-largepages",
+  "--v8-pool-size",
+  "--watch-kill-signal",
+  "--watch-path",
+  "-C",
+  "-r",
+]);
+const nodeOptionsWithoutScript = new Set([
+  "--build-sea",
+  "--build-snapshot",
+  "--build-snapshot-config",
+  "--check",
+  "--completion-bash",
+  "--eval",
+  "--experimental-sea-config",
+  "--help",
+  "--input-type",
+  "--interactive",
+  "--print",
+  "--prof-process",
+  "--run",
+  "--v8-options",
+  "--version",
+  "-c",
+  "-e",
+  "-h",
+  "-i",
+  "-p",
+  "-v",
+]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -842,6 +938,12 @@ function commandWordsRuntimeEntrypoint(wordsInput) {
   return "";
 }
 
+function commandWordsShellEntrypoint(wordsInput) {
+  const words = normalizeExecutableWords(wordsInput);
+  const first = shellWordBasename(words[0]);
+  return shellInlineCommandInterpreters.has(first) ? first : "";
+}
+
 function commandNeedsAwsMacosPackageManager(commandArgs) {
   if (isChangedGateCommand(commandArgs)) {
     return true;
@@ -913,8 +1015,54 @@ function isChangedGateWords(wordsInput) {
   return (
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
-    (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
+    nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
   );
+}
+
+function nodeScriptWord(words) {
+  if (shellWordBasename(words[0]) !== "node") {
+    return "";
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return "";
+    }
+    if (word === "--") {
+      return words[index + 1] ?? "";
+    }
+    if (nodeOptionsWithoutScript.has(word) || nodeOptionsWithoutScriptPrefix(word)) {
+      return "";
+    }
+    const valueMode = nodeOptionValueModeBeforeScript(word);
+    if (valueMode === "next") {
+      index += 1;
+      continue;
+    }
+    if (valueMode === "inline") {
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      continue;
+    }
+    return word;
+  }
+  return "";
+}
+
+function nodeOptionsWithoutScriptPrefix(word) {
+  return word.startsWith("--eval=") || word.startsWith("--print=");
+}
+
+function nodeOptionValueModeBeforeScript(word) {
+  if (nodeOptionsWithNextValueBeforeScript.has(word)) {
+    return "next";
+  }
+  const equalsIndex = word.indexOf("=");
+  if (equalsIndex > 0 && nodeOptionsWithNextValueBeforeScript.has(word.slice(0, equalsIndex))) {
+    return "inline";
+  }
+  return "";
 }
 
 function shellInlineCommand(words) {
@@ -1591,11 +1739,7 @@ function injectRemoteChangedGateEnvironment(commandArgs) {
 }
 
 function markShellChangedGateAsRemoteChild(command) {
-  const missingEnv = remoteChangedGateEnv.filter((assignment) => !command.includes(assignment));
-  if (missingEnv.length === 0) {
-    return command;
-  }
-  return `export ${missingEnv.join(" ")}; ${command}`;
+  return `export ${remoteChangedGateEnv.join(" ")}; ${command}`;
 }
 
 function markDirectChangedGateAsRemoteChild(commandArgs) {
@@ -1784,8 +1928,8 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
     'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
     'base_url="https://nodejs.org/dist/v${node_version}";',
-    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
-    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'rm -rf "$node_dir" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
@@ -1854,7 +1998,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
       'if [ ! -x "$bun_root/bin/bun" ] || [ ! -f "$bun_ready_marker" ]; then',
       'rm -rf "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
       'mkdir -p "$bun_root" || { status=$?; release_bun_install_lock; return "$status"; };',
-      'npm install --global --prefix "$bun_root" "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
+      'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}" || { status=$?; release_bun_install_lock; return "$status"; };',
       'touch "$bun_ready_marker" || { status=$?; release_bun_install_lock; return "$status"; };',
       "fi;",
       "release_bun_install_lock;",
@@ -2013,15 +2157,14 @@ function awsMacosScriptBootstrapRequirements(script) {
   const requirements = { packageManager: false, bun: false };
   const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
   if (firstLine.startsWith("#!")) {
-    let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
-    if ((words[0] ?? "").split("/").pop() === "env") {
-      words = words.slice(1);
-      while ((words[0] ?? "").startsWith("-")) {
-        words = words.slice(1);
-      }
-    }
+    const words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
     requirements.packageManager = commandWordsNeedEntrypoint(words, awsMacosCorepackEntrypoints);
     requirements.bun = commandWordsNeedEntrypoint(words, awsMacosBunEntrypoints);
+    if (commandWordsShellEntrypoint(words)) {
+      const body = script.slice(firstLine.length).replace(/^\r?\n/u, "");
+      requirements.packageManager ||= commandNeedsAwsMacosPackageManager([body]);
+      requirements.bun ||= commandNeedsAwsMacosBun([body]);
+    }
     return requirements;
   }
   requirements.packageManager = commandNeedsAwsMacosPackageManager([script]);
@@ -2560,23 +2703,23 @@ const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.pla
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
+  detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+const childKillGraceMs = 5_000;
+let childForceKillTimer;
+let childTreeShutdownStarted = false;
 if (fullCheckout) {
   try {
     stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
       intervalMs: fullCheckoutKeepaliveIntervalMsValue,
       onMissing: () => {
-        if (!child.killed) {
-          child.kill("SIGTERM");
-        }
+        void exitAfterChildTreeTermination(child, "SIGTERM", 1);
       },
     });
   } catch (error) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
+    signalChildProcessTree(child, "SIGTERM");
     cleanupOnce();
     throw error;
   }
@@ -2588,17 +2731,17 @@ const signalExitCodes = new Map([
   ["SIGTERM", 143],
 ]);
 for (const signal of signalExitCodes.keys()) {
-  process.once(signal, () => {
-    if (!child.killed) {
-      child.kill(signal);
-    }
-    cleanupOnce();
-    process.exit(signalExitCodes.get(signal) ?? 1);
+  process.on(signal, () => {
+    void exitAfterChildTreeTermination(child, signal, signalExitCodes.get(signal) ?? 1);
   });
 }
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
@@ -2612,6 +2755,10 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (error) => {
+  clearChildForceKillTimer();
+  if (childTreeShutdownStarted) {
+    return;
+  }
   if (fullCheckout) {
     assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
   }
@@ -2619,3 +2766,81 @@ child.on("error", (error) => {
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
   process.exit(2);
 });
+
+async function exitAfterChildTreeTermination(childProcess, signal, exitCode) {
+  if (childTreeShutdownStarted) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+    return;
+  }
+  childTreeShutdownStarted = true;
+  signalChildProcessTree(childProcess, signal);
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  if (childProcessTreeIsAlive(childProcess)) {
+    signalChildProcessTree(childProcess, "SIGKILL");
+  }
+  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  cleanupOnce();
+  process.exit(exitCode);
+}
+
+function signalChildProcessTree(childProcess, signal) {
+  if (
+    process.platform === "win32" &&
+    (childProcess.exitCode !== null || childProcess.signalCode !== null)
+  ) {
+    return;
+  }
+  try {
+    if (process.platform !== "win32" && typeof childProcess.pid === "number") {
+      process.kill(-childProcess.pid, signal);
+    } else {
+      childProcess.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      try {
+        childProcess.kill(signal);
+      } catch {}
+    }
+  }
+  if (signal !== "SIGKILL" && !childForceKillTimer) {
+    childForceKillTimer = setTimeout(() => {
+      childForceKillTimer = undefined;
+      signalChildProcessTree(childProcess, "SIGKILL");
+    }, childKillGraceMs);
+    childForceKillTimer.unref?.();
+  }
+}
+
+function clearChildForceKillTimer() {
+  if (childForceKillTimer) {
+    clearTimeout(childForceKillTimer);
+    childForceKillTimer = undefined;
+  }
+}
+
+function childProcessTreeIsAlive(childProcess) {
+  if (process.platform === "win32" || typeof childProcess.pid !== "number") {
+    return childProcess.exitCode === null && childProcess.signalCode === null;
+  }
+  try {
+    process.kill(-childProcess.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForChildTreeExit(childProcess, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!childProcessTreeIsAlive(childProcess)) {
+      clearChildForceKillTimer();
+      return true;
+    }
+    await new Promise((done) => {
+      setTimeout(done, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(childProcess);
+}

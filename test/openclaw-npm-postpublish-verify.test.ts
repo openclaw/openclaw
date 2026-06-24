@@ -14,6 +14,8 @@ import {
   collectInstalledPackageErrors,
   fetchRegistryJson,
   normalizeInstalledBinaryVersion,
+  openClawNpmPostpublishVerifyUsage,
+  parseOpenClawNpmPostpublishVerifyArgs,
   resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
   retryNpmRegistryProvenanceRead,
@@ -22,6 +24,31 @@ import {
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+
+describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  it("supports help and package-manager separators", () => {
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
+      help: true,
+      version: "",
+    });
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
+      help: false,
+      version: "2026.3.23",
+    });
+  });
+
+  it("rejects missing, option-like, and extra arguments before verification", () => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
+      openClawNpmPostpublishVerifyUsage(),
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
+      "Unknown openclaw npm postpublish verifier option: --tag",
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
+      "Unexpected openclaw npm postpublish verifier argument: extra",
+    );
+  });
+});
 
 function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
   const distDir = join(packageRoot, "dist");

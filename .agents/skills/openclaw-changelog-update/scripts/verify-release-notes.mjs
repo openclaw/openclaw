@@ -670,11 +670,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       pending.push({ commitHash, cursor: connection.pageInfo.endCursor });
     }
   }
-  for (
-    let index = 0;
-    index < commitHashes.length;
-    index += commitAssociationQueryBatchSize
-  ) {
+  for (let index = 0; index < commitHashes.length; index += commitAssociationQueryBatchSize) {
     const chunk = commitHashes.slice(index, index + commitAssociationQueryBatchSize);
     const fields = chunk
       .map(

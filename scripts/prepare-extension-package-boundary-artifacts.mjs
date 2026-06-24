@@ -1,10 +1,11 @@
 // Prepares declaration and entry-shim artifacts that prove plugin package
 // boundary imports resolve through public package surfaces.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -241,6 +242,22 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
+const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
+
+/**
+ * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
+ */
+export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
+  const entries =
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
+  return [
+    ...entries.flatMap((entry) => [
+      `dist/plugin-sdk/${entry}.d.ts`,
+      `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+    ]),
+    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
+  ].toSorted((a, b) => a.localeCompare(b));
+}
 
 function isRelevantTypeInput(filePath) {
   const basename = path.basename(filePath);
@@ -382,13 +399,31 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function signalNodeStep(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalNodeStep(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // The child process group can already be gone by the time cleanup runs.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
     }
   }
   child.kill(signal);
@@ -447,9 +482,10 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
     let killDeadlineAt = 0;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-    const killNodeStep = (signal) => signalNodeStep(child, signal);
+    const useProcessGroup = process.platform !== "win32";
+    const killNodeStep = (signal) => signalNodeStep(child, signal, { useProcessGroup });
     const processGroupAlive = () => {
-      if (process.platform === "win32" || !child.pid) {
+      if (!useProcessGroup || !child.pid) {
         return false;
       }
       try {
@@ -621,7 +657,10 @@ async function main(argv = process.argv.slice(2)) {
         "dist/plugin-sdk/.tsbuildinfo",
         "packages/plugin-sdk/dist/.tsbuildinfo",
       ],
-      outputPaths: ["dist/plugin-sdk/.boundary-entry-shims.stamp"],
+      outputPaths: [
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        ...resolveBoundaryEntryShimRequiredOutputs(),
+      ],
     });
     const qaChannelDtsFresh =
       isArtifactSetFresh({

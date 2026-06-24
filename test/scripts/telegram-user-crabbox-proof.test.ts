@@ -18,6 +18,8 @@ import {
   renderRemoteSetup,
   renderSelectDesktopChat,
   runCommand,
+  signalCommandTree,
+  stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
@@ -210,6 +212,46 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(renderSelectDesktopChat({ chatTitle: payload })).toContain(`chat_title='${payload}'`);
   });
 
+  it("stages full publish artifacts without session control files", () => {
+    const outputDir = makeTempDir();
+    const publishDir = path.join(outputDir, "publish-full-artifacts");
+    fs.mkdirSync(publishDir);
+    fs.writeFileSync(path.join(publishDir, "stale.txt"), "stale");
+    fs.mkdirSync(path.join(outputDir, "publish-gif-only"));
+    fs.writeFileSync(
+      path.join(outputDir, "session.json"),
+      '{"sshKey":"/private/tmp/openclaw/key"}',
+    );
+    fs.writeFileSync(path.join(outputDir, "lease.json"), '{"token":"secret"}');
+    fs.writeFileSync(path.join(outputDir, "status.json"), '{"ok":true}');
+    fs.writeFileSync(path.join(outputDir, "probe.json"), '{"ok":true}');
+    fs.writeFileSync(path.join(outputDir, "probe-2026-06-20T16-47-48-123Z.json"), '{"ok":true}');
+    fs.writeFileSync(path.join(outputDir, "probe-secret.json"), '{"token":"secret"}');
+    fs.writeFileSync(path.join(outputDir, "telegram-user-crabbox-session-summary.json"), "{}");
+    fs.writeFileSync(path.join(outputDir, "telegram-user-crabbox-proof.md"), "report");
+    fs.writeFileSync(path.join(outputDir, "telegram-desktop.log"), "log");
+    fs.writeFileSync(path.join(outputDir, "telegram-user-crabbox-session-motion.gif"), "gif");
+    fs.writeFileSync(path.join(outputDir, "telegram-user-crabbox-session.mp4"), "video");
+
+    const stagedDir = stageFullSessionArtifacts(outputDir);
+
+    expect(stagedDir).toBe(publishDir);
+    expect(fs.readdirSync(stagedDir).sort()).toEqual([
+      "probe-2026-06-20T16-47-48-123Z.json",
+      "probe.json",
+      "status.json",
+      "telegram-desktop.log",
+      "telegram-user-crabbox-proof.md",
+      "telegram-user-crabbox-session-motion.gif",
+      "telegram-user-crabbox-session-summary.json",
+      "telegram-user-crabbox-session.mp4",
+    ]);
+    expect(fs.existsSync(path.join(stagedDir, "session.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stagedDir, "lease.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stagedDir, "probe-secret.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stagedDir, "stale.txt"))).toBe(false);
+  });
+
   posixIt("does not expand generated remote probe arguments in the shell", () => {
     const root = makeTempDir();
     const fakePython = path.join(root, "python3");
@@ -309,6 +351,80 @@ setInterval(() => {}, 1000);
         process.kill(grandchildPid, "SIGKILL");
       }
     }
+  });
+
+  it("signals Windows proof command process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalCommandTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+    });
+
+    signalCommandTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  posixIt("lets timed-out command descendants exit during kill grace", async () => {
+    const root = makeTempDir();
+    const scriptPath = path.join(root, "trap-term-grace.mjs");
+    const readyPath = path.join(root, "descendant.ready");
+    const donePath = path.join(root, "descendant.done");
+
+    fs.writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+
+const descendant = spawn(process.execPath, [
+  "--input-type=module",
+  "--eval",
+  ${JSON.stringify(
+    `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(readyPath)}, "ready");
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    writeFileSync(${JSON.stringify(donePath)}, "done");
+    process.exit(0);
+  }, 75);
+});
+setInterval(() => {}, 1000);`,
+  )},
+], { stdio: "ignore" });
+descendant.unref();
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand({
+      args: [scriptPath],
+      command: process.execPath,
+      cwd: root,
+      timeoutKillGraceMs: 500,
+      timeoutMs: 500,
+    });
+
+    await waitFor(() => fs.existsSync(readyPath));
+    await expect(runPromise).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: expect.stringContaining("timed out after 500ms"),
+    });
+    expect(fs.readFileSync(donePath, "utf8")).toBe("done");
   });
 
   posixIt("keeps closed command groups tracked for parent cleanup", async () => {

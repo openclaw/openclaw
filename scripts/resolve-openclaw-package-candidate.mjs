@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -197,17 +197,7 @@ function run(command, args, options = {}) {
     let timedOut = false;
     let killTimer;
     let forceKillAt;
-    const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group can disappear between timeout and cleanup.
-        }
-      }
-      child.kill(signal);
-    };
+    const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
       const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
@@ -312,6 +302,36 @@ async function finishTimedOutProcessTree(
   }
 }
 
+export function signalChildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
 function childHasExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -376,7 +396,7 @@ async function sha256(file) {
 }
 
 function assertSha256(value) {
-  if (!/^[a-f0-9]{64}$/u.test(value)) {
+  if (!/^[a-f0-9]{64}$/iu.test(value)) {
     throw new Error(`package_sha256 must be a lowercase or uppercase 64-character SHA-256 digest`);
   }
 }
@@ -392,6 +412,8 @@ async function assertExpectedSha256(file, expected) {
   }
   return actual;
 }
+
+export const assertExpectedSha256ForTest = assertExpectedSha256;
 
 async function findSingleTarball(dir) {
   const root = path.resolve(ROOT_DIR, dir);
@@ -421,8 +443,11 @@ async function findSingleTarball(dir) {
       if (entry.isFile() && /\.t(?:ar\.)?gz$/u.test(entry.name)) {
         tarballs.push(absolute);
         if (tarballs.length > 1) {
+          const relativeTarballs = tarballs
+            .map((tarball) => path.relative(root, tarball))
+            .toSorted((a, b) => a.localeCompare(b));
           throw new Error(
-            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${tarballs.toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${relativeTarballs.join(", ")}`,
           );
         }
       }
@@ -960,8 +985,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
   }
 }
 
-function createTrustedPackageAuthHeaders(trustedSource) {
+function createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin) {
   if (!trustedSource?.auth) {
+    return undefined;
+  }
+  if (parsed.origin !== initialOrigin) {
     return undefined;
   }
   const token = process.env[TRUSTED_PACKAGE_SOURCE_TOKEN_ENV];
@@ -1190,8 +1218,8 @@ async function openPackageDownloadResponse(url, options) {
   const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
-  const headers = createTrustedPackageAuthHeaders(trustedSource);
   let parsed = new URL(url);
+  const initialOrigin = parsed.origin;
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     if (trustedSource) {
       validateTrustedPackageDownloadUrl(parsed, trustedSource, { isRedirect: redirectCount > 0 });
@@ -1199,6 +1227,7 @@ async function openPackageDownloadResponse(url, options) {
       validatePackageDownloadUrl(parsed);
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
+    const headers = createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin);
     const opened = options.fetchImpl
       ? await openFetchPackageDownloadResponse(parsed, {
           fetchImpl: options.fetchImpl,
