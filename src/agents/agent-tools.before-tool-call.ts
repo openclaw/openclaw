@@ -68,6 +68,11 @@ import {
   recordStructuredReplaySafeToolCall,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import {
+  isFailureToolResultStatus,
+  isToolResultError,
+  readToolResultStatus,
+} from "./tool-result-error.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -1512,18 +1517,32 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          emitTrustedDiagnosticEventWithPrivateData(
-            {
-              type: "tool.execution.completed",
-              ...eventBase,
-              durationMs,
-            },
-            buildToolContentPrivateData(toolContentPolicy, {
-              input: executeParams,
-              output: result,
-              includeOutput: true,
-            }),
-          );
+          const privateData = buildToolContentPrivateData(toolContentPolicy, {
+            input: executeParams,
+            output: result,
+            includeOutput: true,
+          });
+          if (isToolResultError(result)) {
+            const status = readToolResultStatus(result);
+            emitTrustedDiagnosticEventWithPrivateData(
+              {
+                type: "tool.execution.error",
+                ...eventBase,
+                durationMs,
+                errorCategory: isFailureToolResultStatus(status) ? status : "tool_reported_error",
+              },
+              privateData,
+            );
+          } else {
+            emitTrustedDiagnosticEventWithPrivateData(
+              {
+                type: "tool.execution.completed",
+                ...eventBase,
+                durationMs,
+              },
+              privateData,
+            );
+          }
         }
         return result;
       } catch (err) {

@@ -14,6 +14,27 @@ export function readToolResultStatus(result: unknown): string | undefined {
   return normalizeOptionalLowercaseString(readToolResultDetails(result)?.status);
 }
 
+export function isFailureToolResultStatus(status: string | undefined): status is string {
+  return (
+    status === "error" ||
+    status === "failed" ||
+    status === "failure" ||
+    status === "timeout" ||
+    status === "timed_out" ||
+    status === "blocked" ||
+    status === "denied" ||
+    status === "forbidden" ||
+    status === "unavailable" ||
+    status === "approval-unavailable" ||
+    status === "disabled" ||
+    status === "aborted" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "killed" ||
+    status === "invalid"
+  );
+}
+
 export function isToolResultError(result: unknown): boolean {
   const details = readToolResultDetails(result);
   const normalized = readToolResultStatus(result);
@@ -21,24 +42,7 @@ export function isToolResultError(result: unknown): boolean {
   if (details?.ok === false || details?.success === false) {
     return true;
   }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
+  if (isFailureToolResultStatus(normalized) && !explicitlySuccessful) {
     return true;
   }
   if (details?.timedOut === true || Boolean(details?.error)) {

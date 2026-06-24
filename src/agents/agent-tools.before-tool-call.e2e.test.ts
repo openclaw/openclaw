@@ -816,6 +816,40 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("emits tool.execution.error when execute returns a soft-error result without throwing", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "memory unavailable" }],
+      details: { status: "unavailable", disabled: true, error: "memory not configured" },
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "memory_search", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      const result = await tool.execute(
+        "tool-call-soft-error",
+        { query: "test" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect((result as any).details.status).toBe("unavailable");
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expectEventFields(emitted[1], {
+        type: "tool.execution.error",
+        toolName: "memory_search",
+        toolCallId: "tool-call-soft-error",
+        errorCategory: "unavailable",
+      });
+    });
+  });
+
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
     hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
