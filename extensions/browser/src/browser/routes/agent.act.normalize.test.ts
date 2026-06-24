@@ -34,11 +34,15 @@ describe("canonicalizeActTargetIds", () => {
       ],
     });
     expect(result.ok).toBe(true);
-    if (!result.ok || result.action.kind !== "batch") throw new Error("expected batch");
+    if (!result.ok || result.action.kind !== "batch") {
+      throw new Error("expected batch");
+    }
     expect(result.action.targetId).toBe(canonical);
     const [first, nested] = result.action.actions;
     expect(first?.targetId).toBe(canonical);
-    if (nested?.kind !== "batch") throw new Error("expected nested batch");
+    if (nested?.kind !== "batch") {
+      throw new Error("expected nested batch");
+    }
     expect(nested.actions[0]?.targetId).toBe(canonical);
   });
 
