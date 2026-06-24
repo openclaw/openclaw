@@ -797,6 +797,73 @@ describe("buildServiceEnvironment", () => {
   });
 });
 
+describe("buildServiceEnvironment NODE_OPTIONS", () => {
+  it("sets default --max-old-space-size=8192 when no NODE_OPTIONS is present", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+  });
+
+  it("drops ambient NODE_OPTIONS and uses default heap flag", () => {
+    // Hostile NODE_OPTIONS (--require, --inspect, etc.) must not leak into
+    // managed services. The service env only gets the OpenClaw-owned heap flag.
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--max-old-space-size=16384 --no-warnings",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+  });
+
+  it("drops ambient NODE_OPTIONS with other flags and sets default heap", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--no-warnings --experimental-vm-modules",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+  });
+
+  it("drops hostile --require in ambient NODE_OPTIONS", () => {
+    // A --require preload in the host process must never persist into
+    // managed services — that would re-open a startup preload boundary.
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--require /tmp/malicious.js --max-old-space-size=4096",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+    expect(env.NODE_OPTIONS).not.toContain("--require");
+  });
+
+  it("drops --inspect in ambient NODE_OPTIONS", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--inspect=0.0.0.0:9229 --max-old-space-size=4096",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+    expect(env.NODE_OPTIONS).not.toContain("--inspect");
+  });
+
+  it("includes NODE_OPTIONS in buildNodeServiceEnvironment", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+  });
+});
+
 describe("buildNodeServiceEnvironment", () => {
   it("passes through HOME for node services", () => {
     const env = buildNodeServiceEnvironment({
