@@ -132,4 +132,24 @@ describe("matrix thread context", () => {
       "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
     );
   });
+
+  it("truncates a long thread starter body on a code-point boundary without splitting a surrogate pair", () => {
+    // Body is 496 'a's, then 😀 (U+1F600, two UTF-16 units at indices 496-497),
+    // then 'bcd'. A raw slice(0, 497) would cut the emoji in half, leaving a lone
+    // high surrogate before the ellipsis. The truncation must drop the half emoji.
+    const body = `${"a".repeat(496)}😀bcd`;
+    const summary = summarizeMatrixThreadStarterEvent({
+      event_id: "$root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        body,
+      },
+    } as MatrixRawEvent);
+    expect(summary).toBe(`${"a".repeat(496)}...`);
+    // No orphaned surrogate should survive the truncation.
+    expect(summary && /[\uD800-\uDFFF]/.test(summary)).toBe(false);
+  });
 });
