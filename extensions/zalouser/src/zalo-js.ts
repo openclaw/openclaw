@@ -92,6 +92,38 @@ const activeListeners = new Map<string, ActiveZaloListener>();
 const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
 
 type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
+type ZaloUploadedAttachment = Awaited<ReturnType<API["uploadAttachment"]>>[number];
+
+type SendUploadedZaloAttachmentParams = {
+  msg: string;
+  attachment: ZaloUploadedAttachment;
+  threadId: string;
+  type: (typeof ThreadType)[keyof typeof ThreadType];
+};
+
+type OpenClawZaloAttachmentApi = API & {
+  zpwServiceMap?: { file: string[] };
+  custom?: (
+    name: "openclawSendUploadedAttachment",
+    callback: (params: {
+      ctx: {
+        imei: string;
+      };
+      utils: {
+        makeURL(
+          baseURL: string,
+          params?: Record<string, string | number>,
+          apiVersion?: boolean,
+        ): string;
+        encodeAES(data: string): string | null;
+        request(url: string, options?: RequestInit, raw?: boolean): Promise<Response>;
+        resolve(response: Response): Promise<unknown>;
+      };
+      props: SendUploadedZaloAttachmentParams;
+    }) => Promise<unknown>,
+  ) => void;
+  openclawSendUploadedAttachment?: (params: SendUploadedZaloAttachmentParams) => Promise<unknown>;
+};
 
 type ApiTypingCapability = {
   sendTypingEvent: (
@@ -537,6 +569,121 @@ function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }
   // zca-js uses uploadAttachment(...).fileUrl directly for sendVoice.
   // Appending filename can produce URLs that play only in the local session.
   return asset.fileUrl.trim();
+}
+
+function removeUndefinedZaloParams(params: Record<string, unknown>): Record<string, unknown> {
+  for (const key of Object.keys(params)) {
+    if (params[key] === undefined) {
+      delete params[key];
+    }
+  }
+  return params;
+}
+
+function uploadedAttachmentExtension(attachment: ZaloUploadedAttachment): string {
+  return path.extname(attachment.fileName ?? "").replace(/^\./u, "");
+}
+
+function isZaloGifMedia(params: { fileName: string; contentType?: string }): boolean {
+  return (
+    path.extname(params.fileName).toLowerCase() === ".gif" ||
+    normalizeOptionalLowercaseString(params.contentType)?.split(";", 1)[0] === "image/gif"
+  );
+}
+
+function ensureUploadedAttachmentSender(
+  api: API,
+): (params: SendUploadedZaloAttachmentParams) => Promise<unknown> {
+  const customApi = api as OpenClawZaloAttachmentApi;
+  if (customApi.openclawSendUploadedAttachment) {
+    return customApi.openclawSendUploadedAttachment.bind(customApi);
+  }
+  if (typeof customApi.custom !== "function") {
+    throw new Error("zca-js custom API is unavailable for uploaded zalouser attachments");
+  }
+
+  customApi.custom("openclawSendUploadedAttachment", async ({ utils, props }) => {
+    const isGroupMessage = props.type === ThreadType.Group;
+    const fileServiceUrl = customApi.zpwServiceMap?.file[0];
+    if (!fileServiceUrl) {
+      throw new Error("zca-js file service URL is unavailable");
+    }
+    const attachmentBaseUrl = `${fileServiceUrl}/api/${isGroupMessage ? "group" : "message"}/`;
+    const clientId = Date.now().toString();
+    const attachment = props.attachment;
+    const endpoint = attachment.fileType === "image" ? "photo_original/send?" : "asyncfile/msg?";
+    const params =
+      attachment.fileType === "image"
+        ? removeUndefinedZaloParams({
+            photoId: attachment.photoId,
+            clientId,
+            desc: props.msg,
+            width: attachment.width,
+            height: attachment.height,
+            toid: isGroupMessage ? undefined : props.threadId,
+            grid: isGroupMessage ? props.threadId : undefined,
+            rawUrl: attachment.normalUrl,
+            hdUrl: attachment.hdUrl,
+            thumbUrl: attachment.thumbUrl,
+            oriUrl: isGroupMessage ? attachment.normalUrl : undefined,
+            normalUrl: isGroupMessage ? undefined : attachment.normalUrl,
+            hdSize: String(attachment.totalSize ?? 0),
+            zsource: -1,
+            ttl: 0,
+            jcp: '{"convertible":"jxl"}',
+          })
+        : removeUndefinedZaloParams({
+            fileId: attachment.fileId,
+            checksum: attachment.checksum,
+            checksumSha: "",
+            extention: uploadedAttachmentExtension(attachment),
+            totalSize: attachment.totalSize,
+            fileName: attachment.fileName,
+            clientId: attachment.clientFileId,
+            fType: 1,
+            fileCount: 0,
+            fdata: "{}",
+            toid: isGroupMessage ? undefined : props.threadId,
+            grid: isGroupMessage ? props.threadId : undefined,
+            fileUrl: attachment.fileUrl,
+            zsource: -1,
+            ttl: 0,
+          });
+    const encryptedParams = utils.encodeAES(JSON.stringify(params));
+    if (!encryptedParams) {
+      throw new Error("Failed to encrypt zalouser attachment message");
+    }
+    const response = await utils.request(
+      utils.makeURL(`${attachmentBaseUrl}${endpoint}`, { nretry: "0" }),
+      {
+        method: "POST",
+        body: new URLSearchParams({ params: encryptedParams }),
+      },
+    );
+    return await utils.resolve(response);
+  });
+
+  const registeredSender = (api as OpenClawZaloAttachmentApi).openclawSendUploadedAttachment;
+  if (!registeredSender) {
+    throw new Error("Failed to register uploaded zalouser attachment sender");
+  }
+  return registeredSender.bind(customApi);
+}
+
+async function withZaloSendOperationTimeout<T>(
+  promise: Promise<T>,
+  operation: string,
+  timeoutMs: number | undefined,
+): Promise<T> {
+  if (!timeoutMs) {
+    return await promise;
+  }
+  return await withTimeout(promise, timeoutMs, {
+    message:
+      `Timed out ${operation} after ${timeoutMs}ms. ` +
+      "For zalouser media/file sends, keep the live gateway listener session running " +
+      "and retry from that connected session.",
+  });
 }
 
 function mapFriend(friend: User): ZcaFriend {
@@ -1243,7 +1390,7 @@ export async function sendZaloTextMessage(
 
           if (media.kind === "audio") {
             let textMessageId: string | undefined;
-            if (payloadText) {
+            if (payloadText && !options.sendTimeoutMs) {
               const textResponse = await api.sendMessage(
                 textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
                 trimmedThreadId,
@@ -1251,26 +1398,37 @@ export async function sendZaloTextMessage(
               );
               textMessageId = extractSendMessageId(textResponse);
             }
-
             const attachmentFileName = fileName.includes(".") ? fileName : `${fileName}.bin`;
-            const uploaded = await api.uploadAttachment(
-              [
-                {
-                  data: media.buffer,
-                  filename: attachmentFileName as `${string}.${string}`,
-                  metadata: {
-                    totalSize: media.buffer.length,
+            const uploaded = await withZaloSendOperationTimeout(
+              api.uploadAttachment(
+                [
+                  {
+                    data: media.buffer,
+                    filename: attachmentFileName as `${string}.${string}`,
+                    metadata: {
+                      totalSize: media.buffer.length,
+                    },
                   },
-                },
-              ],
-              trimmedThreadId,
-              type,
+                ],
+                trimmedThreadId,
+                type,
+              ),
+              "uploading zalouser audio attachment",
+              options.sendTimeoutMs,
             );
             const voiceAsset = resolveUploadedVoiceAsset(uploaded);
             if (!voiceAsset) {
               throw new Error("Failed to resolve uploaded audio URL for voice message");
             }
             const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
+            if (payloadText && options.sendTimeoutMs) {
+              const textResponse = await api.sendMessage(
+                textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+                trimmedThreadId,
+                type,
+              );
+              textMessageId = extractSendMessageId(textResponse);
+            }
             const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
             const voiceMessageId = extractSendMessageId(response);
             return {
@@ -1284,29 +1442,70 @@ export async function sendZaloTextMessage(
             };
           }
 
-          const response = await api.sendMessage(
-            {
-              msg: payloadText,
-              ...(textStyles ? { styles: textStyles } : {}),
-              attachments: [
-                {
-                  data: media.buffer,
-                  filename: fileName.includes(".") ? fileName : `${fileName}.bin`,
-                  metadata: {
-                    totalSize: media.buffer.length,
-                  },
-                },
-              ],
+          const attachment = {
+            data: media.buffer,
+            filename: (fileName.includes(".")
+              ? fileName
+              : `${fileName}.bin`) as `${string}.${string}`,
+            metadata: {
+              totalSize: media.buffer.length,
             },
-            trimmedThreadId,
-            type,
+          };
+          if (
+            !options.sendTimeoutMs ||
+            isZaloGifMedia({ fileName, contentType: media.contentType })
+          ) {
+            // zca-js sends GIFs through a dedicated thumbnail + gif endpoint.
+            // uploadAttachment would downgrade them to generic files.
+            const response = await api.sendMessage(
+              {
+                msg: payloadText,
+                ...(textStyles ? { styles: textStyles } : {}),
+                attachments: [attachment],
+              },
+              trimmedThreadId,
+              type,
+            );
+            const messageId = extractSendMessageId(response);
+            return {
+              ok: true,
+              messageId,
+              receipt: createZalouserSendReceipt({
+                messageId,
+                threadId: trimmedThreadId,
+                kind: "media",
+              }),
+            };
+          }
+          const [uploadedAttachment] = await withZaloSendOperationTimeout(
+            api.uploadAttachment([attachment], trimmedThreadId, type),
+            "uploading zalouser media attachment",
+            options.sendTimeoutMs,
           );
-          const messageId = extractSendMessageId(response);
+          if (!uploadedAttachment) {
+            throw new Error("Failed to resolve uploaded zalouser attachment");
+          }
+          let textMessageId: string | undefined;
+          if (payloadText && uploadedAttachment.fileType !== "image") {
+            const textResponse = await api.sendMessage(
+              textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+              trimmedThreadId,
+              type,
+            );
+            textMessageId = extractSendMessageId(textResponse);
+          }
+          const attachmentResponse = await ensureUploadedAttachmentSender(api)({
+            msg: uploadedAttachment.fileType === "image" ? payloadText : "",
+            attachment: uploadedAttachment,
+            threadId: trimmedThreadId,
+            type,
+          });
+          const messageId = extractSendMessageId(attachmentResponse);
           return {
             ok: true,
-            messageId,
+            messageId: messageId ?? textMessageId,
             receipt: createZalouserSendReceipt({
-              messageId,
+              messageId: messageId ?? textMessageId,
               threadId: trimmedThreadId,
               kind: "media",
             }),

@@ -208,6 +208,15 @@ export type API = {
       msgId?: string | number;
       fileId?: string;
       fileName?: string;
+      checksum?: string;
+      clientFileId?: string | number;
+      totalSize?: number;
+      normalUrl?: string;
+      hdUrl?: string;
+      thumbUrl?: string;
+      photoId?: string;
+      width?: number;
+      height?: number;
     }>
   >;
   sendVoice(

@@ -19,7 +19,12 @@ import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
+vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
+  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+}));
 
 vi.mock("./zca-client.js", () => ({
   createZalo: createZaloMock,
@@ -31,6 +36,7 @@ import {
   listZaloFriends,
   sendZaloLink,
   sendZaloReaction,
+  sendZaloTextMessage,
   startZaloQrLogin,
   waitForZaloQrLogin,
 } from "./zalo-js.js";
@@ -62,12 +68,27 @@ async function readStoredCredentials(
   ) as StoredCredentialFile;
 }
 
+async function writeStoredCredentials(stateDir: string, profile: string): Promise<void> {
+  await mkdir(path.dirname(credentialPath(stateDir, profile)), { recursive: true });
+  await writeFile(
+    credentialPath(stateDir, profile),
+    JSON.stringify({
+      imei: "stored-imei",
+      cookie: [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }],
+      userAgent: "stored-user-agent",
+    }),
+  );
+}
+
 function createMockApi(params: {
   imei: string;
   userAgent: string;
   language?: string;
   cookies: unknown[] | (() => unknown[]);
   getAllFriends?: API["getAllFriends"];
+  sendMessage?: API["sendMessage"];
+  sendVoice?: API["sendVoice"];
+  uploadAttachment?: API["uploadAttachment"];
 }): API {
   return {
     getContext: () => ({
@@ -88,6 +109,9 @@ function createMockApi(params: {
       avatar: "",
     }),
     getAllFriends: params.getAllFriends ?? vi.fn(async () => []),
+    sendMessage: params.sendMessage ?? vi.fn(async () => ({})),
+    sendVoice: params.sendVoice ?? vi.fn(async () => ({})),
+    uploadAttachment: params.uploadAttachment ?? vi.fn(async () => []),
     listener: {
       on: vi.fn(),
       off: vi.fn(),
@@ -100,6 +124,7 @@ function createMockApi(params: {
 describe("zalouser credential persistence", () => {
   beforeEach(() => {
     createZaloMock.mockReset();
+    loadOutboundMediaFromUrlMock.mockReset();
   });
 
   it("persists the final API cookie jar after QR login", async () => {
@@ -384,6 +409,220 @@ describe("zalouser credential persistence", () => {
           profile: "missing-session",
         });
         expectMissingSessionResult(result);
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails boundedly before final send when a zalouser media upload never resolves", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "hanging-media-upload";
+    await writeStoredCredentials(stateDir, profile);
+
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+    const uploadAttachment = vi.fn(() => new Promise<never>(() => {}));
+    const sendMessage = vi.fn(async () => ({}));
+    const api = createMockApi({
+      imei: "api-imei",
+      userAgent: "api-user-agent",
+      cookies: [{ key: "zpsid", value: "api", domain: "chat.zalo.me" }],
+      sendMessage,
+      uploadAttachment,
+    });
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await sendZaloTextMessage("thread-1", "report", {
+          profile,
+          mediaUrl: "file:///allowed/report.pdf",
+          sendTimeoutMs: 5,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("Timed out uploading zalouser media attachment");
+        expect(result.error).toContain("live gateway listener session");
+        expect(uploadAttachment).toHaveBeenCalledTimes(1);
+        expect(sendMessage).not.toHaveBeenCalled();
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps zalouser media upload probing opt-in", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "media-no-timeout";
+    await writeStoredCredentials(stateDir, profile);
+
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+    const uploadAttachment = vi.fn(async () => []);
+    const sendMessage = vi.fn(async () => ({ attachment: [{ msgId: "att-1" }] }));
+    const api = createMockApi({
+      imei: "api-imei",
+      userAgent: "api-user-agent",
+      cookies: [{ key: "zpsid", value: "api", domain: "chat.zalo.me" }],
+      sendMessage,
+      uploadAttachment,
+    });
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await sendZaloTextMessage("thread-1", "report", {
+          profile,
+          mediaUrl: "file:///allowed/report.pdf",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(uploadAttachment).not.toHaveBeenCalled();
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends timed zalouser media from the uploaded attachment", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "media-uploaded-send";
+    await writeStoredCredentials(stateDir, profile);
+
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+    const uploadAttachment = vi.fn(async () => [
+      {
+        fileType: "others" as const,
+        fileUrl: "https://file.example/report.pdf",
+        fileId: "file-1",
+        fileName: "report.pdf",
+        checksum: "checksum",
+        clientFileId: "client-file-1",
+        totalSize: 3,
+      },
+    ]);
+    const sendMessage = vi.fn(async () => ({}));
+    const makeURL = vi.fn((baseURL: string) => `${baseURL}&nretry=0`);
+    const encodeAES = vi.fn(() => "encrypted-params");
+    const request = vi.fn(async () => ({}) as Response);
+    const resolve = vi.fn(async () => ({ msgId: "uploaded-1" }));
+    const api = createMockApi({
+      imei: "api-imei",
+      userAgent: "api-user-agent",
+      cookies: [{ key: "zpsid", value: "api", domain: "chat.zalo.me" }],
+      sendMessage,
+      uploadAttachment,
+    }) as API & {
+      zpwServiceMap: { file: string[] };
+      custom: (
+        name: "openclawSendUploadedAttachment",
+        callback: (params: {
+          ctx: { imei: string };
+          utils: {
+            makeURL: typeof makeURL;
+            encodeAES: typeof encodeAES;
+            request: typeof request;
+            resolve: typeof resolve;
+          };
+          props: unknown;
+        }) => Promise<unknown>,
+      ) => void;
+      openclawSendUploadedAttachment?: (props: unknown) => Promise<unknown>;
+    };
+    api.zpwServiceMap = { file: ["https://file.zalo.test"] };
+    api.custom = (name, callback) => {
+      Object.defineProperty(api, name, {
+        value: async (props: unknown) =>
+          await callback({
+            ctx: { imei: "api-imei" },
+            utils: { makeURL, encodeAES, request, resolve },
+            props,
+          }),
+      });
+    };
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await sendZaloTextMessage("thread-1", "", {
+          profile,
+          mediaUrl: "file:///allowed/report.pdf",
+          sendTimeoutMs: 5,
+        });
+
+        expect(result).toMatchObject({ ok: true, messageId: "uploaded-1" });
+        expect(uploadAttachment).toHaveBeenCalledTimes(1);
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(makeURL).toHaveBeenCalledWith("https://file.zalo.test/api/message/asyncfile/msg?", {
+          nretry: "0",
+        });
+        expect(encodeAES).toHaveBeenCalledWith(expect.stringContaining('"fileId":"file-1"'));
+        expect(request).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps timed zalouser GIF media on zca-js sendMessage", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "media-gif-send";
+    await writeStoredCredentials(stateDir, profile);
+
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("gif"),
+      contentType: "image/gif",
+      fileName: "animation.gif",
+      kind: "image",
+    });
+    const uploadAttachment = vi.fn(async () => []);
+    const sendMessage = vi.fn(async () => ({ attachment: [{ msgId: "gif-1" }] }));
+    const api = createMockApi({
+      imei: "api-imei",
+      userAgent: "api-user-agent",
+      cookies: [{ key: "zpsid", value: "api", domain: "chat.zalo.me" }],
+      sendMessage,
+      uploadAttachment,
+    });
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await sendZaloTextMessage("thread-1", "animation", {
+          profile,
+          mediaUrl: "file:///allowed/animation.gif",
+          sendTimeoutMs: 5,
+        });
+
+        expect(result).toMatchObject({ ok: true, messageId: "gif-1" });
+        expect(uploadAttachment).not.toHaveBeenCalled();
+        expect(sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            msg: "animation",
+            attachments: [
+              expect.objectContaining({
+                filename: "animation.gif",
+              }),
+            ],
+          }),
+          "thread-1",
+          0,
+        );
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });

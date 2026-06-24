@@ -67,6 +67,7 @@ export type ZaloSendOptions = {
   isGroup?: boolean;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  sendTimeoutMs?: number;
   textMode?: "markdown" | "plain";
   textChunkMode?: "length" | "newline";
   textChunkLimit?: number;

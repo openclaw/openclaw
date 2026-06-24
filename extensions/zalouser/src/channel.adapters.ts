@@ -44,6 +44,7 @@ import {
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
+const ZALOUSER_SEND_TIMEOUT_MS = 35_000;
 
 type ZalouserSendTextContext = {
   to: string;
@@ -141,6 +142,7 @@ async function sendZalouserMediaFromContext({
     textMode: "markdown",
     textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
     textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
+    sendTimeoutMs: ZALOUSER_SEND_TIMEOUT_MS,
   });
 }
 
