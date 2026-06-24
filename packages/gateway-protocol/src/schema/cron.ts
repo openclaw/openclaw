@@ -83,6 +83,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("at"),
   Type.Literal("every"),
   Type.Literal("cron"),
+  Type.Literal("on-exit"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -220,6 +221,17 @@ export const CronScheduleSchema = Type.Union([
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
       staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      // Event-driven trigger: fires once when the gateway-owned watcher running
+      // `command` exits. Survives per-turn CLI teardown (runs under the gateway
+      // ProcessSupervisor, not the turn process tree).
+      kind: Type.Literal("on-exit"),
+      command: NonEmptyString,
+      cwd: Type.Optional(NonEmptyString),
     },
     { additionalProperties: false },
   ),
