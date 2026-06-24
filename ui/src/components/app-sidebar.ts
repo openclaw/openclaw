@@ -1,3 +1,4 @@
+import { consume } from "@lit/context";
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { SessionsListResult } from "../api/types.ts";
@@ -9,16 +10,25 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
-import type { ApplicationSessions } from "../app/sessions.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
+import {
+  isSessionKeyTiedToAgent,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/session-key.ts";
+import type { RouteLocation } from "../router/types.ts";
 import { icons } from "./icons.ts";
 
-export type SidebarRecentSession = {
+type SidebarRecentSession = {
   key: string;
   label: string;
   meta: string;
@@ -37,33 +47,120 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
-  @property({ attribute: false }) getHref?: (routeId: NavigationRouteId) => string;
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) routeLocation?: RouteLocation;
   @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
-  @property({ attribute: false }) recentSessions: readonly SidebarRecentSession[] = [];
-  @property({ attribute: false }) recentSessionsCollapsed = false;
-  @property({ attribute: false }) newSessionDisabled = false;
-  @property({ attribute: false }) newSessionTitle = "";
-  @property({ attribute: false }) sessions?: ApplicationSessions;
   @property({ attribute: false }) sessionsResult: SessionsListResult | null = null;
-  @property({ attribute: false }) currentSessionKey = "";
-  @property({ attribute: false }) sessionAgentId = "main";
-  @property({ attribute: false }) defaultAgentId = "main";
+  @property({ attribute: false }) sessionsLoading = false;
+  @property({ attribute: false }) recentSessionsCollapsed = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) onCreateSession?: () => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
-  @property({ attribute: false }) onRecentSession?: (session: SidebarRecentSession) => void;
-  @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
+
+  @consume({ context: applicationContext, subscribe: false })
+  private context?: ApplicationContext<RouteId>;
 
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
   }
+
+  private getRouteSessionKey(): string {
+    if (this.activeRouteId !== "chat") {
+      return "";
+    }
+    return (
+      new URLSearchParams(this.routeLocation?.search).get("session")?.trim() ??
+      this.context?.gateway.snapshot.sessionKey.trim() ??
+      ""
+    );
+  }
+
+  private getSessionNavigationState() {
+    const context = this.context;
+    const routeSessionKey = this.getRouteSessionKey();
+    const defaultAgentId = resolveUiSelectedGlobalAgentId({
+      assistantAgentId: context?.gateway.snapshot.assistantAgentId,
+      hello: context?.gateway.snapshot.hello,
+    });
+    const parsedSession = parseAgentSessionKey(routeSessionKey);
+    const selectedAgentId = parsedSession?.agentId ?? defaultAgentId;
+    const shouldFilterByAgent = routeSessionKey.toLowerCase() !== "unknown";
+    const recentSessions = (this.sessionsResult?.sessions ?? [])
+      .filter(
+        (row) =>
+          !row.archived &&
+          row.kind !== "global" &&
+          row.kind !== "unknown" &&
+          row.kind !== "cron" &&
+          !isCronSessionKey(row.key) &&
+          !isSubagentSessionKey(row.key) &&
+          !row.spawnedBy &&
+          (!shouldFilterByAgent ||
+            isSessionKeyTiedToAgent(row.key, selectedAgentId, defaultAgentId)),
+      )
+      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, 5)
+      .map((row) => ({
+        key: row.key,
+        label: resolveSessionDisplayName(row.key, row),
+        meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
+        href: `${pathForRoute("chat", context?.basePath ?? "")}?session=${encodeURIComponent(
+          row.key,
+        )}`,
+        active: row.key === routeSessionKey,
+        hasActiveRun: Boolean(row.hasActiveRun),
+      }));
+    const selectedSession = this.sessionsResult?.sessions.find(
+      (row) => row.key === routeSessionKey,
+    );
+    const newSessionDisabled =
+      !this.connected || this.sessionsLoading || Boolean(selectedSession?.hasActiveRun);
+    return {
+      routeSessionKey,
+      selectedAgentId,
+      defaultAgentId,
+      recentSessions,
+      newSessionDisabled,
+      newSessionTitle: !this.connected
+        ? "Connect to create a new session"
+        : selectedSession?.hasActiveRun
+          ? "Finish the active run before creating a new session"
+          : "New session",
+    };
+  }
+
+  private readonly selectSession = (sessionKey: string) => {
+    this.context?.replace("chat", {
+      search: `?session=${encodeURIComponent(sessionKey)}`,
+    });
+  };
+
+  private readonly createSession = async () => {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const { routeSessionKey, selectedAgentId, newSessionDisabled } =
+      this.getSessionNavigationState();
+    if (newSessionDisabled) {
+      return;
+    }
+    const parentSessionKey =
+      routeSessionKey && routeSessionKey.toLowerCase() !== "unknown" ? routeSessionKey : undefined;
+    const nextSessionKey = await context.sessions.create({
+      agentId: selectedAgentId,
+      parentSessionKey,
+      emitCommandHooks: parentSessionKey !== undefined,
+    });
+    if (nextSessionKey) {
+      this.selectSession(nextSessionKey);
+    }
+  };
 
   private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
     if (routeId === this.activeRouteId || !this.isRouteEnabled(routeId) || !this.onPreloadRoute) {
@@ -120,7 +217,11 @@ export class AppSidebar extends LitElement {
         </span>
       `;
     }
-    const href = this.getHref?.(routeId) ?? pathForRoute(routeId as RouteId, this.basePath);
+    const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
+    const href =
+      routeSessionKey && routeId === "chat"
+        ? `${pathForRoute("chat", this.basePath)}?session=${encodeURIComponent(routeSessionKey)}`
+        : pathForRoute(routeId as RouteId, this.basePath);
     return html`
       <a
         href=${href}
@@ -175,7 +276,7 @@ export class AppSidebar extends LitElement {
             return;
           }
           event.preventDefault();
-          this.onRecentSession?.(session);
+          this.selectSession(session.key);
         }}
       >
         <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
@@ -194,15 +295,24 @@ export class AppSidebar extends LitElement {
   }
 
   private renderSessions() {
+    const context = this.context;
+    const {
+      routeSessionKey,
+      selectedAgentId,
+      defaultAgentId,
+      recentSessions,
+      newSessionDisabled,
+      newSessionTitle,
+    } = this.getSessionNavigationState();
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
         <button
           type="button"
           class="sidebar-new-session"
-          title=${this.newSessionTitle}
+          title=${newSessionTitle}
           aria-label=${t("chat.runControls.newSession")}
-          ?disabled=${this.newSessionDisabled}
-          @click=${() => this.onCreateSession?.()}
+          ?disabled=${newSessionDisabled}
+          @click=${this.createSession}
         >
           <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
           ${this.collapsed
@@ -217,17 +327,17 @@ export class AppSidebar extends LitElement {
             : ""}"
         >
           <openclaw-session-picker
-            .sessions=${this.sessions}
+            .sessions=${context?.sessions}
             .sessionsResult=${this.sessionsResult}
-            .currentSessionKey=${this.currentSessionKey}
-            .agentId=${this.sessionAgentId}
-            .defaultAgentId=${this.defaultAgentId}
+            .currentSessionKey=${routeSessionKey}
+            .agentId=${selectedAgentId}
+            .defaultAgentId=${defaultAgentId}
             .connected=${this.connected}
             .compact=${this.collapsed}
-            .onSelectSession=${this.onSelectSession}
+            .onSelectSession=${this.selectSession}
           ></openclaw-session-picker>
         </div>
-        ${this.collapsed || this.recentSessions.length === 0
+        ${this.collapsed || recentSessions.length === 0
           ? nothing
           : html`
               <div
@@ -248,7 +358,7 @@ export class AppSidebar extends LitElement {
                   <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
                 </button>
                 <div class="sidebar-recent-sessions__list">
-                  ${this.recentSessions.map((session) => this.renderRecentSession(session))}
+                  ${recentSessions.map((session) => this.renderRecentSession(session))}
                 </div>
               </div>
             `}

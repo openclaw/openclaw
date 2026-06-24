@@ -2,7 +2,7 @@ import { consume, ContextProvider } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { SessionsListResult } from "../api/types.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/command-palette.ts";
@@ -19,15 +19,7 @@ import {
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
 } from "../lib/dom-tooltips.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
-import {
-  isSessionKeyTiedToAgent,
-  parseAgentSessionKey,
-  isSubagentSessionKey,
-  resolveAgentIdFromSessionKey,
-  resolveUiSelectedGlobalAgentId,
-} from "../lib/session-key.ts";
+import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
@@ -324,9 +316,9 @@ class OpenClawShell extends LitElement {
         context.navigate(routeId, {
           search: `?session=${encodeURIComponent(sessionKey)}`,
         });
-        return;
       }
     }
+    this.navDrawerOpen = false;
   }
 
   private readonly openPalette = () => {
@@ -375,43 +367,6 @@ class OpenClawShell extends LitElement {
           context.gateway.snapshot.sessionKey
         : "";
     const agentLabel = routeSessionKey ? resolveAgentIdFromSessionKey(routeSessionKey) : "";
-    const defaultAgentId = resolveUiSelectedGlobalAgentId({
-      assistantAgentId: context.gateway.snapshot.assistantAgentId,
-      hello: context.gateway.snapshot.hello,
-    });
-    const parsedSession = parseAgentSessionKey(routeSessionKey);
-    const normalizedSessionKey = routeSessionKey.toLowerCase();
-    const selectedAgentId = parsedSession?.agentId ?? defaultAgentId;
-    const shouldFilterByAgent = normalizedSessionKey !== "unknown";
-    const recentSessions = (this.sessionsResult?.sessions ?? [])
-      .filter(
-        (row) =>
-          !row.archived &&
-          row.kind !== "global" &&
-          row.kind !== "unknown" &&
-          row.kind !== "cron" &&
-          !isCronSessionKey(row.key) &&
-          !isSubagentSessionKey(row.key) &&
-          !row.spawnedBy &&
-          (!shouldFilterByAgent ||
-            isSessionKeyTiedToAgent(row.key, selectedAgentId, defaultAgentId)),
-      )
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-      .slice(0, 5)
-      .map((row) => ({
-        key: row.key,
-        label: resolveSessionDisplayName(row.key, row),
-        meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
-        href: `${pathForRoute("chat", context.basePath)}?session=${encodeURIComponent(row.key)}`,
-        active: row.key === routeSessionKey,
-        hasActiveRun: Boolean(row.hasActiveRun),
-      }));
-    const selectedSession = this.sessionsResult?.sessions.find(
-      (row) => row.key === routeSessionKey,
-    );
-    const newSessionDisabled =
-      !this.gatewayConnected || this.sessionsLoading || Boolean(selectedSession?.hasActiveRun);
-
     return html`
       <openclaw-command-palette
         .onOpen=${undefined}
@@ -457,49 +412,15 @@ class OpenClawShell extends LitElement {
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
             .enabledRouteIds=${ACTIVE_ROUTE_IDS}
-            .getHref=${(routeId: string) =>
-              routeId === "chat"
-                ? `${pathForRoute("chat", context.basePath)}?session=${encodeURIComponent(
-                    routeSessionKey,
-                  )}`
-                : ""}
+            .routeLocation=${renderedMatch?.location}
             .collapsed=${this.navCollapsed}
             .connected=${this.gatewayConnected}
             .version=${this.gatewayVersion}
             .navGroupsCollapsed=${this.navGroupsCollapsed}
-            .recentSessions=${recentSessions}
-            .recentSessionsCollapsed=${this.recentSessionsCollapsed}
-            .sessions=${context.sessions}
             .sessionsResult=${this.sessionsResult}
-            .currentSessionKey=${routeSessionKey}
-            .sessionAgentId=${selectedAgentId}
-            .defaultAgentId=${defaultAgentId}
-            .newSessionDisabled=${newSessionDisabled}
-            .newSessionTitle=${!this.gatewayConnected
-              ? "Connect to create a new session"
-              : selectedSession?.hasActiveRun
-                ? "Finish the active run before creating a new session"
-                : "New session"}
+            .sessionsLoading=${this.sessionsLoading}
+            .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
-            .onCreateSession=${async () => {
-              if (newSessionDisabled) {
-                return;
-              }
-              const parentSessionKey =
-                routeSessionKey && routeSessionKey.toLowerCase() !== "unknown"
-                  ? routeSessionKey
-                  : undefined;
-              const nextSessionKey = await context.sessions.create({
-                agentId: selectedAgentId,
-                parentSessionKey,
-                emitCommandHooks: parentSessionKey !== undefined,
-              });
-              if (nextSessionKey) {
-                context.replace("chat", {
-                  search: `?session=${encodeURIComponent(nextSessionKey)}`,
-                });
-              }
-            }}
             .onToggleCollapsed=${() => {
               if (this.navDrawerOpen) {
                 this.navDrawerOpen = false;
@@ -523,16 +444,6 @@ class OpenClawShell extends LitElement {
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
               })}
             .onNavigate=${(routeId: string) => this.navigate(routeId)}
-            .onRecentSession=${(session: { key: string }) => {
-              context.replace("chat", {
-                search: `?session=${encodeURIComponent(session.key)}`,
-              });
-            }}
-            .onSelectSession=${(sessionKey: string) => {
-              context.replace("chat", {
-                search: `?session=${encodeURIComponent(sessionKey)}`,
-              });
-            }}
             .onPreloadRoute=${(routeId: string) =>
               routeId === "chat" ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>
