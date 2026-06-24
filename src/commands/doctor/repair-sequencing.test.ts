@@ -6,6 +6,10 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
+  maybeRepairBundledPluginLoadPaths: vi.fn((cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  })),
   collectActiveToolSchemaProjectionWarnings: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
@@ -131,10 +135,7 @@ vi.mock("./shared/active-tool-schema-warnings.js", () => ({
 }));
 
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
-  maybeRepairBundledPluginLoadPaths: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
+  maybeRepairBundledPluginLoadPaths: mocks.maybeRepairBundledPluginLoadPaths,
 }));
 
 vi.mock("./shared/open-policy-allowfrom.js", () => ({
@@ -210,6 +211,10 @@ vi.mock("./shared/plugin-dependency-cleanup.js", () => ({
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.maybeRepairBundledPluginLoadPaths.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+    }));
     mocks.applyPluginAutoEnable.mockImplementation((params: { config: OpenClawConfig }) => ({
       config: params.config,
       changes: [],
@@ -954,6 +959,46 @@ describe("doctor repair sequencing", () => {
     expect(result.warningNotes).toStrictEqual([
       'Failed to install missing configured plugin "brave" from @openclaw/brave-plugin: package install failed',
     ]);
+  });
+
+  it("runs maybeRepairBundledPluginLoadPaths after all other repair steps", async () => {
+    const events: string[] = [];
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
+      events.push("missing-installs");
+      return { changes: [], warnings: [] };
+    });
+    mocks.applyPluginAutoEnable.mockImplementation((params: { config: OpenClawConfig }) => ({
+      config: params.config,
+      changes: [],
+    }));
+    mocks.maybeRepairBundledPluginLoadPaths.mockImplementation((cfg: OpenClawConfig) => {
+      events.push("bundled-load-paths");
+      return { config: cfg, changes: [] };
+    });
+
+    await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          plugins: {
+            load: { paths: ["/opt/openclaw/dist/extensions/memory-wiki"] },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          plugins: {
+            load: { paths: ["/opt/openclaw/dist/extensions/memory-wiki"] },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(events).toContain("missing-installs");
+    expect(events).toContain("bundled-load-paths");
+    expect(events.indexOf("bundled-load-paths")).toBeGreaterThan(
+      events.indexOf("missing-installs"),
+    );
   });
 
   it("preserves configured channels when their install repair fails", async () => {
