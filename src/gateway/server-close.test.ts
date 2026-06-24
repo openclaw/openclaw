@@ -254,7 +254,7 @@ describe("createGatewayCloseHandler", () => {
     expect(events).toEqual(["config-reloader", "session-end-drain"]);
     expect(drainActiveSessionsForShutdown).toHaveBeenCalledWith({
       reason: "restart",
-      totalTimeoutMs: 5_000,
+      totalTimeoutMs: 2_000,
     });
   });
 

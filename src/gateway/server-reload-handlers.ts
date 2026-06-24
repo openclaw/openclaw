@@ -118,18 +118,15 @@ function waitForChannelReloadPoll(signal: AbortSignal | undefined): Promise<void
     return Promise.reject(new GatewayHotReloadCancelledError());
   }
   return new Promise<void>((resolve, reject) => {
-    let onAbort: (() => void) | undefined;
     const cleanup = () => {
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
+      signal?.removeEventListener("abort", onAbort);
     };
     const timer = setTimeout(() => {
       cleanup();
       resolve();
     }, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
     timer.unref?.();
-    onAbort = () => {
+    const onAbort = () => {
       clearTimeout(timer);
       cleanup();
       reject(new GatewayHotReloadCancelledError());
