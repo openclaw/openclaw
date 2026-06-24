@@ -7,6 +7,7 @@ Skills own workflows; root owns hard policy and routing.
 
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
+- Work tracking: use GitHub issues/PRs by default. External trackers such as Linear are optional only when already linked or explicitly requested.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
 - Existing-solutions preflight: before proposing or building a custom system, feature, workflow, tool, integration, or automation, do a lightweight check for open-source projects, maintained libraries, existing OpenClaw plugins, or free platforms that already solve it well enough. Prefer those when adequate. Build custom only when existing options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom. Avoid paid-service recommendations unless the user explicitly approves spend. Keep this to a brief preflight gate, not a broad research assignment.
 - Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.

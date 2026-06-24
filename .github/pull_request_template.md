@@ -2,6 +2,7 @@
 Optional linked context:
 Add a visible `Closes #<issue-number>` or `Related: #<issue-number>` line
 below this comment.
+External tracker links are optional extra context, not required closure fields.
 
 Required PR title:
 type: user-facing description
