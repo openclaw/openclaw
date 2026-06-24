@@ -902,13 +902,14 @@ export async function acquireSessionWriteLock(params: {
   // maxHoldMs (5 min) even though other acquirers time out after 60 s,
   // producing SessionWriteLockTimeoutError for every other operation that
   // shares the lock (e.g. mirrorCodexAppServerTranscript).
-  // Note: pass minMs=0 and graceMs=0 because resolveSessionLockMaxHoldFromTimeout
-  // defaults minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s), which
-  // would make the cap a no-op for the common case of a 60 s acquire timeout.
+  // Note: pass minMs=1 and graceMs=1 because resolveSessionLockMaxHoldFromTimeout
+  // defaults minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s) and
+  // resolvePositiveMs rejects values ≤ 0, which would make the cap a no-op for
+  // the common case of a 60 s acquire timeout.
   const maxHoldFromTimeout = resolveSessionLockMaxHoldFromTimeout({
     timeoutMs,
-    minMs: 0,
-    graceMs: 0,
+    minMs: 1,
+    graceMs: 1,
   });
   const maxHoldMs = Math.min(
     resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs),
