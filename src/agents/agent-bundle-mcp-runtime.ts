@@ -1068,7 +1068,7 @@ function createSessionMcpRuntimeManager(
   const detachSessionFromRuntimeKey = async (
     sessionId: string,
     runtimeKey: string,
-    opts: { disposeIfUnreferenced: boolean },
+    detachOptions: { disposeIfUnreferenced: boolean },
   ) => {
     runtimeKeyBySessionId.delete(sessionId);
     idleTtlMsBySessionId.delete(sessionId);
@@ -1079,7 +1079,7 @@ function createSessionMcpRuntimeManager(
       return;
     }
     sessionIdsByRuntimeKey.delete(runtimeKey);
-    if (opts.disposeIfUnreferenced) {
+    if (detachOptions.disposeIfUnreferenced) {
       await disposeRuntimeKey(runtimeKey);
     }
   };
