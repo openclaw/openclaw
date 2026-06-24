@@ -1255,8 +1255,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("agent=Runt");
-    expect(prompt).toContain("agentId=work");
+    expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("agentName=Runt");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
@@ -1292,8 +1292,8 @@ describe("buildAgentSystemPrompt", () => {
       "low",
     );
 
-    expect(line).toContain("agent=Runt");
-    expect(line).toContain("agentId=work");
+    expect(line).toContain("agent=work");
+    expect(line).toContain("agentName=Runt");
     expect(line).toContain("session=agent:main:subagent:runtime-check");
     expect(line).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(line).toContain("host=host");

@@ -1399,11 +1399,10 @@ export function buildRuntimeLine(
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   const identityName = runtimeInfo?.identityName?.trim();
   const agentId = runtimeInfo?.agentId;
-  const agentLabel = identityName || agentId;
-  const agentIdLabel = agentId && identityName && identityName !== agentId ? agentId : undefined;
+  const agentNameLabel = agentId && identityName && identityName !== agentId ? identityName : undefined;
   return `Runtime: ${[
-    agentLabel ? `agent=${sanitizeForPromptLiteral(agentLabel)}` : "",
-    agentIdLabel ? `agentId=${sanitizeForPromptLiteral(agentIdLabel)}` : "",
+    agentId ? `agent=${sanitizeForPromptLiteral(agentId)}` : "",
+    agentNameLabel ? `agentName=${sanitizeForPromptLiteral(agentNameLabel)}` : "",
     runtimeInfo?.sessionKey ? `session=${sanitizeForPromptLiteral(runtimeInfo.sessionKey)}` : "",
     runtimeInfo?.sessionId ? `sessionId=${sanitizeForPromptLiteral(runtimeInfo.sessionId)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
