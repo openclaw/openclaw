@@ -19,42 +19,23 @@ Use this page to answer one question: which OpenClaw surfaces are credible choic
 ## At a glance
 
 <div className="maturity-summary-grid">
-  <div className="maturity-summary-item maturity-score-experimental">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">4%</span>
-      <span>Coverage</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "4" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-experimental">Experimental</span>
-      <span>QA profile evidence</span>
-    </div>
-  </div>
   <div className="maturity-summary-item maturity-score-alpha">
     <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">63%</span>
-      <span>Quality</span>
+      <span className="maturity-summary-value">67%</span>
+      <span>Maturity score</span>
     </div>
-    <div className="maturity-summary-bar" style={{ "--score": "63" }}><span /></div>
+    <div className="maturity-summary-bar" style={{ "--score": "67" }}><span /></div>
     <div className="maturity-summary-meta">
       <span className="maturity-level-pill maturity-level-alpha">Alpha</span>
-      <span>Reliability and operator confidence</span>
-    </div>
-  </div>
-  <div className="maturity-summary-item maturity-score-beta">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">70%</span>
-      <span>Completeness</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "70" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-beta">Beta</span>
-      <span>Expected workflow coverage</span>
+      <span>Quality + completeness</span>
+      <span>Coverage Experimental - 4%</span>
+      <span>Quality Alpha - 63%</span>
+      <span>Completeness Beta - 70%</span>
     </div>
   </div>
 </div>
 
-Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.
+Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.
 
 ## Score bands
 
@@ -113,14 +94,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
@@ -141,7 +122,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
@@ -176,7 +157,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
@@ -447,14 +428,14 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#agent-runtime"><span className="maturity-surface-title">Agent Runtime</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>33%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "33%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>32%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "32%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>78%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "78%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#session-memory-and-context-engine"><span className="maturity-surface-title">Session, memory, and context engine</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>30%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "30%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>29%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "29%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>77%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "77%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 6</span></div>
@@ -468,7 +449,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#observability"><span className="maturity-surface-title">Observability</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>18%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "18%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 3</span></div>
@@ -489,7 +470,7 @@ Surfaces are ordered by maturity level, completeness, and quality. LTS support i
       </div>
       <div className="maturity-surface-row">
         <a className="maturity-surface-name" href="/maturity/taxonomy#security-auth-pairing-and-secrets"><span className="maturity-surface-title">Security, auth, pairing, and secrets</span><span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas</span></span></a>
-        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>16%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "16%" }} /></span></span></div>
+        <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>14%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "14%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-surface-support"><span className="maturity-lts maturity-lts-partial">Partial - 5</span></div>
@@ -808,8 +789,8 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
   <div className="maturity-evidence-card">
     <span className="maturity-evidence-title">Full taxonomy validation</span>
     <span>2026-06-23T07:24:36.128Z</span>
-    <span>96 checks - 94 passed, 2 blocked</span>
-    <span>0 of 281 (0%) areas - 20 of 1675 (1.2%) features - 77 of 1665 (4.6%) coverage IDs</span>
+    <span>96 checks - 94 passed, 2 skipped</span>
+    <span>0 of 281 (0%) areas - 19 of 1675 (1.1%) features - 76 of 1665 (4.6%) coverage IDs</span>
   </div>
 </div>
 
@@ -891,8 +872,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Tool Execution Controls</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 6 (0%) / 6 of 12 (50%)</span>
-        <span>6 capability gaps</span>
+        <span>0 of 6 (0%) / 5 of 12 (41.7%)</span>
+        <span>7 capability gaps</span>
       </div>
     </div>
   </Accordion>
@@ -2782,8 +2763,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Credential and Secret Hygiene</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 5 of 11 (45.5%)</span>
-        <span>6 capability gaps</span>
+        <span>0 of 5 (0%) / 4 of 11 (36.4%)</span>
+        <span>7 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -2861,8 +2842,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Memory</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>0 of 5 (0%) / 6 of 13 (46.2%)</span>
-        <span>7 capability gaps</span>
+        <span>0 of 5 (0%) / 5 of 13 (38.5%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
@@ -3041,8 +3022,8 @@ Open a surface to inspect the evidence state of each category. The list stays co
           <span className="maturity-readiness-title">Diagnostic Collection</span>
           <span className="maturity-readiness-status maturity-readiness-status-partially-reviewed">Partially reviewed - Full taxonomy validation</span>
         </div>
-        <span>1 of 8 (12.5%) / 3 of 10 (30%)</span>
-        <span>7 capability gaps</span>
+        <span>0 of 8 (0%) / 2 of 10 (20%)</span>
+        <span>8 capability gaps</span>
       </div>
       <div className="maturity-readiness-row">
         <div className="maturity-readiness-area">
