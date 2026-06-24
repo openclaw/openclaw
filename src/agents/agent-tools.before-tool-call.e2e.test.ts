@@ -1064,6 +1064,26 @@ describe("before_tool_call requireApproval handling", () => {
     );
   }
 
+  function registerTelegramApprovalCapabilityWithOnlyPluginDeliveryDisabled(): void {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: () => ({ kind: "disabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "enabled" as const }),
+              describeExecApprovalSetup: () => "Telegram exec approval setup text",
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
@@ -1656,6 +1676,36 @@ describe("before_tool_call requireApproval handling", () => {
       "reason",
       "Plugin approval unavailable (no approval route)\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
     );
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+    ]);
+  });
+
+  it("does not include exec setup guidance when only plugin approval delivery is disabled", async () => {
+    registerTelegramApprovalCapabilityWithOnlyPluginDeliveryDisabled();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route",
+        description: "Needs native approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-plugin-route", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Plugin approval unavailable (no approval route)");
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
     ]);
