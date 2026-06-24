@@ -1,5 +1,4 @@
 // Migration apply tests cover backups, filtering, provider apply calls, and report output.
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
