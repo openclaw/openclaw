@@ -7,6 +7,12 @@ import { resolveExecutable } from "./executable-path.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 
+const POSIX_SSH_BINARY = "/usr/bin/ssh";
+
+function resolveSshExecutable(): string {
+  return process.platform === "win32" ? resolveExecutable("ssh") : POSIX_SSH_BINARY;
+}
+
 export type SshParsedTarget = {
   user?: string;
   host: string;
@@ -163,7 +169,7 @@ export async function startSshPortForward(opts: {
   args.push("--", userHost);
 
   const stderr: string[] = [];
-  const child = spawn(resolveExecutable("ssh"), args, {
+  const child = spawn(resolveSshExecutable(), args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr?.setEncoding("utf8");

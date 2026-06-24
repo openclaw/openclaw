@@ -175,7 +175,12 @@ export class GatewayChatClient implements TuiBackend {
 
   static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
-    return new GatewayChatClient(connection);
+    try {
+      return new GatewayChatClient(connection);
+    } catch (err) {
+      await connection.sshTunnel?.stop().catch(() => undefined);
+      throw err;
+    }
   }
 
   start() {

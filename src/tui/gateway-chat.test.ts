@@ -624,6 +624,47 @@ describe("GatewayChatClient", () => {
     }
   });
 
+  it("stops the configured SSH tunnel when GatewayClient construction fails", async () => {
+    const stopTunnel = vi.fn(async () => undefined);
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("../gateway/client.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../gateway/client.js")>();
+      class ThrowingGatewayClient {
+        constructor() {
+          throw new Error("device identity failed");
+        }
+      }
+      return { ...actual, GatewayClient: ThrowingGatewayClient };
+    });
+
+    try {
+      loadConfig.mockReturnValue(config);
+      sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+        url: "ws://127.0.0.1:41001",
+        urlSource: "ssh tunnel",
+        tunnel: { stop: stopTunnel },
+      });
+      const { GatewayChatClient: ThrowingGatewayChatClient } = await import("./gateway-chat.js");
+
+      await expect(ThrowingGatewayChatClient.connect({})).rejects.toThrow("device identity failed");
+      expect(stopTunnel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("../gateway/client.js");
+      vi.resetModules();
+    }
+  });
+
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
     vi.useFakeTimers();
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");

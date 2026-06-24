@@ -129,6 +129,29 @@ describe("startSshPortForward", () => {
     });
   }
 
+  it.runIf(process.platform !== "win32")(
+    "uses the trusted POSIX ssh binary instead of PATH lookup",
+    async () => {
+      mocks.ensurePortAvailable.mockResolvedValueOnce();
+      spawnFakeSshListening();
+
+      const tunnel = await startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/ssh",
+        expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
+        expect.anything(),
+      );
+
+      await tunnel.stop();
+    },
+  );
+
   it("rejects when the ssh process cannot be spawned", async () => {
     const startupError = Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" });
     mocks.ensurePortAvailable.mockResolvedValueOnce();
@@ -193,7 +216,7 @@ describe("startSshPortForward", () => {
     expect(tunnel.localPort).not.toBe(preferredPort);
     expect(tunnel.localPort).toBeGreaterThan(0);
     expect(mocks.spawn).toHaveBeenCalledWith(
-      "ssh",
+      process.platform === "win32" ? "ssh" : "/usr/bin/ssh",
       expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
       expect.anything(),
     );
