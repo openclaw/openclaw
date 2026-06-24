@@ -455,6 +455,21 @@ describe("parseMattermostTarget", () => {
     expect(target).toEqual({ kind: "channel-name", name: "abc123" });
   });
 
+  it("parses the group: prefix as a channel (group conversations are id-addressed channels)", () => {
+    expect(parseMattermostTarget("group:dthcxgoxhifn3pwh65cut3ud3w")).toEqual({
+      kind: "channel",
+      id: "dthcxgoxhifn3pwh65cut3ud3w",
+    });
+    expect(parseMattermostTarget("Group:dthcxgoxhifn3pwh65cut3ud3w")).toEqual({
+      kind: "channel",
+      id: "dthcxgoxhifn3pwh65cut3ud3w",
+    });
+    expect(parseMattermostTarget("group:off-topic")).toEqual({
+      kind: "channel-name",
+      name: "off-topic",
+    });
+  });
+
   it("parses user: prefix as user id", () => {
     const target = parseMattermostTarget("user:usr456");
     expect(target).toEqual({ kind: "user", id: "usr456" });

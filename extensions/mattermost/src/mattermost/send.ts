@@ -140,8 +140,11 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
     throw new Error("Recipient is required for Mattermost sends");
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
+  if (lower.startsWith("channel:") || lower.startsWith("group:")) {
+    // Mattermost group conversations (P/G) are still channels addressed by id, so the documented
+    // group: prefix resolves exactly like channel: (matching normalizeMattermostMessagingTarget).
+    // Without this, group:<id> fell through to channel-name lookup and the send failed.
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     if (!id) {
       throw new Error("Channel id is required for Mattermost sends");
     }
