@@ -45,6 +45,11 @@ export type ContextEngineFactory = (
 ) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 export type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+export type ContextEngineRegistration = {
+  factory: ContextEngineFactory;
+  owner: string;
+  lifecycle: ContextEngineRegistrationLifecycle;
+};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -391,14 +396,7 @@ export type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<
-    string,
-    {
-      factory: ContextEngineFactory;
-      owner: string;
-      lifecycle: ContextEngineRegistrationLifecycle;
-    }
-  >;
+  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -561,7 +559,13 @@ export function registerContextEngine(
  * Return the factory for a registered engine, or undefined.
  */
 export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  return getContextEngineRegistryState().engines.get(id)?.factory;
+  const registration = getContextEngineRegistration(id);
+  return registration?.lifecycle === "runtime" ? registration.factory : undefined;
+}
+
+/** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
+export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
+  return getContextEngineRegistryState().engines.get(id);
 }
 
 /**
