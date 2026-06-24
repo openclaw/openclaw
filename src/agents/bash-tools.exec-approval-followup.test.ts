@@ -16,8 +16,8 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -500,6 +500,28 @@ describe("exec approval followup", () => {
       sessionKey: "agent:main:telegram:-100123",
       deliver: false,
       channel: "telegram",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("carries turnSourceTo for external channel plugins when deliverable route is unavailable", async () => {
+    // Regression: #96103 — external channel plugin approval followup falls back to webchat
+    await sendExecApprovalFollowup({
+      approvalId: "req-external-96103",
+      sessionKey: "agent:main:lansenger:user:U123",
+      turnSourceChannel: "lansenger",
+      turnSourceTo: "user:U123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "thread-abc",
+      resultText: "Exec completed: echo ok",
+    });
+
+    expectGatewayAgentFollowup({
+      sessionKey: "agent:main:lansenger:user:U123",
+      channel: "lansenger",
+      to: "user:U123",
+      accountId: "default",
+      threadId: "thread-abc",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

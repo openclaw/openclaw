@@ -261,9 +261,12 @@ function buildAgentFollowupArgs(params: {
   idempotencyKey?: string;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
-  // When the followup run has no deliverable route and no gateway-internal channel,
-  // preserve the raw turnSourceChannel so the spawned agent inherits messageProvider.
+  // When the followup run has no deliverable route, preserve the raw
+  // turnSourceChannel so the spawned agent inherits messageProvider.
   // Without this, tools.elevated.allowFrom.<provider> checks fail with provider=null.
+  // Also forward turnSourceTo / accountId / threadId so external channel plugins
+  // (which are not in isDeliverableMessageChannel) still get a routing target
+  // on the followup agent run instead of falling back to webchat (#96103).
   const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   return {
     sessionKey: params.sessionKey,
@@ -271,21 +274,9 @@ function buildAgentFollowupArgs(params: {
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
-    to: deliveryTarget.deliver
-      ? deliveryTarget.to
-      : sessionOnlyOriginChannel
-        ? params.turnSourceTo
-        : undefined,
-    accountId: deliveryTarget.deliver
-      ? deliveryTarget.accountId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceAccountId
-        : undefined,
-    threadId: deliveryTarget.deliver
-      ? deliveryTarget.threadId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceThreadId
-        : undefined,
+    to: deliveryTarget.deliver ? deliveryTarget.to : params.turnSourceTo,
+    accountId: deliveryTarget.deliver ? deliveryTarget.accountId : params.turnSourceAccountId,
+    threadId: deliveryTarget.deliver ? deliveryTarget.threadId : params.turnSourceThreadId,
     idempotencyKey:
       params.idempotencyKey ??
       buildExecApprovalFollowupIdempotencyKey({
