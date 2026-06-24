@@ -5,10 +5,13 @@
  * compaction while keeping hook failures non-fatal.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { drainPluginNextTurnInjectionContext } from "../../plugins/host-hook-state.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
+  PluginAgentTurnPrepareResult,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
+  PluginNextTurnInjectionRecord,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
@@ -24,6 +27,38 @@ type AgentHarnessPromptBuildResult = {
   /** Span within prompt containing the original prompt input. */
   promptInputRange?: { start: number; end: number };
 };
+
+// Cache drained next-turn injections by runId so retry attempts within the
+// same run reuse the first-attempt drain rather than calling drain again
+// (which destructively consumes from the session store and would return [] on
+// retry, dropping injection context).
+const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
+const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
+
+function rememberDrainedInjections(
+  runId: string,
+  injections: PluginNextTurnInjectionRecord[],
+): void {
+  if (promptBuildDrainCache.has(runId)) {
+    promptBuildDrainCache.delete(runId);
+  } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
+    const oldest = promptBuildDrainCache.keys().next().value;
+    if (oldest !== undefined) {
+      promptBuildDrainCache.delete(oldest);
+    }
+  }
+  promptBuildDrainCache.set(runId, injections);
+}
+
+/**
+ * Releases the per-run drained-injection cache. Call when a run terminates so
+ * the cap stays headroom for active runs.
+ */
+export function forgetHarnessPromptBuildDrainCacheForRun(runId: string | undefined): void {
+  if (runId) {
+    promptBuildDrainCache.delete(runId);
+  }
+}
 
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
@@ -42,9 +77,17 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
+  // agent_turn_prepare was also missing from the harness path (#96233 added
+  // heartbeat_prompt_contribution; this adds the remaining two contributions
+  // the embedded path runs — agent_turn_prepare and queued injections).
+  const hasAgentTurnPrepare =
+    Boolean(hookRunner?.runAgentTurnPrepare) && Boolean(hookRunner?.hasHooks("agent_turn_prepare"));
+  const hasQueuedInjections = Boolean(params.ctx.config && params.ctx.sessionKey);
   if (
     !hasPrecomputedBeforeAgentStartResult &&
     !hasHeartbeatContribution &&
+    !hasAgentTurnPrepare &&
+    !hasQueuedInjections &&
     !hookRunner?.hasHooks("before_prompt_build") &&
     !hookRunner?.hasHooks("before_agent_start")
   ) {
@@ -60,8 +103,47 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     messages: params.messages,
   };
 
-  // Match the embedded runner's lifecycle order: heartbeat contributions are
-  // collected before prompt-build hooks so hook side effects stay deterministic.
+  // Drain queued next-turn injections once per run (cached for retries)
+  // so plugins that enqueue context for the next turn surface it on harness
+  // runtimes, matching the embedded runner's lifecycle.
+  const runId = params.ctx.runId;
+  const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
+  const hasConfigAndSession = Boolean(params.ctx.config && params.ctx.sessionKey);
+  const queuedContext = cachedInjections
+    ? {
+        queuedInjections: cachedInjections,
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+      }
+    : hasConfigAndSession
+      ? await drainPluginNextTurnInjectionContext({
+          cfg: params.ctx.config!,
+          sessionKey: params.ctx.sessionKey,
+        })
+      : { queuedInjections: [] as PluginNextTurnInjectionRecord[] };
+  if (runId && !cachedInjections && queuedContext.queuedInjections.length > 0) {
+    rememberDrainedInjections(runId, queuedContext.queuedInjections);
+  }
+
+  // Match the embedded runner's lifecycle order: queued injections first,
+  // then agent_turn_prepare, then heartbeat contributions, then prompt-build
+  // hooks so hook side effects stay deterministic.
+  const turnPrepareResult: PluginAgentTurnPrepareResult | undefined =
+    hasAgentTurnPrepare && hookRunner
+      ? await hookRunner
+          .runAgentTurnPrepare?.(
+            {
+              prompt: params.prompt,
+              messages: params.messages,
+              queuedInjections: queuedContext.queuedInjections,
+            },
+            hookCtx,
+          )
+          .catch((error: unknown) => {
+            log.warn(`agent_turn_prepare hook failed: ${String(error)}`);
+            return undefined;
+          })
+      : undefined;
+
   const heartbeatResult =
     hasHeartbeatContribution && hookRunner
       ? await hookRunner
@@ -105,12 +187,19 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult,
     beforeAgentStartResult,
   });
+  // Queued-injection context and agent_turn_prepare results are prepended
+  // before prompt-build and heartbeat contributions so plugins that touch
+  // system instructions do not shift the prompt layout unexpectedly.
   const promptPrefix = joinPresentTextSegments([
+    queuedContext.prependContext,
+    turnPrepareResult?.prependContext,
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
     beforeAgentStartResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
+    queuedContext.appendContext,
+    turnPrepareResult?.appendContext,
     heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
     beforeAgentStartResult?.appendContext,
@@ -127,9 +216,13 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     prompt,
     developerInstructions:
       joinPresentTextSegments([
+        wrapPluginSystemContextSection(queuedContext.prependSystemContext),
+        wrapPluginSystemContextSection(turnPrepareResult?.prependSystemContext),
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
         wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
         systemPrompt,
+        wrapPluginSystemContextSection(queuedContext.appendSystemContext),
+        wrapPluginSystemContextSection(turnPrepareResult?.appendSystemContext),
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
         wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
