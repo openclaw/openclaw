@@ -120,27 +120,100 @@ type GuardedMediaResponse = {
   sourceUrl: string;
 };
 
-function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
+function splitContentDispositionParts(header: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let inQuote = false;
+  let escaped = false;
+  for (let i = 0; i < header.length; i += 1) {
+    const char = header[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && inQuote) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (char === ";" && !inQuote) {
+      parts.push(header.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(header.slice(start));
+  return parts;
+}
+
+function unquoteContentDispositionValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 2 || trimmed[0] !== '"' || trimmed[trimmed.length - 1] !== '"') {
+    return trimmed;
+  }
+  let output = "";
+  for (let i = 1; i < trimmed.length - 1; i += 1) {
+    const char = trimmed[i];
+    if (char === "\\" && i + 1 < trimmed.length - 1) {
+      const next = trimmed[i + 1];
+      if (next === '"' || next === "\\") {
+        i += 1;
+        output += next;
+        continue;
+      }
+    }
+    output += char;
+  }
+  return output;
+}
+
+function basenameFromDispositionFilename(fileName: string): string | undefined {
+  const base = basenameFromAnyPath(fileName);
+  if (!base || base === "." || base === "..") {
+    return undefined;
+  }
+  return base;
+}
+
+function decodeRfc5987Filename(value: string): string {
+  const cleaned = unquoteContentDispositionValue(value);
+  const match = /^([^']*)'[^']*'(.*)$/.exec(cleaned);
+  const encoded = match?.[2] ?? cleaned;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
 }
 
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
   }
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
-  if (starMatch?.[1]) {
-    const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
+
+  const params = new Map<string, string>();
+  for (const part of splitContentDispositionParts(header).slice(1)) {
+    const separator = part.indexOf("=");
+    if (separator === -1) {
+      continue;
+    }
+    const name = part.slice(0, separator).trim().toLowerCase();
+    const value = part.slice(separator + 1);
+    if (name && !params.has(name)) {
+      params.set(name, value);
     }
   }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) {
-    return basenameFromAnyPath(stripQuotes(match[1].trim()));
+
+  const encodedFileName = params.get("filename*");
+  if (encodedFileName) {
+    return basenameFromDispositionFilename(decodeRfc5987Filename(encodedFileName));
+  }
+
+  const fileName = params.get("filename");
+  if (fileName) {
+    return basenameFromDispositionFilename(unquoteContentDispositionValue(fileName));
   }
   return undefined;
 }

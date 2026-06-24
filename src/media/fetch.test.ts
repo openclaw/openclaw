@@ -559,6 +559,62 @@ describe("readRemoteMediaBuffer", () => {
     await expectBoundedErrorBodyCase(testCase.fetchImpl);
   });
 
+  it.each([
+    {
+      name: "preserves quoted filenames containing semicolons",
+      contentDisposition: 'attachment; filename="quarter; summary.txt"',
+      expectedFileName: "quarter; summary.txt",
+    },
+    {
+      name: "strips path segments from quoted filenames",
+      contentDisposition: 'attachment; filename="C:\\\\temp\\\\quarter; summary.txt"',
+      expectedFileName: "quarter; summary.txt",
+    },
+    {
+      name: "prefers decoded filename-star over filename",
+      contentDisposition: "attachment; filename=fallback.txt; filename*=UTF-8''report%20Q2.pdf",
+      expectedFileName: "report Q2.pdf",
+    },
+  ] as const)("$name", async ({ contentDisposition, expectedFileName }) => {
+    const media = await readRemoteMediaBuffer(
+      createReadRemoteMediaBufferParams({
+        url: "https://example.com/download",
+        fetchImpl: vi.fn(
+          async () =>
+            new Response("hello", {
+              status: 200,
+              headers: {
+                "content-disposition": contentDisposition,
+                "content-type": "text/plain",
+              },
+            }),
+        ),
+      }),
+    );
+
+    expect(media.fileName).toBe(expectedFileName);
+  });
+
+  it("falls back to the URL filename when content-disposition resolves to a dot segment", async () => {
+    const media = await readRemoteMediaBuffer(
+      createReadRemoteMediaBufferParams({
+        url: "https://example.com/download",
+        fetchImpl: vi.fn(
+          async () =>
+            new Response("%PDF-1.4", {
+              status: 200,
+              headers: {
+                "content-disposition": 'attachment; filename=".."',
+                "content-type": "application/pdf",
+              },
+            }),
+        ),
+      }),
+    );
+
+    expect(media.fileName).toBe("download.pdf");
+  });
+
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
     const lookupFn = makeLookupFn();
