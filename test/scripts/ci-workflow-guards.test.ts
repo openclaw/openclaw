@@ -3,6 +3,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  QA_SMOKE_PROFILE_CRABLINE_UNSUPPORTED_CATEGORY_IDS,
+  createQaSmokeProfileCategoryShards,
+  readTaxonomyProfileCategoryIds,
+} from "../../scripts/lib/ci-qa-smoke-plan.mjs";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
@@ -813,23 +818,29 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Upload QA smoke profile evidence",
     );
 
-    expect(preflightStep.run).toContain("qaSmokeProfileCategories");
-    expect(preflightStep.run).toContain("checks-fast-qa-smoke-profile-${category}");
-    expect(preflightStep.run).toContain('task: "qa-smoke-profile"');
-    expect(preflightStep.run).toContain("qa_category: category");
+    const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
+    const taxonomyCategoryIds = readTaxonomyProfileCategoryIds();
+    const smokeShards = createQaSmokeProfileCategoryShards();
+    const smokeShardCategoryIds = smokeShards.map((shard) => shard.qa_category);
+
+    expect(preflightStep.run).toContain("createQaSmokeProfileCategoryShards");
     expect(smokeProfile.categoryIds).toHaveLength(34);
-    const unsupportedCrablineCategories = [
-      "channel-framework.channel-actions-commands-and-approvals",
-    ];
-    const ciSmokeCategories = smokeProfile.categoryIds.filter(
-      (categoryId) => !unsupportedCrablineCategories.includes(categoryId),
+    expect(taxonomyCategoryIds).toEqual(smokeProfile.categoryIds);
+    expect(smokeShardCategoryIds).toEqual(
+      smokeProfile.categoryIds.filter(
+        (categoryId) => !QA_SMOKE_PROFILE_CRABLINE_UNSUPPORTED_CATEGORY_IDS.includes(categoryId),
+      ),
     );
-    expect(ciSmokeCategories).toHaveLength(33);
-    for (const categoryId of ciSmokeCategories) {
-      expect(preflightStep.run).toContain(`"${categoryId}"`);
+    expect(smokeShards).toHaveLength(33);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
-    for (const categoryId of unsupportedCrablineCategories) {
-      expect(preflightStep.run).not.toContain(`"${categoryId}"`);
+    for (const shard of smokeShards) {
+      expect(shard).toMatchObject({
+        check_name: `checks-fast-qa-smoke-profile-${shard.qa_category}`,
+        runtime: "node",
+        task: "qa-smoke-profile",
+      });
     }
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
