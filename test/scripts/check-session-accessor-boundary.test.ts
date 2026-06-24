@@ -98,6 +98,7 @@ describe("session accessor boundary guard", () => {
         "extensions/telegram/src/bot-message-dispatch.ts",
         "extensions/telegram/src/bot-native-commands.ts",
         "extensions/voice-call/src/response-generator.ts",
+        "extensions/whatsapp/src/auto-reply/monitor/group-activation.ts",
       ]),
     );
   });
