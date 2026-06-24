@@ -157,6 +157,7 @@ export function getVisibleSessionRows(
     agentId: string;
     defaultAgentId: string;
     filterByAgent?: boolean;
+    hideCron?: boolean;
   },
 ): GatewaySessionRow[] {
   return (result?.sessions ?? []).filter((row) => {
@@ -167,8 +168,7 @@ export function getVisibleSessionRows(
       !row.archived &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      row.kind !== "cron" &&
-      !isCronSessionKey(row.key) &&
+      (options.hideCron === false || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||

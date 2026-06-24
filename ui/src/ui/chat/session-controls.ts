@@ -24,6 +24,7 @@ import {
 } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import {
+  getVisibleSessionRows,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "../../lib/sessions/index.ts";
@@ -1933,23 +1934,13 @@ export function resolveSessionOptionGroups(
     });
   };
 
-  for (const row of rows) {
-    if (
-      !isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId) &&
-      row.key !== sessionKey
-    ) {
-      continue;
-    }
-    if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
-      continue;
-    }
-    if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
-      continue;
-    }
-    const isSubagent = isSubagentSessionKey(row.key) || Boolean(row.spawnedBy);
-    if (isSubagent && row.key !== sessionKey) {
-      continue;
-    }
+  for (const row of getVisibleSessionRows(sessions, {
+    currentSessionKey: sessionKey,
+    agentId: activeAgentId,
+    defaultAgentId,
+    filterByAgent: true,
+    hideCron,
+  })) {
     addOption(row.key);
   }
   if (byKey.has(sessionKey)) {
