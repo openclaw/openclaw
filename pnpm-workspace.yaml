@@ -115,7 +115,7 @@ overrides:
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
   qs: 6.15.2
-  node-domexception: "npm:@nolyfill/domexception@1.0.28"
+  node-domexception: "^1.0.0"
   typebox: 1.1.39
   tar: 7.5.16
   tough-cookie: 4.1.3
