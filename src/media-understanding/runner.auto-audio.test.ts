@@ -113,7 +113,7 @@ describe("runCapability auto audio entries", () => {
     const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
     hasAvailableAuthForProvider.mockImplementation(async (params) => {
       if (params.provider === "openai") {
-        return params.modelApi === undefined;
+        return false;
       }
       return params.provider === "mistral";
     });

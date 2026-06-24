@@ -2,6 +2,10 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "../agents/model-selection-normalize.js";
+import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
   noteChromeMcpBrowserReadiness,
@@ -895,6 +899,44 @@ const finalConfigValidationCheck: HealthCheck = {
   },
 };
 
+const openaiAudioOAuthCheck: HealthCheck = {
+  id: "core/doctor/openai-audio-oauth",
+  kind: "core",
+  description: "OpenAI batch audio transcription uses an API-key profile for best compatibility.",
+  source: "doctor",
+  async detect(ctx) {
+    const audioModels = ctx.cfg.tools?.media?.audio?.models;
+    if (!Array.isArray(audioModels) || audioModels.length === 0) {
+      return [];
+    }
+    const hasOpenAiAudio = audioModels.some((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const provider = (entry as { provider?: string }).provider;
+      return typeof provider === "string" && normalizeProviderId(provider) === "openai";
+    });
+    if (!hasOpenAiAudio) {
+      return [];
+    }
+    const openaiProviderConfig = findNormalizedProviderValue(ctx.cfg.models?.providers, "openai");
+    if (openaiProviderConfig && (openaiProviderConfig as { apiKey?: unknown }).apiKey) {
+      return [];
+    }
+    return [
+      {
+        checkId: "core/doctor/openai-audio-oauth",
+        severity: "warning",
+        message:
+          "OpenAI batch audio transcription is configured without an explicit OpenAI Platform API key. OpenAI Platform /v1/audio/transcriptions recommends an API-key profile; OAuth-backed transcription may fail depending on your account type.",
+        path: "tools.media.audio.models",
+        fixHint:
+          "Configure an OpenAI Platform API key for the openai provider, or switch to a different audio transcription provider.",
+      },
+    ];
+  },
+};
+
 const shellCompletionCheck: HealthCheck = {
   id: "core/doctor/shell-completion",
   kind: "core",
@@ -1011,6 +1053,7 @@ export function createCoreHealthChecks(
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
+    openaiAudioOAuthCheck,
     finalConfigValidationCheck,
   ];
 }

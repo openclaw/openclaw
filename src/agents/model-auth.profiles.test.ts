@@ -511,6 +511,36 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
+  it("allows an explicit OpenAI OAuth profile for OpenAI audio transcription models", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    const resolved = await getApiKeyForModel({
+      model: {
+        id: "gpt-4o-mini-transcribe",
+        provider: "openai",
+        api: "openai-audio-transcriptions",
+      } as Model,
+      profileId: "openai:chatgpt",
+      lockedProfile: true,
+      store,
+    });
+
+    expect(resolved).toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      profileId: "openai:chatgpt",
+    });
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {

@@ -748,4 +748,78 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
+
+  it("warns when OpenAI audio transcription is configured without an explicit API key", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/openai-audio-oauth");
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+          },
+        },
+      },
+    };
+
+    const findings = await check.detect({ mode: "lint", runtime, cfg });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      checkId: "core/doctor/openai-audio-oauth",
+      severity: "warning",
+      path: "tools.media.audio.models",
+    });
+  });
+
+  it("does not warn when OpenAI audio transcription has an explicit API key", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/openai-audio-oauth");
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-test",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const findings = await check.detect({ mode: "lint", runtime, cfg });
+
+    expect(findings).toHaveLength(0);
+  });
+
+  it("does not warn when audio models use a non-OpenAI provider", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/openai-audio-oauth");
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "mistral", model: "voxtral-mini-latest" }],
+          },
+        },
+      },
+    };
+
+    const findings = await check.detect({ mode: "lint", runtime, cfg });
+
+    expect(findings).toHaveLength(0);
+  });
+
+  it("does not warn when audio models are not configured", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/openai-audio-oauth");
+    const cfg: OpenClawConfig = {};
+
+    const findings = await check.detect({ mode: "lint", runtime, cfg });
+
+    expect(findings).toHaveLength(0);
+  });
 });

@@ -91,15 +91,18 @@ export type RuntimeProviderAuthLookup = {
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;
   modelApi?: string;
 }): boolean {
+  const modelApi = normalizeLowercaseStringOrEmpty(params.modelApi);
   return (
     normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
-    params.modelApi !== undefined &&
-    normalizeLowercaseStringOrEmpty(params.modelApi) !== OPENAI_CODEX_RESPONSES_API
+    modelApi !== "" &&
+    modelApi !== OPENAI_CODEX_RESPONSES_API &&
+    modelApi !== OPENAI_AUDIO_TRANSCRIPTIONS_API
   );
 }
 
