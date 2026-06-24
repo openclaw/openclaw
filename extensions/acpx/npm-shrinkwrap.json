@@ -1,16 +1,16 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.6.9",
+  "version": "2026.6.10",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/acpx",
-      "version": "2026.6.9",
+      "version": "2026.6.10",
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.39.0",
         "@zed-industries/codex-acp": "0.15.0",
-        "acpx": "0.11.1",
+        "acpx": "0.11.2",
         "zod": "4.4.3"
       }
     },
@@ -831,9 +831,9 @@
       }
     },
     "node_modules/acpx": {
-      "version": "0.11.1",
-      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.11.1.tgz",
-      "integrity": "sha512-AfjHUYnuxRpvb1JLjjIZILEbCskIENCTP9Mgc5w0BiaPLmsL2hTg5gbM7sG1EssOkceNLQwgeAuVtbukLz0KFw==",
+      "version": "0.11.2",
+      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.11.2.tgz",
+      "integrity": "sha512-ksTmfJDVqUAJJXsNDamEno03AMZ/aAZzXk/h5nt61VsLc/jcpoDMfCVpErzuYNJjwCd0V6Zm5o6F8OoqxsjQWA==",
       "license": "MIT",
       "dependencies": {
         "@agentclientprotocol/sdk": "^0.28.1",

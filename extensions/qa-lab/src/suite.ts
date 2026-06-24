@@ -200,6 +200,29 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
   process.stderr.write(`[qa-suite] ${message}\n`);
 }
 
+function formatQaSuiteRunStartProgress(params: {
+  selectedScenarioCount: number;
+  concurrency: number;
+  transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+}) {
+  const channelDriver = params.channelDriver ?? params.channelDriverSelection?.channelDriver;
+  const channel = params.channelDriverSelection?.channel;
+  const parts = [
+    `run start: scenarios=${params.selectedScenarioCount}`,
+    `concurrency=${params.concurrency}`,
+    `transport=${sanitizeQaSuiteProgressValue(params.transportId)}`,
+  ];
+  if (channelDriver) {
+    parts.push(`channelDriver=${sanitizeQaSuiteProgressValue(channelDriver)}`);
+  }
+  if (channel) {
+    parts.push(`channel=${sanitizeQaSuiteProgressValue(channel)}`);
+  }
+  return parts.join(" ");
+}
+
 async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -1185,7 +1208,13 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const gatewayHeapCheckpointsEnabled = shouldCaptureGatewayHeapCheckpoints();
   writeQaSuiteProgress(
     progressEnabled,
-    `run start: scenarios=${selectedScenarios.length} concurrency=${concurrency} transport=${transportId}`,
+    formatQaSuiteRunStartProgress({
+      selectedScenarioCount: selectedScenarios.length,
+      concurrency,
+      transportId,
+      channelDriver: params?.channelDriver,
+      channelDriverSelection: params?.channelDriverSelection,
+    }),
   );
   const useIsolatedScenarioWorkers = shouldRunQaSuiteWithIsolatedScenarioWorkers({
     scenarios: selectedScenarios,
@@ -1767,6 +1796,7 @@ export const qaSuiteProgressTesting = {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
+  formatQaSuiteRunStartProgress,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,

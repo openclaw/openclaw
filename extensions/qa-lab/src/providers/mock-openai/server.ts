@@ -220,7 +220,7 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {

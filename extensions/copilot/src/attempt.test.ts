@@ -2461,11 +2461,13 @@ describe("runCopilotAttempt", () => {
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
         sessionFile: string;
+        sessionId: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
       expect(args.sessionFile).toBe("session.json");
-      expect(args.idempotencyScope).toMatch(/^copilot:/u);
+      expect(args.sessionId).toBe("session-1");
+      expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");
@@ -2512,10 +2514,9 @@ describe("runCopilotAttempt", () => {
         }
         const identity = message["__openclaw"]?.mirrorIdentity ?? "";
         // The terminal assistant carries the turn-stable
-        // `${runId}:assistant:final` identity attached by attempt.ts
-        // (rubber-duck-validated identity scheme — survives SDK session
-        // reuse across turns). Caller-passed history without an
-        // identity falls through to the positional `${scope}:role:idx`
+        // `${runId}:assistant:final` identity attached by attempt.ts.
+        // Caller-passed history without an identity falls through to
+        // the positional `${scope}:role:idx`.
         // fingerprint that the existing tagging map applies.
         if (message.role === "assistant" && index === args.messages.length - 1) {
           expect(identity).toMatch(/:assistant:final$/u);

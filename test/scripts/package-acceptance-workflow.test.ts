@@ -290,6 +290,11 @@ describe("package acceptance workflow", () => {
       '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
+    const prepareCrabboxShell = workflowStep(hydrate, "Prepare Crabbox shell").run;
+    expect(prepareCrabboxShell).toContain("link_node_tool()");
+    expect(prepareCrabboxShell).toContain('readlink -f "$source"');
+    expect(prepareCrabboxShell).toContain('readlink -f "$target"');
+    expect(prepareCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
@@ -363,6 +368,11 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
     );
+    const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );

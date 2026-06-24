@@ -326,6 +326,7 @@ extension SettingsProTab {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         self.setupStatusText = "Checking gateway reachability..."
         let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
         if !ok {

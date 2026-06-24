@@ -313,8 +313,8 @@ importers:
         specifier: 0.15.0
         version: 0.15.0
       acpx:
-        specifier: 0.11.1
-        version: 0.11.1
+        specifier: 0.11.2
+        version: 0.11.2
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -4611,8 +4611,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.11.1:
-    resolution: {integrity: sha512-AfjHUYnuxRpvb1JLjjIZILEbCskIENCTP9Mgc5w0BiaPLmsL2hTg5gbM7sG1EssOkceNLQwgeAuVtbukLz0KFw==}
+  acpx@0.11.2:
+    resolution: {integrity: sha512-ksTmfJDVqUAJJXsNDamEno03AMZ/aAZzXk/h5nt61VsLc/jcpoDMfCVpErzuYNJjwCd0V6Zm5o6F8OoqxsjQWA==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -10656,7 +10656,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.11.1:
+  acpx@0.11.2:
     dependencies:
       '@agentclientprotocol/sdk': 0.28.1(zod@4.4.3)
       commander: 15.0.0
