@@ -164,9 +164,10 @@ export function chunkByNewline(
     }
 
     const firstLimit = Math.max(1, maxLineLength - prefix.length);
-    const first = lineValue.slice(0, firstLimit);
+    const safeLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, firstLimit);
+    const first = lineValue.slice(0, safeLimit);
     chunks.push(prefix + first);
-    const remaining = lineValue.slice(firstLimit);
+    const remaining = lineValue.slice(safeLimit);
     if (remaining) {
       chunks.push(...chunkText(remaining, maxLineLength));
     }

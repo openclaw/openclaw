@@ -513,6 +513,22 @@ describe("chunkByNewline", () => {
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
     expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
+
+  it("does not split surrogate pairs when length-splitting a long line", () => {
+    // A single line of 8 emoji (16 UTF-16 units) with an odd maxLineLength that
+    // would otherwise land mid-surrogate-pair at index 3.
+    const text = "😀".repeat(8);
+    const chunks = chunkByNewline(text, 3);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    // No chunk ends on a lone high surrogate.
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    // No chunk starts on a lone low surrogate.
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+    // First chunk carries a single whole emoji rather than 😀 + lone surrogate.
+    expect(chunks[0]).toBe("😀");
+  });
 });
 
 describe("chunkTextWithMode", () => {
