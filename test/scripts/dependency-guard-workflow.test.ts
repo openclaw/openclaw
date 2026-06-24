@@ -120,7 +120,7 @@ describe("dependency guard workflow", () => {
     const finalSteps = finalJob?.steps ?? [];
     expect(detectSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("detect");
     expect(autoscrubSteps[1].uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(autoscrubSteps[1].with).toMatchObject({
       "app-id": "2729701",
@@ -130,7 +130,7 @@ describe("dependency guard workflow", () => {
     });
     expect(autoscrubSteps[1]["continue-on-error"]).toBe(true);
     expect(autoscrubSteps[2].uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(autoscrubSteps[2].with).toMatchObject({
       "app-id": "2971289",
