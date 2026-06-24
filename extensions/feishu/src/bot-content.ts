@@ -45,6 +45,12 @@ export type FeishuGroupSessionScope =
   | "group_topic"
   | "group_topic_sender";
 
+export function isFeishuTopicSessionScope(
+  scope: string,
+): scope is "group_topic" | "group_topic_sender" {
+  return scope === "group_topic" || scope === "group_topic_sender";
+}
+
 type FeishuLogger = (...args: unknown[]) => void;
 
 type ResolvedFeishuGroupSession = {
@@ -112,8 +118,7 @@ export function resolveFeishuGroupSession(params: {
     chatType,
     hasThread: chatType === "topic_group" || Boolean(normalizedThreadId && !normalizedRootId),
   });
-  const isTopicScope =
-    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender";
+  const isTopicScope = isFeishuTopicSessionScope(groupSessionScope);
   const nativeTopicId =
     chatType === "topic_group"
       ? (normalizedThreadId ?? normalizedRootId)

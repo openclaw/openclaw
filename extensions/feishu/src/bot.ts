@@ -35,10 +35,10 @@ import {
   normalizeMentions,
   parseMergeForwardContent,
   parseMessageContent,
+  isFeishuTopicSessionScope,
   resolveConfiguredFeishuGroupSessionScope,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
-  type FeishuGroupSessionScope,
 } from "./bot-content.js";
 import {
   evaluateSupplementalContextVisibility,
@@ -107,10 +107,6 @@ function shouldSendNoVisibleReplyFallback(dispatchResult: {
     dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
     (emptyEligibleDispatch || queuedFinalFailed)
   );
-}
-
-function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
-  return scope === "group_topic" || scope === "group_topic_sender";
 }
 
 function evictGroupNameCache(): void {

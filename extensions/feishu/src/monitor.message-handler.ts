@@ -2,7 +2,10 @@
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
-import { resolveConfiguredFeishuGroupSessionScope } from "./bot-content.js";
+import {
+  isFeishuTopicSessionScope,
+  resolveConfiguredFeishuGroupSessionScope,
+} from "./bot-content.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
@@ -80,10 +83,6 @@ function resolveFeishuProcessingClaimKey(params: {
   return params.messageDedupeKey && params.messageDedupeKey !== messageId
     ? params.messageDedupeKey
     : messageId;
-}
-
-function isFeishuTopicSessionScope(scope: string): boolean {
-  return scope === "group_topic" || scope === "group_topic_sender";
 }
 
 function shouldHydrateFeishuTopicThreadIdForQueue(params: {
