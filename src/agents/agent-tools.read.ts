@@ -1002,6 +1002,14 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
+// Defers and memoizes the fs-safe workspace root so it resolves on first use
+// rather than at tool construction. An eager resolve floats an unhandled
+// FsSafeError when the workspace dir is missing and no operation is ever run.
+function createLazyWorkspaceRoot(root: string): () => ReturnType<typeof fsRoot> {
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  return () => (rootPromise ??= fsRoot(root));
+}
+
 async function writeWorkspaceFile(
   root: string,
   rootPromise: ReturnType<typeof fsRoot>,
@@ -1030,8 +1038,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // Resolve the workspace root lazily: constructing the tool (e.g. for doctor
+  // schema inspection) must not float an FsSafeError when the workspace dir is
+  // missing. The root is only needed once an fs operation actually runs.
+  const resolveRoot = createLazyWorkspaceRoot(root);
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -1040,10 +1050,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, rootPromise, absolutePath, content),
+      writeWorkspaceFile(root, resolveRoot(), absolutePath, content),
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      return (await (await rootPromise).read(relative)).buffer;
+      return (await (await resolveRoot()).read(relative)).buffer;
     },
     statFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
@@ -1068,16 +1078,18 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // Resolve the workspace root lazily: constructing the tool (e.g. for doctor
+  // schema inspection) must not float an FsSafeError when the workspace dir is
+  // missing. The root is only needed once an fs operation actually runs.
+  const resolveRoot = createLazyWorkspaceRoot(root);
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await (await rootPromise).read(relative);
+      const safeRead = await (await resolveRoot()).read(relative);
       return safeRead.buffer;
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, rootPromise, absolutePath, content),
+      writeWorkspaceFile(root, resolveRoot(), absolutePath, content),
     access: async (absolutePath: string) => {
       let relative: string;
       try {
@@ -1091,7 +1103,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         return;
       }
       try {
-        const opened = await (await rootPromise).open(relative);
+        const opened = await (await resolveRoot()).open(relative);
         await opened.handle.close().catch(() => {});
       } catch (error) {
         if (error instanceof FsSafeError && error.code === "not-found") {
