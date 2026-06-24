@@ -925,17 +925,40 @@ end
 
 def verify_app_store_screenshot_set!(app_screenshot_set:, screenshots:, locale:, display_type:)
   expected = app_store_screenshot_expected_rows(screenshots)
-  actual = app_store_screenshot_actual_rows(app_screenshot_set)
-  actual_identity = actual.map { |row| { checksum: row[:checksum], file_name: row[:file_name] } }
-  incomplete = actual.reject { |row| row[:state] == "COMPLETE" }
+  timeout_seconds = app_store_screenshot_processing_timeout_seconds
+  deadline = Time.now + timeout_seconds
+  actual = []
 
-  return if actual_identity == expected && incomplete.empty?
+  loop do
+    app_screenshot_set = Spaceship::ConnectAPI::AppScreenshotSet.get(app_screenshot_set_id: app_screenshot_set.id)
+    actual = app_store_screenshot_actual_rows(app_screenshot_set)
+    actual_identity = actual.map { |row| { checksum: row[:checksum], file_name: row[:file_name] } }
+    incomplete = actual.reject { |row| row[:state] == "COMPLETE" }
 
-  UI.user_error!(
-    "App Store Connect screenshot verification failed for #{locale} #{display_type}. " \
-      "Expected: #{format_app_store_screenshot_rows(expected)}. " \
-      "Actual: #{format_app_store_screenshot_rows(actual)}."
-  )
+    return if actual_identity == expected && incomplete.empty?
+
+    if actual.length > expected.length
+      UI.user_error!(
+        "App Store Connect screenshot verification failed for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    if Time.now >= deadline
+      UI.user_error!(
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect screenshot verification for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    UI.verbose(
+      "Waiting for App Store Connect screenshot verification for #{locale} #{display_type}: " \
+        "#{format_app_store_screenshot_rows(actual)}."
+    )
+    sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
+  end
 end
 
 def replace_app_store_screenshot_set!(localization:, display_type:, screenshots:)
