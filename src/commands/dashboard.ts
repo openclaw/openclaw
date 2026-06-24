@@ -131,17 +131,15 @@ export async function dashboardCommand(
         basePath,
       });
     }
+  } else if (options.copyToken) {
+    hint = copied
+      ? "Browser launch disabled (--no-open). Gateway token copied to clipboard."
+      : "Browser launch disabled (--no-open). Use the URL above.";
   } else {
-    if (options.copyToken) {
-      hint = copied
-        ? "Browser launch disabled (--no-open). Gateway token copied to clipboard."
+    hint =
+      copied && includeTokenInUrl
+        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
         : "Browser launch disabled (--no-open). Use the URL above.";
-    } else {
-      hint =
-        copied && includeTokenInUrl
-          ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
-          : "Browser launch disabled (--no-open). Use the URL above.";
-    }
   }
 
   const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
