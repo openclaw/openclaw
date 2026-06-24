@@ -3513,6 +3513,54 @@ describe("config cli", () => {
       expectLogExcludes("Restart the gateway to apply.");
     });
 
+    it("keeps the restart hint for hot-path edits when reload mode is off", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+        },
+        gateway: {
+          reload: { mode: "off" },
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.5"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for hot-path edits when reload mode is restart", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+        },
+        gateway: {
+          reload: { mode: "restart" },
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.5"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
     it("prints a hot-reload hint when removing legacy per-agent agentRuntime", async () => {
       const resolved: OpenClawConfig = {
         agents: {

@@ -43,6 +43,7 @@ import {
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -1013,7 +1014,7 @@ function isPluginEntryConfigPath(path: string): boolean {
   return path === "plugins.entries" || path.startsWith("plugins.entries.");
 }
 
-function configApplyHintForPaths(paths: string[]): string {
+function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): string {
   if (paths.length === 0) {
     return RESTART_HINT;
   }
@@ -1025,6 +1026,10 @@ function configApplyHintForPaths(paths: string[]): string {
     return RESTART_HINT;
   }
   if (plan.hotReasons.length > 0) {
+    const { mode } = resolveGatewayReloadSettings(afterConfig);
+    if (mode === "off" || mode === "restart") {
+      return RESTART_HINT;
+    }
     return HOT_RELOAD_HINT;
   }
   return NO_RELOAD_HINT;
@@ -1049,6 +1054,7 @@ function configApplyHintForOperations(
       beforeConfig,
       afterConfig,
     ),
+    afterConfig,
   );
 }
 
