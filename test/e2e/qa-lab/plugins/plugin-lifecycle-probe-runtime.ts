@@ -1,10 +1,11 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -16,6 +17,9 @@ type MatrixEnv = NodeJS.ProcessEnv & ProbeEnv;
 interface CommandOptions {
   env?: NodeJS.ProcessEnv;
   outputFile?: string;
+  spawnImpl?: typeof spawn;
+  taskkillImpl?: typeof spawnSync;
+  timeoutKillGraceMs?: number;
   timeoutMs?: number;
 }
 
@@ -231,43 +235,124 @@ async function runCommand(command: string, args: readonly string[], options: Com
     options.outputFile === undefined ? undefined : fs.openSync(options.outputFile, "a");
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
+      const spawnImpl = options.spawnImpl ?? spawn;
+      const useProcessGroup = process.platform !== "win32";
+      const child = spawnImpl(command, args, {
         cwd: process.cwd(),
+        detached: useProcessGroup,
         env: options.env ?? process.env,
         stdio: outputFd === undefined ? "inherit" : (["ignore", outputFd, outputFd] as const),
       });
       let settled = false;
-      const timer =
-        options.timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              child.kill("SIGTERM");
-              setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
-            }, options.timeoutMs);
-      timer?.unref();
-      child.once("error", (error) => {
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      let forceSettleTimer: NodeJS.Timeout | undefined;
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      let timeoutError: Error | undefined;
+      const clearTimers = () => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+        }
+        if (forceSettleTimer) {
+          clearTimeout(forceSettleTimer);
+        }
+      };
+      const signalChild = (signal: NodeJS.Signals) => {
+        if (useProcessGroup && child.pid) {
+          try {
+            process.kill(-child.pid, signal);
+            return;
+          } catch {
+            // The process group may already be gone; fall back to the direct child.
+          }
+        }
+        if (!useProcessGroup && child.pid) {
+          const runTaskkill = options.taskkillImpl ?? spawnSync;
+          const taskkillPath = resolveWindowsTaskkillPath();
+          const args = ["/PID", String(child.pid), "/T"];
+          if (signal === "SIGKILL") {
+            args.push("/F");
+          }
+          const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+          if (!result.error && result.status === 0) {
+            return;
+          }
+          if (signal !== "SIGKILL") {
+            const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            });
+            if (!forceResult.error && forceResult.status === 0) {
+              return;
+            }
+          }
+        }
+        child.kill(signal);
+      };
+      const isProcessGroupRunning = () => {
+        if (!useProcessGroup || !child.pid) {
+          return false;
+        }
+        try {
+          process.kill(-child.pid, 0);
+          return true;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "EPERM";
+        }
+      };
+      const finish = (error?: Error) => {
         if (settled) {
           return;
         }
         settled = true;
-        if (timer) {
-          clearTimeout(timer);
+        clearTimers();
+        if (error) {
+          reject(error);
+          return;
         }
-        reject(error);
+        resolve();
+      };
+      timeoutTimer =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              timeoutError = new Error(
+                `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
+              );
+              signalChild("SIGTERM");
+              forceKillTimer = setTimeout(() => {
+                forceKillTimer = undefined;
+                signalChild("SIGKILL");
+                forceSettleTimer = setTimeout(
+                  () => finish(timeoutError),
+                  options.timeoutKillGraceMs ?? 2_000,
+                );
+                forceSettleTimer.unref();
+              }, options.timeoutKillGraceMs ?? 2_000);
+              forceKillTimer.unref();
+            }, options.timeoutMs);
+      timeoutTimer?.unref();
+      child.once("error", (error) => {
+        finish(error);
       });
       child.once("exit", (code, signal) => {
         if (settled) {
           return;
         }
-        settled = true;
-        if (timer) {
-          clearTimeout(timer);
-        }
-        if (code === 0 && !signal) {
-          resolve();
+        if (timeoutError) {
+          if (isProcessGroupRunning()) {
+            return;
+          }
+          finish(timeoutError);
           return;
         }
-        reject(new Error(`${command} ${args.join(" ")} failed with ${signal ?? `exit ${code}`}`));
+        if (code === 0 && !signal) {
+          finish();
+          return;
+        }
+        finish(new Error(`${command} ${args.join(" ")} failed with ${signal ?? `exit ${code}`}`));
       });
     });
   } catch (error) {
@@ -531,6 +616,8 @@ export async function runPluginLifecycleMatrix() {
     registry?.stop();
   }
 }
+
+export const testing = { runCommand };
 
 const isLifecycleMatrixCli = process.argv[2] === "--lifecycle-matrix";
 

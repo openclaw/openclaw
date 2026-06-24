@@ -334,6 +334,7 @@ export async function buildReplyPayloads(params: {
     messagingToolSentTargets.length > 0;
   const sentMediaUrlFallback = params.messagingToolSentMediaUrls ?? [];
   let dedupedPayloads = silentFilteredPayloads;
+  let hasHeartbeatRouteTextDeliveryEvidence = false;
   if (shouldCheckMessagingToolDedupe) {
     const dedupeRuntime = await loadReplyPayloadsDedupeRuntime();
     const originatingTo = resolveOriginMessageTo({
@@ -377,7 +378,8 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: normalizedSentMediaUrls,
       });
       if (params.isHeartbeat && decision.matchingRoute && hasNonEmptyStringArray(sentTexts)) {
-        dedupedPayloads.push(...markHeartbeatMessageToolDeliveredPayloads(mediaFiltered));
+        hasHeartbeatRouteTextDeliveryEvidence = true;
+        dedupedPayloads.push(...mediaFiltered);
         continue;
       }
       const textFiltered = dedupeRuntime.filterMessagingToolDuplicates({
@@ -385,6 +387,20 @@ export async function buildReplyPayloads(params: {
         sentTexts,
       });
       dedupedPayloads.push(...textFiltered);
+    }
+  }
+  const directlySentTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
+  for (const sentPayload of params.directlySentBlockPayloads ?? []) {
+    const sentText = sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
+    if (!sentText) {
+      continue;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
+    const fragments = directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
+    if (fragments) {
+      fragments.push(sentText);
+    } else {
+      directlySentTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
     }
   }
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
@@ -397,21 +413,10 @@ export async function buildReplyPayloads(params: {
     if (!text || !params.directlySentBlockPayloads?.length) {
       return false;
     }
-    const fragmentsByAssistantMessage = new Map<number | undefined, string[]>();
-    for (const sentPayload of params.directlySentBlockPayloads) {
-      const sentText =
-        sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
-      if (!sentText) {
-        continue;
-      }
-      const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-      const fragments = fragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
-      fragments.push(sentText);
-      fragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
-    }
     const normalizedText = text.trim();
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    const applicableFragments = fragmentsByAssistantMessage.get(assistantMessageIndex);
+    const applicableFragments =
+      directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
     return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
@@ -529,9 +534,12 @@ export async function buildReplyPayloads(params: {
       replyPayloads.push(payload);
     }
   }
+  const finalReplyPayloads = hasHeartbeatRouteTextDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads(replyPayloads)
+    : replyPayloads;
 
   return {
-    replyPayloads,
+    replyPayloads: finalReplyPayloads,
     didLogHeartbeatStrip,
   };
 }

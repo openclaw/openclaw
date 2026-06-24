@@ -944,6 +944,14 @@
     "target": "Matrix QA"
   },
   {
+    "source": "Maturity scorecard",
+    "target": "成熟度评分卡"
+  },
+  {
+    "source": "Maturity taxonomy",
+    "target": "成熟度分类法"
+  },
+  {
     "source": "Matrix presentation metadata",
     "target": "Matrix 呈现元数据"
   },
@@ -1194,5 +1202,9 @@
   {
     "source": "cohere",
     "target": "cohere"
+  },
+  {
+    "source": "Zalo ClawBot",
+    "target": "Zalo ClawBot"
   }
 ]

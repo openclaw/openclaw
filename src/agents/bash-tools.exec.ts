@@ -42,6 +42,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -49,6 +50,7 @@ import {
 } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -106,6 +108,31 @@ type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
+
+const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+
+function buildSubprocessChannelContext(
+  channelContext: PluginHookChannelContext | undefined,
+): PluginHookChannelContext | undefined {
+  const senderId = normalizeOptionalString(channelContext?.sender?.id);
+  const chatId = normalizeOptionalString(channelContext?.chat?.id);
+  const subprocessContext: PluginHookChannelContext = {
+    ...(senderId ? { sender: { id: senderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+  return subprocessContext.sender || subprocessContext.chat ? subprocessContext : undefined;
+}
+
+function buildChannelContextEnv(
+  channelContext: PluginHookChannelContext | undefined,
+): Record<string, string> | undefined {
+  const subprocessContext = buildSubprocessChannelContext(channelContext);
+  if (!subprocessContext) {
+    return undefined;
+  }
+  const serialized = safeJsonStringify(subprocessContext);
+  return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
+}
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
@@ -1336,6 +1363,7 @@ export function createExecTool(
         sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
         messageProvider: defaults?.messageProvider,
         channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+        ...(defaults?.channelContext ? { channelContext: defaults.channelContext } : {}),
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
@@ -1571,9 +1599,13 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
-      const requestedEnv = resolvedExecEnvState?.pluginEnv
-        ? { ...params.env, ...resolvedExecEnvState.pluginEnv }
-        : params.env;
+      const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+      const requestedEnv: Record<string, string> | undefined =
+        params.env !== undefined ||
+        resolvedExecEnvState?.pluginEnv !== undefined ||
+        channelContextEnv !== undefined
+          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+          : undefined;
       const hostEnvResult =
         host === "sandbox"
           ? null
@@ -1657,6 +1689,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1707,6 +1740,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,

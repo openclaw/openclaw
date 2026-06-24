@@ -1,5 +1,8 @@
 // Routing session key helpers build stable session keys from route targets.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import {
   isCronRunSessionKey,
@@ -189,6 +192,11 @@ export function normalizeAgentId(value: string | undefined | null): string {
       .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_AGENT_ID
   );
+}
+
+export function normalizeOptionalAgentId(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? normalizeAgentId(trimmed) : undefined;
 }
 
 export function isValidAgentId(value: string | undefined | null): boolean {

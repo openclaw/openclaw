@@ -573,13 +573,13 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
         skip_entity_detection: true,
       },
     });
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b><br><b>🛠️ Exec</b>", {
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
       parse_mode: "HTML",
     });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
@@ -587,7 +587,7 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
         skip_entity_detection: true,
       },
     });
@@ -596,10 +596,68 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(
       123,
       17,
-      "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
       { parse_mode: "HTML" },
     );
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("sends marked progress rich previews through HTML text transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec\n• Checking files",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+      { parse_mode: "HTML" },
+    );
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain preview text when rich preview HTML parsing fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling\n\n🛠️ Exec", {});
   });
 
   it("uses rich send and edit for previews when explicitly enabled", async () => {
@@ -630,6 +688,24 @@ describe("createTelegramDraftStream", () => {
       rich_message: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
     });
     expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    stream.update(oauthProfileText);
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: oauthProfileText,
+        skip_entity_detection: true,
+      },
+    });
   });
 
   it("keeps rich preview html out of plain preview gating", async () => {

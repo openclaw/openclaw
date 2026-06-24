@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  allowedSessionStoreRuntimeFileBackedCompatExports,
+  collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
+  findMemoryHostSessionCorpusBoundaryViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
   findSessionLifecycleCleanupBoundaryViolations,
+  findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedMemoryHostSessionCorpusFiles,
   migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
   migratedSessionAccessorFiles,
@@ -18,11 +23,19 @@ describe("session accessor boundary guard", () => {
   it("ratchets only the files migrated by the session accessor slices", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
+        "packages/memory-host-sdk/src/host/session-files.ts",
+        "src/acp/runtime/session-meta.ts",
+        "src/agents/acp-spawn.ts",
+        "src/agents/auth-profiles/session-override.ts",
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+        "src/agents/live-model-switch.ts",
+        "src/agents/subagent-control.ts",
+        "src/agents/subagent-registry-helpers.ts",
+        "src/auto-reply/reply/abort.ts",
         "src/auto-reply/reply/agent-runner-helpers.ts",
         "src/auto-reply/reply/agent-runner.ts",
         "src/auto-reply/reply/commands-subagents/action-info.ts",
@@ -35,14 +48,29 @@ describe("session accessor boundary guard", () => {
         "src/commands/sessions.ts",
         "src/commands/status.agent-local.ts",
         "src/commands/status.summary.ts",
+        "src/commands/tasks.ts",
         "src/config/sessions/combined-store-gateway.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
         "src/gateway/session-compaction-checkpoints.ts",
+        "src/gateway/session-history-state.ts",
+        "src/gateway/sessions-history-http.ts",
         "src/gateway/session-utils.ts",
+        "src/gateway/managed-image-attachments.ts",
+        "src/gateway/boot.ts",
+        "src/gateway/server-methods/artifacts.ts",
+        "src/gateway/server-methods/chat.ts",
         "src/gateway/sessions-resolve.ts",
+        "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions.ts",
+        "src/gateway/server-session-events.ts",
+        "src/gateway/session-reset-service.ts",
         "src/infra/outbound/message-action-tts.ts",
+        "src/agents/tools/embedded-gateway-stub.ts",
+        "src/agents/tools/session-status-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/plugins/host-hook-state.ts",
+        "src/status/status-message.ts",
         "src/tui/embedded-backend.ts",
       ]),
     );
@@ -51,9 +79,22 @@ describe("session accessor boundary guard", () => {
   it("ratchets only the bundled plugin files migrated by this slice", () => {
     expect(migratedBundledPluginSessionAccessorFiles).toEqual(
       new Set([
+        "extensions/codex/src/conversation-binding.ts",
+        "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
+        "extensions/feishu/src/reasoning-preview.ts",
+        "extensions/memory-core/src/dreaming-phases.ts",
+        "extensions/memory-core/src/dreaming-narrative.ts",
+        "extensions/mattermost/src/mattermost/model-picker.ts",
+        "extensions/matrix/src/matrix/monitor/handler.ts",
+        "extensions/matrix/src/session-route.ts",
+        "extensions/slack/src/monitor/slash.ts",
+        "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
+        "extensions/telegram/src/bot.ts",
+        "extensions/telegram/src/bot-message-dispatch.ts",
+        "extensions/telegram/src/bot-native-commands.ts",
       ]),
     );
   });
@@ -61,29 +102,46 @@ describe("session accessor boundary guard", () => {
   it("ratchets only files migrated to session accessor writes", () => {
     expect(migratedSessionAccessorWriteFiles).toEqual(
       new Set([
+        "src/acp/runtime/session-meta.ts",
+        "src/agents/auth-profiles/session-override.ts",
         "src/agents/command/attempt-execution.shared.ts",
         "src/agents/command/session-store.ts",
         "src/agents/embedded-agent-runner/run.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/live-model-switch.ts",
+        "src/agents/main-session-restart-recovery.ts",
+        "src/auto-reply/reply/abort.ts",
+        "src/agents/subagent-control.ts",
+        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/tools/session-status-tool.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
         "src/auto-reply/reply/agent-runner-execution.ts",
         "src/auto-reply/reply/agent-runner-memory.ts",
+        "src/auto-reply/reply/agent-runner-session-reset.ts",
         "src/auto-reply/reply/agent-runner.ts",
         "src/auto-reply/reply/body.ts",
         "src/auto-reply/reply/commands-acp/lifecycle.ts",
         "src/auto-reply/reply/commands-reset.ts",
+        "src/auto-reply/reply/commands-session-store.ts",
         "src/auto-reply/reply/directive-handling.impl.ts",
         "src/auto-reply/reply/directive-handling.persist.ts",
         "src/auto-reply/reply/dispatch-from-config.runtime.ts",
         "src/auto-reply/reply/followup-runner.ts",
         "src/auto-reply/reply/get-reply.ts",
         "src/auto-reply/reply/model-selection.ts",
+        "src/auto-reply/reply/session.ts",
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
-        "src/tui/embedded-backend.ts",
+        "src/commands/tasks.ts",
         "src/config/sessions/cleanup-service.ts",
+        "src/gateway/boot.ts",
+        "src/gateway/server-node-events.ts",
+        "src/gateway/session-compaction-checkpoints.ts",
+        "src/plugins/host-hook-cleanup.ts",
+        "src/plugins/host-hook-state.ts",
+        "src/tui/embedded-backend.ts",
       ]),
     );
   });
@@ -115,6 +173,64 @@ describe("session accessor boundary guard", () => {
         "src/infra/heartbeat-runner.ts",
       ]),
     );
+  });
+
+  it("ratchets only memory-host session corpus files migrated to accessor entries", () => {
+    expect(migratedMemoryHostSessionCorpusFiles).toEqual(
+      new Set([
+        "packages/memory-host-sdk/src/host/session-files.ts",
+        "packages/memory-host-sdk/src/host/session-transcript-corpus.ts",
+      ]),
+    );
+  });
+
+  it("ratchets only explicit file-backed SDK session compatibility exports", () => {
+    expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
+      new Set([
+        "loadSessionStore",
+        "readLatestAssistantTextFromSessionTranscript",
+        "resolveAndPersistSessionFile",
+        "resolveSessionFilePath",
+        "resolveSessionStoreEntry",
+        "saveSessionStore",
+        "updateSessionStore",
+      ]),
+    );
+  });
+
+  it("collects file-backed SDK session compatibility exports", () => {
+    expect(
+      collectSessionStoreRuntimeFileBackedCompatExports(`
+        export const loadSessionStore = loadSessionStoreImpl;
+        export { resolveSessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual(
+      new Map([
+        ["loadSessionStore", { line: 2, sourceName: "loadSessionStore" }],
+        ["resolveSessionFilePath", { line: 3, sourceName: "resolveSessionFilePath" }],
+        ["saveSessionStore", { line: 4, sourceName: "saveSessionStore" }],
+        ["updateSessionStore", { line: 4, sourceName: "updateSessionStore" }],
+      ]),
+    );
+  });
+
+  it("flags unratcheted file-backed SDK session compatibility exports", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { readSessionEntries } from "../config/sessions/store-load.js";
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "readSessionEntries"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+    ]);
   });
 
   it("flags legacy reader imports", () => {
@@ -187,6 +303,62 @@ describe("session accessor boundary guard", () => {
     ).toEqual([]);
   });
 
+  it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return loadSessionTranscriptClassificationForSessionsDir(resolveSessionTranscriptsDirForAgent(agentId));
+        }
+        export async function listSessionFilesForAgent(agentId) {
+          return readSessionTranscriptClassificationStore("sessions.json");
+        }
+      `),
+    ).toEqual([
+      {
+        line: 3,
+        reason:
+          'calls legacy memory-host session corpus helper "loadSessionTranscriptClassificationForSessionsDir"',
+      },
+      {
+        line: 6,
+        reason:
+          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
+      },
+    ]);
+  });
+
+  it("follows memory-host corpus helper calls when checking legacy access", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function loadViaHelper() {
+          return readSessionTranscriptClassificationStore("sessions.json");
+        }
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return loadViaHelper(agentId);
+        }
+      `),
+    ).toEqual([
+      {
+        line: 3,
+        reason:
+          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
+      },
+    ]);
+  });
+
+  it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return listSessionEntries({ agentId });
+        }
+        export async function listSessionFilesForAgent(agentId) {
+          return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
+        }
+      `),
+    ).toEqual([]);
+  });
+
   it("flags legacy writer imports and calls", () => {
     expect(
       findSessionAccessorWriteBoundaryViolations(`
@@ -222,15 +394,10 @@ describe("session accessor boundary guard", () => {
       findTranscriptWriterBoundaryViolations(`
         import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
         import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
-        import { rewriteTranscriptEntriesInSessionFile } from "../agents/embedded-agent-runner/transcript-rewrite.js";
       `),
     ).toEqual([
       { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
       { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
-      {
-        line: 4,
-        reason: 'imports legacy transcript writer "rewriteTranscriptEntriesInSessionFile"',
-      },
     ]);
   });
 
@@ -240,16 +407,11 @@ describe("session accessor boundary guard", () => {
         appendSessionTranscriptMessage({ transcriptPath, message });
         transcriptEvents.emitSessionTranscriptUpdate({ sessionFile });
         transcriptAppend["appendSessionTranscriptMessage"]({ transcriptPath, message });
-        transcriptRewrite.rewriteTranscriptEntriesInSessionFile({ sessionFile, request });
       `),
     ).toEqual([
       { line: 2, reason: 'calls legacy transcript writer "appendSessionTranscriptMessage"' },
       { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
       { line: 4, reason: 'references legacy transcript writer "appendSessionTranscriptMessage"' },
-      {
-        line: 5,
-        reason: 'references legacy transcript writer "rewriteTranscriptEntriesInSessionFile"',
-      },
     ]);
   });
 

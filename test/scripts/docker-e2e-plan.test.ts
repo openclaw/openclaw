@@ -397,7 +397,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         name: "kitchen-sink-rpc",
         resources: ["docker", "service", "npm"],
         stateScenario: "empty",
-        timeoutMs: 900_000,
+        timeoutMs: 1_500_000,
         weight: 3,
       },
       {
@@ -711,6 +711,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
     for (const { credentials, name } of cases) {
       expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
     }
+  });
+
+  it("marks the aggregate Gemini CLI backend lane advisory for auth drift", () => {
+    const plan = planFor({ selectedLaneNames: ["live-cli-backend-gemini"] });
+    const lane = requireFirstLane(plan);
+
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1");
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1");
+    expect(lane.command).toContain(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+    );
   });
 
   it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {

@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
+  isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
@@ -756,6 +757,12 @@ function resolveStaleHeartbeatIsolatedSessionKey(params: {
   return undefined;
 }
 
+// Display-format check (not a classifier): whether reasoning text is already
+// rendered in the heartbeat "Reasoning:" / "Thinking..._" form, so it should be
+// delivered as-is rather than re-wrapped by formatReasoningMessage. Reasoning
+// classification itself is the shared SDK `isReasoningReplyPayload`.
+const HEARTBEAT_REASONING_DISPLAY_PREFIX = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u;
+
 function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
@@ -763,14 +770,16 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
-      text.trimStart(),
-    );
-    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
+    // Shared classifier keeps this lane in lockstep with the heartbeat reply
+    // selector so a legacy-formatted reasoning payload is never both skipped
+    // here and surfaced as the visible reply (or vice versa). See #92242.
+    if (!isReasoningReplyPayload(payload)) {
       continue;
     }
 
-    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = HEARTBEAT_REASONING_DISPLAY_PREFIX.test(text.trimStart())
+      ? text
+      : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }
@@ -1882,7 +1891,15 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
+      reasoningPayloads.length === 0
+    ) {
+      // No main reply to send. Only treat this as an empty heartbeat when there
+      // is also no opt-in reasoning to deliver; otherwise fall through so the
+      // includeReasoning Thinking payload is still sent (mirrors the
+      // shouldSkipMain guard below). See #92242 follow-up.
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
