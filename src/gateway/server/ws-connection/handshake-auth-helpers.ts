@@ -117,6 +117,40 @@ export function shouldAllowSilentLocalPairing(params: {
   return false;
 }
 
+/**
+ * Decide whether a device-pairing request may be auto-approved silently.
+ *
+ * A scope-upgrade (e.g. operator.read -> operator.admin, which happens when a
+ * CLI device's first gateway call was a read method and a later call needs an
+ * admin scope) is auto-approvable under the SAME local-trust condition that
+ * already governs initial pairing and role-upgrades — i.e. only when the client
+ * is local (`allowSilentLocalPairing`, which is false for remote clients). It is
+ * never silently granted via the trusted-CIDR node path or the bootstrap path,
+ * both of which target initial node onboarding rather than scope escalation.
+ *
+ * This keeps remote scope escalations on the explicit-approval path while
+ * removing the spurious manual-approval prompt for same-host/in-pod CLI clients
+ * whose initial pairing was already silently auto-approved.
+ * `shouldAllowSilentLocalPairing` already returns true for a local scope-upgrade;
+ * this is the call-site that honors it (it previously hard-forced `false` for
+ * every scope-upgrade regardless of locality).
+ */
+export function resolveDevicePairingSilent(params: {
+  reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
+  allowSilentLocalPairing: boolean;
+  allowSilentTrustedCidrsNodePairing: boolean;
+  allowSilentBootstrapPairing: boolean;
+}): boolean {
+  if (params.reason === "scope-upgrade") {
+    return params.allowSilentLocalPairing;
+  }
+  return (
+    params.allowSilentLocalPairing ||
+    params.allowSilentTrustedCidrsNodePairing ||
+    params.allowSilentBootstrapPairing
+  );
+}
+
 function isCliContainerLocalEquivalent(params: {
   connectParams: ConnectParams;
   requestHost?: string;

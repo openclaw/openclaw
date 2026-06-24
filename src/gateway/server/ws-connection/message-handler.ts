@@ -163,6 +163,7 @@ import {
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
+  resolveDevicePairingSilent,
   resolveDeviceSignaturePayloadVersion,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
@@ -1419,12 +1420,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     scopes: bootstrapPairingScopes ?? [],
                   }
                 : {}),
-              silent:
-                reason === "scope-upgrade"
-                  ? false
-                  : allowSilentLocalPairing ||
-                    allowSilentTrustedCidrsNodePairing ||
-                    allowSetupCodeMobileBootstrapPairing,
+              silent: resolveDevicePairingSilent({
+                reason,
+                allowSilentLocalPairing,
+                allowSilentTrustedCidrsNodePairing,
+                allowSilentBootstrapPairing: allowSetupCodeMobileBootstrapPairing,
+              }),
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;

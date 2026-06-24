@@ -9,6 +9,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import {
   BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
+  resolveDevicePairingSilent,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -619,5 +620,74 @@ describe("handshake auth helpers", () => {
         requestHost: "127.0.0.1:18789",
       }),
     ).toBe("cli_container_local");
+  });
+});
+
+describe("resolveDevicePairingSilent", () => {
+  const base = {
+    allowSilentLocalPairing: false,
+    allowSilentTrustedCidrsNodePairing: false,
+    allowSilentBootstrapPairing: false,
+  };
+
+  it("auto-approves a local scope-upgrade silently (read -> admin for an in-pod CLI)", () => {
+    expect(
+      resolveDevicePairingSilent({
+        ...base,
+        reason: "scope-upgrade",
+        allowSilentLocalPairing: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a remote scope-upgrade on the explicit-approval path", () => {
+    // allowSilentLocalPairing is false for remote clients (shouldAllowSilentLocalPairing).
+    expect(
+      resolveDevicePairingSilent({
+        ...base,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let the trusted-CIDR or bootstrap node paths silence a scope-upgrade", () => {
+    expect(
+      resolveDevicePairingSilent({
+        reason: "scope-upgrade",
+        allowSilentLocalPairing: false,
+        allowSilentTrustedCidrsNodePairing: true,
+        allowSilentBootstrapPairing: true,
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["not-paired", "role-upgrade", "metadata-upgrade"] as const)(
+    "auto-approves %s silently when any silent condition holds",
+    (reason) => {
+      expect(
+        resolveDevicePairingSilent({ ...base, reason, allowSilentLocalPairing: true }),
+      ).toBe(true);
+      expect(
+        resolveDevicePairingSilent({
+          ...base,
+          reason,
+          allowSilentTrustedCidrsNodePairing: true,
+        }),
+      ).toBe(true);
+      expect(
+        resolveDevicePairingSilent({ ...base, reason, allowSilentBootstrapPairing: true }),
+      ).toBe(true);
+    },
+  );
+
+  it("requires approval when no silent condition holds", () => {
+    for (const reason of [
+      "not-paired",
+      "role-upgrade",
+      "scope-upgrade",
+      "metadata-upgrade",
+    ] as const) {
+      expect(resolveDevicePairingSilent({ ...base, reason })).toBe(false);
+    }
   });
 });
