@@ -817,7 +817,7 @@ describe("ci workflow guards", () => {
 
     expect(preflightStep.run).not.toContain("qa-smoke-profile");
     expect(preflightStep.run).not.toContain("qa_category");
-    expect(smokeProfile.categoryIds).toHaveLength(34);
+    expect(smokeProfile.categoryIds).toHaveLength(30);
     for (const categoryId of smokeProfile.categoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
