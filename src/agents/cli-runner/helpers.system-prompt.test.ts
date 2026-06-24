@@ -107,8 +107,8 @@ describe("buildCliAgentSystemPrompt", () => {
       sessionId: "session-123",
     });
 
-    expect(prompt).toContain("agent=Runt");
-    expect(prompt).toContain("agentId=main");
+    expect(prompt).toContain("agent=main");
+    expect(prompt).toContain("agentName=Runt");
     expect(prompt).toContain("session=agent:main:telegram:direct:peer");
     expect(prompt).toContain("sessionId=session-123");
   });
