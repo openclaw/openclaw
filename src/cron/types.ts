@@ -285,6 +285,15 @@ export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
+  /**
+   * Timestamp (ms) the schedule/enabled state was last changed, recorded
+   * whenever nextRunAtMs is recomputed from a definition change. Restart
+   * catch-up uses it to skip inferred "missed" slots that predate the current
+   * schedule's activation (#91944). Doctor preflight re-activates older cron
+   * rows at migration time; runtime does not infer this boundary from mutable
+   * execution timestamps.
+   */
+  scheduleActivatedAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
   /** @deprecated Use lastRunStatus. */
@@ -335,9 +344,11 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
+type CronJobCallerState = Omit<CronJobState, "scheduleActivatedAtMs">;
+
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
-  state?: Partial<CronJobState>;
+  state?: Partial<CronJobCallerState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
@@ -346,5 +357,5 @@ export type CronJobPatch = Partial<
 > & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
-  state?: Partial<CronJobState>;
+  state?: Partial<CronJobCallerState>;
 };

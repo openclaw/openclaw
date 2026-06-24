@@ -329,7 +329,9 @@ describe("CronService restart catch-up", () => {
           name: "every ten minutes +1",
           enabled: true,
           createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-          updatedAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+          // updatedAtMs reflects the last run outcome write (run end), not the
+          // missed 04:01 slot — only maintenance writers touched state after.
+          updatedAtMs: Date.parse("2025-12-13T03:51:05.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
@@ -340,6 +342,7 @@ describe("CronService restart catch-up", () => {
             nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
             lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
             lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           },
         },
       ],
@@ -350,6 +353,204 @@ describe("CronService restart catch-up", () => {
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-missed-slot");
         expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("does not infer missed-slot replay when the canonical activation boundary is absent", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-updated-schedule",
+          name: "updated schedule keeps future slot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          // Direct runtime consumers do not run doctor preflight. Missing
+          // canonical state must suppress inferred replay instead of guessing
+          // from updatedAtMs and firing an outbound job at the wrong time.
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "must not fire before next slot" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastStatus: "ok",
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-updated-schedule");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
+        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T03:51:00.000Z"));
+      },
+    );
+  });
+
+  it("uses scheduleActivatedAtMs so a later metadata edit does not suppress a real missed slot", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-metadata-edit",
+          name: "renamed after a missed slot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          // Schedule last activated at 03:50 (before the missed 04:01 slot); a
+          // later rename bumped updatedAtMs to 04:11:30 without touching the
+          // schedule. The 04:01 slot is genuinely missed and must still replay —
+          // the precise activation timestamp keeps the metadata edit from
+          // masking it. nextRunAtMs (04:11) stays in the future so this exercises
+          // the missed-slot replay path, not the plain due check.
+          updatedAtMs: Date.parse("2025-12-13T04:11:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "replay the genuinely missed slot" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-13T03:50:00.000Z"),
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        // The updatedAtMs-only guard would have suppressed this (04:01 <= 04:11:30);
+        // the precise activation timestamp (03:50) lets the real missed slot fire.
+        expectQueuedSystemEvent(enqueueSystemEvent, "replay the genuinely missed slot");
+        expect(requestHeartbeat).toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-metadata-edit");
+        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("suppresses a pre-activation slot when scheduleActivatedAtMs is set by an update", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-activated-field",
+          name: "schedule activated after the slot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "must not fire before next slot" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-activated-field");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
+      },
+    );
+  });
+
+  it("does not defer-fire a pre-update agent-turn slot after a schedule update", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T04:02:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "startup-updated-agent",
+        name: "updated agent schedule",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        // cron.update at 04:01:30 recomputed nextRunAtMs past the 04:01 slot (#91944).
+        updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+        schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "must not fire before next slot" },
+        state: {
+          nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+          lastStatus: "ok",
+          scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+      nowMs: () => startNow,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "startup-updated-agent");
+      // The 120s startup deferral must not overwrite the update's future slot.
+      expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("does not pull an updated future slot back to the error backoff window", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-updated-backoff",
+          name: "updated schedule during backoff",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          // cron.update at 04:01:30 recomputed nextRunAtMs past the 04:01 slot
+          // while the job sat in error backoff (4 errors -> until 04:06:00).
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "must not fire from backoff window" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastDurationMs: 0,
+            lastRunStatus: "error",
+            consecutiveErrors: 4,
+            scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-updated-backoff");
+        // Pre-update slots must not re-enter via the backoff deferral either.
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
       },
     );
   });
@@ -576,7 +777,9 @@ describe("CronService restart catch-up", () => {
           name: "backoff elapsed replay",
           enabled: true,
           createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-          updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
+          // updatedAtMs reflects the failed run's outcome write (run end);
+          // the missed 04:01 slot itself was never written by a definition writer.
+          updatedAtMs: Date.parse("2025-12-13T03:51:10.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
@@ -588,6 +791,7 @@ describe("CronService restart catch-up", () => {
             lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
             lastStatus: "error",
             consecutiveErrors: 1,
+            scheduleActivatedAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           },
         },
       ],

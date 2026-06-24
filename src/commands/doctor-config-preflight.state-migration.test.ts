@@ -13,6 +13,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
+const repairCronScheduleActivationWithoutPrompt = vi.hoisted(() =>
+  vi.fn(async () => ({ changes: ["cron-activation-backfilled"], warnings: [] })),
+);
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
     exists: true,
@@ -33,6 +36,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 }));
 
 vi.mock("./doctor/cron/index.js", () => ({
+  repairCronScheduleActivationWithoutPrompt,
   repairLegacyCronStoreWithoutPrompt,
 }));
 
@@ -69,6 +73,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     const configGuardOrder = beforeStateMigrations.mock.invocationCallOrder[1] ?? 0;
     const configMutationOrder = repairLegacyCronStoreWithoutPrompt.mock.invocationCallOrder[0] ?? 0;
     expect(configMutationOrder).toBeGreaterThan(configGuardOrder);
+    const activationMigrationOrder =
+      repairCronScheduleActivationWithoutPrompt.mock.invocationCallOrder[0] ?? 0;
+    expect(activationMigrationOrder).toBeGreaterThan(configMutationOrder);
     expect(beforeStateMigrations.mock.calls[1]?.[0]).toMatchObject({
       valid: true,
       sourceConfig: { gateway: { mode: "local", port: 19091 } },
@@ -84,6 +91,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(repairCronScheduleActivationWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
@@ -104,6 +112,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
     expect(beforeStateMigrations).toHaveBeenCalledTimes(2);
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(repairCronScheduleActivationWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
@@ -119,12 +128,16 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
     });
+    expect(repairCronScheduleActivationWithoutPrompt).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+    });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
       recoverCorruptTargetStore: undefined,
     });
     expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
+    expect(note).toHaveBeenCalledWith("- cron-activation-backfilled", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
   });
 
@@ -160,6 +173,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(repairCronScheduleActivationWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });

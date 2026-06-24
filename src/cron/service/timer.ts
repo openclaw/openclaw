@@ -1495,6 +1495,19 @@ function isRunnableJob(params: {
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
+  return hasReplayableMissedCronSlot(job, nowMs);
+}
+
+// A missed cron slot is replayable only when it fell after the schedule was
+// last activated: an update recomputes nextRunAtMs to a future slot, so older
+// slots were deliberately scheduled away and must not re-fire (#91944).
+// scheduleActivatedAtMs is the exact activation moment (set only on
+// schedule/enabled changes), so a later metadata-only edit no longer suppresses
+// a legitimate catch-up. Doctor preflight re-activates older rows at migration
+// time before startup; if that migration was skipped, fail closed instead of
+// guessing from unrelated timestamps and firing an outbound job at the wrong
+// time.
+function hasReplayableMissedCronSlot(job: CronJob, nowMs: number): boolean {
   let previousRunAtMs: number | undefined;
   try {
     previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
@@ -1507,6 +1520,13 @@ function isRunnableJob(params: {
   const lastRunAtMs = job.state.lastRunAtMs;
   if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
     // Only replay a "missed slot" when there is concrete run history.
+    return false;
+  }
+  const activatedAtMs = job.state.scheduleActivatedAtMs;
+  if (typeof activatedAtMs !== "number" || !Number.isFinite(activatedAtMs)) {
+    return false;
+  }
+  if (previousRunAtMs <= activatedAtMs) {
     return false;
   }
   return previousRunAtMs > lastRunAtMs;
@@ -1572,20 +1592,7 @@ function deferPendingBackoffMissedCronSlots(
     if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
       continue;
     }
-    let previousRunAtMs: number | undefined;
-    try {
-      previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
-    } catch {
-      continue;
-    }
-    const lastRunAtMs = job.state.lastRunAtMs;
-    if (
-      typeof previousRunAtMs !== "number" ||
-      !Number.isFinite(previousRunAtMs) ||
-      typeof lastRunAtMs !== "number" ||
-      !Number.isFinite(lastRunAtMs) ||
-      previousRunAtMs <= lastRunAtMs
-    ) {
+    if (!hasReplayableMissedCronSlot(job, nowMs)) {
       continue;
     }
     if (job.state.nextRunAtMs !== backoffUntilMs) {
