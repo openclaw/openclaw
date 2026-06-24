@@ -60,6 +60,25 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     messages: params.messages,
   };
 
+  // Match the embedded runner's lifecycle order: heartbeat contributions are
+  // collected before prompt-build hooks so hook side effects stay deterministic.
+  const heartbeatResult =
+    hasHeartbeatContribution && hookRunner
+      ? await hookRunner
+          .runHeartbeatPromptContribution(
+            {
+              sessionKey: params.ctx.sessionKey,
+              agentId: params.ctx.agentId,
+              heartbeatName: "heartbeat",
+            },
+            hookCtx,
+          )
+          .catch((error: unknown) => {
+            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
+            return undefined;
+          })
+      : undefined;
+
   // Support the newer before_prompt_build hook plus the deprecated
   // before_agent_start hook during the prompt-build migration window.
   const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
@@ -79,26 +98,6 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
           );
           return undefined;
         })
-      : undefined;
-
-  // heartbeat_prompt_contribution runs only on heartbeat turns. Mirrors the
-  // embedded runner (resolvePromptBuildHookResult): the contribution is merged
-  // ahead of the before_prompt_build / before_agent_start contributions.
-  const heartbeatResult =
-    hasHeartbeatContribution && hookRunner
-      ? await hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.ctx.sessionKey,
-              agentId: params.ctx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            hookCtx,
-          )
-          .catch((error: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
-            return undefined;
-          })
       : undefined;
 
   const systemPrompt = resolvePromptBuildSystemPrompt({
