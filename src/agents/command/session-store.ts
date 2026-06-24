@@ -279,7 +279,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  const metadataPatch = preserveUserFacingRunState
+  const metadataPatch: Partial<SessionEntry> = preserveUserFacingRunState
     ? {
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
