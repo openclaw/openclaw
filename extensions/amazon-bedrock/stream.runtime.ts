@@ -63,7 +63,11 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
+import {
+  isBedrockNovaPromptCachingModel,
+  supportsBedrockPromptCaching,
+  type BedrockOptions,
+} from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
@@ -686,6 +690,20 @@ function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean
   );
 }
 
+function makePromptCachePoint(
+  model: Model<"bedrock-converse-stream">,
+  cacheRetention: CacheRetention,
+) {
+  return {
+    cachePoint: {
+      type: CachePointType.DEFAULT,
+      ...(cacheRetention === "long" && !isBedrockNovaPromptCachingModel(model.id, model.name)
+        ? { ttl: CacheTTL.ONE_HOUR }
+        : {}),
+    },
+  };
+}
+
 /**
  * Check if the model supports thinking signatures in reasoningContent.
  * Only Anthropic Claude models support the signature field.
@@ -709,14 +727,9 @@ function buildSystemPrompt(
 
   const blocks: SystemContentBlock[] = [{ text: sanitizeSurrogates(systemPrompt) }];
 
-  // Add cache point for supported Claude models when caching is enabled
+  // Add cache point for supported Bedrock models when caching is enabled.
   if (cacheRetention !== "none" && supportsPromptCaching(model)) {
-    blocks.push({
-      cachePoint: {
-        type: CachePointType.DEFAULT,
-        ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-      },
-    });
+    blocks.push(makePromptCachePoint(model, cacheRetention));
   }
 
   return blocks;
@@ -889,16 +902,11 @@ function convertMessages(
     }
   }
 
-  // Add cache point to the last user message for supported Claude models when caching is enabled
+  // Add cache point to the last user message for supported Bedrock models when caching is enabled.
   if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
     const lastMessage = result[result.length - 1];
     if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
-      lastMessage.content.push({
-        cachePoint: {
-          type: CachePointType.DEFAULT,
-          ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-        },
-      });
+      lastMessage.content.push(makePromptCachePoint(model, cacheRetention));
     }
   }
 

@@ -46,8 +46,8 @@ const sendBedrockCommand = vi.fn(async (command: unknown) => {
       modelSummaries: [
         {
           modelId: NON_ANTHROPIC_MODEL,
-          modelName: "Nova Micro",
-          providerName: "Amazon",
+          modelName: "Mistral Large",
+          providerName: "Mistral AI",
           inputModalities: ["TEXT"],
           outputModalities: ["TEXT"],
           responseStreamingSupported: true,
@@ -132,7 +132,8 @@ const spyStreamFn = (_model: unknown, _context: unknown, options: Record<string,
   options;
 
 const ANTHROPIC_MODEL = "us.anthropic.claude-sonnet-4-6-v1";
-const NON_ANTHROPIC_MODEL = "amazon.nova-micro-v1:0";
+const NOVA_MODEL = "amazon.nova-micro-v1:0";
+const NON_ANTHROPIC_MODEL = "mistral.mistral-large-2402-v1:0";
 
 const MODEL_DESCRIPTOR = {
   api: "openai-completions",
@@ -418,6 +419,13 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
   });
 
+  it("recognizes Amazon Nova model refs as prompt-cache eligible", () => {
+    expect(supportsBedrockPromptCaching(NOVA_MODEL)).toBe(true);
+    expect(supportsBedrockPromptCaching("us.amazon.nova-lite-v1:0")).toBe(true);
+    expect(supportsBedrockPromptCaching("amazon.nova-2-lite-v1:0")).toBe(true);
+    expect(supportsBedrockPromptCaching("production-profile", "Nova Pro")).toBe(true);
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -438,11 +446,11 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", async () => {
+  it("allows prompt caching for Amazon Nova Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
-      modelId: "amazon.nova-micro-v1:0",
+      modelId: NOVA_MODEL,
       streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
     } as never);
 
@@ -451,7 +459,30 @@ describe("amazon-bedrock provider plugin", () => {
         {
           api: "openai-completions",
           provider: "amazon-bedrock",
-          id: "amazon.nova-micro-v1:0",
+          id: NOVA_MODEL,
+        } as never,
+        { messages: [] } as never,
+        { cacheRetention: "short" },
+      ),
+      { cacheRetention: "short" },
+    );
+  });
+
+  it("disables prompt caching for unsupported non-Anthropic Bedrock models", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: NON_ANTHROPIC_MODEL,
+      streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
+    } as never);
+
+    expect(supportsBedrockPromptCaching(NON_ANTHROPIC_MODEL)).toBe(false);
+    expectWrappedResultFields(
+      wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "amazon-bedrock",
+          id: NON_ANTHROPIC_MODEL,
         } as never,
         { messages: [] } as never,
         {},
@@ -1000,10 +1031,10 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).not.toHaveProperty("cacheRetention", "none");
     });
 
-    it("injects guardrailConfig for non-Anthropic models with cacheRetention: none", async () => {
+    it("injects guardrailConfig for unsupported non-Anthropic models with cacheRetention: none", async () => {
       const provider = await registerWithConfig({
         guardrail: {
-          guardrailIdentifier: "guardrail-nova",
+          guardrailIdentifier: "guardrail-mistral",
           guardrailVersion: "3",
         },
       });
@@ -1012,11 +1043,11 @@ describe("amazon-bedrock provider plugin", () => {
       // Non-Anthropic models should get guardrailConfig
       expect(result.capturedPayload).toEqual({
         guardrailConfig: {
-          guardrailIdentifier: "guardrail-nova",
+          guardrailIdentifier: "guardrail-mistral",
           guardrailVersion: "3",
         },
       });
-      // Non-Anthropic models should also get cacheRetention: "none"
+      // Unsupported non-Anthropic models should also get cacheRetention: "none".
       expectWrappedResultFields(result, { cacheRetention: "none" });
     });
 
@@ -1253,6 +1284,41 @@ describe("amazon-bedrock provider plugin", () => {
 
       const system = payload.system as Array<Record<string, unknown>>;
       expect(system[1]).toEqual({ cachePoint: { type: "default", ttl: "1h" } });
+    });
+
+    it("injects cache points for opaque application inference profile ARNs that resolve to Nova without long TTL", async () => {
+      const modelId =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459dn";
+      inferenceProfileGetResults.push({
+        models: [
+          {
+            modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0",
+          },
+        ],
+      });
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      };
+
+      await callWrappedStreamWithPayload(
+        provider,
+        modelId,
+        makeAppInferenceProfileDescriptor(modelId),
+        { cacheRetention: "long" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
+      const messages = payload.messages as Array<{
+        role: string;
+        content: Array<Record<string, unknown>>;
+      }>;
+      expect(messages[0].content[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
+      expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
     });
 
     it("does not inject cache points when cacheRetention is 'none'", async () => {

@@ -121,7 +121,8 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
-- Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+- Amazon Nova generation model refs (`amazon-bedrock/*amazon.nova-micro*`, `*nova-lite*`, `*nova-pro*`, `*nova-premier*`, and `*nova-2-lite*`) support Bedrock `cachePoint` insertion. `cacheRetention: "long"` still sends Nova's default cache point without adding Claude's `ttl: "1h"` field.
+- Other non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 
 ### OpenRouter models
 
@@ -344,7 +345,7 @@ Defaults:
 - High `cacheWrite` on Anthropic: often means the cache breakpoint is landing on content that changes every request.
 - Low OpenAI `cacheRead`: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
 - No effect from `cacheRetention`: confirm model key matches `agents.defaults.models["provider/model"]`.
-- Bedrock Nova/Mistral requests with cache settings: expected runtime force to `none`.
+- Bedrock Mistral or other unsupported non-Anthropic requests with cache settings: expected runtime force to `none`; Nova generation models should receive Bedrock `cachePoint` entries.
 
 Related docs:
 
