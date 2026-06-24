@@ -45,6 +45,17 @@ describe("telegram native approval adapter", () => {
     expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
   });
 
+  it("uses the Telegram setup path for unavailable plugin approvals", () => {
+    const text = telegramApprovalCapability.describePluginApprovalSetup?.({
+      channel: "telegram",
+      channelLabel: "Telegram",
+    });
+
+    expect(text).toContain("`channels.telegram.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.telegram.allowFrom`");
+  });
+
   it("describes the named-account Telegram exec-approval setup path", () => {
     const text = telegramApprovalCapability.describeExecApprovalSetup?.({
       channel: "telegram",
