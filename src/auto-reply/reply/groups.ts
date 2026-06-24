@@ -352,9 +352,11 @@ export function buildGroupIntro(params: {
   silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
+  const isChannelChat = params.sessionCtx.ChatType === "channel";
+  const messageType = isChannelChat ? "channel message" : "group message";
   const activationLine =
     activation === "always"
-      ? "Activation: always-on (you receive every group message)."
+      ? `Activation: always-on (you receive every ${messageType}).`
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   return `${activationLine} Address the specific sender noted in the message context.`;
 }

@@ -194,6 +194,36 @@ describe("group runtime loading", () => {
     expect(groupContext).toContain("Be a good group participant");
   });
 
+  it("buildGroupIntro uses 'channel message' for ChatType channel", () => {
+    const channelIntro = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      defaultActivation: "always",
+      silentToken: "NO_REPLY",
+    });
+    expect(channelIntro).toContain("every channel message");
+    expect(channelIntro).not.toContain("every group message");
+
+    const groupIntro = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: { ChatType: "group", Provider: "mattermost" },
+      defaultActivation: "always",
+      silentToken: "NO_REPLY",
+    });
+    expect(groupIntro).toContain("every group message");
+    expect(groupIntro).not.toContain("every channel message");
+
+    const mentionChannelIntro = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      defaultActivation: "mention",
+      silentToken: "NO_REPLY",
+    });
+    expect(mentionChannelIntro).toContain("trigger-only");
+    expect(mentionChannelIntro).not.toContain("group message");
+    expect(mentionChannelIntro).not.toContain("channel message");
+  });
+
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
     expect(
       groups.resolveGroupSilentReplyBehavior({
