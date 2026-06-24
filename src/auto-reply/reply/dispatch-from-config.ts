@@ -3330,7 +3330,8 @@ export async function dispatchReplyFromConfig(
                 }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
-                // and must not be synthesised into the spoken reply.
+                // and must not be synthesised into the spoken reply. Reasoning
+                // stays out too: it is a presentation lane, never final text.
                 const isStatusNotice = isReplyPayloadStatusNotice(payload);
                 if (payload.text && !isStatusNotice && payload.isReasoning !== true) {
                   const joinsBufferedTtsDirective =

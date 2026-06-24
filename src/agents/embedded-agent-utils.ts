@@ -143,6 +143,11 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
   return extractAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true }).text;
 }
 
+/** Extract the commentary/narration text of a commentary-phase assistant message. */
+export function extractAssistantCommentaryText(msg: AssistantMessage): string {
+  return extractAssistantTextForPhase(msg, "commentary").text;
+}
+
 /** Extract sanitized assistant text across all text content blocks. */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =

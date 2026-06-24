@@ -58,6 +58,7 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -116,7 +117,7 @@ function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string 
 }
 
 type TransportContentBlock =
-  | { type: "text"; text: string; index?: number }
+  | { type: "text"; text: string; index?: number; textSignature?: string }
   | {
       type: "thinking";
       thinking: string;
@@ -1565,6 +1566,26 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         refusalBuffer?.flush();
+        // A tool-using turn's visible text is narration/preamble, not the final
+        // answer. Tag it commentary so it routes to the narration lane (💬 with
+        // /verbose) and stays out of the final reply — same contract as the
+        // openai transport.
+        if (output.stopReason === "toolUse") {
+          let commentaryTextIndex = 0;
+          for (const block of output.content) {
+            if (
+              block.type === "text" &&
+              block.text.trim().length > 0 &&
+              block.textSignature === undefined
+            ) {
+              block.textSignature = encodeAssistantTextSignatureV1(
+                `commentary-${commentaryTextIndex}`,
+                "commentary",
+              );
+              commentaryTextIndex += 1;
+            }
+          }
+        }
         finalizeTransportStream({ stream, output });
       } catch (error) {
         if (refusalBuffer) {

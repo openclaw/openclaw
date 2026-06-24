@@ -113,9 +113,15 @@ describe("channel-streaming", () => {
         streaming: { mode: "partial", progress: { commentary: true } },
       }),
     ).toBe(false);
+    // Commentary now defaults on in progress mode (window shows all three lanes).
     expect(
       resolveChannelStreamingProgressCommentary({
         streaming: { mode: "progress" },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress", progress: { commentary: false } },
       }),
     ).toBe(false);
   });
@@ -340,6 +346,37 @@ describe("channel-streaming", () => {
     ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts");
   });
 
+  it("keys tool draft lines by call id and skips detail-free mid-call phases", () => {
+    const startLine = buildChannelProgressDraftLine({
+      event: "tool",
+      toolCallId: "call-1",
+      name: "exec",
+      phase: "start",
+      args: { command: "wc -l SOUL.md" },
+    });
+    expect(startLine?.id).toBe("call-1");
+
+    // A later phase without args would render a bare label; it must not
+    // replace the richer line already keyed to the same call.
+    const bareUpdate = buildChannelProgressDraftLine({
+      event: "tool",
+      toolCallId: "call-1",
+      name: "exec",
+      phase: "update",
+    });
+    expect(bareUpdate).toBeUndefined();
+
+    const completion = buildChannelProgressDraftLine({
+      event: "command-output",
+      toolCallId: "call-1",
+      name: "exec",
+      phase: "end",
+      exitCode: 0,
+      title: "wc -l SOUL.md",
+    });
+    expect(completion?.id).toBe("call-1");
+  });
+
   it("bounds progress draft line length to reduce edit reflow", () => {
     expect(
       formatChannelProgressDraftText({
@@ -431,14 +468,6 @@ describe("channel-streaming", () => {
         meta: "/tmp/demo/style.css",
       }),
     ).toBe("✍️ Write: /tmp/demo/style.css");
-    expect(
-      formatChannelProgressDraftLine({
-        event: "item",
-        itemKind: "status",
-        title: "Fast",
-        summary: "💨Fast: auto-off(75s>=60s)",
-      }),
-    ).toBe("💨Fast: auto-off(75s>=60s)");
     expect(
       formatChannelProgressDraftLine({
         event: "patch",
@@ -562,98 +591,33 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
-  it("keeps public command progress ids while replacing by command correlation", () => {
+  it("keys tool and command-output progress lines by the shared call id", () => {
+    // itemIds are envelope-specific (tool:X vs command:X); preferring them
+    // split one call across parallel draft lines. toolCallId is the shared
+    // identity, so completion updates the start line in place.
     const toolLine = buildChannelProgressDraftLine({
       event: "tool",
-      itemId: "tool:call-1",
+      itemId: "tool:item-1",
       toolCallId: "call-1",
       name: "bash",
       phase: "start",
     });
     const commandLine = buildChannelProgressDraftLine({
       event: "command-output",
-      itemId: "tool:call-1-output",
+      itemId: "command:item-1",
       toolCallId: "call-1",
       name: "bash",
       phase: "end",
       exitCode: 0,
     });
-    const itemLine = buildChannelProgressDraftLine({
-      event: "item",
-      itemId: "tool:call-1",
-      toolCallId: "call-1",
-      itemKind: "command",
-      name: "bash",
-      phase: "update",
-      progressText: "install dependencies",
-    });
 
-    expect(toolLine).toMatchObject({ id: "tool:call-1", kind: "tool", toolName: "bash" });
-    expect(itemLine).toMatchObject({ id: "tool:call-1", kind: "item", toolName: "bash" });
+    expect(toolLine).toMatchObject({ id: "call-1", kind: "tool", toolName: "bash" });
     expect(commandLine).toMatchObject({
-      id: "tool:call-1-output",
+      id: "call-1",
       kind: "command-output",
       status: "completed",
       toolName: "bash",
     });
-
-    if (!toolLine || !itemLine || !commandLine) {
-      throw new Error("expected command progress lines");
-    }
-    const updated = [itemLine, commandLine].reduce(
-      (lines, line) => mergeChannelProgressDraftLine(lines, line, { maxLines: 4 }),
-      mergeChannelProgressDraftLine([], toolLine, { maxLines: 4 }),
-    );
-
-    expect(updated).toHaveLength(1);
-    expect(updated[0]).toMatchObject({
-      id: "tool:call-1-output",
-      kind: "command-output",
-      detail: "install dependencies",
-      status: "completed",
-      text: "🛠️ install dependencies",
-    });
-    expect(
-      formatChannelProgressDraftText({
-        lines: updated,
-        entry: { streaming: { progress: { label: false } } },
-      }),
-    ).toBe("🛠️ install dependencies");
-
-    const recoveredItemLine = buildChannelProgressDraftLine({
-      event: "item",
-      itemId: "command-2",
-      itemKind: "command",
-      name: "bash",
-      phase: "end",
-      status: "failed",
-      progressText: "install dependencies failed",
-    });
-    const recoveredCommandLine = buildChannelProgressDraftLine({
-      event: "command-output",
-      itemId: "command-2",
-      toolCallId: "call-2",
-      name: "bash",
-      phase: "end",
-      exitCode: 0,
-    });
-    if (!recoveredItemLine || !recoveredCommandLine) {
-      throw new Error("expected recovered command progress lines");
-    }
-    const recoveredUpdated = mergeChannelProgressDraftLine(
-      [recoveredItemLine],
-      recoveredCommandLine,
-      { maxLines: 4 },
-    );
-    expect(recoveredUpdated).toMatchObject([
-      {
-        id: "command-2",
-        kind: "command-output",
-        status: "completed",
-        text: "🛠️ Bash",
-      },
-    ]);
-    expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

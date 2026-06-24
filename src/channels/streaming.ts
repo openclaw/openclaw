@@ -391,26 +391,40 @@ function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { e
   return itemKind === "command" || isCommandToolName(input.name);
 }
 
-function resolveProgressDraftLineId(
-  input: {
-    itemId?: string;
-    toolCallId?: string;
-  },
-  params?: {
-    useToolCallIdFallback?: boolean;
-  },
-): string | undefined {
-  const itemId = input.itemId?.trim();
-  const toolCallId = input.toolCallId?.trim();
-  if (itemId) {
-    return itemId;
+function buildCommandOutputProgressLine(
+  input: Extract<ChannelProgressDraftLineInput, { event: "command-output" }>,
+  status: string | undefined,
+  options?: ChannelProgressLineOptions,
+): ChannelProgressDraftLine | undefined {
+  const name = input.name ?? "exec";
+  // toolCallId is the call identity shared across tool, item, and
+  // command-output streams; itemId is envelope-specific (tool:X, cmd:X)
+  // and would split one call into parallel draft lines.
+  const id = input.toolCallId ?? input.itemId;
+  const detail = options?.commandText === "status" ? [] : compactStrings([input.title]);
+  const line = buildNamedProgressLine(input.event, name, detail, options, {
+    id,
+    status,
+  });
+  if (!line || !status) {
+    return line;
   }
-  return params?.useToolCallIdFallback === true ? toolCallId : undefined;
-}
-
-function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): string | undefined {
-  const toolCallId = input.toolCallId?.trim();
-  return toolCallId ? `command:${toolCallId}` : undefined;
+  // A completed exit-zero command carries no extra information beyond the
+  // call line already shown, so omit the redundant "completed" suffix.
+  if (status === "completed") {
+    return line;
+  }
+  if (!line.detail || line.detail === status) {
+    return {
+      ...line,
+      detail: status,
+      text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
+    };
+  }
+  return {
+    ...line,
+    text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
+  };
 }
 
 function isTerminalProgressStatus(status: string | undefined): boolean {
@@ -436,42 +450,6 @@ function isEmptyReasoningProgressItem(
 function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patch" }>): string[] {
   const fileMetas = [...(input.added ?? []), ...(input.modified ?? []), ...(input.deleted ?? [])];
   return compactStrings([input.summary, ...fileMetas, input.title]);
-}
-
-function buildCommandOutputProgressLine(
-  input: Extract<ChannelProgressDraftLineInput, { event: "command-output" }>,
-  status: string | undefined,
-  options?: ChannelProgressLineOptions,
-): ChannelProgressDraftLine | undefined {
-  const name = input.name ?? "exec";
-  const correlationKey = resolveCommandProgressCorrelationKey(input);
-  const detail = options?.commandText === "status" ? [] : compactStrings([input.title]);
-  const line = buildNamedProgressLine(input.event, name, detail, options, {
-    correlationKey,
-    id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
-    status,
-  });
-  if (!line || !status) {
-    return line;
-  }
-  if (status === "completed") {
-    return line;
-  }
-  if (!line.detail || line.detail === status) {
-    const statusLine = {
-      ...line,
-      detail: status,
-      text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
-    };
-    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
-    return statusLine;
-  }
-  const statusLine = {
-    ...line,
-    text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
-  };
-  setProgressDraftLineCorrelationKey(statusLine, correlationKey);
-  return statusLine;
 }
 
 function shouldPrefixProgressLine(line: string): boolean {
@@ -532,23 +510,24 @@ export function buildChannelProgressDraftLine(
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
     case "tool": {
-      const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
+      const meta =
+        options?.commandText === "status" && isCommandToolName(input.name)
+          ? undefined
+          : inferToolMeta(input.name, input.args, options?.detailMode);
+      if (input.name && !meta && input.phase && input.phase !== "start") {
+        // Mid-call phases without tool detail carry no new information; a bare
+        // label here would replace the richer line already keyed to this call.
+        return undefined;
+      }
       return buildNamedProgressLine(
         input.event,
         input.name,
-        [
-          options?.commandText === "status" && isCommandToolName(input.name)
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
-          input.phase && !input.name ? input.phase : undefined,
-        ],
+        [meta, input.phase && !input.name ? input.phase : undefined],
         options,
-        {
-          correlationKey: isCommandToolName(input.name)
-            ? resolveCommandProgressCorrelationKey(input)
-            : undefined,
-          id: itemId,
-        },
+        // toolCallId is the call identity shared across tool, item, and
+        // command-output streams; itemId is envelope-specific (tool:X, cmd:X)
+        // and would split one call into parallel draft lines.
+        { id: input.toolCallId ?? input.itemId },
       );
     }
     case "item": {
@@ -564,30 +543,21 @@ export function buildChannelProgressDraftLine(
       }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
-          correlationKey: isCommandProgressItem(input)
-            ? resolveCommandProgressCorrelationKey(input)
-            : undefined,
-          id: resolveProgressDraftLineId(input),
+          id: input.toolCallId ?? input.itemId,
           status: input.status,
         });
       }
       const text = compactStrings([meta, input.title]).at(0);
-      const id = resolveProgressDraftLineId(input);
-      const correlationKey = isCommandProgressItem(input)
-        ? resolveCommandProgressCorrelationKey(input)
+      const lineId = input.toolCallId ?? input.itemId;
+      return text
+        ? {
+            ...(lineId ? { id: lineId } : {}),
+            kind: input.event,
+            text,
+            label: input.title?.trim() || input.itemKind?.trim() || "Update",
+            ...(input.status ? { status: input.status } : {}),
+          }
         : undefined;
-      if (!text) {
-        return undefined;
-      }
-      const line = {
-        ...(id ? { id } : {}),
-        kind: input.event,
-        text,
-        label: input.title?.trim() || input.itemKind?.trim() || "Update",
-        ...(input.status ? { status: input.status } : {}),
-      };
-      setProgressDraftLineCorrelationKey(line, correlationKey);
-      return line;
     }
     case "plan": {
       if (input.phase !== undefined && input.phase !== "update") {
@@ -633,7 +603,7 @@ export function buildChannelProgressDraftLine(
         input.name ?? "apply_patch",
         patchMetas(input),
         options,
-        { id: input.itemId ?? input.toolCallId },
+        { id: input.toolCallId ?? input.itemId },
       );
     }
   }
@@ -816,7 +786,7 @@ export function resolveChannelStreamingPreviewToolProgress(
 
 export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue = false,
+  defaultValue = true,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
   if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
@@ -824,6 +794,18 @@ export function resolveChannelStreamingProgressCommentary(
   }
   const progress = asObjectRecord(config?.progress);
   return asBoolean(progress?.commentary) ?? defaultValue;
+}
+
+export function resolveChannelStreamingProgressThinking(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+    return false;
+  }
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.thinking) ?? defaultValue;
 }
 
 export function resolveChannelStreamingPreviewCommandText(

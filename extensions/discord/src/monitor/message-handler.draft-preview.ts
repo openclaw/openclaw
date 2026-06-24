@@ -44,8 +44,10 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -254,6 +256,10 @@ export function createDiscordDraftPreviewController(params: {
       });
     },
     handleAssistantMessageBoundary() {
+      // A boundary after a delivered final means a queued/followup turn is
+      // starting: re-arm the draft so /reasoning stream and tool progress
+      // render exactly like a primary turn.
+      progressDraft.beginNewTurn();
       if (discordStreamMode === "progress") {
         return;
       }
