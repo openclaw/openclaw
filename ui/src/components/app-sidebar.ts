@@ -12,17 +12,14 @@ import {
 import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import {
-  resolveApplicationSessionNavigation,
-  resolveSessionCreateParams,
-} from "../app/sessions.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
-import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { resolveSessionNavigation, resolveSessionCreateParams } from "../lib/sessions/index.ts";
 import type { RouteLocation } from "../router/types.ts";
 import { icons } from "./icons.ts";
 
@@ -121,7 +118,7 @@ export class AppSidebar extends LitElement {
   private getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
-    const navigation = resolveApplicationSessionNavigation({
+    const navigation = resolveSessionNavigation({
       result: this.sessionsResult,
       sessionKey: routeSessionKey,
       assistantAgentId: context?.gateway.snapshot.assistantAgentId,

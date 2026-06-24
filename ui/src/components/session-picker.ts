@@ -2,18 +2,17 @@ import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../api/types.ts";
-import type { ApplicationSessions } from "../app/sessions.ts";
 import { t } from "../i18n/index.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
-import { isSessionKeyTiedToAgent, isSubagentSessionKey } from "../lib/session-key.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { projectSessionRows, type SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
 export class SessionPicker extends LitElement {
-  @property({ attribute: false }) sessions?: ApplicationSessions;
+  @property({ attribute: false }) sessions?: SessionCapability;
   @property({ attribute: false }) sessionsResult: SessionsListResult | null = null;
   @property({ attribute: false }) currentSessionKey = "";
   @property({ attribute: false }) agentId = "main";
@@ -262,21 +261,10 @@ export class SessionPicker extends LitElement {
   }
 
   private rows() {
-    const currentSessionKey = this.currentSessionKey;
-    return (this.result?.sessions ?? []).filter((row) => {
-      if (row.key === currentSessionKey) {
-        return true;
-      }
-      return (
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        isSessionKeyTiedToAgent(row.key, this.agentId, this.defaultAgentId)
-      );
+    return projectSessionRows(this.result, {
+      currentSessionKey: this.currentSessionKey,
+      agentId: this.agentId,
+      defaultAgentId: this.defaultAgentId,
     });
   }
 

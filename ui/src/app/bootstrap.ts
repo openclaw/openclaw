@@ -13,6 +13,7 @@ import {
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
+import { createSessionCapability } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserHistory } from "./browser.ts";
 import type {
@@ -28,7 +29,6 @@ import type {
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { createRouterOutletSnapshot, type RouterOutletSnapshotStore } from "./router-outlet.ts";
-import { createApplicationSessions } from "./sessions.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -351,7 +351,7 @@ export function bootstrapApplication(): ApplicationRuntime {
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(settings, startup.password ?? "");
-  const sessions = createApplicationSessions(gateway);
+  const sessions = createSessionCapability(gateway);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);

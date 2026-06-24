@@ -17,7 +17,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { resolveSessionCreateParams } from "../../app/sessions.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -38,6 +37,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
+import { resolveSessionCreateParams } from "../../lib/sessions/index.ts";
 import {
   dismissChatError,
   dismissRealtimeTalkError,
