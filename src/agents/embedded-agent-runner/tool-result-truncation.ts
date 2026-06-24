@@ -632,7 +632,13 @@ function buildAggregateToolResultReplacements(params: {
     params.aggregateBudgetChars < candidates.length * DEFAULT_SUFFIX(1).length
       ? COMPACT_RECOVERY_SUFFIX
       : DEFAULT_SUFFIX;
-  const minTruncatedTextChars = minKeepChars + suffixFactory(1).length;
+  const aggregateMinKeepChars =
+    params.aggregateReductionQuantumRatio !== undefined ? Math.max(minKeepChars, 1) : minKeepChars;
+  const maxSuffixChars = Math.max(
+    suffixFactory(1).length,
+    ...candidates.map((candidate) => suffixFactory(candidate.textLength).length),
+  );
+  const minTruncatedTextChars = aggregateMinKeepChars + maxSuffixChars;
 
   const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
