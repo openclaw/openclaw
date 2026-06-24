@@ -32,8 +32,20 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps encoded health probes outside the SPA catch-all",
+        pathname: "/health%252f",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps plugin routes outside the SPA catch-all",
         pathname: "/plugins/webhook",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps encoded plugin routes outside the SPA catch-all",
+        pathname: "/plugins%2fdiffs/view/abc",
         method: "GET",
         expected: { kind: "not-control-ui" as const },
       },
@@ -42,6 +54,24 @@ describe("classifyControlUiRequest", () => {
         pathname: "/api/sessions",
         method: "GET",
         expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps repeatedly encoded API routes outside the SPA catch-all",
+        pathname: "/api%252fsessions",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "fails closed for malformed encoded API routes",
+        pathname: "/api%zz",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "serves encoded lookalike routes after canonicalization",
+        pathname: "/api%61",
+        method: "GET",
+        expected: { kind: "serve" as const },
       },
       {
         name: "returns not-found for legacy ui routes",

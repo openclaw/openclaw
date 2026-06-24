@@ -1,5 +1,6 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
 import { isReadHttpMethod } from "./control-ui-http-utils.js";
+import { canonicalizePathForSecurity } from "./security-path.js";
 
 type ControlUiRequestClassification =
   | { kind: "not-control-ui" }
@@ -8,6 +9,41 @@ type ControlUiRequestClassification =
   | { kind: "serve" };
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
+const ROOT_MOUNTED_GATEWAY_ROUTE_PREFIXES = ["/api", "/plugins"] as const;
+
+function matchesCanonicalExactPath(pathname: string, paths: ReadonlySet<string>): boolean {
+  const canonical = canonicalizePathForSecurity(pathname);
+  if (canonical.candidates.some((candidate) => paths.has(candidate))) {
+    return true;
+  }
+  if (!canonical.malformedEncoding && !canonical.decodePassLimitReached) {
+    return false;
+  }
+  return Array.from(paths).some(
+    (path) =>
+      canonical.rawNormalizedPath === path || canonical.rawNormalizedPath.startsWith(`${path}%`),
+  );
+}
+
+function matchesCanonicalPrefixPath(pathname: string, prefixes: readonly string[]): boolean {
+  const canonical = canonicalizePathForSecurity(pathname);
+  if (
+    canonical.candidates.some((candidate) =>
+      prefixes.some((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`)),
+    )
+  ) {
+    return true;
+  }
+  if (!canonical.malformedEncoding && !canonical.decodePassLimitReached) {
+    return false;
+  }
+  return prefixes.some(
+    (prefix) =>
+      canonical.rawNormalizedPath === prefix ||
+      canonical.rawNormalizedPath.startsWith(`${prefix}/`) ||
+      canonical.rawNormalizedPath.startsWith(`${prefix}%`),
+  );
+}
 
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
@@ -23,15 +59,12 @@ export function classifyControlUiRequest(params: {
     }
     // Keep core probe routes outside the root-mounted SPA catch-all so the
     // gateway probe handler can answer them even when the Control UI owns `/`.
-    if (ROOT_MOUNTED_GATEWAY_PROBE_PATHS.has(pathname)) {
+    if (matchesCanonicalExactPath(pathname, ROOT_MOUNTED_GATEWAY_PROBE_PATHS)) {
       return { kind: "not-control-ui" };
     }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
     // fallback so untrusted plugins cannot claim arbitrary UI paths.
-    if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
-      return { kind: "not-control-ui" };
-    }
-    if (pathname === "/api" || pathname.startsWith("/api/")) {
+    if (matchesCanonicalPrefixPath(pathname, ROOT_MOUNTED_GATEWAY_ROUTE_PREFIXES)) {
       return { kind: "not-control-ui" };
     }
     if (!isReadHttpMethod(method)) {
