@@ -9,15 +9,21 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
+import {
+  assertHostnameAllowedWithPolicy,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+  type LookupFn,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
-import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
@@ -133,6 +139,28 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
 
 function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
   return fetch?.useTrustedEnvProxy === true;
+}
+
+function resolveFetchSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  const configured = fetch?.ssrfPolicy;
+  if (!configured) {
+    return undefined;
+  }
+  const hostnameAllowlist =
+    configured.hostnameAllowlist === undefined
+      ? undefined
+      : normalizeHostnameAllowlist(configured.hostnameAllowlist);
+  if (configured.hostnameAllowlist !== undefined && hostnameAllowlist?.length === 0) {
+    throw new Error(
+      "tools.web.fetch.ssrfPolicy.hostnameAllowlist must contain at least one specific hostname",
+    );
+  }
+  const policy: SsrFPolicy = {
+    ...(configured.allowRfc2544BenchmarkRange === true ? { allowRfc2544BenchmarkRange: true } : {}),
+    ...(configured.allowIpv6UniqueLocalRange === true ? { allowIpv6UniqueLocalRange: true } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -328,10 +356,7 @@ type WebFetchRuntimeParams = {
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
   useTrustedEnvProxy: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-    allowIpv6UniqueLocalRange?: boolean;
-  };
+  ssrfPolicy?: SsrFPolicy;
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   signal?: AbortSignal;
@@ -452,6 +477,11 @@ async function maybeFetchProviderWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
+  // Hosted providers own their redirect chain, so they cannot preserve a
+  // caller's restrictive hostname policy. Keep restricted fetches local.
+  if (params.ssrfPolicy?.hostnameAllowlist?.length) {
+    return null;
+  }
   const providerFallback = await params.resolveProviderFallback();
   if (!providerFallback) {
     return null;
@@ -474,23 +504,24 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  const ssrfPolicy: SsrFPolicy | undefined =
-    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
-      ? {
-          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
-          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
-        }
-      : undefined;
+  const ssrfPolicy = params.ssrfPolicy;
+  const cachePolicy = {
+    allowRfc2544BenchmarkRange: ssrfPolicy?.allowRfc2544BenchmarkRange === true,
+    allowIpv6UniqueLocalRange: ssrfPolicy?.allowIpv6UniqueLocalRange === true,
+    hostnameAllowlist: [...(ssrfPolicy?.hostnameAllowlist ?? [])].toSorted(),
+  };
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    JSON.stringify({
+      kind: "fetch",
+      url: params.url,
+      extractMode: params.extractMode,
+      maxChars: params.maxChars,
+      provider: params.providerCacheKey ?? null,
+      ssrfPolicy: cachePolicy,
+      useTrustedEnvProxy,
+    }),
   );
-  const cached = readCache(FETCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
 
   let parsedUrl: URL;
   try {
@@ -500,6 +531,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
+  }
+  const cached = readCache(FETCH_CACHE, cacheKey);
+  if (cached) {
+    // Cache hits skip the guarded network path, so apply its hostname policy
+    // before returning cached content. Misses use the guard's audited check.
+    assertHostnameAllowedWithPolicy(parsedUrl.hostname, ssrfPolicy);
+    return { ...cached.value, cached: true };
   }
 
   const start = Date.now();
@@ -634,8 +672,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             title = basic.title;
             extractor = "raw-html";
           } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+            const providerLabel = params.ssrfPolicy?.hostnameAllowlist?.length
+              ? "provider fallback"
+              : ((await params.resolveProviderFallback())?.provider.label ?? "provider fallback");
             throw new Error(
               `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
             );
@@ -795,7 +834,7 @@ export function createWebFetchTool(options?: {
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
+          ssrfPolicy: resolveFetchSsrfPolicy(executionFetch),
           ...(providerCacheKey ? { providerCacheKey } : {}),
           lookupFn: options?.lookupFn,
           signal,

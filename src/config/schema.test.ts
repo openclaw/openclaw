@@ -847,6 +847,7 @@ describe("config schema", () => {
           ssrfPolicy: {
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
+            hostnameAllowlist: [" API.EXAMPLE.COM. ", "*.Assets.Example.com.", "api.example.com"],
           },
         },
       },
@@ -855,7 +856,28 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.example.com", "*.assets.example.com"],
     });
+  });
+
+  it.each([
+    { name: "empty", hostnameAllowlist: [] },
+    { name: "blank", hostnameAllowlist: [""] },
+    { name: "catch-all", hostnameAllowlist: ["*"] },
+    { name: "suffix-star", hostnameAllowlist: ["example.*"] },
+    { name: "nested-star", hostnameAllowlist: ["*.*.example.com"] },
+    { name: "URL-like", hostnameAllowlist: ["https://example.com"] },
+    { name: "wildcard path", hostnameAllowlist: ["*.example.com/path"] },
+  ])("rejects a $name web fetch hostname allowlist", ({ hostnameAllowlist }) => {
+    const parsed = ToolsSchema.safeParse({
+      web: {
+        fetch: {
+          ssrfPolicy: { hostnameAllowlist },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("accepts web fetch trusted env proxy opt-in in the runtime zod schema", () => {

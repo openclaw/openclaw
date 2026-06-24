@@ -5,19 +5,20 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { renderFileContextBlock } from "../media/file-context.js";
+import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import { projectRemoteMediaSsrfPolicy } from "../media/remote-media-ssrf-policy.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -539,7 +540,7 @@ export async function applyMediaUnderstanding(params: {
       ctx,
       workspaceDir: params.workspaceDir,
     }),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: projectRemoteMediaSsrfPolicy(cfg),
     workspaceDir: mediaWorkspaceDir,
   });
 

@@ -9,6 +9,12 @@ import "./web-fetch.test-mocks.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const logWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logger.js")>("../../logger.js");
+  return { ...actual, logWarn: logWarnMock };
+});
 
 function redirectResponse(location: string): Response {
   return {
@@ -50,7 +56,11 @@ function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
   useTrustedEnvProxy?: boolean;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+    allowIpv6UniqueLocalRange?: boolean;
+    hostnameAllowlist?: string[];
+  };
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -103,6 +113,7 @@ describe("web_fetch SSRF protection", () => {
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
+    logWarnMock.mockClear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -158,6 +169,137 @@ describe("web_fetch SSRF protection", () => {
     });
 
     await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports exact and subdomain-only wildcard hostname allowlist entries", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("allowed"));
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: {
+        hostnameAllowlist: [" ALLOWED.EXAMPLE. ", "*.trusted.example."],
+      },
+    });
+
+    await tool?.execute?.("exact", { url: "https://allowed.example/page" });
+    await tool?.execute?.("wildcard", { url: "https://cdn.trusted.example/page" });
+    await expectBlockedUrl(tool, "https://trusted.example/page", /allowlist/i);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("blocks an initial hostname outside the configured allowlist", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { hostnameAllowlist: ["allowed.example"] },
+    });
+
+    await expectBlockedUrl(tool, "https://blocked.example/page", /allowlist/i);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("logs an initial allowlist block once without URL secrets", async () => {
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { hostnameAllowlist: ["allowed.example"] },
+    });
+
+    await expectBlockedUrl(
+      tool,
+      "https://user:password@blocked.example/private/path?token=secret#fragment",
+      /allowlist/i,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const warning = String(logWarnMock.mock.calls[0]?.[0] ?? "");
+    expect(warning).toContain(
+      "security: blocked URL fetch (url-fetch) targetOrigin=https://blocked.example",
+    );
+    expect(warning).not.toContain("user");
+    expect(warning).not.toContain("password");
+    expect(warning).not.toContain("/private/path");
+    expect(warning).not.toContain("token=secret");
+    expect(warning).not.toContain("#fragment");
+  });
+
+  it("re-applies the hostname allowlist to every redirect", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValueOnce(
+      redirectResponse("https://blocked.example/secret"),
+    );
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { hostnameAllowlist: ["allowed.example"] },
+    });
+
+    await expectBlockedUrl(tool, "https://allowed.example/start", /allowlist/i);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(lookupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a permissive cache entry bypass a later hostname allowlist", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("cached body"));
+    const url = "https://cache-policy.example/page";
+
+    const permissiveTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await permissiveTool?.execute?.("permissive", { url });
+
+    const restrictiveTool = createWebFetchToolForTest({
+      cacheTtlMinutes: 1,
+      ssrfPolicy: { hostnameAllowlist: ["allowed.example"] },
+    });
+    await expectBlockedUrl(restrictiveTool, url, /allowlist/i);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates cache entries across different restrictive hostname policies", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch()
+      .mockResolvedValueOnce(textResponse("exact policy"))
+      .mockResolvedValueOnce(textResponse("wildcard policy"));
+    const url = "https://cache.allowed.example/page";
+
+    const exactTool = createWebFetchToolForTest({
+      cacheTtlMinutes: 1,
+      ssrfPolicy: { hostnameAllowlist: ["cache.allowed.example"] },
+    });
+    await exactTool?.execute?.("exact-policy", { url });
+
+    const wildcardTool = createWebFetchToolForTest({
+      cacheTtlMinutes: 1,
+      ssrfPolicy: { hostnameAllowlist: ["*.allowed.example"] },
+    });
+    const result = await wildcardTool?.execute?.("wildcard-policy", { url });
+
+    expect((result?.details as { cached?: boolean } | undefined)?.cached).toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates the hostname policy before returning a cache hit", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("cached policy body"));
+    const assertPolicySpy = vi.spyOn(ssrf, "assertHostnameAllowedWithPolicy");
+    const tool = createWebFetchToolForTest({
+      cacheTtlMinutes: 1,
+      ssrfPolicy: { hostnameAllowlist: ["cache-hit.example"] },
+    });
+
+    await tool?.execute?.("prime-cache", { url: "https://cache-hit.example/page" });
+    assertPolicySpy.mockClear();
+    const cached = await tool?.execute?.("read-cache", {
+      url: "https://cache-hit.example/page",
+    });
+
+    expect((cached?.details as { cached?: boolean } | undefined)?.cached).toBe(true);
+    expect(assertPolicySpy).toHaveBeenCalledExactlyOnceWith("cache-hit.example", {
+      hostnameAllowlist: ["cache-hit.example"],
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 

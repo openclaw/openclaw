@@ -1,8 +1,9 @@
 // Audio transcription runner executes the configured media-understanding audio
 // pipeline and extracts the first transcript output.
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { projectRemoteMediaSsrfPolicy } from "../media/remote-media-ssrf-policy.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -29,7 +30,7 @@ export async function runAudioTranscription(params: {
   const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
   const cache = createMediaAttachmentCache(attachments, {
     ...(params.localPathRoots ? { localPathRoots: params.localPathRoots } : {}),
-    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: projectRemoteMediaSsrfPolicy(params.cfg),
   });
 
   try {

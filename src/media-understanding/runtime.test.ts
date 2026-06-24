@@ -585,7 +585,19 @@ describe("media-understanding runtime", () => {
         provider: "zai",
         model: "glm-4.6v",
         prompt: "Describe it",
-        cfg: {} as OpenClawConfig,
+        cfg: {
+          tools: {
+            web: {
+              fetch: {
+                ssrfPolicy: {
+                  allowRfc2544BenchmarkRange: true,
+                  allowIpv6UniqueLocalRange: true,
+                  hostnameAllowlist: ["web-fetch-only.example"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
         agentDir: "/tmp/agent",
         timeoutMs: 45_000,
       }),
@@ -598,7 +610,12 @@ describe("media-understanding runtime", () => {
     });
     expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
       [{ index: 0, url: "https://httpbin.org/image/png", mime: "image/png" }],
-      { ssrfPolicy: undefined },
+      {
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
     );
     expect(mocks.getBuffer).toHaveBeenCalledWith({
       attachmentIndex: 0,

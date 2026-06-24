@@ -10,6 +10,7 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeHostnameAllowlist } from "../infra/net/ssrf.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
@@ -433,6 +434,52 @@ const ToolsWebSearchSchema = z
   )
   .optional();
 
+function normalizeWebFetchHostnameAllowlistPattern(value: string): string | undefined {
+  const normalized = normalizeHostnameAllowlist([value])[0];
+  if (!normalized) {
+    return undefined;
+  }
+  const wildcard = normalized.startsWith("*.");
+  if (normalized.includes("*") && (!wildcard || normalized.slice(2).includes("*"))) {
+    return undefined;
+  }
+  const hostname = wildcard ? normalized.slice(2) : normalized;
+  if (
+    !hostname ||
+    hostname.startsWith(".") ||
+    hostname.endsWith(".") ||
+    hostname.includes("..") ||
+    (wildcard && hostname.includes(":"))
+  ) {
+    return undefined;
+  }
+  try {
+    const authority = hostname.includes(":") ? `[${hostname}]` : hostname;
+    const parsed = new URL(`https://${authority}`);
+    return normalizeHostnameAllowlist([parsed.hostname])[0] === hostname ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const WebFetchHostnameAllowlistSchema = z
+  .array(z.string())
+  .min(1, "tools.web.fetch.ssrfPolicy.hostnameAllowlist must not be empty")
+  .superRefine((values, ctx) => {
+    for (const [index, value] of values.entries()) {
+      if (normalizeWebFetchHostnameAllowlistPattern(value)) {
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index],
+        message:
+          "hostname allowlist entries must be exact hostnames or subdomain-only patterns such as '*.example.com'",
+      });
+    }
+  })
+  .transform((values) => normalizeHostnameAllowlist(values));
+
 const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -450,6 +497,7 @@ const ToolsWebFetchSchema = z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
         allowIpv6UniqueLocalRange: z.boolean().optional(),
+        hostnameAllowlist: WebFetchHostnameAllowlistSchema.optional(),
       })
       .strict()
       .optional(),

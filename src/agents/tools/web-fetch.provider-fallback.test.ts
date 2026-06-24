@@ -298,4 +298,61 @@ describe("web_fetch provider fallback normalization", () => {
     expect(secondDetails.text).toContain("perplexity-fetch fallback body");
     expect(secondDetails.cached).toBeUndefined();
   });
+
+  it("suppresses provider fallbacks and their cache entries under a hostname allowlist", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => ({ text: "provider-only content" }),
+      },
+    });
+    const url = "https://restricted-fallback.example/page";
+    const permissiveTool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+              cacheTtlMinutes: 10,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sandboxed: false,
+    });
+
+    const permissive = await permissiveTool?.execute?.("permissive-fallback", { url });
+    expect((permissive?.details as { text?: string } | undefined)?.text).toContain(
+      "provider-only content",
+    );
+
+    const restrictiveTool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+              cacheTtlMinutes: 10,
+              ssrfPolicy: {
+                hostnameAllowlist: ["restricted-fallback.example"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sandboxed: false,
+    });
+
+    await expect(restrictiveTool?.execute?.("restricted-fallback", { url })).rejects.toThrow(
+      "network failed",
+    );
+    expect(resolveWebFetchDefinitionMock).toHaveBeenCalledTimes(1);
+  });
 });

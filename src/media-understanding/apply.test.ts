@@ -434,6 +434,14 @@ describe("applyMediaUnderstanding", () => {
     };
     const cfg: OpenClawConfig = {
       tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              allowRfc2544BenchmarkRange: true,
+              hostnameAllowlist: ["web-fetch-only.example"],
+            },
+          },
+        },
         media: {
           audio: {
             enabled: true,
@@ -460,6 +468,11 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedAudio).toBe(true);
+    expect(mockedReadRemoteMediaBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
     expect(ctx.Transcript).toBe("remote transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
   });

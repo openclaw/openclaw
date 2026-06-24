@@ -93,6 +93,7 @@ content.
         ssrfPolicy: {
           allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
           allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
+          hostnameAllowlist: ["example.com", "*.example.org"], // optional exact/subdomain-only restriction
         },
       },
     },
@@ -160,6 +161,10 @@ Current runtime behavior:
   official Firecrawl plugin; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
+- When `ssrfPolicy.hostnameAllowlist` is configured, hosted/provider fallbacks
+  are disabled because their redirect chain cannot be enforced by OpenClaw's
+  local network guard. The direct fetch and local extraction paths remain
+  available.
 
 ## Trusted env proxy
 
@@ -183,6 +188,11 @@ outbound policy after DNS resolution.
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
 - Private/internal hostnames are blocked
+- `tools.web.fetch.ssrfPolicy.hostnameAllowlist` restricts both the initial URL
+  and every redirect to exact hostnames or subdomain-only wildcard patterns.
+  For example, `*.example.com` matches `cdn.example.com`, but not `example.com`.
+  Entries are case-insensitive, trailing dots are normalized, and an empty or
+  malformed list or any catch-all entry is rejected.
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
   for trusted fake-IP proxy stacks; leave them unset unless your proxy owns

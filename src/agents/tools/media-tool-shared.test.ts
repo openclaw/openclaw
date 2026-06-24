@@ -11,6 +11,7 @@ import {
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
 
@@ -120,6 +121,25 @@ describe("resolveMediaToolLocalRoots", () => {
         accountId: "work",
       }),
     ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
+  });
+});
+
+describe("resolveRemoteMediaSsrfPolicy", () => {
+  it("does not forward web_fetch hostname restrictions to generation providers", () => {
+    expect(
+      resolveRemoteMediaSsrfPolicy({
+        tools: {
+          web: {
+            fetch: {
+              ssrfPolicy: {
+                allowRfc2544BenchmarkRange: true,
+                hostnameAllowlist: ["web-fetch-only.example"],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 });
 

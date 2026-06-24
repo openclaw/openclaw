@@ -4,6 +4,7 @@ import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { projectRemoteMediaSsrfPolicy } from "../media/remote-media-ssrf-policy.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -192,7 +193,7 @@ export async function runMediaUnderstandingFile(
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: projectRemoteMediaSsrfPolicy(cfg),
   });
 
   try {
@@ -295,7 +296,7 @@ async function readImageDescriptionInput(params: {
     buildFileContext({ ...params, capability: "image" }),
   );
   const cache = createMediaAttachmentCache(attachments, {
-    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: projectRemoteMediaSsrfPolicy(params.cfg),
   });
   try {
     const media = await cache.getBuffer({

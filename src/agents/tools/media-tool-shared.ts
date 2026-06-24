@@ -16,10 +16,10 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { projectRemoteMediaSsrfPolicy } from "../../media/remote-media-ssrf-policy.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -126,13 +126,9 @@ export function readGenerationTimeoutMs(args: Record<string, unknown>): number |
   });
 }
 
-/**
- * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
- */
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
+/** Resolves the remote-media subset of the web_fetch SSRF policy. */
+export function resolveRemoteMediaSsrfPolicy(cfg: OpenClawConfig | undefined) {
+  return projectRemoteMediaSsrfPolicy(cfg);
 }
 
 function applyAgentDefaultModelConfig(
