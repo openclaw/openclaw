@@ -1704,12 +1704,17 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  downloads?: { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> };
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  const state = ensurePageState(page);
+  // Monotonic cursor — not bounded-list length — so we don't miss downloads
+  // when the buffer is full and shift() cancels out push().
+  const downloadSeqBefore = state.downloadSeq;
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
@@ -1725,7 +1730,12 @@ export async function executeActViaPlaywright(opts: {
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
       });
-      return { results: batch.results };
+      await drainPendingDownloadSaves(state);
+      const newDownloads = pickNewDownloads(state, downloadSeqBefore);
+      return {
+        results: batch.results,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      };
     }
     const result = await executeSingleAction(
       opts.action,
@@ -1736,10 +1746,12 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
+    await drainPendingDownloadSaves(state);
+    const newDownloads = pickNewDownloads(state, downloadSeqBefore);
     if (opts.action.kind === "evaluate") {
-      return { result };
+      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
     }
-    return {};
+    return newDownloads ? { downloads: newDownloads } : {};
   } catch (err) {
     if (isBrowserObservedDialogBlockedError(err)) {
       return { blockedByDialog: true, browserState: err.browserState };
@@ -1748,6 +1760,29 @@ export async function executeActViaPlaywright(opts: {
   } finally {
     dialogAbort.cleanup();
   }
+}
+
+/** Wait for any in-flight auto-save downloads to finish before sampling. */
+async function drainPendingDownloadSaves(state: ReturnType<typeof ensurePageState>): Promise<void> {
+  if (state.downloadSavePromises.length === 0) return;
+  await Promise.all(state.downloadSavePromises);
+  state.downloadSavePromises = [];
+}
+
+/** Collect downloads with seq > cursor, or undefined if none. */
+function pickNewDownloads(
+  state: ReturnType<typeof ensurePageState>,
+  seqBefore: number,
+): { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> } | undefined {
+  const newDownloads = state.recentDownloads.filter((d) => d.seq > seqBefore);
+  if (newDownloads.length === 0) return undefined;
+  return {
+    count: newDownloads.length,
+    recent: newDownloads.map((d) => ({
+      suggestedFilename: d.suggestedFilename,
+      savedPath: d.savedPath,
+    })),
+  };
 }
 
 /** Executes a bounded sequence of browser actions and returns per-step results. */
