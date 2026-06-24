@@ -370,7 +370,7 @@ describe("tasks commands", () => {
     });
   });
 
-  it("preserves the producer-specific cron-run session key for a running non-slug job id", async () => {
+  it("preserves both cron-run session key shapes for a running non-slug job id", async () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
       const old = now - 8 * 24 * 60 * 60_000;
@@ -382,7 +382,7 @@ describe("tasks commands", () => {
             name: "Daily Report",
             enabled: true,
             schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "main",
+            sessionTarget: "isolated",
             sessionKey: "cron:daily-report",
             wakeMode: "now",
             payload: { kind: "agentTurn", message: "ping" },
@@ -397,7 +397,8 @@ describe("tasks commands", () => {
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
       await fs.mkdir(sessionsDir, { recursive: true });
-      // Main-session cron runs key the job segment slugified ("daily-report").
+      // A running job can be retargeted after its session is created, so maintenance must preserve
+      // both the raw and slugged historical shapes.
       const slugKey = "agent:main:cron:daily-report:run:old-run";
       const rawKey = "agent:main:cron:daily report:run:old-run";
       const retiredKey = "agent:main:cron:retired-job:run:old-run";
@@ -418,9 +419,13 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
+      const payload = readFirstJsonLog(runtime) as {
+        maintenance: { sessions: { runningCronJobs: number } };
+      };
+      expect(payload.maintenance.sessions.runningCronJobs).toBe(1);
       const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
       expect(updated[slugKey]).toBeDefined();
-      expect(updated[rawKey]).toBeUndefined();
+      expect(updated[rawKey]).toBeDefined();
       expect(updated[retiredKey]).toBeUndefined();
     });
   });

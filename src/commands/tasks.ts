@@ -129,20 +129,26 @@ type SessionRegistryMaintenanceSummary = {
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
-function readRunningCronJobIds(): Set<string> {
+function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
     const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
-    return new Set(
-      loadCronJobsStoreSync(cronStorePath)
-        .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
-        .map((job) =>
-          job.sessionTarget === "main"
-            ? normalizeCronLaneSegment(job.id, "job")
-            : job.id.toLowerCase(),
-        ),
+    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
+      (job) => typeof job.state?.runningAtMs === "number",
     );
+    return {
+      // A running job may have been retargeted after its session was created. Keep both historical
+      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
+      // than pruning a live transcript.
+      ids: new Set(
+        runningJobs.flatMap((job) => [
+          job.id.toLowerCase(),
+          normalizeCronLaneSegment(job.id, "job"),
+        ]),
+      ),
+      count: runningJobs.length,
+    };
   } catch {
-    return new Set();
+    return { ids: new Set(), count: 0 };
   }
 }
 
@@ -150,13 +156,13 @@ async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
-  const runningCronJobIds = readRunningCronJobIds();
+  const runningCronJobs = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
       apply: params.apply,
       retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds,
+      runningCronJobIds: runningCronJobs.ids,
       storePath: target.storePath,
     });
     stores.push({
@@ -170,7 +176,7 @@ async function runSessionRegistryMaintenance(params: {
   }
   return {
     retentionMs: SESSION_REGISTRY_RETENTION_MS,
-    runningCronJobs: runningCronJobIds.size,
+    runningCronJobs: runningCronJobs.count,
     pruned: stores.reduce((total, store) => total + store.pruned, 0),
     stores,
   };
