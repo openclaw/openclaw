@@ -23,6 +23,10 @@ import {
   saveSettings,
   type UiSettings,
 } from "../../app/settings.ts";
+import {
+  COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPaletteTargetDetail,
+} from "../../components/command-palette.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -780,6 +784,30 @@ export class ChatPage extends LitElement {
   private stopSessionsSubscription: (() => void) | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
 
+  private readonly handleCommandPaletteSlashCommand = (command: string) => {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `);
+    state.requestUpdate?.();
+  };
+
+  private announceCommandPaletteTarget(
+    onSlashCommand: CommandPaletteTargetDetail["onSlashCommand"],
+  ) {
+    this.dispatchEvent(
+      new CustomEvent<CommandPaletteTargetDetail>(COMMAND_PALETTE_TARGET_EVENT, {
+        bubbles: true,
+        composed: true,
+        detail: {
+          owner: this,
+          onSlashCommand,
+        },
+      }),
+    );
+  }
+
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
@@ -874,6 +902,7 @@ export class ChatPage extends LitElement {
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.state = createPageState(this.context, () => this.requestUpdate(), this);
+    this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
       this.state.sessionKey = this.data.sessionKey;
     }
@@ -912,6 +941,7 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.announceCommandPaletteTarget(null);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.stopGatewaySnapshot?.();

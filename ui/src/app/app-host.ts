@@ -5,12 +5,15 @@ import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
-import "../components/command-palette.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
 import "../components/update-banner.ts";
-import { CommandPalette } from "../components/command-palette.ts";
+import {
+  COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPalette,
+  type CommandPaletteTargetDetail,
+} from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   clearActiveFloatingTooltips,
@@ -195,6 +198,7 @@ class OpenClawShell extends LitElement {
     approvalError: null,
   };
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
+  private commandPaletteTarget?: CommandPaletteTargetDetail;
 
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
@@ -225,6 +229,7 @@ class OpenClawShell extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.startSubscriptions();
+    this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     this.addEventListener("pointerover", this.nativeTitleTooltipPointerOver);
     this.addEventListener("pointerout", this.nativeTitleTooltipPointerOut);
     this.addEventListener("focusin", this.nativeTitleTooltipFocusIn);
@@ -277,6 +282,7 @@ class OpenClawShell extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopNavigationSubscription?.();
@@ -325,6 +331,19 @@ class OpenClawShell extends LitElement {
     this.commandPalette?.openPalette();
   };
 
+  private readonly handleCommandPaletteTarget = (event: Event) => {
+    const detail = (event as CustomEvent<CommandPaletteTargetDetail>).detail;
+    if (!detail || !(detail.owner instanceof Element)) {
+      return;
+    }
+    if (detail.onSlashCommand) {
+      this.commandPaletteTarget = detail;
+    } else if (this.commandPaletteTarget?.owner === detail.owner) {
+      this.commandPaletteTarget = undefined;
+    }
+    this.requestUpdate();
+  };
+
   private readonly updateGatewayStatus = (snapshot: {
     connected: boolean;
     hello: ApplicationRuntime["context"]["gateway"]["snapshot"]["hello"];
@@ -361,6 +380,11 @@ class OpenClawShell extends LitElement {
     const selection = this.routeSelection;
     const renderedMatch = selection.pending ?? selection.active;
     const activeRoute = (renderedMatch?.routeId ?? "chat") as RouteId;
+    const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
+    const navCollapsed = this.navCollapsed && !navDrawerOpen;
+    const onSlashCommand = this.commandPaletteTarget?.owner.isConnected
+      ? this.commandPaletteTarget.onSlashCommand
+      : undefined;
     const routeSessionKey =
       activeRoute === "chat"
         ? new URLSearchParams(renderedMatch?.location.search).get("session")?.trim() ||
@@ -369,21 +393,13 @@ class OpenClawShell extends LitElement {
     const agentLabel = routeSessionKey ? resolveAgentIdFromSessionKey(routeSessionKey) : "";
     return html`
       <openclaw-command-palette
-        .onOpen=${undefined}
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
-        .onSlashCommand=${(command: string) => {
-          const search = new URLSearchParams();
-          if (routeSessionKey) {
-            search.set("session", routeSessionKey);
-          }
-          search.set("draft", command.endsWith(" ") ? command : `${command} `);
-          context.navigate("chat", { search: `?${search.toString()}` });
-        }}
+        .onSlashCommand=${onSlashCommand ?? undefined}
       ></openclaw-command-palette>
       <div
-        class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${this.navCollapsed
+        class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
-          : ""} ${this.navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
+          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
           : ""}"
         @theme-change=${this.handleThemeChange}
@@ -400,7 +416,7 @@ class OpenClawShell extends LitElement {
           .agentLabel=${agentLabel}
           .overviewHref=${""}
           .searchDisabled=${false}
-          .navDrawerOpen=${this.navDrawerOpen}
+          .navDrawerOpen=${navDrawerOpen}
           .themeMode=${context.theme.mode}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
@@ -413,7 +429,7 @@ class OpenClawShell extends LitElement {
             .activeRouteId=${activeRoute}
             .enabledRouteIds=${ACTIVE_ROUTE_IDS}
             .routeLocation=${renderedMatch?.location}
-            .collapsed=${this.navCollapsed}
+            .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
             .version=${this.gatewayVersion}
             .navGroupsCollapsed=${this.navGroupsCollapsed}
@@ -422,12 +438,12 @@ class OpenClawShell extends LitElement {
             .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
             .onToggleCollapsed=${() => {
-              if (this.navDrawerOpen) {
+              if (navDrawerOpen) {
                 this.navDrawerOpen = false;
                 return;
               }
               context.navigation.update({
-                navCollapsed: !context.navigation.snapshot.navCollapsed,
+                navCollapsed: !navCollapsed,
               });
             }}
             .onToggleGroup=${(label: string) => {
@@ -455,8 +471,7 @@ class OpenClawShell extends LitElement {
               updateAvailable: this.overlaySnapshot.updateAvailable,
               updateRunning: this.overlaySnapshot.updateRunning,
               connected: this.gatewayConnected,
-              onUpdate: () =>
-                context.overlays.runUpdate(routeSessionKey || context.gateway.snapshot.sessionKey),
+              onUpdate: () => context.overlays.runUpdate(),
               onDismiss: () => context.overlays.dismissUpdate(),
             }}
           ></openclaw-update-banner>

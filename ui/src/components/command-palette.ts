@@ -16,6 +16,13 @@ type PaletteItem = {
   description?: string;
 };
 
+export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
+
+export type CommandPaletteTargetDetail = {
+  owner: Element;
+  onSlashCommand: ((command: string) => void) | null;
+};
+
 function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
@@ -83,16 +90,17 @@ type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
-  onOpen?: () => void | Promise<void>;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
   onNavigate: (routeId: RouteId) => void;
-  onSlashCommand: (command: string) => void;
+  onSlashCommand?: (command: string) => void;
 };
 
-function filteredItems(query: string): PaletteItem[] {
-  const items = getPaletteItemsInternal();
+function filteredItems(query: string, includeSlashCommands = true): PaletteItem[] {
+  const items = getPaletteItemsInternal().filter(
+    (item) => includeSlashCommands || item.category !== "search",
+  );
   if (!query) {
     return items;
   }
@@ -160,7 +168,7 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   if (item.action.startsWith("nav:")) {
     props.onNavigate(item.action.slice(4) as RouteId);
   } else {
-    props.onSlashCommand(item.action);
+    props.onSlashCommand?.(item.action);
   }
   props.onToggle();
   restoreFocus();
@@ -216,7 +224,7 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
     return;
   }
 
-  const items = filteredItems(props.query);
+  const items = filteredItems(props.query, Boolean(props.onSlashCommand));
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
@@ -272,7 +280,6 @@ function syncDialog(el: Element | undefined) {
   if (activeDialog !== el) {
     saveFocus();
     activeDialog = el;
-    void activeProps?.onOpen?.();
   }
   if (el.open) {
     return;
@@ -306,7 +313,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
   }
   activeProps = props;
 
-  const items = filteredItems(props.query);
+  const items = filteredItems(props.query, Boolean(props.onSlashCommand));
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
@@ -405,7 +412,6 @@ export class CommandPalette extends LitElement {
     return this;
   }
 
-  @property({ attribute: false }) onOpen?: () => void | Promise<void>;
   @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @state() private open = false;
@@ -455,7 +461,6 @@ export class CommandPalette extends LitElement {
       open: this.open,
       query: this.query,
       activeIndex: this.activeIndex,
-      onOpen: this.onOpen,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;
@@ -465,7 +470,7 @@ export class CommandPalette extends LitElement {
         this.activeIndex = index;
       },
       onNavigate: (routeId) => this.onNavigate?.(routeId),
-      onSlashCommand: (command) => this.onSlashCommand?.(command),
+      onSlashCommand: this.onSlashCommand,
     });
   }
 }
