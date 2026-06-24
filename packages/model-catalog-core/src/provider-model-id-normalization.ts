@@ -68,6 +68,19 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
+function resolvePolicyAlias(
+  aliases: Record<string, string> | undefined,
+  modelId: string,
+): string | undefined {
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  for (const [alias, target] of Object.entries(aliases ?? {})) {
+    if (normalizeLowercaseStringOrEmpty(alias) === normalizedModelId) {
+      return target;
+    }
+  }
+  return undefined;
+}
+
 /** Strip a duplicated self-provider prefix from a model id. */
 export function stripSelfProviderModelPrefix(provider: string, model: string): string {
   const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
@@ -103,7 +116,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
     }
   }
 
-  modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
+  modelId = resolvePolicyAlias(policy.aliases, modelId) ?? modelId;
 
   if (!hasProviderPrefix(modelId)) {
     for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {

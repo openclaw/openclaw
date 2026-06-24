@@ -28,6 +28,26 @@ describe("provider model id policy normalization", () => {
     );
   });
 
+  it("matches manifest aliases using normalized alias keys", () => {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: {
+              aliases: {
+                " GPT-5.4 ": "gpt-5.4-chat",
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("openai", "gpt-5.4", policies)).toBe(
+      "gpt-5.4-chat",
+    );
+  });
+
   it("normalizes provider-prefixed Google catalog refs behind gateway prefixes", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId(
