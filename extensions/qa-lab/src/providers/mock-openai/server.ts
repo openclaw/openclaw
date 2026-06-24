@@ -10,6 +10,8 @@ import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
+let mockFunctionCallSequence = 0;
+
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
   | {
@@ -773,8 +775,10 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
-  const callId = `call_mock_${name}_${callSuffix}`;
-  const itemId = `fc_mock_${name}_${callSuffix}`;
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const callId = `call_mock_${name}_${uniqueSuffix}`;
+  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
   const item = {
     type: "function_call",
     id: itemId,
@@ -786,7 +790,7 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
-    responseId: `resp_mock_${name}_${callSuffix}`,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
     serialized,
   };
 }
