@@ -62,6 +62,39 @@ describe("resolveLlmIdleTimeoutMs", () => {
     ).toBe(600_000);
   });
 
+  it.each([
+    "http://ollama-host:11434",
+    "http://lmstudio-box:1234/v1",
+    "http://vllm-rig:8000/v1",
+    "http://sglang-rig:30000/v1",
+    "http://host.docker.internal:11434",
+  ])("honors explicit cron run timeouts for self-hosted provider hostname %s", (baseUrl) => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("keeps the cron stall cap for remote or cloud hostnames", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "openai", id: "openai/gpt-5.5", baseUrl: "https://api.openai.com/v1" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ollama", id: "ollama/gpt-oss:cloud", baseUrl: "http://ollama-host" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+  });
+
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: MAX_TIMER_TIMEOUT_MS })).toBe(0);
   });

@@ -40,11 +40,9 @@ const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
  *    matched, mirroring the SSRF-policy helper in
  *    `src/cron/isolated-agent/model-preflight.runtime.ts`.
  *  - DNS-resolved local aliases (e.g. an `/etc/hosts` entry mapping a custom
- *    hostname to a private IP) are not detected: classification keys on
- *    `URL.hostname` so resolution would have to happen here, and adding
- *    sync/async DNS to the watchdog hot path is disproportionate. Affected
- *    users can use the IP directly or set
- *    `models.providers.<id>.timeoutSeconds` explicitly.
+ *    hostname to a private IP) are not detected for the implicit watchdog opt-out:
+ *    classification keys on `URL.hostname` so resolution would have to happen
+ *    here, and adding sync/async DNS to the watchdog hot path is disproportionate.
  */
 function isLocalProviderBaseUrl(baseUrl: string): boolean {
   let host: string;
@@ -98,6 +96,27 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
+function isSelfHostedProviderHostnameBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  if (
+    host === "docker.orb.internal" ||
+    host === "host.docker.internal" ||
+    host === "host.orb.internal"
+  ) {
+    return true;
+  }
+  if (host.includes(".") || host.includes(":")) {
+    return false;
+  }
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(host);
+}
+
 function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
   const rawModelId = model?.id;
   if (typeof rawModelId !== "string") {
@@ -141,6 +160,11 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const isLocalProvider =
     typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
   const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
+  const isSelfHostedHostnameRuntimeModel =
+    typeof baseUrl === "string" &&
+    baseUrl.length > 0 &&
+    isSelfHostedProviderHostnameBaseUrl(baseUrl) &&
+    !isOllamaCloudModel(params?.model);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -181,7 +205,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
       return 0;
     }
     if (params?.trigger === "cron") {
-      if (isLocalRuntimeModel) {
+      if (isLocalRuntimeModel || isSelfHostedHostnameRuntimeModel) {
         return clampTimeoutMs(runTimeoutMs);
       }
       return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
