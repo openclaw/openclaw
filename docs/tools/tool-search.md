@@ -12,10 +12,11 @@ compact way to discover and call large tool catalogs. It is useful when the run
 has many available tools but the model is likely to need only a few of them.
 
 This page documents OpenClaw Tool Search. It is not the Codex-native tool
-search or dynamic-tools surface. Codex-native code mode, tool search, deferred
-dynamic tools, and nested tool calls are Codex-owned harness surfaces that
-upstream Codex marks as under development, and they do not depend on
-`tools.toolSearch`.
+search or dynamic-tools surface. Codex-native code mode is a Codex-owned
+harness surface that upstream Codex marks as under development
+(`code_mode`/`code_mode_only`); Codex-native tool search, deferred dynamic
+tools, and nested tool calls are separate Codex-owned surfaces that do not
+depend on `tools.toolSearch`.
 
 When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
 by default. That tool runs a short JavaScript body in an isolated Node
