@@ -2445,6 +2445,11 @@ export async function agentCommand(
   );
 }
 
+/** Resolve the channel label for model.usage diagnostics from ingress run options. */
+function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+  return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
+}
+
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
@@ -2506,7 +2511,7 @@ export async function agentCommandFromIngress(
             type: "model.usage",
             sessionKey: opts.sessionKey,
             sessionId: agentMeta.sessionId,
-            channel: opts.messageChannel ?? "http",
+            channel: ingressDiagnosticChannel(opts),
             agentId: opts.agentId,
             provider: providerUsed,
             model: modelUsed,
