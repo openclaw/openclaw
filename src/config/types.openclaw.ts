@@ -298,6 +298,7 @@ export type ConfigFileSnapshot = {
   /** @deprecated Prefer runtimeConfig. */
   config: RuntimeConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
