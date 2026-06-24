@@ -43,7 +43,6 @@ describe("embedded agent transcript repair runtime contract", () => {
       prompt: "newest inbound message",
       trigger: "user",
       leafMessage: {
-        role: "user",
         content: [{ type: "text", text: "NO_REPLY stale subagent completion" }],
         provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
       },
@@ -61,7 +60,6 @@ describe("embedded agent transcript repair runtime contract", () => {
       prompt: "newest inbound message",
       trigger: "user",
       leafMessage: {
-        role: "user",
         content: "forwarded user request",
         provenance: { kind: "inter_session", sourceTool: "sessions_send" },
       },
