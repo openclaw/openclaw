@@ -34,7 +34,6 @@ export const page = definePage({
   },
   component: () =>
     import("./view.ts").then((module) => ({
-      contentClass: "content--workboard",
       render: ({ state, navigate }: WorkboardRenderContext) => {
         const requestUpdate = (state as AppViewState & { requestUpdate?: () => void })
           .requestUpdate;

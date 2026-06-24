@@ -30,7 +30,6 @@ export const page = definePage({
   path: "/skills",
   component: () =>
     import("./view.ts").then((module) => ({
-      shell: "page" as const,
       header: true,
       render: ({ state }: SkillsRenderContext) => html`
         <section class="content-header">

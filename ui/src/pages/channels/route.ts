@@ -17,7 +17,7 @@ export const page = definePage({
     import("./view.ts").then((module) => ({
       render: ({ state, navigate }: ChannelsRenderContext) =>
         renderSettingsWorkspace(
-          state,
+          state.basePath,
           module.renderChannels({
             connected: state.connected,
             loading: state.channelsLoading,

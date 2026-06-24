@@ -17,7 +17,6 @@ export const page = definePage({
   path: "/overview",
   loader: ({ host }: OverviewLoadContext, options) => loadOverview(host, undefined, options),
   component: () => ({
-    shell: "page" as const,
     header: true,
     render: ({ state, navigate }: OverviewRenderContext) => html`
       <section class="content-header">

@@ -23,7 +23,7 @@ export const page = definePage({
           </div>
         </section>
         ${renderSettingsWorkspace(
-          state,
+          state.basePath,
           module.renderDebug({
             loading: state.debugLoading,
             status: state.debugStatus,

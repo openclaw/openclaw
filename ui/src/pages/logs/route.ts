@@ -25,7 +25,7 @@ export const page = definePage({
         </section>
         <section class="content--logs">
           ${renderSettingsWorkspace(
-            state,
+            state.basePath,
             module.renderLogs({
               loading: state.logsLoading,
               error: state.logsError,

@@ -43,7 +43,6 @@ export const page = definePage({
     stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]),
   component: () =>
     import("./view.ts").then((module) => ({
-      shell: "page" as const,
       header: true,
       render: ({ state }: NodesRenderContext) => html`
         <section class="content-header">

@@ -290,7 +290,6 @@ export const page = definePage({
   loader: ({ host }: CronLoadContext, options) => loadCronPage(host, options),
   component: () =>
     import("./view.ts").then((module) => ({
-      shell: "page" as const,
       header: true,
       render: ({ state, navigate }: CronRenderContext) => renderCronPage(state, module, navigate),
     })),
