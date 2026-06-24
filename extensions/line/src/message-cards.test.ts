@@ -1,5 +1,6 @@
 // Line tests cover message cards plugin behavior.
 import { describe, expect, it } from "vitest";
+import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
 import {
   createActionCard,
   createCarousel,
@@ -270,5 +271,71 @@ describe("flex cards", () => {
     expect(card.size).toBe("mega");
     const body = card.body as { contents: Array<{ type: string }> };
     expect(body.contents).toHaveLength(3);
+  });
+});
+
+describe("action label/data surrogate-safe truncation", () => {
+  const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+  // 19 ASCII chars + 😀 (U+1F600, two UTF-16 code units) = 21 code units; a raw
+  // .slice(0, 20) would keep the first 19 chars plus the lone high surrogate.
+  const labelWithEmoji = `${"1234567890123456789"}😀`;
+
+  it("messageAction drops a half emoji instead of leaving a lone surrogate", () => {
+    const action = messageAction(labelWithEmoji);
+
+    expect(action.label).toBe("1234567890123456789");
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+  });
+
+  it("messageAction leaves a short ASCII label unchanged", () => {
+    const action = messageAction("Yes");
+
+    expect(action.label).toBe("Yes");
+  });
+
+  it("uriAction drops a half emoji instead of leaving a lone surrogate", () => {
+    const action = uriAction(labelWithEmoji, "https://example.com");
+
+    expect(action.label).toBe("1234567890123456789");
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+  });
+
+  it("postbackAction truncates label and data on surrogate boundaries", () => {
+    // 299 ASCII chars + 😀 = 301 code units; the 300-unit slice cuts the emoji.
+    const data = `${"d".repeat(299)}😀`;
+    const action = postbackAction(labelWithEmoji, data) as {
+      label: string;
+      data: string;
+    };
+
+    expect(action.label).toBe("1234567890123456789");
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(action.data).toBe("d".repeat(299));
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
+  });
+
+  it("postbackAction truncates displayText on surrogate boundaries but keeps undefined", () => {
+    const displayText = `${"t".repeat(299)}😀`;
+    const withDisplay = postbackAction("Label", "data", displayText) as {
+      displayText?: string;
+    };
+    const withoutDisplay = postbackAction("Label", "data") as { displayText?: string };
+
+    expect(withDisplay.displayText).toBe("t".repeat(299));
+    expect(loneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
+    expect(withoutDisplay.displayText).toBeUndefined();
+  });
+
+  it("datetimePickerAction truncates label and data on surrogate boundaries", () => {
+    const data = `${"d".repeat(299)}😀`;
+    const action = datetimePickerAction(labelWithEmoji, data, "datetime") as {
+      label: string;
+      data: string;
+    };
+
+    expect(action.label).toBe("1234567890123456789");
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(action.data).toBe("d".repeat(299));
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
 });
