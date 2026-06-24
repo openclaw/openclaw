@@ -265,7 +265,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       config: resolvedConfig,
       env: process.env,
     });
+    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- plugin-imported", "Doctor changes");
+    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
   it("limits invalid-config preflight to config-independent state migration", async () => {

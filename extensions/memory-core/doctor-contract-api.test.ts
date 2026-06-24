@@ -831,8 +831,8 @@ describe("memory-core doctor dreaming migration", () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
-    await writeLegacyMemorySidecar(legacyPath, { text: "custom retry", vector: "custom-vec" });
-    await writeLegacyMemorySidecar(retryPath, { text: "default retry", vector: "default-vec" });
+    await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
+    await writeLegacyMemorySidecar(retryPath, { vector: "vec0" });
     const config = {
       agents: {
         defaults: {

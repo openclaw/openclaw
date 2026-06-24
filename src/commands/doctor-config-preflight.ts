@@ -226,6 +226,7 @@ export async function runDoctorConfigPreflight(
             env: process.env,
           }),
         );
+        noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
       }
     } else {
       noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
