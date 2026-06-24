@@ -31,6 +31,22 @@ export class SessionPicker extends LitElement {
   private requestId = 0;
   private searchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (!this.open || event.defaultPrevented || event.key !== "Escape") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.close();
+  };
+
+  private readonly handleDocumentPointerdown = (event: PointerEvent) => {
+    if (!this.open || event.composedPath().includes(this)) {
+      return;
+    }
+    this.close();
+  };
+
   override createRenderRoot() {
     return this;
   }
@@ -38,9 +54,13 @@ export class SessionPicker extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.clearSearchTimer();
     super.disconnectedCallback();
   }
@@ -49,6 +69,13 @@ export class SessionPicker extends LitElement {
     if (changed.has("sessionsResult") && !this.appliedQuery) {
       this.result = this.sessionsResult;
     }
+  }
+
+  override updated(changed: Map<PropertyKey, unknown>) {
+    if (!changed.has("open") || !this.open) {
+      return;
+    }
+    this.querySelector<HTMLInputElement>('[data-chat-session-picker-search="true"]')?.focus();
   }
 
   private clearSearchTimer() {
@@ -77,7 +104,7 @@ export class SessionPicker extends LitElement {
     this.clearSearchTimer();
     this.searchTimer = globalThis.setTimeout(() => {
       this.searchTimer = null;
-      void this.loadPage();
+      void this.applySearch();
     }, SEARCH_DEBOUNCE_MS);
   }
 
@@ -191,13 +218,6 @@ export class SessionPicker extends LitElement {
         class="chat-session-picker"
         role="dialog"
         aria-label=${t("chat.selectors.session")}
-        @keydown=${(event: KeyboardEvent) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            this.close();
-          }
-        }}
       >
         <div class="chat-session-picker__search-row">
           <label class="field chat-session-picker__search">

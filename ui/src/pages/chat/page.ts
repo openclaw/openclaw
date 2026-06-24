@@ -105,6 +105,9 @@ type ChatRouteData = {
 
 type ChatPageContext = ApplicationContext;
 
+const CHAT_OPEN_DETAILS_SELECTOR =
+  ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]";
+
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
   readonly updateComplete: Promise<unknown>;
@@ -156,6 +159,7 @@ type ChatPageHost = ChatHost &
     chatNewMessagesBelow: boolean;
     chatManualRefreshInFlight: boolean;
     chatMobileControlsOpen: boolean;
+    chatMobileControlsTrigger: HTMLElement | null;
     sessionsHideCron: boolean;
     chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
     chatInputHistorySessionKey: string | null;
@@ -517,6 +521,7 @@ function createPageState(
     chatNewMessagesBelow: false,
     chatManualRefreshInFlight: false,
     chatMobileControlsOpen: false,
+    chatMobileControlsTrigger: null,
     sessionsHideCron: true,
     chatLocalInputHistoryBySession: {} as Record<string, Array<{ text: string; ts: number }>>,
     chatInputHistorySessionKey: null,
@@ -587,9 +592,29 @@ function createPageState(
     saveSettings(next);
     requestUpdate();
   };
-  state.setChatMobileControlsOpen = (open) => {
-    state.chatMobileControlsOpen = open;
+  state.setChatMobileControlsOpen = (open, options) => {
+    if (open) {
+      state.chatMobileControlsTrigger = options?.trigger ?? state.chatMobileControlsTrigger;
+      state.chatMobileControlsOpen = true;
+      requestUpdate();
+      return;
+    }
+    const focusTarget = options?.restoreFocus ? state.chatMobileControlsTrigger : null;
+    state.chatMobileControlsOpen = false;
+    if (state.chatSessionPickerSurface === "mobile") {
+      state.chatSessionPickerOpen = false;
+      state.chatSessionPickerSurface = null;
+    }
+    state.chatMobileControlsTrigger = null;
     requestUpdate();
+    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (focusTarget.isConnected) {
+        focusTarget.focus();
+      }
+    });
   };
   state.resetRealtimeTalkConversation = () => {
     state.realtimeTalkConversationState = createRealtimeTalkConversationState();
@@ -755,12 +780,99 @@ export class ChatPage extends LitElement {
   private stopSessionsSubscription: (() => void) | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
 
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.key !== "Escape") {
+      return;
+    }
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    if (state.chatSessionPickerOpen) {
+      event.preventDefault();
+      state.chatSessionPickerOpen = false;
+      state.chatSessionPickerSurface = null;
+      state.requestUpdate();
+      return;
+    }
+    const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
+    if (openDetails.length > 0) {
+      event.preventDefault();
+      openDetails.forEach((details) => {
+        details.open = false;
+      });
+      return;
+    }
+    if (state.realtimeTalkOptionsOpen) {
+      event.preventDefault();
+      state.realtimeTalkOptionsOpen = false;
+      state.requestUpdate();
+      return;
+    }
+    if (!state.chatMobileControlsOpen) {
+      return;
+    }
+    event.preventDefault();
+    state.setChatMobileControlsOpen(false, { restoreFocus: true });
+  };
+
+  private readonly handleDocumentPointerdown = (event: PointerEvent) => {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const path = event.composedPath();
+    let changed = false;
+    this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
+      if (!path.includes(details)) {
+        details.open = false;
+        changed = true;
+      }
+    });
+    if (state.realtimeTalkOptionsOpen) {
+      const insideTalkOptions = Array.from(
+        this.querySelectorAll(
+          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
+        ),
+      ).some((node) => path.includes(node));
+      if (!insideTalkOptions) {
+        state.realtimeTalkOptionsOpen = false;
+        changed = true;
+      }
+    }
+    if (state.chatSessionPickerOpen) {
+      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
+        (node) => path.includes(node),
+      );
+      if (!insidePicker) {
+        state.chatSessionPickerOpen = false;
+        state.chatSessionPickerSurface = null;
+        changed = true;
+      }
+    }
+    if (changed) {
+      state.requestUpdate();
+    }
+    if (!state.chatMobileControlsOpen) {
+      return;
+    }
+    const wrapper =
+      this.querySelector(".chat-settings-popover-wrapper") ??
+      this.querySelector(".chat-mobile-controls-wrapper");
+    if (wrapper && path.includes(wrapper)) {
+      return;
+    }
+    state.setChatMobileControlsOpen(false);
+  };
+
   override createRenderRoot() {
     return this;
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.state = createPageState(this.context, () => this.requestUpdate(), this);
     if (this.data?.sessionKey) {
       this.state.sessionKey = this.data.sessionKey;
@@ -800,6 +912,8 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.stopGatewaySnapshot?.();
     this.stopGatewaySnapshot = undefined;
     this.stopGatewayEvents?.();
