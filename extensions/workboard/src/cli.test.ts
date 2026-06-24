@@ -240,4 +240,21 @@ describe("registerWorkboardCli", () => {
     expect(parsed.card.status).toBe("review");
     expect(parsed.card.title).toBe("JSON move");
   });
+
+  it("enforces claim scope in store.move() when moving claimed cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed", status: "todo" });
+    // Claim the card
+    await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    // Unrelated agent tries to move - should fail
+    await expect(
+      store.move(card.id, "running", undefined, { ownerId: "agent-b", token: "tok-b" }),
+    ).rejects.toThrow(/card is claimed by agent-a/);
+    // Same agent can move - should succeed
+    const moved = await store.move(card.id, "running", undefined, {
+      ownerId: "agent-a",
+      token: "tok-a",
+    });
+    expect(moved.status).toBe("running");
+  });
 });
