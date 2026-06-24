@@ -5,6 +5,8 @@
  * Based on OpenClaw's markdownToText in src/agents/tools/web-fetch-utils.ts.
  */
 
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
 /**
  * Strip markdown formatting from text for Twitch compatibility.
  *
@@ -80,9 +82,14 @@ export function chunkTextForTwitch(text: string, limit: number): string[] {
     const lastSpaceIndex = window.lastIndexOf(" ");
 
     if (lastSpaceIndex === -1) {
-      // No space found, hard split at limit
-      chunks.push(window);
-      remaining = remaining.slice(limit);
+      // No space found, hard split at limit. Use a surrogate-safe slice so we
+      // never cut a surrogate pair (e.g. an emoji) in half across two chunks.
+      // Fall back to a raw slice when the limit is too small to hold a single
+      // surrogate pair, so the loop always makes progress.
+      const safe = sliceUtf16Safe(remaining, 0, limit);
+      const chunk = safe.length > 0 ? safe : remaining.slice(0, limit);
+      chunks.push(chunk);
+      remaining = remaining.slice(chunk.length);
     } else {
       // Split at the last space
       chunks.push(window.slice(0, lastSpaceIndex));
