@@ -205,12 +205,19 @@ export class ReportGenerator {
     const narrator = onActivity ? new ToolActivityNarrator({ push: onActivity }) : null;
 
     // Stream LLM text deltas to the caller and accumulate them as a fallback
-    // source for the final report text. Events are filtered by sessionKey
-    // (the agent runtime attaches it to every event of this run), so parallel
-    // chat sessions never bleed into the report stream.
+    // source for the final report text. Scope to THIS turn by EITHER runId (once
+    // captured after run() returns) OR sessionKey (when present). The runtime
+    // attaches sessionKey only when the run surfaces to the control UI
+    // (isControlUiVisible), which holds solely for "webchat"-channel runs; this
+    // report subagent isn't one, so its events arrive with sessionKey=undefined
+    // and the old `evt.sessionKey !== sessionKey` filter dropped every delta and
+    // tool-progress line (the report streamed nothing live, recovered only from
+    // session messages). runId is always stamped and unique per run, so it both
+    // catches our events and isolates parallel chat/report runs.
     let streamedText = "";
+    let currentRunId: string | null = null;
     const unsubscribe = this.runtime.events.onAgentEvent((evt) => {
-      if (evt.sessionKey !== sessionKey) {
+      if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
         return;
       }
       if (evt.stream === "tool") {
@@ -247,6 +254,10 @@ export class ReportGenerator {
         deliver: false,
         extraSystemPrompt: PURE_WRITING_SYSTEM_PROMPT,
       });
+
+      // Scope the event listener to this run now that we have its id; the
+      // agent's tool/assistant events fire during waitForRun below.
+      currentRunId = runResult.runId;
 
       const waitResult = await this.runtime.subagent.waitForRun({
         runId: runResult.runId,

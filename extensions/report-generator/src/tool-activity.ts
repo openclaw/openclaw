@@ -14,7 +14,17 @@
  */
 
 /** Sanitized step category — drives the frontend's icon, never raw content. */
-export type StepCategory = "query" | "read" | "write" | "search" | "memory" | "default";
+export type StepCategory =
+  | "query"
+  | "read"
+  | "write"
+  | "search"
+  | "memory"
+  | "check"
+  | "report"
+  | "think"
+  | "answer"
+  | "default";
 
 /** A structured timeline step emitted for the frontend "工作过程" panel. */
 export type ActivityStep = {
@@ -32,32 +42,67 @@ export type ActivityStep = {
 
 /** Tool name (normalized by the agent runtime) → user-facing activity label. */
 const TOOL_LABELS: Readonly<Record<string, string>> = {
+  // Data query / analysis
   exec: "正在查询分析数据",
   process: "正在查询分析数据",
+  feed_query: "正在检索舆情数据",
+  // File reading
   read: "正在查阅资料",
+  // Content editing / file output
   write: "正在整理内容",
   edit: "正在整理内容",
   apply_patch: "正在整理内容",
+  file_share: "正在生成可下载文件",
+  // Web search / fetch
   web_search: "正在检索网络信息",
-  web_fetch: "正在检索网络信息",
-  browser: "正在检索网络信息",
+  web_fetch: "正在读取网页内容",
+  browser: "正在浏览网页",
+  tavily_search: "正在检索网络信息",
+  firecrawl_search: "正在检索网络信息",
+  tavily_extract: "正在读取网页内容",
+  firecrawl_scrape: "正在读取网页内容",
+  // Long-term memory
   memory_search: "正在回忆相关上下文",
   memory_get: "正在回忆相关上下文",
+  memory_recall: "正在回忆相关上下文",
+  memory_operators: "正在回忆相关上下文",
+  memory_store: "正在记录长期记忆",
+  memory_forget: "正在更新长期记忆",
+  // 侵权 / 合规检测
+  legal_check_create: "正在发起侵权检测",
+  legal_check_status: "正在确认检测结果",
+  // 报告生成
+  report: "正在生成报告",
+  report_create: "正在生成报告",
 };
 
 /** Tool name → sanitized category (icon hint only; never echoes content). */
 const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   exec: "query",
   process: "query",
+  feed_query: "query",
   read: "read",
   write: "write",
   edit: "write",
   apply_patch: "write",
+  file_share: "write",
   web_search: "search",
   web_fetch: "search",
   browser: "search",
+  tavily_search: "search",
+  firecrawl_search: "search",
+  tavily_extract: "search",
+  firecrawl_scrape: "search",
   memory_search: "memory",
   memory_get: "memory",
+  memory_recall: "memory",
+  memory_operators: "memory",
+  memory_store: "memory",
+  memory_forget: "memory",
+  legal_check_create: "check",
+  legal_check_status: "check",
+  report: "report",
+  report_create: "report",
 };
 
 const DEFAULT_LABEL = "正在执行处理步骤";

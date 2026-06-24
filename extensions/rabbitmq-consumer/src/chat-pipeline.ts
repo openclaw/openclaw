@@ -8,7 +8,7 @@ import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
-import { ToolActivityNarrator } from "./tool-activity.js";
+import { ToolActivityNarrator, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
 import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
@@ -490,24 +490,56 @@ export async function processChatMessage(
     // processing starts, so the user sees activity through the cold-start + model
     // first-token wait instead of a blank "思考中…". This first step is ended as
     // soon as real output begins (a tool step, or the first assistant delta).
-    const INIT_STEP_ID = "init";
-    let initStepEnded = false;
-    const INIT_STEP_LABEL = "正在理解您的问题";
-    void mercure.pushStep(
-      mercureTopic,
-      { phase: "start", stepId: INIT_STEP_ID, index: 0, label: INIT_STEP_LABEL, category: "default", status: "running" },
-      chatMsg.historyId,
-    );
-    void mercure.pushProgress(mercureTopic, `${INIT_STEP_LABEL}…`, chatMsg.historyId);
-    const endInitStep = () => {
-      if (initStepEnded) return;
-      initStepEnded = true;
+    // Synthetic phase steps frame the agent's work so the "工作过程" timeline
+    // reads as a narrative — 理解 → (思考) → (工具步骤) → 组织回答 — even on turns
+    // with few or no tool calls. Tool steps (from the narrator) carry their own
+    // ids and slot in between. start/end are matched by stepId on the frontend,
+    // which also finalizes any still-running step on `done`, so a missed end is
+    // harmless. Each phase starts/ends at most once (idempotent), so repeated
+    // thinking/assistant events never duplicate or revive a phase.
+    const phaseState = new Map<string, { ended: boolean; startedAt: number }>();
+    const startPhase = (stepId: string, index: number, label: string, category: StepCategory) => {
+      if (phaseState.has(stepId)) return;
+      phaseState.set(stepId, { ended: false, startedAt: Date.now() });
       void mercure.pushStep(
         mercureTopic,
-        { phase: "end", stepId: INIT_STEP_ID, index: 0, label: INIT_STEP_LABEL, category: "default", status: "completed" },
+        { phase: "start", stepId, index, label, category, status: "running" },
         chatMsg.historyId,
       );
     };
+    const endPhase = (stepId: string, label: string, category: StepCategory) => {
+      const entry = phaseState.get(stepId);
+      if (!entry || entry.ended) return;
+      entry.ended = true;
+      void mercure.pushStep(
+        mercureTopic,
+        {
+          phase: "end",
+          stepId,
+          index: 0,
+          label,
+          category,
+          status: "completed",
+          durationMs: Math.max(0, Date.now() - entry.startedAt),
+        },
+        chatMsg.historyId,
+      );
+    };
+
+    const INIT_STEP_ID = "init";
+    const INIT_STEP_LABEL = "正在理解您的问题";
+    const THINK_STEP_ID = "think";
+    const THINK_STEP_LABEL = "正在思考分析";
+    const ANSWER_STEP_ID = "answer";
+    const ANSWER_STEP_LABEL = "正在组织回答";
+
+    const endInitStep = () => endPhase(INIT_STEP_ID, INIT_STEP_LABEL, "default");
+    const endThinkStep = () => endPhase(THINK_STEP_ID, THINK_STEP_LABEL, "think");
+
+    // Immediate feedback: light up the timeline the instant processing starts,
+    // through the cold-start + model first-token wait, instead of a blank panel.
+    startPhase(INIT_STEP_ID, 0, INIT_STEP_LABEL, "default");
+    void mercure.pushProgress(mercureTopic, `${INIT_STEP_LABEL}…`, chatMsg.historyId);
 
     const narrator = new ToolActivityNarrator({
       push: (message) => {
@@ -516,21 +548,44 @@ export async function processChatMessage(
       // Structured timeline steps (start/end) for the frontend's "工作过程"
       // panel. Sanitized label/category only — the narrator never reads args.
       onStep: (step) => {
+        // A tool starting means the agent moved from understanding/thinking to
+        // acting — close those phases so the tool step reads as the next stage.
         endInitStep();
+        endThinkStep();
         void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
       },
     });
 
-    // Only forward events from THIS session. The agent runtime attaches
-    // sessionKey to every event of a run; without that filter, any
-    // concurrent run in the same gateway process (report subagent, heartbeat,
-    // another user's chat) would bleed into this user's Mercure stream.
+    // Forward only events belonging to THIS turn, identified by EITHER the run's
+    // id (once captured below) OR its sessionKey (when present). Either one
+    // uniquely identifies our run, and needing only one is what fixes the bug:
+    // the runtime attaches sessionKey to agent events ONLY when the run surfaces
+    // to the control UI (isControlUiVisible), which holds solely for
+    // "webchat"-channel runs. This subagent run isn't a webchat channel, so its
+    // events arrive with sessionKey=undefined — the old
+    // `evt.sessionKey !== sessionKey` filter then dropped ALL tool/assistant
+    // events, leaving the "工作过程" timeline stuck on just the init step and the
+    // reply un-streamed (recovered only from session messages at the end).
+    // runId is always stamped by emitAgentEvent and is unique per run, so the
+    // runId arm catches our events even without a sessionKey, while still
+    // isolating us from concurrent runs (report subagent, heartbeat, another
+    // user's chat) whose runId and sessionKey both differ.
+    let currentRunId: string | null = null;
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
-      if (evt.sessionKey !== sessionKey) {
+      if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
         return;
       }
       if (evt.stream === "tool") {
         narrator.handleAgentEvent(evt);
+        return;
+      }
+      if (evt.stream === "thinking") {
+        // Model reasoning phase. Only emitted when the run streams reasoning
+        // (reasoning-capable model + streamReasoning on); a no-op otherwise.
+        // We surface a single "正在思考分析" step rather than the raw reasoning
+        // text — the timeline stays a clean narrative and no internal refs leak.
+        endInitStep();
+        startPhase(THINK_STEP_ID, 1, THINK_STEP_LABEL, "think");
         return;
       }
       if (evt.stream !== "assistant") {
@@ -538,7 +593,11 @@ export async function processChatMessage(
       }
       const delta = extractAssistantDelta(evt.data);
       if (delta) {
+        // First visible answer text → close understanding/thinking and open the
+        // answer-composing phase, which the timeline shows until the turn ends.
         endInitStep();
+        endThinkStep();
+        startPhase(ANSWER_STEP_ID, 99, ANSWER_STEP_LABEL, "answer");
         streamPusherCtx.streamPusher!.appendDelta(delta);
       }
     });
@@ -567,6 +626,10 @@ export async function processChatMessage(
         message: `${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}`,
         deliver: false,
       });
+
+      // Scope the event listener to this run now that we have its id. Tool and
+      // assistant events fire during waitForRun below, after this assignment.
+      currentRunId = runResult.runId;
 
       // Step 5: Wait for completion (5 minute timeout)
       const waitResult = await runtime.subagent.waitForRun({
@@ -621,6 +684,12 @@ export async function processChatMessage(
 
       // Step 7: Update history record
       await historyManager.updateResponse(chatMsg.historyId, safeResponse);
+
+      // Close any open phase steps so the timeline ends clean (with real
+      // durations) rather than relying on the frontend's done-time finalize.
+      endInitStep();
+      endThinkStep();
+      endPhase(ANSWER_STEP_ID, ANSWER_STEP_LABEL, "answer");
 
       // Step 8: Finish streaming — flush remaining buffer + push done signal
       await streamPusherCtx.streamPusher.finish();

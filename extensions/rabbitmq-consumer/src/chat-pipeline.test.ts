@@ -55,6 +55,12 @@ function createHistoryManagerMock() {
 function createRuntimeMock(options: {
   workspaceDir: string;
   onRun: (listener: AgentEventListener | undefined) => void;
+  /**
+   * Emit events here to simulate the real timing: tool/assistant events fire
+   * DURING waitForRun, i.e. after run() returned and the pipeline captured its
+   * runId. Use this (not onRun) to exercise runId-based scoping.
+   */
+  onWait?: (listener: AgentEventListener | undefined) => void;
   sessionMessages?: unknown[];
   onRunArgs?: (args: { message: string }) => void;
 }): PluginRuntime {
@@ -74,7 +80,10 @@ function createRuntimeMock(options: {
         options.onRun(listener);
         return { runId: "r1" };
       },
-      waitForRun: async () => ({ status: "ok" as const }),
+      waitForRun: async () => {
+        options.onWait?.(listener);
+        return { status: "ok" as const };
+      },
       getSessionMessages: async () => ({ messages: options.sessionMessages ?? [] }),
     },
     agent: {
@@ -269,6 +278,77 @@ describe("processChatMessage", () => {
       expect(JSON.stringify(evt)).not.toContain("SECRET");
       expect(JSON.stringify(evt)).not.toContain("SELECT");
     }
+  });
+
+  it("scopes events by runId when the runtime omits sessionKey (non-webchat run)", async () => {
+    // Regression: a non-webchat subagent run never surfaces to the control UI,
+    // so emitAgentEvent stamps sessionKey=undefined on every event. Scoping must
+    // fall back to runId — otherwise ALL tool/assistant events drop and the
+    // "工作过程" timeline shows only the directly-pushed init step while the reply
+    // is recovered only from session messages. These events carry NO sessionKey
+    // and fire during waitForRun (after run() returned and runId was captured).
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: { phase: "start", name: "exec", toolCallId: "t1" },
+        });
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "tool",
+          ts: 2,
+          data: {
+            phase: "end",
+            name: "exec",
+            toolCallId: "t1",
+            status: "completed",
+            startedAt: 1,
+            endedAt: 5,
+          },
+        });
+        // Foreign run, also without sessionKey — must still drop (runId differs).
+        listener?.({
+          runId: "r2",
+          seq: 1,
+          stream: "tool",
+          ts: 3,
+          data: { phase: "start", name: "exec", toolCallId: "t2" },
+        });
+        listener?.({
+          runId: "r1",
+          seq: 3,
+          stream: "assistant",
+          ts: 4,
+          data: { delta: "answer" },
+        });
+      },
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const payloads = fetchMock.mock.calls.map((call) => {
+      const init = call[1] as { body?: string };
+      const params = new URLSearchParams(init.body ?? "");
+      return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
+    });
+
+    // Our run's tool surfaced as start+end `step` events for the timeline...
+    const stepEvents = payloads.filter((p) => p.type === "step");
+    expect(stepEvents.some((p) => p.stepId === "t1" && p.phase === "start")).toBe(true);
+    expect(stepEvents.some((p) => p.stepId === "t1" && p.phase === "end")).toBe(true);
+    // ...and the sanitized progress line was pushed too.
+    const progressEvents = payloads.filter((p) => p.type === "progress");
+    expect(progressEvents.some((p) => p.content === "正在查询分析数据（第 1 步）…")).toBe(true);
+    // The foreign run's tool (t2) must not leak into this turn's timeline.
+    expect(stepEvents.some((p) => p.stepId === "t2")).toBe(false);
   });
 
   it("prefers the latest assistant session message as the canonical response", async () => {
