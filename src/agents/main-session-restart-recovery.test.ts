@@ -826,6 +826,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     loadSessionStore(storePath);
+    const cachedFileStat = await fs.stat(storePath);
     await writeStore(sessionsDir, {
       "agent:main:main": {
         sessionId: "main-session",
@@ -835,6 +836,7 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryAttempts: 3,
       },
     });
+    await fs.utimes(storePath, cachedFileStat.atimeMs / 1000, cachedFileStat.mtimeMs / 1000);
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "run the tool" },
       { role: "toolResult", content: "done" },

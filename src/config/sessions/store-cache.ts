@@ -22,6 +22,7 @@ export type SessionStoreSnapshotEntries = ReadonlyArray<
 
 type SessionStoreCacheEntry = {
   store: Record<string, SessionEntry>;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
@@ -29,6 +30,7 @@ type SessionStoreCacheEntry = {
 
 type SessionStoreSnapshotCacheEntry = {
   snapshot: SessionStoreSnapshot;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
 };
@@ -374,6 +376,7 @@ export function dropSessionStoreSnapshotCache(storePath: string): void {
 
 export function readSessionStoreSnapshotCache(params: {
   storePath: string;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
 }): SessionStoreSnapshot | null {
@@ -381,7 +384,11 @@ export function readSessionStoreSnapshotCache(params: {
   if (!cached) {
     return null;
   }
-  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+  if (
+    params.ctimeMs !== cached.ctimeMs ||
+    params.mtimeMs !== cached.mtimeMs ||
+    params.sizeBytes !== cached.sizeBytes
+  ) {
     // Object and snapshot caches share file identity; a stat mismatch invalidates both views.
     invalidateSessionStoreCache(params.storePath);
     return null;
@@ -392,6 +399,7 @@ export function readSessionStoreSnapshotCache(params: {
 export function writeSessionStoreSnapshotCache(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
@@ -399,6 +407,7 @@ export function writeSessionStoreSnapshotCache(params: {
   const snapshot = cloneSessionStoreSnapshot(params.store, params.serialized);
   SESSION_STORE_SNAPSHOT_CACHE.set(params.storePath, {
     snapshot,
+    ctimeMs: params.ctimeMs,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
   });
@@ -407,6 +416,7 @@ export function writeSessionStoreSnapshotCache(params: {
 
 export function readSessionStoreCache(params: {
   storePath: string;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
   clone?: boolean;
@@ -415,7 +425,11 @@ export function readSessionStoreCache(params: {
   if (!cached) {
     return null;
   }
-  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+  if (
+    params.ctimeMs !== cached.ctimeMs ||
+    params.mtimeMs !== cached.mtimeMs ||
+    params.sizeBytes !== cached.sizeBytes
+  ) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -427,6 +441,7 @@ export function readSessionStoreCache(params: {
 
 export function takeMutableSessionStoreCache(params: {
   storePath: string;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
 }): Record<string, SessionEntry> | null {
@@ -434,7 +449,11 @@ export function takeMutableSessionStoreCache(params: {
   if (!cached) {
     return null;
   }
-  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+  if (
+    params.ctimeMs !== cached.ctimeMs ||
+    params.mtimeMs !== cached.mtimeMs ||
+    params.sizeBytes !== cached.sizeBytes
+  ) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -445,6 +464,7 @@ export function takeMutableSessionStoreCache(params: {
 export function writeSessionStoreCache(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
+  ctimeMs?: number;
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
@@ -461,6 +481,7 @@ export function writeSessionStoreCache(params: {
   }
   SESSION_STORE_CACHE.set(params.storePath, {
     store,
+    ctimeMs: params.ctimeMs,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.cloneSerialized,
