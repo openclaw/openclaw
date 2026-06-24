@@ -897,8 +897,12 @@ async function resolveCompatiblePackageVersion(params: {
         timeoutMs: params.timeoutMs,
       });
       versionEndpointCompatibility = selectedVersion.version?.compatibility ?? null;
-    } catch {
-      // Version endpoint unavailable; proceed without version-specific compatibility.
+    } catch (error) {
+      return mapClawHubRequestError(error, {
+        stage: "version",
+        name: params.detail.package?.name ?? "unknown",
+        version: resolvedVersion,
+      });
     }
   }
   if (params.detail.package?.family === "skill") {

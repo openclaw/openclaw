@@ -899,6 +899,47 @@ describe("installPluginFromClawHub", () => {
     expect(failure.error).toContain("2026.6.8");
   });
 
+  it("fails closed when version endpoint is unavailable for sparse artifact metadata on pinned version", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.6.8" });
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.8");
+    // Artifact endpoint returns sparse metadata (no compatibility).
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.8",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+    // Version endpoint fails.
+    fetchClawHubPackageVersionMock.mockRejectedValueOnce(new Error("500 Internal Server Error"));
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@2026.6.8",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.ok).toBe(false);
+  });
+
   it("enforces package-level compatibility for unpinned latest install when version response omits compatibility", async () => {
     resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
