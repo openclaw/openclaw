@@ -1,4 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
+import os from "node:os";
 import {
   context as otelContextApi,
   metrics,
@@ -21,7 +22,7 @@ import {
   ParentBasedSampler,
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
-import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
   ATTR_GEN_AI_INPUT_MESSAGES,
   ATTR_GEN_AI_OUTPUT_MESSAGES,
@@ -1390,8 +1391,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const contentCapturePolicy = resolveContentCapturePolicy(otel.captureContent);
       const sdkPreloaded = hasPreloadedOtelSdk();
 
+      const instanceId = process.env.OTEL_SERVICE_INSTANCE_ID ?? os.hostname();
       const resource = resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
+        [ATTR_SERVICE_INSTANCE_ID]: instanceId,
       });
 
       const logUrl = resolveSignalOtelUrl({
