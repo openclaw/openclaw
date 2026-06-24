@@ -129,6 +129,11 @@ type SessionRegistryMaintenanceSummary = {
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
+function resolveExplicitCronSessionSegment(sessionKey: string | undefined): string | undefined {
+  const match = /^(?:agent:[^:]+:)?cron:([^:]+)$/u.exec(sessionKey?.trim() ?? "");
+  return match?.[1]?.toLowerCase();
+}
+
 function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
     const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
@@ -143,6 +148,11 @@ function readRunningCronJobIds(): { ids: Set<string>; count: number } {
         runningJobs.flatMap((job) => [
           job.id.toLowerCase(),
           normalizeCronLaneSegment(job.id, "job"),
+          ...(job.sessionTarget !== "main" && job.sessionKey
+            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
+                (segment): segment is string => segment !== undefined,
+              )
+            : []),
         ]),
       ),
       count: runningJobs.length,

@@ -430,6 +430,65 @@ describe("tasks commands", () => {
     });
   });
 
+  it("preserves a running cron session with an explicit session key", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      const old = now - 8 * 24 * 60 * 60_000;
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "job-uuid",
+            name: "Daily monitor",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:daily-monitor",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+        ],
+      });
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:cron:daily-monitor:run:old-run": {
+              sessionId: "explicit-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:job-uuid:run:old-run": {
+              sessionId: "job-id-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:retired-job:run:old-run": {
+              sessionId: "retired-run",
+              updatedAt: old,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated["agent:main:cron:daily-monitor:run:old-run"]).toBeDefined();
+      expect(updated["agent:main:cron:retired-job:run:old-run"]).toBeUndefined();
+    });
+  });
+
   it("does not build JSON-only diagnostics for text maintenance output", async () => {
     await withTaskCommandStateDir(async () => {
       const diagnosticsSpy = vi.spyOn(
