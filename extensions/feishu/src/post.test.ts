@@ -157,6 +157,19 @@ describe("parsePostContent", () => {
     }
   });
 
+  it("falls back to content when content_v2 is non-empty but renders no usable text/media", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "real body" }]],
+      // non-empty array, but the only element renders to nothing usable
+      content_v2: [[{ tag: "md", text: "   " }]],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.textContent).toBe("real body");
+  });
+
   it("keeps dedupe-relevant media keys stable across content / content_v2 (AC-M1-E2)", () => {
     const contentOnly = JSON.stringify({
       title: "",
