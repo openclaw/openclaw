@@ -41,7 +41,10 @@ import {
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../../plugins/manifest-registry.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -247,6 +250,11 @@ type NativeHookRelayPermissionApprovalResult =
   | "allow-always"
   | "defer";
 
+type NativeHookRelayCodexToolResultMiddlewarePreparation = {
+  hasMiddleware: boolean;
+  manifestRegistry?: PluginManifestRegistry;
+};
+
 type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
@@ -255,6 +263,10 @@ type NativeHookRelaySharedState = {
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
   permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  codexToolResultMiddlewarePreparations: Map<
+    string,
+    NativeHookRelayCodexToolResultMiddlewarePreparation
+  >;
 };
 
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
@@ -279,6 +291,10 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
     pendingPreToolUseApprovals: new Map<string, NativeHookRelayPreToolUseApproval>(),
     permissionApprovalWindows: new Map<string, number[]>(),
     permissionAllowAlwaysApprovals: new Map<string, { expiresAtMs: number }>(),
+    codexToolResultMiddlewarePreparations: new Map<
+      string,
+      NativeHookRelayCodexToolResultMiddlewarePreparation
+    >(),
   };
   return globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL];
 }
@@ -291,6 +307,8 @@ const pendingPermissionApprovals = nativeHookRelayState.pendingPermissionApprova
 const pendingPreToolUseApprovals = nativeHookRelayState.pendingPreToolUseApprovals;
 const permissionApprovalWindows = nativeHookRelayState.permissionApprovalWindows;
 const permissionAllowAlwaysApprovals = nativeHookRelayState.permissionAllowAlwaysApprovals;
+const codexToolResultMiddlewarePreparations =
+  nativeHookRelayState.codexToolResultMiddlewarePreparations;
 
 type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
@@ -462,6 +480,10 @@ export function registerNativeHookRelay(
     expiresAtMs,
     ...(params.signal ? { signal: params.signal } : {}),
   };
+  codexToolResultMiddlewarePreparations.set(
+    relayId,
+    prepareNativeHookRelayCodexToolResultMiddleware(registration),
+  );
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration);
   const handle: ActiveNativeHookRelayRegistrationHandle = {
@@ -515,6 +537,7 @@ function unregisterNativeHookRelay(
   }
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
+  codexToolResultMiddlewarePreparations.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
   removeNativeHookRelayPreToolUseApprovals(relayId);
   removeNativeHookRelayPermissionState(relayId);
@@ -628,7 +651,8 @@ function nativeHookRelayEventHasLocalWork(
   }
   if (event === "post_tool_use") {
     return (
-      hasGlobalHooks("after_tool_call") || nativeHookRelayHasCodexToolResultMiddleware(registration)
+      hasGlobalHooks("after_tool_call") ||
+      nativeHookRelayHasPreparedCodexToolResultMiddleware(registration)
     );
   }
   if (event === "before_agent_finalize") {
@@ -637,21 +661,34 @@ function nativeHookRelayEventHasLocalWork(
   return true;
 }
 
-function nativeHookRelayHasCodexToolResultMiddleware(
+function nativeHookRelayHasPreparedCodexToolResultMiddleware(
   registration: NativeHookRelayRegistration,
 ): boolean {
-  if (listAgentToolResultMiddlewares("codex").length > 0) {
-    return true;
-  }
+  return nativeHookRelayPreparedCodexToolResultMiddleware(registration).hasMiddleware;
+}
+
+function nativeHookRelayPreparedCodexToolResultMiddleware(
+  registration: NativeHookRelayRegistration,
+): NativeHookRelayCodexToolResultMiddlewarePreparation {
+  return (
+    codexToolResultMiddlewarePreparations.get(registration.relayId) ?? { hasMiddleware: false }
+  );
+}
+
+function prepareNativeHookRelayCodexToolResultMiddleware(
+  registration: NativeHookRelayRegistration,
+): NativeHookRelayCodexToolResultMiddlewarePreparation {
+  const hasActiveHandlers = listAgentToolResultMiddlewares("codex").length > 0;
   if (!registration.config) {
-    return false;
+    return { hasMiddleware: hasActiveHandlers };
   }
+  const manifestRegistry = loadPluginManifestRegistry({ config: registration.config });
   const pluginsConfig = normalizePluginsConfig(registration.config.plugins);
   const activationSource = createPluginActivationSource({
     config: registration.config,
     plugins: pluginsConfig,
   });
-  for (const record of loadPluginManifestRegistry({ config: registration.config }).plugins) {
+  for (const record of manifestRegistry.plugins) {
     if (
       !normalizeAgentToolResultMiddlewareRuntimeIds(
         record.contracts?.agentToolResultMiddleware,
@@ -671,10 +708,10 @@ function nativeHookRelayHasCodexToolResultMiddleware(
       activationState.enabled &&
       (record.origin === "bundled" || activationState.explicitlyEnabled)
     ) {
-      return true;
+      return { hasMiddleware: true, manifestRegistry };
     }
   }
-  return false;
+  return { hasMiddleware: hasActiveHandlers, manifestRegistry };
 }
 
 export async function invokeNativeHookRelay(
@@ -1512,7 +1549,10 @@ async function runNativeHookRelayPostToolUse(params: {
   const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
   const result = params.adapter.readToolResponse(params.invocation.rawPayload);
   let response = params.adapter.renderNoopResponse(params.invocation.event);
-  if (nativeHookRelayHasCodexToolResultMiddleware(params.registration)) {
+  const middlewarePreparation = nativeHookRelayPreparedCodexToolResultMiddleware(
+    params.registration,
+  );
+  if (middlewarePreparation.hasMiddleware) {
     // Codex native PostToolUse replaces model-visible output via exit-code-2
     // feedback. Keep raw after_tool_call below for existing hook observers.
     const middlewareRunner = createAgentToolResultMiddlewareRunner(
@@ -1524,7 +1564,14 @@ async function runNativeHookRelayPostToolUse(params: {
         runId: params.registration.runId,
       },
       undefined,
-      params.registration.config ? { config: params.registration.config } : undefined,
+      params.registration.config
+        ? {
+            config: params.registration.config,
+            ...(middlewarePreparation.manifestRegistry
+              ? { manifestRegistry: middlewarePreparation.manifestRegistry }
+              : {}),
+          }
+        : undefined,
     );
     const middlewareInputResult = coerceNativeHookRelayToolResponseForMiddleware(result);
     const originalModelText = readNativeHookRelayToolResultText(middlewareInputResult);
@@ -2484,6 +2531,7 @@ export const testing = {
       unregisterNativeHookRelayBridge(relayId);
     }
     relays.clear();
+    codexToolResultMiddlewarePreparations.clear();
     invocations.length = 0;
     pendingPermissionApprovals.clear();
     for (const pendingApproval of pendingPreToolUseApprovals.values()) {

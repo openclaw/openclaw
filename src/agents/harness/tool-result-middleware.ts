@@ -10,6 +10,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
+import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -38,6 +39,7 @@ type MiddlewareToolResultCoerceOptions = {
 
 type AgentToolResultMiddlewareRunnerOptions = {
   config?: OpenClawConfig;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 function isValidMiddlewareContentBlock(value: unknown): boolean {
@@ -489,6 +491,7 @@ export function createAgentToolResultMiddlewareRunner(
     return loadAgentToolResultMiddlewaresForRuntime({
       runtime: ctx.runtime,
       ...(options.config ? { config: options.config } : {}),
+      ...(options.manifestRegistry ? { manifestRegistry: options.manifestRegistry } : {}),
     });
   });
   const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
