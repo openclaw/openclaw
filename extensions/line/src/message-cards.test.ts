@@ -278,10 +278,10 @@ describe("action label/data surrogate-safe truncation", () => {
   const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
   // 19 ASCII chars + 😀 (U+1F600, two UTF-16 code units) = 21 code units; a raw
   // .slice(0, 20) would keep the first 19 chars plus the lone high surrogate.
-  const labelWithEmoji = `${"1234567890123456789"}😀`;
+  const labelWithEmoji = "1234567890123456789😀";
 
   it("messageAction drops a half emoji instead of leaving a lone surrogate", () => {
-    const action = messageAction(labelWithEmoji);
+    const action = messageAction(labelWithEmoji) as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
@@ -294,7 +294,7 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("uriAction drops a half emoji instead of leaving a lone surrogate", () => {
-    const action = uriAction(labelWithEmoji, "https://example.com");
+    const action = uriAction(labelWithEmoji, "https://example.com") as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
