@@ -5391,3 +5391,116 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+
+describe("initSessionState execSecurity initialization", () => {
+  it("initializes execSecurity from cfg.tools.exec.security when creating a new session", async () => {
+    const storePath = await createStorePath("exec-security-init-");
+    const cfg = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "deny",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:test:channel:12345",
+        OriginatingChannel: "test",
+        OriginatingTo: "channel:12345",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBe("deny");
+  });
+
+  it("initializes execSecurity to undefined when cfg.tools.exec.security is not set", async () => {
+    const storePath = await createStorePath("exec-security-unset-");
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:test:channel:67890",
+        OriginatingChannel: "test",
+        OriginatingTo: "channel:67890",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBeUndefined();
+  });
+
+  it("preserves execSecurity from persisted session entry on reuse", async () => {
+    const storePath = await createStorePath("exec-security-persist-");
+    const sessionKey = "agent:main:test:channel:11111";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-exec-security-persist",
+        updatedAt: Date.now(),
+        execSecurity: "full",
+      },
+    });
+    const cfg = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "deny",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        OriginatingChannel: "test",
+        OriginatingTo: "channel:11111",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Persisted value takes precedence over config default
+    expect(result.sessionEntry.execSecurity).toBe("full");
+  });
+
+  it("falls back to cfg.tools.exec.security when persisted entry has no execSecurity", async () => {
+    const storePath = await createStorePath("exec-security-fallback-");
+    const sessionKey = "agent:main:test:channel:22222";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-exec-security-fallback",
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        OriginatingChannel: "test",
+        OriginatingTo: "channel:22222",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBe("allowlist");
+  });
+});
