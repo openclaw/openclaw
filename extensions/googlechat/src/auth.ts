@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Googlechat plugin module implements auth behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
@@ -18,7 +19,10 @@ const CHAT_CERTS_URL =
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
   try {
-    return (await response.json()) as Record<string, string>;
+    return await readProviderJsonResponse<Record<string, string>>(
+      response,
+      "Google Chat cert fetch",
+    );
   } catch (cause) {
     throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
   }

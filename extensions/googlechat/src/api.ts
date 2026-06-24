@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -13,8 +14,13 @@ const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // Success-body read. The error path is already bounded via
+  // readResponseWithLimit (line below) — this swap closes the symmetric
+  // success-body surface so an oversized Google Chat response (a misbehaving
+  // proxy, a streaming endpoint, or a hostile cert path) cannot force the
+  // runtime to buffer the full payload before parsing.
   try {
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, label);
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
