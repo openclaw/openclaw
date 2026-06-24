@@ -60,6 +60,8 @@ const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
+const GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV =
+  "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT";
 
 type Awaitable<T> = T | Promise<T>;
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
@@ -707,6 +709,18 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     defaultRuntime.exit(1);
     return;
   }
+  const deferredActivationControlPortRaw =
+    process.env[GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV];
+  const deferredActivationControlPort = deferredActivationControlPortRaw
+    ? parsePort(deferredActivationControlPortRaw)
+    : null;
+  if (deferredActivationControlPortRaw && deferredActivationControlPort === null) {
+    defaultRuntime.error(
+      `${GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT_ENV} must be a valid TCP port.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
@@ -964,6 +978,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
           ...(deferStartupSidecars ? { deferStartupSidecars: true } : {}),
+          ...(deferredActivationControlPort !== null
+            ? {
+                activationControlPort: deferredActivationControlPort,
+                activationMode: "deferred" as const,
+              }
+            : {}),
         });
       },
     });

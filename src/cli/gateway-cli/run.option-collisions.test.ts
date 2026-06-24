@@ -361,6 +361,8 @@ describe("gateway run option collisions", () => {
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
     return callArg(startGatewayServer, index, 1) as {
+      activationControlPort?: number;
+      activationMode?: "deferred";
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
@@ -371,6 +373,17 @@ describe("gateway run option collisions", () => {
   function expectAuthOverrideMode(mode: string) {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
+
+  it("passes deferred activation control port env into gateway startup", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: "19789" }, async () => {
+      await runGatewayCli(["gateway", "--allow-unconfigured"]);
+
+      expect(gatewayStartOptions()).toMatchObject({
+        activationControlPort: 19789,
+        activationMode: "deferred",
+      });
+    });
+  });
 
   it("runs the fast-path bootstrap hook before gateway startup", async () => {
     normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
