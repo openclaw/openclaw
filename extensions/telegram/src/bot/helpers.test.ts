@@ -931,6 +931,23 @@ describe("renderTelegramTextEntities", () => {
     );
   });
 
+  it("pads inline code whose content ends with a backtick so the span parses", () => {
+    const text = "x`";
+    const entities = [{ type: "code", offset: 0, length: 2 }];
+
+    // Per CommonMark, content that ends with a backtick needs single-space
+    // padding inside the fence, otherwise the trailing backtick fuses with the
+    // closing delimiter and the span is rendered as literal text.
+    expect(renderTelegramTextEntities(text, entities)).toBe("`` x` ``");
+  });
+
+  it("pads inline code whose content starts with a backtick so the span parses", () => {
+    const text = "`x";
+    const entities = [{ type: "code", offset: 0, length: 2 }];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe("`` `x ``");
+  });
+
   it("renders pre entities with language fences", () => {
     const text = "const value = 1;";
     const entities = [{ type: "pre", offset: 0, length: text.length, language: "ts" }];

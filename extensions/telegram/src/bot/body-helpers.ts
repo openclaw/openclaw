@@ -226,7 +226,12 @@ function longestBacktickRun(text: string): number {
 
 function markdownInlineCodeDelimiters(content: string): [string, string] {
   const delimiter = "`".repeat(longestBacktickRun(content) + 1);
-  if (content.startsWith(" ") || content.endsWith(" ")) {
+  if (
+    content.startsWith(" ") ||
+    content.endsWith(" ") ||
+    content.startsWith("`") ||
+    content.endsWith("`")
+  ) {
     return [`${delimiter} `, ` ${delimiter}`];
   }
   return [delimiter, delimiter];
