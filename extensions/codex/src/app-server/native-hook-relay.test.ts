@@ -1,13 +1,21 @@
 // Codex tests cover native hook relay plugin behavior.
-import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  nativeHookRelayTesting,
+  registerNativeHookRelay,
+  type NativeHookRelayRegistrationHandle,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   resolveCodexNativeHookRelayCommandTimeoutMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
+
+afterEach(() => {
+  nativeHookRelayTesting.clearNativeHookRelaysForTests();
+});
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
@@ -185,6 +193,73 @@ describe("Codex native hook relay config", () => {
         },
       },
     });
+  });
+
+  it("installs PostToolUse for enabled lazy Codex middleware owners", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "relay-1",
+      generation: "generation-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "openclaw",
+      },
+      config: {
+        plugins: {
+          entries: {
+            tokenjuice: { enabled: true },
+          },
+        },
+      } as never,
+    });
+
+    const config = buildCodexNativeHookRelayConfig({
+      relay,
+      events: ["post_tool_use"],
+    });
+
+    expect(config["hooks.PostToolUse"]).toEqual([
+      {
+        hooks: [
+          {
+            type: "command",
+            command:
+              "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event post_tool_use --timeout 4000",
+            timeout: 5,
+            async: false,
+            statusMessage: "OpenClaw native hook relay",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps PostToolUse omitted when lazy middleware owners are disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "relay-1",
+      generation: "generation-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "openclaw",
+      },
+      config: {
+        plugins: {
+          entries: {
+            tokenjuice: { enabled: false },
+          },
+        },
+      } as never,
+    });
+
+    const config = buildCodexNativeHookRelayConfig({
+      relay,
+      events: ["post_tool_use"],
+    });
+
+    expect(config["hooks.PostToolUse"]).toEqual([]);
   });
 
   it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {

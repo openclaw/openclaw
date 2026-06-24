@@ -2,28 +2,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { listAgentToolResultMiddlewareOwnerPluginIds } from "./agent-tool-result-middleware-owners.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
-import {
-  listAgentToolResultMiddlewares,
-  normalizeAgentToolResultMiddlewareRuntimeIds,
-} from "./agent-tool-result-middleware.js";
-import {
-  createPluginActivationSource,
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-  type NormalizedPluginsConfig,
-  type PluginActivationConfigSource,
-} from "./config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { listAgentToolResultMiddlewares } from "./agent-tool-result-middleware.js";
+import { createPluginActivationSource, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
@@ -39,55 +26,6 @@ async function resolveRuntimeConfigContext(): Promise<{
     config,
     activationSourceConfig: getRuntimeConfigSourceSnapshot() ?? config,
   };
-}
-
-function listMiddlewareOwnerPluginIds(params: {
-  manifestRegistry: PluginManifestRegistry;
-  runtime: AgentToolResultMiddlewareRuntime;
-  config: OpenClawConfig;
-  pluginsConfig: NormalizedPluginsConfig;
-  activationSource: PluginActivationConfigSource;
-}): string[] {
-  const pluginIds: string[] = [];
-  for (const record of params.manifestRegistry.plugins) {
-    if (
-      !canLazyLoadMiddlewareOwner({
-        record,
-        config: params.config,
-        pluginsConfig: params.pluginsConfig,
-        activationSource: params.activationSource,
-      })
-    ) {
-      continue;
-    }
-    const runtimes = normalizeAgentToolResultMiddlewareRuntimeIds(
-      record.contracts?.agentToolResultMiddleware,
-    );
-    if (runtimes.includes(params.runtime) && !pluginIds.includes(record.id)) {
-      pluginIds.push(record.id);
-    }
-  }
-  return pluginIds;
-}
-
-function canLazyLoadMiddlewareOwner(params: {
-  record: PluginManifestRecord;
-  config: OpenClawConfig;
-  pluginsConfig: NormalizedPluginsConfig;
-  activationSource: PluginActivationConfigSource;
-}): boolean {
-  if (params.record.origin === "bundled") {
-    return true;
-  }
-  const activationState = resolveEffectivePluginActivationState({
-    id: params.record.id,
-    origin: params.record.origin,
-    config: params.pluginsConfig,
-    rootConfig: params.config,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.record),
-    activationSource: params.activationSource,
-  });
-  return activationState.enabled && activationState.explicitlyEnabled;
 }
 
 function listRuntimeMiddlewareOwnerPluginIds(
@@ -152,7 +90,7 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       config: activationSourceConfig,
       plugins: activationSourcePlugins,
     });
-    const pluginIds = listMiddlewareOwnerPluginIds({
+    const pluginIds = listAgentToolResultMiddlewareOwnerPluginIds({
       manifestRegistry,
       runtime: params.runtime,
       config,
@@ -207,6 +145,6 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
 }
 
 export const testing = {
-  listMiddlewareOwnerPluginIds,
+  listMiddlewareOwnerPluginIds: listAgentToolResultMiddlewareOwnerPluginIds,
 };
 export { testing as __testing };

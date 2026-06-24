@@ -29,6 +29,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasEnabledAgentToolResultMiddlewareOwnerForRuntime } from "../../plugins/agent-tool-result-middleware-owners.js";
 import type { OpenClawAgentToolResult } from "../../plugins/agent-tool-result-middleware-types.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
@@ -617,7 +618,9 @@ function nativeHookRelayEventHasLocalWork(
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call") || nativeHookRelayHasCodexToolResultMiddleware();
+    return (
+      hasGlobalHooks("after_tool_call") || nativeHookRelayHasCodexToolResultMiddleware(registration)
+    );
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -625,8 +628,19 @@ function nativeHookRelayEventHasLocalWork(
   return true;
 }
 
-function nativeHookRelayHasCodexToolResultMiddleware(): boolean {
-  return listAgentToolResultMiddlewares("codex").length > 0;
+function nativeHookRelayHasCodexToolResultMiddleware(
+  registration: NativeHookRelayRegistration,
+): boolean {
+  if (listAgentToolResultMiddlewares("codex").length > 0) {
+    return true;
+  }
+  if (!registration.config) {
+    return false;
+  }
+  return hasEnabledAgentToolResultMiddlewareOwnerForRuntime({
+    runtime: "codex",
+    config: registration.config,
+  });
 }
 
 export async function invokeNativeHookRelay(
@@ -1464,7 +1478,7 @@ async function runNativeHookRelayPostToolUse(params: {
   const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
   const result = params.adapter.readToolResponse(params.invocation.rawPayload);
   let response = params.adapter.renderNoopResponse(params.invocation.event);
-  if (nativeHookRelayHasCodexToolResultMiddleware()) {
+  if (nativeHookRelayHasCodexToolResultMiddleware(params.registration)) {
     // Codex native PostToolUse replaces model-visible output via exit-code-2
     // feedback. Keep raw after_tool_call below for existing hook observers.
     const middlewareRunner = createAgentToolResultMiddlewareRunner({
