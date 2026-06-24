@@ -202,6 +202,7 @@ async function applyEnforcedMaintenance(params: {
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: params.beforeCount,
+    force: params.forceMaintenance,
   })
     ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
         onPruned: ({ entry }) => {

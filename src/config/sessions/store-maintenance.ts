@@ -200,12 +200,24 @@ export function shouldRunModelRunPrune(params: {
     "maxEntries" | "modelRunPruneAfterConfigured" | "modelRunPruneAfterMs"
   >;
   entryCount: number;
+  /**
+   * True when the caller caps immediately to `maxEntries` in the same pass (forced
+   * maintenance / `sessions cleanup`) rather than using the batched high-water trigger.
+   */
+  force?: boolean;
 }): boolean {
   if (params.maintenance.modelRunPruneAfterMs == null) {
     return false;
   }
   if (params.maintenance.modelRunPruneAfterConfigured) {
     return true;
+  }
+  // Unset default is pressure-gated, and must align with whichever cap step runs alongside it.
+  // Forced maintenance caps immediately down to `maxEntries`, so prune stale probes first whenever
+  // that cap would actually evict; otherwise stale probes would survive while real sessions get
+  // capped (the inverse of #88632). Batched runtime writes instead use the high-water trigger.
+  if (params.force) {
+    return params.entryCount > params.maintenance.maxEntries;
   }
   return shouldRunSessionEntryMaintenance({
     entryCount: params.entryCount,

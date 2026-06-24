@@ -222,6 +222,56 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     ]);
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
   });
+
+  it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {
+    const now = Date.now();
+    const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
+    const store: Record<string, SessionEntry> = {
+      [staleProbe]: makeEntry(now - 2 * DAY_MS),
+    };
+    for (let i = 0; i < 50; i++) {
+      store[`agent:main:explicit:real-${i}`] = makeEntry(now - 3 * DAY_MS);
+    }
+    let report: { modelRunPruned: number; pruned: number; capped: number } | undefined;
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 50,
+        modelRunPruneAfterMs: DAY_MS,
+        modelRunPruneAfterConfigured: false,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      maintenanceOverride: { mode: "enforce" },
+      onMaintenanceApplied: (applied) => {
+        report = {
+          modelRunPruned: applied.modelRunPruned,
+          pruned: applied.pruned,
+          capped: applied.capped,
+        };
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(report?.modelRunPruned).toBe(1);
+    expect(report?.capped).toBe(0);
+    expect(store[staleProbe]).toBeUndefined();
+    expect(Object.keys(store)).toHaveLength(50);
+    for (let i = 0; i < 50; i++) {
+      expect(store).toHaveProperty(`agent:main:explicit:real-${i}`);
+    }
+  });
 });
 
 describe("pruneStaleModelRunEntries", () => {
@@ -518,6 +568,61 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+  });
+
+  it("defaults gateway model-run probes to 24h retention with override and disable support", () => {
+    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "48h" }).modelRunPruneAfterMs,
+    ).toBe(2 * DAY_MS);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: false }).modelRunPruneAfterMs,
+    ).toBe(null);
+    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterConfigured).toBe(false);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "48h" }).modelRunPruneAfterConfigured,
+    ).toBe(true);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: false }).modelRunPruneAfterConfigured,
+    ).toBe(true);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "bad" }).modelRunPruneAfterMs,
+    ).toBe(null);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "bad" }).modelRunPruneAfterConfigured,
+    ).toBe(true);
+  });
+
+  it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
+    const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
+    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
+    expect(shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60 })).toBe(false);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60, force: true }),
+    ).toBe(true);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 50, force: true }),
+    ).toBe(false);
+    expect(
+      shouldRunModelRunPrune({
+        maintenance: resolveMaintenanceConfigFromInput({
+          maxEntries: 50,
+          modelRunPruneAfter: "24h",
+        }),
+        entryCount: 1,
+        force: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunModelRunPrune({
+        maintenance: resolveMaintenanceConfigFromInput({
+          maxEntries: 50,
+          modelRunPruneAfter: false,
+        }),
+        entryCount: 60,
+        force: true,
+      }),
+    ).toBe(false);
   });
 
   it("batches normal entry-count maintenance for production-sized caps", () => {

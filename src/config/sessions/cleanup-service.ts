@@ -370,6 +370,10 @@ async function previewStoreCleanup(params: {
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: Object.keys(previewStore).length,
+    // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
+    // preview caps unconditionally below), so mirror that here: prune stale probes before the
+    // forced cap can evict real sessions in their place.
+    force: true,
   })
     ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
         log: false,
