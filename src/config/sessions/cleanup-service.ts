@@ -30,6 +30,7 @@ import {
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import { loadSessionStore } from "./store.js";
@@ -366,17 +367,18 @@ async function previewStoreCleanup(params: {
         })
       : 0;
   const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
-  const modelRunPruned = pruneStaleModelRunEntries(
-    previewStore,
-    params.maintenance.modelRunPruneAfterMs,
-    {
-      log: false,
-      preserveKeys: preserveSessionKeys,
-      onPruned: ({ key }) => {
-        modelRunPrunedKeys.add(key);
-      },
-    },
-  );
+  const modelRunPruned = shouldRunModelRunPrune({
+    maintenance: params.maintenance,
+    entryCount: Object.keys(previewStore).length,
+  })
+    ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+        onPruned: ({ key }) => {
+          modelRunPrunedKeys.add(key);
+        },
+      })
+    : 0;
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,

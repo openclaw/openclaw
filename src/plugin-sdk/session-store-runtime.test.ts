@@ -145,6 +145,8 @@ describe("session-store-runtime compatibility surface", () => {
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 7 * DAY_MS,
+          modelRunPruneAfterMs: null,
+          modelRunPruneAfterConfigured: true,
           maxEntries: 1,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,

@@ -35,6 +35,7 @@ import {
   capEntryCount,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -442,10 +443,17 @@ export function loadSessionStore(
     let capped = 0;
     if (maintenance.mode === "enforce") {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
-      modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
-        log: false,
-        preserveKeys: preserveSessionKeys,
-      });
+      if (
+        shouldRunModelRunPrune({
+          maintenance,
+          entryCount: beforeCount,
+        })
+      ) {
+        modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+          log: false,
+          preserveKeys: preserveSessionKeys,
+        });
+      }
     }
     if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();

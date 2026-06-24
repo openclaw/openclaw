@@ -8,6 +8,7 @@ import {
   getActiveSessionMaintenanceWarning,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -198,16 +199,17 @@ async function applyEnforcedMaintenance(params: {
     params.operation.activeSessionKey,
   ]);
   const removedSessionFiles = new Map<string, string | undefined>();
-  const modelRunPruned = pruneStaleModelRunEntries(
-    params.operation.store,
-    params.maintenance.modelRunPruneAfterMs,
-    {
-      onPruned: ({ entry }) => {
-        rememberRemovedSessionFile(removedSessionFiles, entry);
-      },
-      preserveKeys: preserveSessionKeys,
-    },
-  );
+  const modelRunPruned = shouldRunModelRunPrune({
+    maintenance: params.maintenance,
+    entryCount: params.beforeCount,
+  })
+    ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
+        onPruned: ({ entry }) => {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+        },
+        preserveKeys: preserveSessionKeys,
+      })
+    : 0;
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);

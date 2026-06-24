@@ -185,6 +185,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         pruneAfterMs: 7 * DAY_MS,
         maxEntries: 500,
         modelRunPruneAfterMs: null,
+        modelRunPruneAfterConfigured: true,
         resetArchiveRetentionMs: null,
         maxDiskBytes: null,
         highWaterBytes: null,

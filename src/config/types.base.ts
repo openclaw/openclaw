@@ -261,7 +261,8 @@ export type SessionMaintenanceConfig = {
   maxEntries?: number;
   /**
    * Retention for gateway model-run probe sessions (`agent:*:explicit:model-run-<uuid>`).
-   * Set `false` to disable model-run-specific cleanup. Default: "24h".
+   * Unset defaults to "24h" but only runs under session-entry cap pressure;
+   * setting a duration opts into unconditional age cleanup, and `false` disables.
    */
   modelRunPruneAfter?: string | number | false;
   /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */

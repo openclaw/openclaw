@@ -42,6 +42,8 @@ export type ResolvedSessionMaintenanceConfig = {
   pruneAfterMs: number;
   maxEntries: number;
   modelRunPruneAfterMs: number | null;
+  /** True when modelRunPruneAfter was explicitly set instead of using the pressure-gated default. */
+  modelRunPruneAfterConfigured: boolean;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -91,7 +93,9 @@ function resolveModelRunPruneAfterMs(maintenance?: SessionMaintenanceConfig): nu
   try {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
-    return DEFAULT_MODEL_RUN_PRUNE_AFTER_MS;
+    // The schema rejects invalid explicit values. Keep direct resolver callers fail-closed
+    // rather than silently enabling the default 24h model-run cleanup.
+    return null;
   }
 }
 
@@ -157,6 +161,7 @@ export function resolveMaintenanceConfigFromInput(
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: resolveModelRunPruneAfterMs(maintenance),
+    modelRunPruneAfterConfigured: maintenance?.modelRunPruneAfter !== undefined,
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
@@ -189,16 +194,39 @@ export function shouldRunSessionEntryMaintenance(params: {
   return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
+export function shouldRunModelRunPrune(params: {
+  maintenance: Pick<
+    ResolvedSessionMaintenanceConfig,
+    "maxEntries" | "modelRunPruneAfterConfigured" | "modelRunPruneAfterMs"
+  >;
+  entryCount: number;
+}): boolean {
+  if (params.maintenance.modelRunPruneAfterMs == null) {
+    return false;
+  }
+  if (params.maintenance.modelRunPruneAfterConfigured) {
+    return true;
+  }
+  return shouldRunSessionEntryMaintenance({
+    entryCount: params.entryCount,
+    maxEntries: params.maintenance.maxEntries,
+  });
+}
+
 export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
-  if (
-    !/^agent:[^:]+:explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+  const match =
+    /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(
       sessionKey,
-    )
-  ) {
+    );
+  if (!match) {
+    return false;
+  }
+  const agentId = match[1];
+  if (!agentId || /\s/.test(agentId)) {
     return false;
   }
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed || !parsed.agentId.trim()) {
+  if (!parsed || parsed.agentId !== agentId.toLowerCase()) {
     return false;
   }
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
