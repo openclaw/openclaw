@@ -849,7 +849,7 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("qa-smoke-profile)");
     expect(runStep.run).toContain("--qa-profile smoke-ci");
     expect(runStep.run).toContain('--category "$QA_SMOKE_CATEGORY"');
-    expect(runStep.run).toContain("--allow-failures");
+    expect(runStep.run).not.toContain("--allow-failures");
     expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
     expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-profile'");

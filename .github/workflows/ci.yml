@@ -953,8 +953,7 @@ jobs:
                 --repo-root . \
                 --qa-profile smoke-ci \
                 --category "$QA_SMOKE_CATEGORY" \
-                --output-dir "$output_dir" \
-                --allow-failures
+                --output-dir "$output_dir"
               echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
               ;;
             bun-launcher)
