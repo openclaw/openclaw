@@ -15,6 +15,7 @@ export interface DoctorLintRunOptions {
   readonly checks?: readonly HealthCheck[];
   readonly skipIds?: ReadonlySet<string> | readonly string[];
   readonly onlyIds?: ReadonlySet<string> | readonly string[];
+  readonly includeAllChecks?: boolean;
 }
 
 export interface DoctorLintRunResult {
@@ -32,18 +33,16 @@ export async function runDoctorLintChecks(
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
   const allIds = new Set(all.map((check) => check.id));
+  const includeDefaultDisabled = opts.includeAllChecks === true;
 
   const selected = all.filter((c) => {
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
-    if (only.size === 0 && isDefaultDisabled(c)) {
+    if (only.size === 0 && !includeDefaultDisabled && isDefaultDisabled(c)) {
       return false;
     }
     if (skip.has(c.id)) {
-      return false;
-    }
-    if (only.size === 0 && isDefaultDisabled(c)) {
       return false;
     }
     return true;
