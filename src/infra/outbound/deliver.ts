@@ -358,6 +358,7 @@ function createPluginHandler(
     replyToIdSource?: "explicit" | "implicit";
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    forceDocument?: boolean;
     formatting?: OutboundDeliveryFormattingOptions;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,

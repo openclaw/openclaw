@@ -44,6 +44,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },

@@ -95,6 +95,7 @@ describe("runMessageAction send validation", () => {
       action: "send",
       params: {
         message: "hello from codex",
+        forceDocument: true,
       },
       toolContext: {
         currentChannelProvider: "webchat",
@@ -115,6 +116,7 @@ describe("runMessageAction send validation", () => {
         sourceReplySink: "internal-ui",
         sourceReply: {
           text: "hello from codex",
+          forceDocument: true,
         },
       },
     });
@@ -136,6 +138,7 @@ describe("runMessageAction send validation", () => {
       sourceReplySink: "internal-ui",
       sourceReply: {
         text: "hello from codex",
+        forceDocument: true,
       },
       message: "hello from codex",
       dryRun: false,

@@ -78,6 +78,7 @@ function createTestContext(): {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
       deterministicApprovalPromptPending: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
@@ -2489,6 +2490,7 @@ describe("messaging tool media URL tracking", () => {
           sourceReply: {
             text: "visible in tui",
             mediaUrls: ["file:///tmp/reply.png"],
+            forceDocument: true,
             channelData: { source: "tui" },
           },
         },
@@ -2500,6 +2502,7 @@ describe("messaging tool media URL tracking", () => {
       {
         text: "visible in tui",
         mediaUrls: ["file:///tmp/reply.png"],
+        forceDocument: true,
         channelData: { source: "tui" },
         idempotencyKey: "stable-source-reply",
       },

@@ -244,6 +244,7 @@ export type AgentRuntimeReplyPayload = {
   replyToTag?: boolean;
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   spokenText?: string;
   ttsSupplement?: {
     spokenText: string;

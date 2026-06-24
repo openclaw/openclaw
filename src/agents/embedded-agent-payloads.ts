@@ -6,6 +6,8 @@ export type BlockReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
+  /** Send media as a document/file where supported, avoiding image/video recompression. */
+  forceDocument?: boolean;
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   isReasoning?: boolean;

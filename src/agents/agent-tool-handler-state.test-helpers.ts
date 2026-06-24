@@ -22,6 +22,7 @@ export function createBaseToolHandlerState() {
     pendingMessagingMediaUrls: new Map<string, string[]>(),
     pendingToolMediaUrls: [] as string[],
     pendingToolAudioAsVoice: false,
+    pendingToolForceDocument: false,
     pendingToolTrustedLocalMedia: false,
     deterministicApprovalPromptPending: false,
     toolExecutionSinceLastBlockReply: false,
