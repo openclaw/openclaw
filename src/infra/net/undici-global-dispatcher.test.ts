@@ -143,6 +143,7 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+  matchesNoProxy: vi.fn(() => false),
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
   resolveEnvHttpProxyUrl: vi.fn(() => undefined),
 }));
