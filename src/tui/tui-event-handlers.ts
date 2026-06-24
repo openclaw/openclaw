@@ -114,6 +114,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     pendingHistoryRefreshCanFlushAfterDisplayableFinal = false;
   };
 
+  // A plain deferral (e.g. session.message) is dropped if the run ends with a displayable
+  // final, so an uncorrelated history rebuild cannot wipe a just-rendered answer; only
+  // silent finals flush it. `afterDisplayableFinal: "immediate"` (reconnect/optimistic
+  // reconcile) must reload even after a displayable final, so it sets a sticky flush flag
+  // that survives until clearPendingHistoryRefresh resets it.
   const deferHistoryRefresh = (opts?: { afterDisplayableFinal?: "immediate" }) => {
     pendingHistoryRefresh = true;
     pendingHistoryRefreshCanFlushAfterDisplayableFinal =
