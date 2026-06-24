@@ -435,7 +435,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     } catch (err) {
       log.debug("memory embeddings: batch failed", {
         provider: provider.id,
-        error: String(err),
+        error: formatErrorMessage(err),
       });
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
