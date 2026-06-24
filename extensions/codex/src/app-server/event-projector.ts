@@ -18,6 +18,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
+  type ToolHookRunContext,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -65,6 +66,7 @@ export type CodexAppServerToolTelemetry = {
 
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
+  toolHookContext?: ToolHookRunContext;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
@@ -1374,6 +1376,9 @@ export class CodexAppServerEventProjector {
       agentId: this.params.agentId,
       sessionId: this.params.sessionId,
       sessionKey: this.params.sessionKey,
+      // The attempt boundary resolves aliases and sandbox session identity once.
+      // Keep that canonical snapshot authoritative over optional raw projector params.
+      ...this.options.toolHookContext,
       startArgs: itemToolArgs(item) ?? {},
       ...(result !== undefined ? { result } : {}),
       ...(error ? { error } : {}),

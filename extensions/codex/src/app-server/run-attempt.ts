@@ -38,6 +38,7 @@ import {
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
+  type ToolHookRunContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -248,6 +249,7 @@ import {
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
+import { buildCodexToolHookRunContext } from "./tool-hook-context.js";
 import {
   inferCodexDynamicToolMeta,
   resolveCodexToolProgressDetailMode,
@@ -717,6 +719,14 @@ export async function runCodexAppServerAttempt(
     });
   }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
+  const toolHookRunContext = buildCodexToolHookRunContext({
+    attempt: params,
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: sandboxSessionKey,
+    runId: params.runId,
+    channelId: hookChannelId,
+  });
   preDynamicStartupStages.mark("context-engine-support");
   const preDynamicSummary = preDynamicStartupStages.snapshot();
   if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary)) {
@@ -832,12 +842,8 @@ export async function runCodexAppServerAttempt(
     }),
     directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
-      agentId: sessionAgentId,
+      ...toolHookRunContext,
       config: params.config,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      runId: params.runId,
-      channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
@@ -1444,6 +1450,7 @@ export async function runCodexAppServerAttempt(
       config: params.config,
       runId: params.runId,
       channelId: hookChannelId,
+      toolHookContext: toolHookRunContext,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
@@ -2150,6 +2157,7 @@ export async function runCodexAppServerAttempt(
             method: request.method,
             params: request.params,
             paramsForRun: params,
+            toolHookContext: toolHookRunContext,
             threadId: thread.threadId,
             turnId,
             nativeHookRelay,
@@ -2761,6 +2769,7 @@ export async function runCodexAppServerAttempt(
       nativePostToolUseRelayEnabled:
         nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      toolHookContext: toolHookRunContext,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
     },
@@ -3430,6 +3439,7 @@ function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
+  toolHookContext: ToolHookRunContext;
   threadId: string;
   turnId: string;
   nativeHookRelay?: NativeHookRelayRegistrationHandle;
@@ -3443,6 +3453,7 @@ function handleApprovalRequest(params: {
     method: params.method,
     requestParams: params.params,
     paramsForRun: params.paramsForRun,
+    toolHookContext: params.toolHookContext,
     threadId: params.threadId,
     turnId: params.turnId,
     nativeHookRelay: params.nativeHookRelay,

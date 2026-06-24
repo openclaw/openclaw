@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
+import { buildAgentHookContextOriginFields } from "../plugins/hook-agent-context.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -470,8 +471,12 @@ export function createOpenClawCodingTools(options?: {
   currentMessagingTarget?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
+  /** Transport-native conversation id exposed to tool hooks when available. */
+  chatId?: string;
   /** Channel-owned sender/chat metadata exposed to subprocess environments. */
   channelContext?: PluginHookChannelContext;
+  /** Channel-owned sender/chat metadata exposed only to plugin tool hooks. */
+  hookChannelContext?: PluginHookChannelContext;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -1187,7 +1192,8 @@ export function createOpenClawCodingTools(options?: {
   );
   options?.recordToolPrepStage?.("schema-normalization");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
-  const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
+  const turnSourceTo =
+    options?.currentMessagingTarget ?? options?.messageTo ?? options?.currentChannelId;
   const hookContext = {
     agentId,
     ...(options?.config ? { config: options.config } : {}),
@@ -1200,7 +1206,19 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
-    channelId: options?.hookChannelId ?? options?.currentChannelId,
+    jobId: options?.jobId,
+    trigger: options?.trigger,
+    ...buildAgentHookContextOriginFields({
+      sessionKey: options?.sessionKey,
+      messageChannel: options?.messageChannel,
+      messageProvider: options?.toolPolicyMessageProvider ?? options?.messageProvider,
+      currentChannelId: options?.hookChannelId ?? options?.currentChannelId,
+      messageTo: options?.currentMessagingTarget ?? options?.messageTo,
+      trigger: options?.trigger,
+      senderId: options?.senderId,
+      chatId: options?.chatId,
+      channelContext: options?.hookChannelContext ?? options?.channelContext,
+    }),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),

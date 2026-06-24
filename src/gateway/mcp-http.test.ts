@@ -47,6 +47,16 @@ type BeforeToolCallHookInput = {
     agentId?: string;
     config?: unknown;
     sessionKey?: string;
+    sessionId?: string;
+    messageProvider?: string;
+    channel?: string;
+    channelId?: string;
+    chatId?: string;
+    senderId?: string;
+    channelContext?: {
+      sender?: { id?: string };
+      chat?: { id?: string };
+    };
   };
   signal?: unknown;
 };
@@ -1437,6 +1447,37 @@ describe("mcp loopback server", () => {
     expect(hookInput.signal).toBeInstanceOf(AbortSignal);
     expect(execute).not.toHaveBeenCalled();
     expectMcpResultText(payload, "blocked by hook", true);
+  });
+
+  it("passes canonical prefixed channel origin into loopback before-tool hooks", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const response = await sendLoopbackToolCall({
+      token: runtime.ownerToken,
+      name: "message",
+      args: { body: "hello" },
+      headers: {
+        "x-session-key": "agent:main:main",
+        "x-openclaw-session-id": "session-origin-1",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-current-channel-id": "telegram:chat123",
+      },
+    });
+
+    expectMcpResultText(await readOkMcpPayload(response), "EXECUTED", false);
+    expect(getBeforeToolCallHookInput(0).ctx).toEqual({
+      agentId: "main",
+      config: { session: { mainKey: "main" } },
+      sessionKey: "agent:main:main",
+      sessionId: "session-origin-1",
+      messageProvider: "telegram",
+      channel: "telegram",
+      channelId: "chat123",
+    });
   });
 
   it("forwards the request abort signal to loopback tool execution", async () => {

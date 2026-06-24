@@ -10,6 +10,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { ToolHookRunContext } from "./agent-tools.before-tool-call.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
@@ -35,6 +36,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
   hookRunner?: HookRunner;
+  /** Internal run context projected onto before/after tool hook contracts. */
+  toolHookContext?: ToolHookRunContext;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;

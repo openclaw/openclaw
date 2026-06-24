@@ -12,7 +12,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  buildApprovalResponse,
+  handleCodexAppServerApprovalRequest as handleCodexAppServerApprovalRequestImpl,
+} from "./approval-bridge.js";
+import { buildCodexToolHookRunContext } from "./tool-hook-context.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -41,6 +45,20 @@ const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
 );
 const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWithConfiguredModel);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
+
+type ApprovalRequestParams = Parameters<typeof handleCodexAppServerApprovalRequestImpl>[0];
+
+function handleCodexAppServerApprovalRequest(
+  params: Omit<ApprovalRequestParams, "toolHookContext"> & {
+    toolHookContext?: ApprovalRequestParams["toolHookContext"];
+  },
+) {
+  return handleCodexAppServerApprovalRequestImpl({
+    ...params,
+    toolHookContext:
+      params.toolHookContext ?? buildCodexToolHookRunContext({ attempt: params.paramsForRun }),
+  });
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -243,6 +261,8 @@ describe("Codex app-server approval bridge", () => {
       ctx: {
         agentId: "main",
         sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+        channel: "telegram",
         channelId: "chat-1",
       },
     });
@@ -1164,11 +1184,18 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it("normalizes prefixed channel targets for OpenClaw tool policy context", async () => {
+  it("uses the caller-resolved hook context for approval fallback policy", async () => {
     const params = createParams();
-    params.messageChannel = "telegram";
-    params.messageProvider = "telegram";
-    params.currentChannelId = "telegram:-100123";
+    params.agentId = "raw-agent";
+    params.sessionId = "raw-session";
+    params.sessionKey = "agent:raw:session";
+    params.runId = "raw-run";
+    params.messageChannel = "discord";
+    params.messageProvider = "discord";
+    params.currentChannelId = "discord:raw-target";
+    params.jobId = "raw-job";
+    params.senderId = "raw-user";
+    params.chatId = "raw-chat";
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-prefixed", status: "accepted" })
       .mockResolvedValueOnce({ id: "plugin:approval-prefixed", decision: "allow-once" });
@@ -1182,6 +1209,27 @@ describe("Codex app-server approval bridge", () => {
         command: "pnpm test extensions/codex/src/app-server",
       },
       paramsForRun: params,
+      toolHookContext: {
+        agentId: "resolved-agent",
+        sessionId: "resolved-session",
+        sessionKey: "agent:resolved:session",
+        runId: "resolved-run",
+        jobId: "resolved-job",
+        trigger: "user",
+        messageProvider: "telegram-voice",
+        channel: "telegram",
+        channelId: "-100123",
+        chatId: "native-chat-1",
+        senderId: "user-1",
+        channelContext: {
+          sender: {
+            id: "user-1",
+            displayName: "Ada",
+            providerUserId: "provider-user-1",
+          },
+          chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+        },
+      },
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -1189,11 +1237,29 @@ describe("Codex app-server approval bridge", () => {
     expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
+          agentId: "resolved-agent",
+          sessionId: "resolved-session",
+          sessionKey: "agent:resolved:session",
+          runId: "resolved-run",
+          jobId: "resolved-job",
+          trigger: "user",
+          messageProvider: "telegram-voice",
+          channel: "telegram",
           channelId: "-100123",
+          chatId: "native-chat-1",
+          senderId: "user-1",
+          channelContext: {
+            sender: {
+              id: "user-1",
+              displayName: "Ada",
+              providerUserId: "provider-user-1",
+            },
+            chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+          },
         }),
       }),
     );
-    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+    expect(gatewayRequestPayload().turnSourceTo).toBe("discord:raw-target");
   });
 
   it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {

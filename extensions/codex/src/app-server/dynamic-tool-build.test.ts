@@ -944,8 +944,16 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
-    params.currentChannelId = "D123";
+    params.messageChannel = "discord";
+    params.messageProvider = "discord-voice";
+    params.currentChannelId = "discord:D123";
     params.currentMessagingTarget = "user:U123";
+    params.chatId = "chat-123";
+    params.senderId = "user-123";
+    params.channelContext = {
+      sender: { id: "user-123" },
+      chat: { id: "chat-123" },
+    };
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
@@ -956,9 +964,19 @@ describe("Codex app-server dynamic tool build", () => {
     await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
     expect(factoryOptions[0]).toMatchObject({
-      currentChannelId: "D123",
+      messageChannel: "discord",
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      currentChannelId: "discord:D123",
       currentMessagingTarget: "user:U123",
+      chatId: "chat-123",
+      senderId: "user-123",
+      hookChannelContext: {
+        sender: { id: "user-123" },
+        chat: { id: "chat-123" },
+      },
     });
+    expect((factoryOptions[0] as { channelContext?: unknown }).channelContext).toBeUndefined();
   });
 
   it("passes the approval reviewer device into Codex dynamic tools", async () => {

@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextOriginFields,
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -409,6 +410,25 @@ export async function runCopilotAttempt(
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
   };
+  const toolHookRunContext = {
+    runId: input.runId,
+    jobId: input.jobId,
+    agentId: sessionAgentId,
+    sessionKey: sandboxSessionKey,
+    sessionId: input.sessionId,
+    trigger: input.trigger,
+    ...buildAgentHookContextOriginFields({
+      sessionKey: sandboxSessionKey,
+      messageChannel: input.messageChannel,
+      messageProvider: input.messageProvider ?? input.messageChannel,
+      currentChannelId: input.currentChannelId,
+      messageTo: input.currentMessagingTarget ?? input.messageTo,
+      trigger: input.trigger,
+      senderId: input.senderId,
+      chatId: input.chatId,
+      channelContext: input.channelContext,
+    }),
+  };
   const finishAttempt = (result: AgentHarnessAttemptResult) =>
     finalizeCopilotAttempt(input, result, hookContext, attemptStartedAt, now);
 
@@ -626,7 +646,7 @@ export async function runCopilotAttempt(
         allowModelTools: poolAcquire.provider.mode === "byok",
         modelProvider: modelRef.provider,
         modelId: modelRef.id,
-        agentId: readString(params.agentId) ?? "copilot",
+        agentId: sessionAgentId,
         sessionId: readString(input.sessionId) ?? "copilot-session",
         sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
         agentDir: readString(input.agentDir),
@@ -652,11 +672,7 @@ export async function runCopilotAttempt(
           runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId,
-            runId: input.runId,
-            agentId: sessionAgentId,
-            sessionId: input.sessionId,
-            sessionKey: sandboxSessionKey,
-            channelId: hookContext.channelId,
+            ...toolHookRunContext,
             startArgs: args,
             ...(result !== undefined ? { result } : {}),
             ...(error ? { error } : {}),

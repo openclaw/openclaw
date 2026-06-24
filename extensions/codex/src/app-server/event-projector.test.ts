@@ -2587,15 +2587,36 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("emits after_tool_call observations for Codex-native tool item completions", async () => {
+  it("keeps resolved hook identity authoritative for Codex-native tool completions", async () => {
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
-    const projector = await createProjector({
+    const projectorParams = {
       ...(await createParams()),
-      agentId: "main",
-      sessionKey: "agent:main:session-1",
+      agentId: "raw-agent",
+      sessionId: "raw-session",
+      sessionKey: "agent:raw:session-1",
+      runId: "raw-run",
+    };
+    const projector = await createProjector(projectorParams, {
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "discord-voice",
+        channel: "discord",
+        chatId: "channel-1",
+        senderId: "user-1",
+        channelId: "channel-1",
+        channelContext: {
+          sender: { id: "user-1" },
+          chat: { id: "channel-1" },
+        },
+      },
     });
 
     await projector.handleNotification(
@@ -2652,6 +2673,17 @@ describe("CodexAppServerEventProjector", () => {
     expect(context.sessionId).toBe("session-1");
     expect(context.sessionKey).toBe("agent:main:session-1");
     expect(context.runId).toBe("run-1");
+    expect(context.jobId).toBe("job-1");
+    expect(context.trigger).toBe("user");
+    expect(context.messageProvider).toBe("discord-voice");
+    expect(context.channel).toBe("discord");
+    expect(context.chatId).toBe("channel-1");
+    expect(context.senderId).toBe("user-1");
+    expect(context.channelId).toBe("channel-1");
+    expect(context.channelContext).toEqual({
+      sender: { id: "user-1" },
+      chat: { id: "channel-1" },
+    });
     expect(context.toolName).toBe("bash");
     expect(context.toolCallId).toBe("cmd-observed");
   });

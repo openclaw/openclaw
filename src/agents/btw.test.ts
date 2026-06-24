@@ -629,6 +629,11 @@ describe("runBtwSideQuestion", () => {
       senderName: "Rosita",
       senderUsername: "rosita",
       senderE164: "+15550001",
+      chatId: "native-chat-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+      },
     });
 
     expect(result).toEqual({ text: "Codex side answer." });
@@ -653,6 +658,11 @@ describe("runBtwSideQuestion", () => {
           senderName?: string;
           senderUsername?: string;
           senderE164?: string;
+          chatId?: string;
+          channelContext?: {
+            sender?: Record<string, unknown>;
+            chat?: Record<string, unknown>;
+          };
           toolsAllow?: string[];
         },
       ]
@@ -675,6 +685,11 @@ describe("runBtwSideQuestion", () => {
       senderName: "Rosita",
       senderUsername: "rosita",
       senderE164: "+15550001",
+      chatId: "native-chat-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+      },
     });
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,

@@ -1,9 +1,6 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import {
-  onAgentEvent,
-  type AgentEventPayload,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -607,6 +604,21 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     } finally {
       unsubscribeDiagnostics();
     }
+  });
+
+  it("prefers the current messaging target for hook channel fallback", () => {
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.messageTo = "telegram:stale-target";
+    params.currentMessagingTarget = "telegram:current-target";
+
+    expect(testing.resolveCodexAppServerHookChannelId(params, "agent:main:session-1")).toBe(
+      "current-target",
+    );
   });
 
   it("passes normalized channel context to app-server dynamic tool result hooks", async () => {

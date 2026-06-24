@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
+  buildAgentHookContextOriginFields,
   resolveAgentHookChannelId,
 } from "./hook-agent-context.js";
 
@@ -133,5 +134,65 @@ describe("buildAgentHookContextIdentityFields", () => {
         chatId: "chat-1",
       }),
     ).toEqual({});
+  });
+});
+
+describe("buildAgentHookContextOriginFields", () => {
+  it("infers a canonical channel while preserving native chat identity", () => {
+    expect(
+      buildAgentHookContextOriginFields({
+        sessionKey: "agent:main:main",
+        messageProvider: "discord-voice",
+        currentChannelId: "discord:1472750640760623226",
+        trigger: "user",
+        channelContext: {
+          sender: { id: "user-123" },
+          chat: { id: "native-chat-1" },
+        },
+      }),
+    ).toEqual({
+      channel: "discord",
+      messageProvider: "discord-voice",
+      channelId: "1472750640760623226",
+      chatId: "native-chat-1",
+      senderId: "user-123",
+      channelContext: {
+        sender: { id: "user-123" },
+        chat: { id: "native-chat-1" },
+      },
+    });
+  });
+
+  it("does not infer native chat identity from a routing target", () => {
+    expect(
+      buildAgentHookContextOriginFields({
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        currentChannelId: "telegram:-100123:topic:7",
+        trigger: "user",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      messageProvider: "telegram",
+      channelId: "-100123:topic:7",
+    });
+  });
+
+  it("keeps routing fields but omits requester identity for system triggers", () => {
+    expect(
+      buildAgentHookContextOriginFields({
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        currentChannelId: "telegram:-100123",
+        trigger: "cron",
+        senderId: "stale-user",
+        chatId: "stale-chat",
+        channelContext: { sender: { id: "stale-user" }, chat: { id: "stale-chat" } },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      messageProvider: "telegram",
+      channelId: "-100123",
+    });
   });
 });

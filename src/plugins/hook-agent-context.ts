@@ -38,18 +38,48 @@ function stripConversationPrefix(
   return text;
 }
 
+function inferNarrowProviderChannel(params: {
+  messageProvider?: string | null;
+  currentChannelId?: string | null;
+  messageTo?: string | null;
+}): string | undefined {
+  const providerKey = normalizeKey(normalizeOptionalString(params.messageProvider));
+  if (!providerKey) {
+    return undefined;
+  }
+  for (const value of [params.currentChannelId, params.messageTo]) {
+    const text = normalizeOptionalString(value);
+    const separatorIndex = text?.indexOf(":") ?? -1;
+    if (!text || separatorIndex <= 0) {
+      continue;
+    }
+    const prefix = normalizeOptionalString(text.slice(0, separatorIndex));
+    const prefixKey = normalizeKey(prefix);
+    if (prefix && providerKey.startsWith(`${prefixKey}-`)) {
+      return prefix;
+    }
+  }
+  return undefined;
+}
+
 function resolveAgentHookChannel(params: {
   messageChannel?: string | null;
   messageProvider?: string | null;
+  currentChannelId?: string | null;
+  messageTo?: string | null;
 }): string | undefined {
   const messageChannel = normalizeOptionalString(params.messageChannel);
   const provider = normalizeOptionalString(params.messageProvider);
+  const inferredProviderChannel = inferNarrowProviderChannel(params);
   if (!messageChannel) {
-    return provider;
+    return inferredProviderChannel ?? provider;
   }
 
   const separatorIndex = messageChannel.indexOf(":");
   if (separatorIndex === -1) {
+    if (inferredProviderChannel && normalizeKey(messageChannel) === normalizeKey(provider)) {
+      return inferredProviderChannel;
+    }
     return messageChannel;
   }
 
@@ -61,7 +91,7 @@ function resolveAgentHookChannel(params: {
     TARGET_PREFIXES.has(normalizeKey(prefix)) ||
     normalizeKey(prefix) === normalizeKey(provider)
   ) {
-    return provider;
+    return inferredProviderChannel ?? provider;
   }
   return prefix;
 }
@@ -76,14 +106,19 @@ export function resolveAgentHookChannelId(params: {
 }): string | undefined {
   const provider = normalizeOptionalString(params.messageProvider);
   const messageChannel = normalizeOptionalString(params.messageChannel);
+  const channel = resolveAgentHookChannel(params);
   const parsed = parseRawSessionConversationRef(params.sessionKey);
   if (parsed?.rawId) {
     return parsed.rawId;
   }
 
   const metadataChannel =
-    stripConversationPrefix(params.currentChannelId ?? undefined, provider, messageChannel) ??
-    stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel);
+    stripConversationPrefix(
+      params.currentChannelId ?? undefined,
+      provider,
+      messageChannel,
+      channel,
+    ) ?? stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel, channel);
   if (metadataChannel && normalizeKey(metadataChannel) !== normalizeKey(provider)) {
     return metadataChannel;
   }
@@ -154,5 +189,40 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(senderId ? { senderId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
+  };
+}
+
+/** Builds canonical channel and requester fields shared by agent and tool hooks. */
+export function buildAgentHookContextOriginFields(params: {
+  sessionKey?: string | null;
+  messageChannel?: string | null;
+  messageProvider?: string | null;
+  currentChannelId?: string | null;
+  messageTo?: string | null;
+  trigger?: string | null;
+  senderId?: string | null;
+  chatId?: string | null;
+  channelContext?: PluginHookChannelContext;
+}): Pick<
+  PluginHookAgentContext,
+  "channel" | "messageProvider" | "channelId" | "chatId" | "senderId" | "channelContext"
+> {
+  const channelFields = buildAgentHookContextChannelFields({
+    sessionKey: params.sessionKey,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+    currentChannelId: params.currentChannelId,
+    messageTo: params.messageTo,
+  });
+  return {
+    ...(channelFields.channel ? { channel: channelFields.channel } : {}),
+    ...(channelFields.messageProvider ? { messageProvider: channelFields.messageProvider } : {}),
+    ...(channelFields.channelId ? { channelId: channelFields.channelId } : {}),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId ?? params.channelContext?.sender?.id,
+      chatId: params.chatId ?? params.channelContext?.chat?.id,
+      channelContext: params.channelContext,
+    }),
   };
 }

@@ -6,25 +6,26 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import {
+  buildPluginHookToolContext,
+  consumeAdjustedParamsForToolCall,
+  type ToolHookRunContext,
+} from "../agent-tools.before-tool-call.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
 
 /** Runs best-effort after-tool-call hooks for a completed tool invocation. */
-export async function runAgentHarnessAfterToolCallHook(params: {
-  toolName: string;
-  toolCallId: string;
-  runId?: string;
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  channelId?: string;
-  startArgs: Record<string, unknown>;
-  result?: unknown;
-  error?: string;
-  startedAt?: number;
-}): Promise<void> {
+export async function runAgentHarnessAfterToolCallHook(
+  params: ToolHookRunContext & {
+    toolName: string;
+    toolCallId: string;
+    startArgs: Record<string, unknown>;
+    result?: unknown;
+    error?: string;
+    startedAt?: number;
+  },
+): Promise<void> {
   const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
   // Hooks should see adjusted tool params when before_tool_call rewrote them.
   const resolvedArgs =
@@ -47,15 +48,11 @@ export async function runAgentHarnessAfterToolCallHook(params: {
         ...(params.error ? { error: params.error } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },
-      {
+      buildPluginHookToolContext({
         toolName: params.toolName,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
-        ...(params.channelId ? { channelId: params.channelId } : {}),
         toolCallId: params.toolCallId,
-      },
+        ctx: params,
+      }),
     );
   } catch (error) {
     log.warn(`after_tool_call hook failed: tool=${params.toolName} error=${String(error)}`);

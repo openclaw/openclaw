@@ -30,9 +30,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -95,7 +93,15 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
+    params.messageProvider = "discord-voice";
     params.currentChannelId = "channel:target";
+    params.trigger = "user";
+    params.senderId = "user-1";
+    params.chatId = "native-target";
+    params.channelContext = {
+      sender: { id: "user-1", providerUserId: "discord-user-1" },
+      chat: { id: "native-target", guildId: "guild-1" },
+    };
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
@@ -135,6 +141,22 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       autoApprove: true,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        trigger: "user",
+        messageProvider: "discord-voice",
+        channel: "discord",
+        channelId: "target",
+        chatId: "native-target",
+        senderId: "user-1",
+        channelContext: {
+          sender: { id: "user-1", providerUserId: "discord-user-1" },
+          chat: { id: "native-target", guildId: "guild-1" },
+        },
+      },
     });
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId,

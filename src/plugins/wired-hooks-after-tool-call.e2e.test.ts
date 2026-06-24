@@ -29,6 +29,19 @@ function createToolHandlerCtx(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  toolHookContext?: {
+    jobId?: string;
+    trigger?: string;
+    messageProvider?: string;
+    channel?: string;
+    chatId?: string;
+    senderId?: string;
+    channelId?: string;
+    channelContext?: {
+      sender?: { id?: string; displayName?: string };
+      chat?: { id?: string };
+    };
+  };
   onBlockReplyFlush?: unknown;
 }) {
   return {
@@ -38,6 +51,7 @@ function createToolHandlerCtx(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      toolHookContext: params.toolHookContext,
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
     hookRunner: hookMocks.runner,
@@ -74,7 +88,15 @@ function getAfterToolCallCall(index = 0) {
           sessionKey?: string;
           sessionId?: string;
           runId?: string;
+          jobId?: string;
+          trigger?: string;
+          messageProvider?: string;
+          channel?: string;
+          chatId?: string;
+          senderId?: string;
           toolCallId?: string;
+          channelId?: string;
+          channelContext?: unknown;
         }
       | undefined,
   };
@@ -126,6 +148,19 @@ describe("after_tool_call hook wiring", () => {
       agentId: "main",
       sessionKey: "test-session",
       sessionId: "test-ephemeral-session",
+      toolHookContext: {
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      },
     });
 
     await handleToolExecutionStart(
@@ -166,6 +201,17 @@ describe("after_tool_call hook wiring", () => {
         sessionKey: "test-session",
         sessionId: "test-ephemeral-session",
         runId: "test-run-1",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
         toolCallId: "wired-hook-call-1",
       },
     });

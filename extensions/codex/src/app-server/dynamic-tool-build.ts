@@ -125,7 +125,7 @@ export function resolveCodexAppServerHookChannelId(
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     currentChannelId: params.currentChannelId,
-    messageTo: params.messageTo,
+    messageTo: params.currentMessagingTarget ?? params.messageTo,
   }).channelId;
 }
 
@@ -239,6 +239,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       elevated: params.bashElevated,
     },
     sandbox: input.sandbox,
+    messageChannel: params.messageChannel,
     messageProvider: resolveCodexMessageToolProvider(params),
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
     agentAccountId: params.agentAccountId,
@@ -249,6 +250,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     groupSpace: params.groupSpace,
     spawnedBy: params.spawnedBy,
     senderId: params.senderId,
+    hookChannelContext: params.channelContext,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
@@ -290,6 +292,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
+    chatId: params.chatId,
     currentMessagingTarget: params.currentMessagingTarget,
     hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
     currentThreadTs: params.currentThreadTs,

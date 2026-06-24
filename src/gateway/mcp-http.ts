@@ -11,6 +11,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { buildAgentHookContextOriginFields } from "../plugins/hook-agent-context.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -273,6 +274,12 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 agentId: scopedTools.agentId,
                 config: cfg,
                 sessionKey: requestContext.sessionKey,
+                ...(requestContext.sessionId ? { sessionId: requestContext.sessionId } : {}),
+                ...buildAgentHookContextOriginFields({
+                  sessionKey: requestContext.sessionKey,
+                  messageProvider: requestContext.messageProvider,
+                  currentChannelId: requestContext.currentChannelId,
+                }),
               },
               signal: requestAbort.signal,
               onToolCallPrepared: cliCaptureHandle

@@ -340,7 +340,22 @@ describe("runCopilotAttempt", () => {
       return { sdkTools: [], sourceTools: [] };
     });
 
-    await runCopilotAttempt(makeParams(), {
+    const params = makeParams();
+    Object.assign(params, {
+      jobId: "job-1",
+      trigger: "user",
+      messageChannel: "slack",
+      messageProvider: "slack-voice",
+      currentChannelId: "C123",
+      chatId: "C123",
+      senderId: "U123",
+      channelContext: {
+        sender: { id: "U123", displayName: "Ada" },
+        chat: { id: "C123" },
+      },
+    });
+
+    await runCopilotAttempt(params, {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -387,7 +402,21 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      }),
     );
   });
 
@@ -1285,6 +1314,32 @@ describe("runCopilotAttempt", () => {
       ((sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as { tools?: unknown[] })
         .tools,
     ).toBe(sdkTools);
+  });
+
+  it("passes the session-resolved agent id to the tool bridge", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+
+    await runCopilotAttempt(
+      makeParams({
+        agentId: undefined,
+        sessionKey: "agent:beta:main",
+        config: {
+          agents: {
+            list: [{ id: "main" }, { id: "beta" }],
+          },
+        } as never,
+      }),
+      { createToolBridge, pool },
+    );
+
+    expect(createToolBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "beta",
+        sessionKey: "agent:beta:main",
+      }),
+    );
   });
 
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {

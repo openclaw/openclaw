@@ -1637,6 +1637,19 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       channelId: "telegram",
+      toolHookContext: {
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "telegram-voice",
+        channel: "telegram",
+        chatId: "chat-1",
+        senderId: "user-1",
+        channelId: "telegram",
+        channelContext: {
+          sender: { id: "user-1" },
+          chat: { id: "chat-1" },
+        },
+      },
     });
 
     const response = await invokeNativeHookRelay({
@@ -1674,7 +1687,17 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      jobId: "job-1",
+      trigger: "user",
+      messageProvider: "telegram-voice",
+      channel: "telegram",
+      chatId: "chat-1",
+      senderId: "user-1",
       channelId: "telegram",
+      channelContext: {
+        sender: { id: "user-1" },
+        chat: { id: "chat-1" },
+      },
       toolName: "exec",
       toolCallId: "native-call-1",
     });
@@ -1695,6 +1718,19 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       channelId: "telegram",
+      toolHookContext: {
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "telegram-voice",
+        channel: "telegram",
+        chatId: "chat-1",
+        senderId: "user-1",
+        channelId: "telegram",
+        channelContext: {
+          sender: { id: "user-1" },
+          chat: { id: "chat-1" },
+        },
+      },
     });
 
     const response = await invokeNativeHookRelay({
@@ -2243,6 +2279,19 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       channelId: "telegram",
+      toolHookContext: {
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "telegram-voice",
+        channel: "telegram",
+        chatId: "chat-1",
+        senderId: "user-1",
+        channelId: "telegram",
+        channelContext: {
+          sender: { id: "user-1" },
+          chat: { id: "chat-1" },
+        },
+      },
     });
 
     const response = await invokeNativeHookRelay({
@@ -2273,7 +2322,17 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      jobId: "job-1",
+      trigger: "user",
+      messageProvider: "telegram-voice",
+      channel: "telegram",
+      chatId: "chat-1",
+      senderId: "user-1",
       channelId: "telegram",
+      channelContext: {
+        sender: { id: "user-1" },
+        chat: { id: "chat-1" },
+      },
       toolName: "exec",
       toolCallId: "native-call-1",
     });

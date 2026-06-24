@@ -52,6 +52,7 @@ import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugi
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
+  buildAgentHookContextOriginFields,
 } from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -1241,6 +1242,7 @@ export async function runEmbeddedAttempt(
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
       codeModeControlsEnabledForRun;
+    const toolPolicyMessageProvider = resolveAttemptToolPolicyMessageProvider(params);
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
@@ -1261,7 +1263,7 @@ export async function runEmbeddedAttempt(
               elevated: params.bashElevated,
             },
             sandbox,
-            messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+            messageProvider: toolPolicyMessageProvider,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -1314,6 +1316,7 @@ export async function runEmbeddedAttempt(
             }),
             currentChannelId: params.currentChannelId,
             currentMessagingTarget: params.currentMessagingTarget,
+            chatId: params.chatId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
@@ -1661,7 +1664,19 @@ export async function runEmbeddedAttempt(
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
       runId: params.runId,
-      channelId: params.currentChannelId,
+      jobId: params.jobId,
+      trigger: params.trigger,
+      ...buildAgentHookContextOriginFields({
+        sessionKey: sandboxSessionKey,
+        messageChannel: params.messageChannel,
+        messageProvider: toolPolicyMessageProvider,
+        currentChannelId: params.currentChannelId,
+        messageTo: params.currentMessagingTarget ?? params.messageTo,
+        trigger: params.trigger,
+        senderId: params.senderId,
+        chatId: params.chatId,
+        channelContext: params.channelContext,
+      }),
       trace: runTrace,
       loopDetection: resolveToolLoopDetectionConfig({
         cfg: params.config,
@@ -2421,14 +2436,9 @@ export async function runEmbeddedAttempt(
               },
             },
             {
-              agentId: sessionAgentId,
-              sessionKey: sandboxSessionKey,
+              ...catalogToolHookContext,
               config: toolSearchRuntimeConfig,
-              sessionId: params.sessionId,
-              runId: params.runId,
               loopDetection: clientToolLoopDetection,
-              onToolOutcome: params.onToolOutcome,
-              allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             },
           )
         : [];
@@ -3555,6 +3565,7 @@ export async function runEmbeddedAttempt(
           messageChannel: runtimeChannel,
           initialReplayState: params.initialReplayState,
           hookRunner: getGlobalHookRunner() ?? undefined,
+          toolHookContext: catalogToolHookContext,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
           thinkingLevel: params.thinkLevel,

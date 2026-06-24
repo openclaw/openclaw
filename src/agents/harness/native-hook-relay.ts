@@ -37,6 +37,7 @@ import {
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
   type DeferredPluginToolApproval,
+  type ToolHookRunContext,
 } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
@@ -104,6 +105,7 @@ export type NativeHookRelayRegistration = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  toolHookContext?: ToolHookRunContext;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
@@ -131,6 +133,7 @@ export type RegisterNativeHookRelayParams = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  toolHookContext?: ToolHookRunContext;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
@@ -435,6 +438,7 @@ export function registerNativeHookRelay(
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.toolHookContext ? { toolHookContext: params.toolHookContext } : {}),
     allowedEvents,
     expiresAtMs,
     ...(params.signal ? { signal: params.signal } : {}),
@@ -1398,6 +1402,7 @@ async function runNativeHookRelayPreToolUse(params: {
     ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
     signal: params.registration.signal,
     ctx: {
+      ...params.registration.toolHookContext,
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
@@ -1447,6 +1452,7 @@ async function runNativeHookRelayPostToolUse(params: {
   await runAgentHarnessAfterToolCallHook({
     toolName,
     toolCallId,
+    ...params.registration.toolHookContext,
     runId: params.registration.runId,
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
     sessionId: params.registration.sessionId,

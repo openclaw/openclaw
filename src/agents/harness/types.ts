@@ -65,6 +65,8 @@ export type AgentHarnessSideQuestionParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  chatId?: string;
+  channelContext?: import("../../plugins/hook-types.js").PluginHookChannelContext;
   currentChannelId?: string;
   toolsAllow?: string[];
   authProfileId?: string;

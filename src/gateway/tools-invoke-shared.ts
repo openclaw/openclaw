@@ -13,6 +13,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { buildAgentHookContextOriginFields } from "../plugins/hook-agent-context.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
@@ -257,6 +258,12 @@ export async function invokeGatewayTool(params: {
         agentId,
         config: params.cfg,
         sessionKey,
+        ...buildAgentHookContextOriginFields({
+          sessionKey,
+          messageChannel: params.messageChannel,
+          messageProvider: params.messageChannel,
+          messageTo: params.agentTo,
+        }),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       approvalMode: params.approvalMode,

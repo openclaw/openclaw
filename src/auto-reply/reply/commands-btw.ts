@@ -1,4 +1,5 @@
 /** Handles /btw side-question commands against the active session context. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -57,6 +58,12 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     await params.typing?.startTypingLoop();
     const currentChannelId =
       params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
+    const chatId =
+      normalizeOptionalString(params.ctx.NativeChannelId) ??
+      normalizeOptionalString(params.ctx.ChatId) ??
+      normalizeOptionalString(params.rootCtx?.NativeChannelId) ??
+      normalizeOptionalString(params.rootCtx?.ChatId);
+    const channelContext = params.ctx.ChannelContext ?? params.rootCtx?.ChannelContext;
     const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
@@ -109,6 +116,8 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       ...(params.ctx.SenderUsername ? { senderUsername: params.ctx.SenderUsername } : {}),
       ...(params.ctx.SenderE164 ? { senderE164: params.ctx.SenderE164 } : {}),
       senderIsOwner: params.command.senderIsOwner,
+      ...(chatId ? { chatId } : {}),
+      ...(channelContext ? { channelContext } : {}),
       ...(currentChannelId ? { currentChannelId } : {}),
     });
     return {

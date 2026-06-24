@@ -186,8 +186,12 @@ file.
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
-  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
-  `ctx.toolInputKind`, and diagnostic `ctx.trace`
+  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.trigger`,
+  `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- for channel-originated calls, origin fields such as `ctx.channel`,
+  `ctx.messageProvider`, `ctx.channelId`, `ctx.chatId`, `ctx.senderId`, and
+  extensible `ctx.channelContext` sender/chat metadata. These use the same
+  identity semantics described below for agent hook contexts.
 
 It can return:
 

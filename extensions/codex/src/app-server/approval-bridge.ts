@@ -8,7 +8,6 @@ import {
  */
 import {
   type AgentApprovalEventData,
-  buildAgentHookContextChannelFields,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
@@ -17,6 +16,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
+  type ToolHookRunContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -75,6 +75,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
   requestParams: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
+  toolHookContext: ToolHookRunContext;
   threadId: string;
   turnId: string;
   nativeHookRelay?: Pick<
@@ -106,6 +107,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       method: params.method,
       requestParams,
       paramsForRun: params.paramsForRun,
+      toolHookContext: params.toolHookContext,
       context,
       nativeHookRelay: params.nativeHookRelay,
       signal: params.signal,
@@ -619,6 +621,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   method: string;
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
+  toolHookContext: ToolHookRunContext;
   context: ApprovalContext;
   nativeHookRelay?: Pick<
     NativeHookRelayRegistrationHandle,
@@ -652,13 +655,6 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   if (nativeRelayOutcome?.handled) {
     return { outcome: "no-decision" };
   }
-  const hookChannelId = buildAgentHookContextChannelFields({
-    sessionKey: params.paramsForRun.sessionKey,
-    messageChannel: params.paramsForRun.messageChannel,
-    messageProvider: params.paramsForRun.messageProvider,
-    currentChannelId: params.paramsForRun.currentChannelId,
-    messageTo: params.paramsForRun.messageTo,
-  }).channelId;
   const outcome = await runBeforeToolCallHook({
     toolName: policyRequest.toolName,
     params: policyRequest.params,
@@ -666,13 +662,9 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     approvalMode: "request",
     signal: params.signal,
     ctx: {
-      ...(params.paramsForRun.agentId ? { agentId: params.paramsForRun.agentId } : {}),
+      ...params.toolHookContext,
       ...(params.paramsForRun.config ? { config: params.paramsForRun.config } : {}),
       ...(cwd ? { cwd } : {}),
-      ...(params.paramsForRun.sessionKey ? { sessionKey: params.paramsForRun.sessionKey } : {}),
-      ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
-      ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
-      ...(hookChannelId ? { channelId: hookChannelId } : {}),
     },
   });
   if (outcome.blocked) {

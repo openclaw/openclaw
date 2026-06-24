@@ -684,6 +684,7 @@ describe("POST /tools/invoke", () => {
       port: sharedPort,
       headers: {
         ...gatewayAuthHeaders(),
+        "x-openclaw-message-channel": "telegram",
         "x-openclaw-message-to": "channel:24514",
         "x-openclaw-thread-id": "thread-24514",
       },
@@ -696,6 +697,14 @@ describe("POST /tools/invoke", () => {
       agentTo: "channel:24514",
       agentThreadId: "thread-24514",
     });
+    expect(firstHookCallArg().ctx).toMatchObject({
+      messageProvider: "telegram",
+      channel: "telegram",
+      channelId: "24514",
+    });
+    expect(firstHookCallArg().ctx?.senderId).toBeUndefined();
+    expect(firstHookCallArg().ctx?.chatId).toBeUndefined();
+    expect(firstHookCallArg().ctx?.channelContext).toBeUndefined();
   });
 
   it("propagates owner-only HTTP denies into spawned session inheritance", async () => {

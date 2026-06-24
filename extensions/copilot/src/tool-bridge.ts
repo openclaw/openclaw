@@ -7,15 +7,19 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   applyEmbeddedAttemptToolsAllow,
+  buildAgentHookContextOriginFields,
   buildEmbeddedAttemptToolRunContext,
   extractToolErrorMessage,
   getPluginToolMeta,
   isSubagentSessionKey,
+  isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
   resolveAttemptSpawnWorkspaceDir,
   resolveEmbeddedAttemptToolConstructionPlan,
   resolveModelAuthMode,
+  resolveToolLoopDetectionConfig,
   sanitizeToolResult,
+  wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 
@@ -144,6 +148,7 @@ export interface CopilotToolBridge {
 export const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
+const CODE_MODE_CONTROL_TOOL_NAMES = new Set(["exec", "wait"]);
 
 export function supportsModelTools(modelProvider: string): boolean {
   return SUPPORTED_TOOL_PROVIDERS.has(modelProvider);
@@ -210,6 +215,7 @@ export async function createCopilotToolBridge(
     },
     toolSurfaceRuntime,
   );
+  const toolHookContext = buildCopilotToolHookContext(toolOptions);
 
   let sourceTools: unknown;
   try {
@@ -231,9 +237,18 @@ export async function createCopilotToolBridge(
     sourceTools as AnyAgentTool[],
     toolSurfaceRuntime.runtimeToolAllowlist,
   );
-  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools);
+  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
+    hookContext: toolHookContext,
+  });
+  const hookedCompactedTools = compactedTools.tools.map((tool) =>
+    !toolSurfaceRuntime.codeModeControlsEnabled ||
+    !CODE_MODE_CONTROL_TOOL_NAMES.has(tool.name) ||
+    isToolWrappedWithBeforeToolCallHook(tool)
+      ? tool
+      : wrapToolWithBeforeToolCallHook(tool, toolHookContext),
+  );
   const plannedTools = filterCopilotToolsForConstructionPlan(
-    compactedTools.tools,
+    hookedCompactedTools,
     effectiveToolPlan.codingToolConstructionPlan,
     { preserveToolNames: toolSurfaceRuntime.runtimeToolAllowlist },
   );
@@ -263,6 +278,51 @@ export async function createCopilotToolBridge(
     sourceTools: filteredTools,
   };
 }
+
+function buildCopilotToolHookContext(toolOptions: OpenClawCodingToolsOptions) {
+  const turnSourceChannel = toolOptions.messageChannel ?? toolOptions.messageProvider;
+  const messageTo = toolOptions.currentMessagingTarget ?? toolOptions.messageTo;
+  const turnSourceTo = messageTo ?? toolOptions.currentChannelId;
+  return {
+    agentId: toolOptions.agentId,
+    config: toolOptions.config,
+    cwd: toolOptions.cwd,
+    workspaceDir: toolOptions.workspaceDir,
+    sessionKey: toolOptions.sessionKey,
+    sessionId: toolOptions.sessionId,
+    runId: toolOptions.runId,
+    jobId: toolOptions.jobId,
+    trace: toolOptions.trace,
+    trigger: toolOptions.trigger,
+    ...buildAgentHookContextOriginFields({
+      sessionKey: toolOptions.sessionKey,
+      messageChannel: toolOptions.messageChannel,
+      messageProvider: toolOptions.toolPolicyMessageProvider ?? toolOptions.messageProvider,
+      currentChannelId: toolOptions.hookChannelId ?? toolOptions.currentChannelId,
+      messageTo,
+      trigger: toolOptions.trigger,
+      senderId: toolOptions.senderId,
+      chatId: toolOptions.chatId,
+      channelContext: toolOptions.hookChannelContext ?? toolOptions.channelContext,
+    }),
+    ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(turnSourceTo ? { turnSourceTo } : {}),
+    ...(toolOptions.agentAccountId ? { turnSourceAccountId: toolOptions.agentAccountId } : {}),
+    ...(toolOptions.currentThreadTs ? { turnSourceThreadId: toolOptions.currentThreadTs } : {}),
+    loopDetection: resolveToolLoopDetectionConfig({
+      cfg: toolOptions.config,
+      agentId: toolOptions.agentId,
+    }),
+    onToolOutcome: toolOptions.onToolOutcome,
+    allocateToolOutcomeOrdinal: toolOptions.allocateToolOutcomeOrdinal,
+  };
+}
+
+/** Test-only access to requester-context construction. */
+export const testing = {
+  buildCopilotToolHookContext: (toolOptions: unknown): Record<string, unknown> =>
+    buildCopilotToolHookContext(toolOptions as OpenClawCodingToolsOptions),
+};
 
 /**
  * Builds the full `createOpenClawCodingTools` options bag mirroring the
@@ -350,7 +410,9 @@ function buildOpenClawCodingToolsOptions(
       ...a.execOverrides,
       elevated: a.bashElevated,
     },
+    messageChannel: a.messageChannel,
     messageProvider: a.messageProvider ?? a.messageChannel,
+    toolPolicyMessageProvider: a.messageProvider ?? a.messageChannel,
     agentAccountId: a.agentAccountId,
     messageTo: a.messageTo,
     messageThreadId: a.messageThreadId,
@@ -360,6 +422,7 @@ function buildOpenClawCodingToolsOptions(
     memberRoleIds: a.memberRoleIds,
     spawnedBy: a.spawnedBy,
     senderId: a.senderId,
+    hookChannelContext: a.channelContext,
     senderName: a.senderName,
     senderUsername: a.senderUsername,
     senderE164: a.senderE164,
@@ -395,6 +458,7 @@ function buildOpenClawCodingToolsOptions(
       workspaceDir,
     }),
     currentChannelId: a.currentChannelId,
+    chatId: a.chatId,
     currentMessagingTarget: a.currentMessagingTarget,
     currentThreadTs: a.currentThreadTs,
     currentMessageId: a.currentMessageId,

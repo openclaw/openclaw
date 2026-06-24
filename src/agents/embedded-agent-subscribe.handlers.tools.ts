@@ -34,6 +34,7 @@ import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { buildPluginHookToolContext } from "./agent-tools.before-tool-call.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -1573,14 +1574,20 @@ export async function handleToolExecutionEnd(
       durationMs,
     };
     void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
-        toolName,
-        agentId: ctx.params.agentId,
-        sessionKey: ctx.params.sessionKey,
-        sessionId: ctx.params.sessionId,
-        runId,
-        toolCallId,
-      })
+      .runAfterToolCall(
+        hookEvent,
+        buildPluginHookToolContext({
+          toolName,
+          toolCallId,
+          ctx: {
+            ...ctx.params.toolHookContext,
+            ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+            ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+            ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+            runId,
+          },
+        }),
+      )
       .catch((err: unknown) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });

@@ -33,6 +33,13 @@ import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import {
+  addClientToolsToToolSearchCatalog,
+  applyToolSearchCatalog,
+  clearToolSearchCatalog,
+  createToolSearchTools,
+  TOOL_CALL_RAW_TOOL_NAME,
+} from "./tool-search.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
@@ -1198,6 +1205,143 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+
+  it("preserves requester origin context on adapted client tools", async () => {
+    const beforeToolCallHook = installBeforeToolCallHook();
+    const [tool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      undefined,
+      {
+        agentId: "main",
+        sessionKey: "agent:main:client",
+        sessionId: "session-client",
+        runId: "run-client",
+        jobId: "job-client",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      },
+    );
+    const extensionContext = {} as Parameters<typeof tool.execute>[4];
+
+    await tool.execute("client-call-context", {}, undefined, undefined, extensionContext);
+
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "client_tool",
+        params: {},
+        runId: "run-client",
+        toolCallId: "client-call-context",
+      },
+      {
+        toolName: "client_tool",
+        agentId: "main",
+        sessionKey: "agent:main:client",
+        sessionId: "session-client",
+        runId: "run-client",
+        jobId: "job-client",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        toolCallId: "client-call-context",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      },
+    );
+  });
+
+  it("preserves requester origin context when a client tool is cataloged", async () => {
+    const beforeToolCallHook = installBeforeToolCallHook();
+    const onClientToolCall = vi.fn();
+    const sessionId = "session-client-catalog";
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    const [clientTool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      onClientToolCall,
+      {
+        agentId: "main",
+        sessionKey: "agent:main:client",
+        sessionId,
+        runId: "run-client-catalog",
+        jobId: "job-client",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      },
+    );
+    if (!clientTool) {
+      throw new Error("missing client tool definition");
+    }
+    const controls = createToolSearchTools({ config, sessionId });
+    applyToolSearchCatalog({ tools: controls, config, sessionId });
+    addClientToolsToToolSearchCatalog({ tools: [clientTool], config, sessionId });
+    const toolCall = controls.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+    if (!toolCall) {
+      throw new Error("missing tool_call control");
+    }
+
+    try {
+      await toolCall.execute("catalog-parent", {
+        id: "client:client:client_tool",
+        args: { value: "cataloged" },
+      });
+
+      expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+      expect(beforeToolCallHook.mock.calls[0]?.[1]).toMatchObject({
+        jobId: "job-client",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        chatId: "C123",
+        senderId: "U123",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+          chat: { id: "C123" },
+        },
+      });
+      expect(onClientToolCall).toHaveBeenCalledWith("client_tool", { value: "cataloged" });
+    } finally {
+      clearToolSearchCatalog({ sessionId });
+    }
   });
 
   it("preserves client tool source order when hooks resolve out of order", async () => {

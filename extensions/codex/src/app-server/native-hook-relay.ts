@@ -8,6 +8,7 @@ import {
   type EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
+  type ToolHookRunContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   addTimerTimeoutGraceMs,
@@ -121,6 +122,7 @@ export function createCodexNativeHookRelay(params: {
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
   channelId?: string;
+  toolHookContext?: ToolHookRunContext;
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
@@ -146,6 +148,7 @@ export function createCodexNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.toolHookContext ? { toolHookContext: params.toolHookContext } : {}),
     allowedEvents: params.events,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,

@@ -18,6 +18,7 @@ import type {
   Model,
   TextContent,
 } from "../llm/types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
@@ -388,6 +389,8 @@ type RunBtwSideQuestionParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  chatId?: string;
+  channelContext?: PluginHookChannelContext;
   currentChannelId?: string;
 };
 

@@ -130,6 +130,12 @@ describe("handleBtwCommand", () => {
     params.ctx.SenderUsername = "rosita";
     params.ctx.SenderE164 = "+15550001";
     params.ctx.MessageThreadId = "thread-1";
+    params.ctx.NativeChannelId = "native-chat-1";
+    params.ctx.ChatId = "legacy-chat";
+    params.ctx.ChannelContext = {
+      sender: { id: "sender-1", providerUserId: "provider-user-1" },
+      chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+    };
     params.agentDir = "/tmp/agent";
     params.sessionEntry = {
       sessionId: "session-1",
@@ -161,6 +167,11 @@ describe("handleBtwCommand", () => {
       senderUsername: "rosita",
       senderE164: "+15550001",
       senderIsOwner: true,
+      chatId: "native-chat-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", providerThreadKey: "thread-key-1" },
+      },
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({

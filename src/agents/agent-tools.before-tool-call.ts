@@ -37,6 +37,7 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildAgentHookContextIdentityFields } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
@@ -50,8 +51,10 @@ import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
+  type PluginHookChannelContext,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
+  type PluginHookToolContext,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -110,8 +113,15 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  jobId?: string;
   trace?: DiagnosticTraceContext;
+  trigger?: string;
+  messageProvider?: string;
+  channel?: string;
+  chatId?: string;
+  senderId?: string;
   channelId?: string;
+  channelContext?: PluginHookChannelContext;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -132,6 +142,24 @@ export type HookContext = {
     bridge: SandboxFsBridge;
   };
 };
+
+/** Plain run-owned metadata that can safely be projected onto tool hook contexts. */
+export type ToolHookRunContext = Pick<
+  HookContext,
+  | "agentId"
+  | "sessionKey"
+  | "sessionId"
+  | "runId"
+  | "jobId"
+  | "trace"
+  | "trigger"
+  | "messageProvider"
+  | "channel"
+  | "chatId"
+  | "senderId"
+  | "channelId"
+  | "channelContext"
+>;
 
 type HookBlockedKind = "veto" | "failure";
 type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
@@ -209,6 +237,38 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
+}
+
+/** Project the internal tool runtime context onto the public plugin hook contract. */
+export function buildPluginHookToolContext(args: {
+  toolName: string;
+  toolKind?: PluginHookToolKind;
+  toolInputKind?: PluginHookToolInputKind;
+  toolCallId?: string;
+  ctx?: ToolHookRunContext;
+}): PluginHookToolContext {
+  return {
+    toolName: args.toolName,
+    ...(args.toolKind && { toolKind: args.toolKind }),
+    ...(args.toolInputKind && { toolInputKind: args.toolInputKind }),
+    ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
+    ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
+    ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
+    ...(args.ctx?.runId && { runId: args.ctx.runId }),
+    ...(args.ctx?.jobId && { jobId: args.ctx.jobId }),
+    ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
+    ...(args.ctx?.trigger && { trigger: args.ctx.trigger }),
+    ...(args.ctx?.messageProvider && { messageProvider: args.ctx.messageProvider }),
+    ...(args.ctx?.channel && { channel: args.ctx.channel }),
+    ...(args.toolCallId && { toolCallId: args.toolCallId }),
+    ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+    ...buildAgentHookContextIdentityFields({
+      trigger: args.ctx?.trigger,
+      senderId: args.ctx?.senderId,
+      chatId: args.ctx?.chatId,
+      channelContext: args.ctx?.channelContext,
+    }),
+  };
 }
 
 const log = createSubsystemLogger("agents/tools");
@@ -1143,17 +1203,13 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolKind && { toolKind: args.toolKind }),
       ...(args.toolInputKind && { toolInputKind: args.toolInputKind }),
     };
-    const buildToolContext = (identity: typeof toolIdentity) => ({
-      toolName,
-      ...identity,
-      ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
-      ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
-      ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
-      ...(args.ctx?.runId && { runId: args.ctx.runId }),
-      ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
-      ...(args.toolCallId && { toolCallId: args.toolCallId }),
-      ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
-    });
+    const buildToolContext = (identity: typeof toolIdentity) =>
+      buildPluginHookToolContext({
+        toolName,
+        ...identity,
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(args.ctx ? { ctx: args.ctx } : {}),
+      });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
       ? await runTrustedToolPolicies(

@@ -609,12 +609,22 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
-export type PluginHookToolContext = {
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId?: string;
-  trace?: DiagnosticTraceContext;
+export type PluginHookToolContext = Pick<
+  PluginHookAgentContext,
+  | "agentId"
+  | "sessionKey"
+  | "sessionId"
+  | "runId"
+  | "jobId"
+  | "trace"
+  | "trigger"
+  | "messageProvider"
+  | "channel"
+  | "chatId"
+  | "senderId"
+  | "channelId"
+  | "channelContext"
+> & {
   toolName: string;
   /** Host-authoritative discriminator for tools that intentionally share names. */
   toolKind?: PluginHookToolKind;
@@ -622,7 +632,6 @@ export type PluginHookToolContext = {
   toolInputKind?: PluginHookToolInputKind;
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
-  channelId?: string;
 };
 
 export type PluginHookBeforeToolCallEvent = {

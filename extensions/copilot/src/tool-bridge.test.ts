@@ -1,11 +1,17 @@
 // Copilot tests cover tool bridge plugin behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCopilotToolBridge,
   convertOpenClawToolToSdkTool,
   supportsModelTools,
+  testing,
 } from "./tool-bridge.js";
 
 type FakeTool = AnyAgentTool & {
@@ -77,6 +83,7 @@ function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation())
 }
 
 afterEach(() => {
+  resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
 
@@ -309,6 +316,79 @@ describe("createCopilotToolBridge", () => {
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
   });
 
+  it("runs requester-aware policy before code-mode exec controls", async () => {
+    const beforeToolCall = vi.fn(() => ({
+      block: true,
+      blockReason: "blocked before code-mode execution",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const createOpenClawCodingTools = vi.fn(async () => [makeTool({ name: "read" })]);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        jobId: "job-1",
+        trigger: "user",
+        messageChannel: "slack",
+        messageProvider: "slack-voice",
+        currentChannelId: "slack:C123",
+        senderId: "U123",
+        channelContext: { sender: { id: "U123", displayName: "Ada" } },
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+    const exec = result.sdkTools.find((tool) => tool.name === "exec");
+    if (!exec) {
+      throw new Error("missing code-mode exec control");
+    }
+
+    await runSdkTool(
+      exec,
+      { code: "return 1;" },
+      makeInvocation({ toolCallId: "code-call-1", toolName: "exec" }),
+    );
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 1;", command: "return 1;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-code-mode",
+        toolCallId: "code-call-1",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "agent-1",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        runId: "run-code-mode",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "slack-voice",
+        channel: "slack",
+        senderId: "U123",
+        toolCallId: "code-call-1",
+        channelId: "C123",
+        channelContext: {
+          sender: { id: "U123", displayName: "Ada" },
+        },
+      },
+    );
+  });
+
   it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
     const createOpenClawCodingTools = vi.fn(async () => [
       makeTool({ name: "fake_hidden" }),
@@ -443,7 +523,13 @@ describe("createCopilotToolBridge", () => {
           currentMessagingTarget: "user:U123",
           currentThreadTs: "1700000000.000100",
           currentMessageId: "M-1",
-          messageProvider: "slack",
+          messageChannel: "slack",
+          messageProvider: "slack-voice",
+          chatId: "chat-1",
+          channelContext: {
+            sender: { id: "sender-1", displayName: "Ada" },
+            chat: { id: "chat-1", kind: "channel" },
+          },
           messageTo: "U-1",
           messageThreadId: "1700000000.000100",
           replyToMode: "first",
@@ -477,7 +563,13 @@ describe("createCopilotToolBridge", () => {
         currentMessagingTarget: "user:U123",
         currentThreadTs: "1700000000.000100",
         currentMessageId: "M-1",
-        messageProvider: "slack",
+        messageChannel: "slack",
+        messageProvider: "slack-voice",
+        chatId: "chat-1",
+        hookChannelContext: {
+          sender: { id: "sender-1", displayName: "Ada" },
+          chat: { id: "chat-1", kind: "channel" },
+        },
         messageTo: "U-1",
         messageThreadId: "1700000000.000100",
         replyToMode: "first",
@@ -485,6 +577,7 @@ describe("createCopilotToolBridge", () => {
         forceMessageTool: true,
         enableHeartbeatTool: true,
       });
+      expect(opts.channelContext).toBeUndefined();
     });
 
     it("falls back messageProvider to attemptParams.messageChannel when messageProvider is absent (codex parity)", async () => {
@@ -500,6 +593,63 @@ describe("createCopilotToolBridge", () => {
       });
 
       expect(getOpts().messageProvider).toBe("telegram");
+    });
+
+    it("uses messageTo when currentMessagingTarget is absent in tool hook routing", () => {
+      const context = testing.buildCopilotToolHookContext({
+        agentId: "agent-1",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        messageTo: "user:U-only",
+        trigger: "user",
+      });
+
+      expect(context).toMatchObject({
+        channel: "slack",
+        messageProvider: "slack",
+        channelId: "U-only",
+        turnSourceChannel: "slack",
+        turnSourceTo: "user:U-only",
+      });
+      expect(context.chatId).toBeUndefined();
+      expect(context.channelContext).toBeUndefined();
+    });
+
+    it("resolves per-agent loop detection overrides for generated code-mode controls", () => {
+      const context = testing.buildCopilotToolHookContext({
+        agentId: "agent-1",
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+              warningThreshold: 7,
+              detectors: { genericRepeat: true },
+              postCompactionGuard: { windowSize: 4 },
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "agent-1",
+                tools: {
+                  loopDetection: {
+                    enabled: false,
+                    detectors: { pingPong: false },
+                    postCompactionGuard: { windowSize: 2 },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+
+      expect(context.loopDetection).toEqual({
+        enabled: false,
+        warningThreshold: 7,
+        detectors: { genericRepeat: true, pingPong: false },
+        postCompactionGuard: { windowSize: 2 },
+      });
     });
 
     it("forwards authProfileStore, runId, config, and run hooks (onToolOutcome) from attemptParams", async () => {

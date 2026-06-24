@@ -32,6 +32,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
+  type ToolHookRunContext,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -53,13 +54,8 @@ import type {
   JsonValue,
 } from "./protocol.js";
 
-type CodexDynamicToolHookContext = {
-  agentId?: string;
+type CodexDynamicToolHookContext = ToolHookRunContext & {
   config?: EmbeddedRunAttemptParams["config"];
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  channelId?: string;
   currentChannelProvider?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
@@ -70,7 +66,7 @@ type CodexDynamicToolHookContext = {
   allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 
-type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
+type CodexToolResultHookContext = ToolHookRunContext;
 
 type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
@@ -310,11 +306,7 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
+          ...toolResultHookContext,
           startArgs: executedArgs,
           result,
           startedAt,
@@ -407,11 +399,7 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
+          ...toolResultHookContext,
           startArgs: executedArgs,
           error: errorMessage,
           startedAt,
@@ -702,13 +690,35 @@ function dedupeQuarantinedDynamicTools(
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
-  const { agentId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
+  const {
+    agentId,
+    sessionId,
+    sessionKey,
+    runId,
+    jobId,
+    trace,
+    trigger,
+    messageProvider,
+    channel,
+    chatId,
+    senderId,
+    channelId,
+    channelContext,
+  } = ctx ?? {};
   return {
     ...(agentId && { agentId }),
     ...(sessionId && { sessionId }),
     ...(sessionKey && { sessionKey }),
     ...(runId && { runId }),
+    ...(jobId && { jobId }),
+    ...(trace && { trace }),
+    ...(trigger && { trigger }),
+    ...(messageProvider && { messageProvider }),
+    ...(channel && { channel }),
+    ...(chatId && { chatId }),
+    ...(senderId && { senderId }),
     ...(channelId && { channelId }),
+    ...(channelContext && { channelContext }),
   };
 }
 

@@ -861,9 +861,12 @@ describe("runCodexAppServerSideQuestion", () => {
         ).toMatchObject({
           agentId: "main",
           sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: "agent:main:runtime-policy",
           runId: "run-side-1",
           channelId: "voice-room",
+          toolHookContext: {
+            sessionKey: "agent:main:runtime-policy",
+          },
           allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
         });
         return threadResult("side-thread");
@@ -889,6 +892,7 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideParams({
           sessionKey: "agent:main:session-1",
+          sandboxSessionKey: "agent:main:runtime-policy",
           messageChannel: "discord",
           messageProvider: "discord-voice",
           currentChannelId: "discord:voice-room",
@@ -971,6 +975,7 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideParams({
           sessionKey: "agent:main:session-1",
+          sandboxSessionKey: "agent:main:runtime-policy",
           messageChannel: "discord",
           messageProvider: "discord-voice",
           opts: { runId: "run-side-approval" },
@@ -988,6 +993,7 @@ describe("runCodexAppServerSideQuestion", () => {
           threadId?: string;
           turnId?: string;
           paramsForRun?: { messageChannel?: string; messageProvider?: string };
+          toolHookContext?: { sessionKey?: string };
           nativeHookRelay?: { relayId?: string; allowedEvents?: readonly string[] };
         }
       | undefined;
@@ -1006,6 +1012,9 @@ describe("runCodexAppServerSideQuestion", () => {
       paramsForRun: {
         messageChannel: "discord",
         messageProvider: "discord-voice",
+      },
+      toolHookContext: {
+        sessionKey: "agent:main:runtime-policy",
       },
     });
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
@@ -1482,6 +1491,14 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
+    const beforeToolCall = vi.fn();
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
     const client = createFakeClient();
     let toolResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
@@ -1527,6 +1544,13 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolArguments).toEqual({ topic: "AGENTS.md" });
     expect(toolSignal).toBeInstanceOf(AbortSignal);
     expect(toolOptions).toBeUndefined();
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(mockCall(beforeToolCall)[1]).toMatchObject({ sessionKey: "session-1" });
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    expect(mockCall(afterToolCall)[1]).toMatchObject({ sessionKey: "session-1" });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "session-1" }),
+    );
     expect(toolResponse).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
@@ -1610,14 +1634,29 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
+  it("preserves requester identity while normalizing side-thread hook channels", async () => {
+    const afterToolCall = vi.fn();
     const beforeToolCall = vi.fn((...args: unknown[]) => {
-      const context = args[1] as { channelId?: string };
-      expect(context.channelId).toBe("voice-room");
+      const context = args[1] as Record<string, unknown>;
+      expect(context).toMatchObject({
+        sessionKey: "agent:main:runtime-policy",
+        messageProvider: "discord-voice",
+        channel: "discord",
+        channelId: "voice-room",
+        chatId: "native-voice-chat",
+        senderId: "sender-1",
+        channelContext: {
+          sender: { id: "sender-1", providerUserId: "discord-user-1" },
+          chat: { id: "native-voice-chat", guildId: "guild-1" },
+        },
+      });
       return undefined;
     });
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
     );
     const client = createFakeClient();
     client.request.mockImplementation(async (method: string) => {
@@ -1657,17 +1696,48 @@ describe("runCodexAppServerSideQuestion", () => {
     await expect(
       runCodexAppServerSideQuestion(
         sideParams({
+          sessionKey: "agent:main:conversation",
+          sandboxSessionKey: "agent:main:runtime-policy",
           messageChannel: "discord",
           messageProvider: "discord-voice",
           currentChannelId: "discord:voice-room",
+          chatId: "native-voice-chat",
+          senderId: "sender-1",
+          channelContext: {
+            sender: { id: "sender-1", providerUserId: "discord-user-1" },
+            chat: { id: "native-voice-chat", guildId: "guild-1" },
+          },
         }),
       ),
     ).resolves.toEqual({ text: "Tool answer." });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    expect(mockCall(afterToolCall)[1]).toMatchObject({
+      sessionKey: "agent:main:runtime-policy",
+      messageProvider: "discord-voice",
+      channel: "discord",
+      channelId: "voice-room",
+      chatId: "native-voice-chat",
+    });
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hookChannelId: "voice-room" }),
+      expect.objectContaining({
+        sessionKey: "agent:main:runtime-policy",
+        runSessionKey: "agent:main:conversation",
+        messageChannel: "discord",
+        messageProvider: "discord",
+        toolPolicyMessageProvider: "discord-voice",
+        hookChannelId: "voice-room",
+        chatId: "native-voice-chat",
+        hookChannelContext: {
+          sender: { id: "sender-1", providerUserId: "discord-user-1" },
+          chat: { id: "native-voice-chat", guildId: "guild-1" },
+        },
+      }),
     );
+    expect(
+      (mockCall(createOpenClawCodingToolsMock)[0] as { channelContext?: unknown }).channelContext,
+    ).toBeUndefined();
     expect(toolExecuteMock).toHaveBeenCalledTimes(1);
   });
 

@@ -201,7 +201,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("tool_call")).toBe(false);
   });
 
-  it("passes explicit hook channel ids to wrapped tool hooks", async () => {
+  it("passes requester origin context to wrapped tool hooks", async () => {
     const beforeToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
@@ -210,15 +210,36 @@ describe("createOpenClawCodingTools", () => {
     await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
     const tools = createOpenClawCodingTools({
       workspaceDir: tmpDir,
-      currentChannelId: "telegram:-100123",
-      hookChannelId: "-100123",
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      toolPolicyMessageProvider: "telegram-voice",
+      messageTo: "telegram:-100123",
+      senderId: "speaker-1",
+      trigger: "user",
+      jobId: "job-1",
+      hookChannelContext: {
+        sender: { id: "transport-speaker" },
+        chat: { id: "transport-chat" },
+      },
     });
     const readTool = requireTool(tools, "read");
     await requireToolExecute(readTool)("tool-hook-channel", { path: "note.txt" });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({ channelId: "-100123" }),
+      expect.objectContaining({
+        channel: "telegram",
+        messageProvider: "telegram-voice",
+        channelId: "-100123",
+        chatId: "transport-chat",
+        senderId: "speaker-1",
+        trigger: "user",
+        jobId: "job-1",
+        channelContext: {
+          sender: { id: "speaker-1" },
+          chat: { id: "transport-chat" },
+        },
+      }),
     );
   });
 

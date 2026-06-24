@@ -1846,6 +1846,17 @@ describe("createCodexDynamicToolBridge", () => {
         sessionId: "session-1",
         sessionKey: "agent:agent-1:session-1",
         runId: "run-1",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "discord-voice",
+        channel: "discord",
+        chatId: "channel-1",
+        senderId: "user-1",
+        channelId: "channel-1",
+        channelContext: {
+          sender: { id: "user-1", displayName: "Ada" },
+          chat: { id: "channel-1" },
+        },
       },
     });
 
@@ -1949,6 +1960,17 @@ describe("createCodexDynamicToolBridge", () => {
         sessionId: "session-1",
         sessionKey: "agent:agent-1:session-1",
         runId: "run-1",
+        jobId: "job-1",
+        trigger: "user",
+        messageProvider: "discord-voice",
+        channel: "discord",
+        chatId: "channel-1",
+        senderId: "user-1",
+        channelId: "channel-1",
+        channelContext: {
+          sender: { id: "user-1", displayName: "Ada" },
+          chat: { id: "channel-1" },
+        },
       },
     });
 
@@ -1975,6 +1997,17 @@ describe("createCodexDynamicToolBridge", () => {
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
       runId: "run-1",
+      jobId: "job-1",
+      trigger: "user",
+      messageProvider: "discord-voice",
+      channel: "discord",
+      chatId: "channel-1",
+      senderId: "user-1",
+      channelId: "channel-1",
+      channelContext: {
+        sender: { id: "user-1", displayName: "Ada" },
+        chat: { id: "channel-1" },
+      },
       toolCallId: "call-1",
     });
     expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd", mode: "safe" } });
@@ -1997,6 +2030,17 @@ describe("createCodexDynamicToolBridge", () => {
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
       runId: "run-1",
+      jobId: "job-1",
+      trigger: "user",
+      messageProvider: "discord-voice",
+      channel: "discord",
+      chatId: "channel-1",
+      senderId: "user-1",
+      channelId: "channel-1",
+      channelContext: {
+        sender: { id: "user-1", displayName: "Ada" },
+        chat: { id: "channel-1" },
+      },
       toolCallId: "call-1",
     });
   });
