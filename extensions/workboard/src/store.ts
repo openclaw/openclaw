@@ -2828,7 +2828,17 @@ export class WorkboardStore {
     }
   }
 
-  async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
+  async move(
+    id: string,
+    status: unknown,
+    position: unknown,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const existing = await this.get(id);
+    if (!existing) {
+      throw new Error(`card "${id}" not found.`);
+    }
+    assertCanMutateClaimedCard(existing, scope);
     return await this.update(id, {
       status,
       position,

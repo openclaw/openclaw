@@ -1020,7 +1020,7 @@ export function createWorkboardTools(params: {
         if (!(WORKBOARD_STATUSES as readonly string[]).includes(targetStatus)) {
           throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
         }
-        return redactedCardResult(await store.move(id, targetStatus, undefined));
+        return redactedCardResult(await store.move(id, targetStatus, undefined, scope));
       },
     },
     {

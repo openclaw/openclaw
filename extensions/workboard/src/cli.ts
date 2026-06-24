@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import { WORKBOARD_STATUSES } from "./types.js";
 
 type JsonOptions = {
   json?: boolean;
@@ -168,19 +169,8 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!card) {
         throw new Error(error);
       }
-      const validStatuses = [
-        "triage",
-        "backlog",
-        "todo",
-        "scheduled",
-        "ready",
-        "running",
-        "review",
-        "blocked",
-        "done",
-      ];
-      if (!validStatuses.includes(options.status)) {
-        throw new Error(`status must be one of: ${validStatuses.join(", ")}.`);
+      if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
+        throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
       const updated = await params.store.move(card.id, options.status, undefined);
       if (options.json) {
