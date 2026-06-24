@@ -1092,7 +1092,7 @@ describe("searchMemoryWiki", () => {
     const results = await searchMemoryWiki({ config, query: "Source" });
 
     expect(results).toHaveLength(2);
-    const paths = results.map((r) => r.path).sort();
+    const paths = results.map((r) => r.path).toSorted();
     expect(paths).toEqual(["sources/sub/nested.md", "sources/top.md"]);
   });
 
