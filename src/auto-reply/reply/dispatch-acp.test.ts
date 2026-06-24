@@ -932,6 +932,23 @@ describe("tryDispatchAcpReply", () => {
     expect(text).not.toContain("/tmp/secret.png");
   });
 
+  it("omits invalid recent history image timestamps", () => {
+    const text = appendRecentHistoryImageContext({
+      promptText: "what is this?",
+      images: [
+        {
+          path: "/tmp/secret.png",
+          contentType: "image/png",
+          sender: "@alice",
+          timestampMs: Number.MAX_VALUE,
+        },
+      ],
+    });
+
+    expect(text).toContain("Recent image 1 from @alice, attached as media.");
+    expect(text).not.toContain("sent");
+  });
+
   it("forwards recent history image attachments into agent runtime turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-history-"));
     const imagePath = path.join(tempDir, "recent.png");

@@ -53,6 +53,17 @@ function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {
   return Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
 }
 
+function formatHistoryImageTimestamp(timestampMs: number | undefined): string {
+  if (timestampMs === undefined) {
+    return "";
+  }
+  const date = new Date(timestampMs);
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+  return `, sent ${date.toISOString()}`;
+}
+
 export function resolveRecentInboundHistoryImages(params: {
   ctx: MsgContext;
   nowMs?: number;
@@ -122,8 +133,7 @@ export function appendRecentHistoryImageContext(params: {
   }
   const notes = params.images.map((image, index) => {
     const message = image.messageId ? `, message ${image.messageId}` : "";
-    const sentAt =
-      image.timestampMs === undefined ? "" : `, sent ${new Date(image.timestampMs).toISOString()}`;
+    const sentAt = formatHistoryImageTimestamp(image.timestampMs);
     const position =
       image.historyPosition === undefined || image.historyTotal === undefined
         ? ""
