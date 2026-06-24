@@ -87,30 +87,17 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       );
     },
     config: {
-      command: "gemini",
+      command: "agy",
       args: [
-        "--skip-trust",
-        "--approval-mode",
-        "auto_edit",
-        "--output-format",
-        "stream-json",
-        "--prompt",
-        "{prompt}",
+        "--dangerously-skip-permissions"
       ],
       resumeArgs: [
-        "--skip-trust",
-        "--approval-mode",
-        "auto_edit",
-        "--resume",
-        "{sessionId}",
-        "--output-format",
-        "stream-json",
-        "--prompt",
-        "{prompt}",
+        "--dangerously-skip-permissions",
+        "--conversation",
+        "{sessionId}"
       ],
-      output: "jsonl",
-      input: "arg",
-      jsonlDialect: "gemini-stream-json",
+      output: "text",
+      input: "stdin",
       imageArg: "@",
       imagePathScope: "workspace",
       modelArg: "--model",
