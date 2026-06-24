@@ -1091,7 +1091,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
-          scanLegacyKeys: false,
         });
         const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
         storeCache.set(cachedStoreTarget.storePath, store);

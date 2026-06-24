@@ -47,6 +47,10 @@ PUBLIC_METADATA_FILENAMES = [
   "subtitle.txt",
   "support_url.txt"
 ].freeze
+APP_REVIEW_NOTES_METADATA_FILENAMES = [
+  "notes.txt",
+  "review_notes.txt"
+].freeze
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -732,6 +736,37 @@ def release_notes_metadata_path
   temp_root
 end
 
+def app_review_notes_markdown_path
+  File.join(ios_root, "APP-REVIEW-NOTES.md")
+end
+
+def app_review_notes_pdf_path
+  File.join(ios_root, "build", "app-review", "APP-REVIEW-NOTES.pdf")
+end
+
+def generate_app_review_notes_pdf!
+  source = app_review_notes_markdown_path
+  UI.user_error!("Missing App Review notes at #{source}.") unless File.exist?(source)
+
+  output = app_review_notes_pdf_path
+  FileUtils.mkdir_p(File.dirname(output))
+  sh(shell_join(["xcrun", "swift", File.join(repo_root, "scripts", "ios-app-review-notes-pdf.swift"), source, output]))
+  output
+end
+
+def assert_no_app_review_notes_field_metadata!(metadata_path)
+  notes_dir = File.join(metadata_path, "review_information")
+  APP_REVIEW_NOTES_METADATA_FILENAMES.each do |filename|
+    path = File.join(notes_dir, filename)
+    next unless File.exist?(path)
+
+    UI.user_error!(
+      "Refusing to upload App Review Notes metadata from #{path}. " \
+        "Maintain the App Store Connect Notes field manually so the live setup code is not stored in this repo."
+    )
+  end
+end
+
 def public_metadata_path
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
@@ -1014,7 +1049,7 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Generate screenshots, update App Store version metadata, then upload an App Store build"
+  desc "Generate screenshots, update App Store metadata and review attachment, then upload an App Store build"
   lane :release_upload do
     unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
@@ -1044,7 +1079,7 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Upload App Store metadata (and optionally screenshots)"
+  desc "Upload App Store metadata, App Review PDF attachment, and optionally screenshots"
   lane :metadata do
     install_ready_for_review_edit_state_lookup!
     sync_ios_versioning!
@@ -1064,12 +1099,15 @@ platform :ios do
       validate_required_screenshots!(paths)
     end
 
+    assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
     metadata_path = public_metadata_path
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
       metadata_path = release_notes_metadata_path
       skip_metadata = false
     end
+    assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
+    app_review_attachment_file = skip_metadata ? nil : generate_app_review_notes_pdf!
 
     deliver_options = {
       api_key: api_key,
@@ -1083,6 +1121,7 @@ platform :ios do
       skip_metadata: skip_metadata,
       skip_binary_upload: true,
       overwrite_screenshots: screenshot_upload_requested?,
+      app_review_attachment_file: app_review_attachment_file,
       skip_app_version_update: false,
       submit_for_review: false,
       run_precheck_before_submit: false

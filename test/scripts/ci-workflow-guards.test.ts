@@ -386,7 +386,7 @@ describe("ci workflow guards", () => {
   it("bounds platform checkout fetches without GNU timeout", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
@@ -583,6 +583,7 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "ios-build",
       "android",
     ]);
     expect(timingJob.if).toContain("always()");

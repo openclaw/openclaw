@@ -6,7 +6,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -38,7 +37,7 @@ import {
 } from "./session-transcript-readers.js";
 import {
   resolveFreshestSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -129,9 +128,8 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
-  const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
-  const store = loadSessionStore(target.storePath);
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
+  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
