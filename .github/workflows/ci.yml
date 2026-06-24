@@ -225,9 +225,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createQaSmokeProfileCategoryShards,
-          } from "./scripts/lib/ci-qa-smoke-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -252,6 +249,16 @@ jobs:
                   task: "contracts-plugins",
                 },
               ],
+            };
+          });
+          const { createQaSmokeProfileCategoryShards } = await import(
+            "./scripts/lib/ci-qa-smoke-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
+            }
+            return {
+              createQaSmokeProfileCategoryShards: () => [],
             };
           });
 

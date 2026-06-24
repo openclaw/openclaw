@@ -824,6 +824,8 @@ describe("ci workflow guards", () => {
     const smokeShardCategoryIds = smokeShards.map((shard) => shard.qa_category);
 
     expect(preflightStep.run).toContain("createQaSmokeProfileCategoryShards");
+    expect(preflightStep.run).toContain('await import(\n  "./scripts/lib/ci-qa-smoke-plan.mjs"');
+    expect(preflightStep.run).toContain("createQaSmokeProfileCategoryShards: () => []");
     expect(smokeProfile.categoryIds).toHaveLength(34);
     expect(taxonomyCategoryIds).toEqual(smokeProfile.categoryIds);
     expect(smokeShardCategoryIds).toEqual(
