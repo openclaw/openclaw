@@ -2593,6 +2593,10 @@ function remoteAwsMacosSwiftBootstrap() {
     'echo "[crabbox] current Swift is $1.$2; select/install Xcode 26.x or use a Blacksmith macOS runner with Xcode_26.1.app." >&2;',
     "return 2;",
     "fi;",
+    'openclaw_xcodebuild_version="$(xcodebuild -version 2>&1)" || { printf "%s\\n" "$openclaw_xcodebuild_version" >&2; echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; active developer directory does not provide usable xcodebuild." >&2; return 2; };',
+    'printf "%s\\n" "$openclaw_xcodebuild_version" >&2;',
+    'openclaw_xcode_major="$(printf "%s\\n" "$openclaw_xcodebuild_version" | sed -nE "s/^Xcode ([0-9]+)(\\..*)?$/\\1/p" | head -n 1)";',
+    'if [ "$openclaw_xcode_major" != "26" ]; then echo "[crabbox] OpenClaw macOS app proof requires Xcode 26.x; current xcodebuild is ${openclaw_xcode_major:-unknown}." >&2; return 2; fi;',
     "};",
     "openclaw_crabbox_require_macos_swift_62",
   ].join(" ");

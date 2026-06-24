@@ -1183,6 +1183,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("/Applications/Xcode-26*.app");
     expect(remoteCommand).toContain('sudo xcode-select -s "$openclaw_developer"');
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("xcodebuild -version");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(
       remoteCommand,
@@ -1204,6 +1206,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("pnpm --version >&2");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expectGroupedShellCommand(remoteCommand, "pnpm mac:package");
   });
 
@@ -2234,6 +2237,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
     expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
 

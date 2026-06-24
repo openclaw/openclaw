@@ -121,7 +121,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
     },
     {
       command: process.execPath,
