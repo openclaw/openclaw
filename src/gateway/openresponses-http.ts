@@ -17,6 +17,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logWarn } from "../logger.js";
@@ -783,7 +784,8 @@ export async function handleOpenResponsesHttpRequest(
       // Emit model.usage diagnostic so HTTP ingress traffic is visible to
       // diagnostics consumers (Langfuse, OTEL, Prometheus) just like channel
       // and cron turns. The raw usage from agentMeta carries the full breakdown.
-      if (agentMeta?.usage && isDiagnosticsEnabled(opts.config)) {
+      const cfg = opts.config as OpenClawConfig | undefined;
+      if (agentMeta?.usage && isDiagnosticsEnabled(cfg)) {
         const normalized = normalizeUsage(agentMeta.usage as Parameters<typeof normalizeUsage>[0]);
         if (normalized) {
           const input = normalized.input ?? 0;
@@ -795,7 +797,7 @@ export async function handleOpenResponsesHttpRequest(
           const costConfig = resolveModelCostConfig({
             provider: agentMeta.provider ?? "",
             model: agentMeta.model ?? "",
-            config: opts.config,
+            config: cfg,
           });
           const costUsd = estimateUsageCost({ usage: normalized, cost: costConfig });
           emitTrustedDiagnosticEvent({
