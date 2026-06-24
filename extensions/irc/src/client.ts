@@ -68,7 +68,7 @@ function toError(err: unknown): Error {
 
 let nickCollisionFallbackSeq = 0;
 
-function buildFallbackNick(nick: string): string {
+export function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
