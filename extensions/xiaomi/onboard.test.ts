@@ -18,15 +18,19 @@ describe("xiaomi onboard", () => {
     const provider = cfg.models?.providers?.xiaomi;
     expect(provider).toEqual(buildXiaomiProvider());
     expect(provider?.models.map((m) => m.id)).toEqual([
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
       "mimo-v2-flash",
       "mimo-v2-pro",
       "mimo-v2-omni",
     ]);
-    expect(cfg.agents?.defaults?.models?.["xiaomi/mimo-v2-flash"]).toEqual({ alias: "Xiaomi" });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi/mimo-v2-flash" });
+    expect(cfg.agents?.defaults?.models?.["xiaomi/mimo-v2.5"]).toEqual({
+      alias: "Xiaomi MiMo V2.5",
+    });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi/mimo-v2.5" });
     expectProviderOnboardPrimaryModel({
       applyConfig: applyXiaomiConfig,
-      modelRef: "xiaomi/mimo-v2-flash",
+      modelRef: "xiaomi/mimo-v2.5",
     });
   });
 
@@ -42,6 +46,8 @@ describe("xiaomi onboard", () => {
     });
     expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
       "mimo-v2-flash",
       "mimo-v2-pro",
       "mimo-v2-omni",
@@ -56,13 +62,13 @@ describe("xiaomi onboard", () => {
       baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
     });
     expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5-pro", "mimo-v2.5"]);
-    expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.5-pro"]).toEqual({
-      alias: "Xiaomi MiMo V2.5 Pro",
+    expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.5"]).toEqual({
+      alias: "Xiaomi MiMo V2.5",
     });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.5-pro" });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.5" });
     expectProviderOnboardPrimaryModel({
       applyConfig: (config) => applyXiaomiTokenPlanConfig(config, "ams"),
-      modelRef: "xiaomi-token-plan/mimo-v2.5-pro",
+      modelRef: "xiaomi-token-plan/mimo-v2.5",
     });
   });
 
