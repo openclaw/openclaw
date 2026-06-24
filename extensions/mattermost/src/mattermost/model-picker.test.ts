@@ -214,4 +214,66 @@ describe("Mattermost model picker", () => {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
+
+  it("resolves current and parent model overrides from targeted session entries", () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
+    try {
+      const storePath = path.join(testDir, "{agentId}.json");
+      const supportStorePath = path.join(testDir, "support.json");
+      const parentSessionKey = "agent:support:mattermost:default:channel-1";
+      const childSessionKey = `${parentSessionKey}:thread:root-1`;
+      const directSessionKey = "agent:support:mattermost:default:direct-1";
+      fs.writeFileSync(
+        supportStorePath,
+        JSON.stringify(
+          {
+            [parentSessionKey]: {
+              providerOverride: "anthropic",
+              modelOverride: "claude-sonnet-4-5",
+              sessionId: "parent-session",
+            },
+            [childSessionKey]: {
+              parentSessionKey,
+              sessionId: "child-session",
+            },
+            [directSessionKey]: {
+              providerOverride: "openai",
+              modelOverride: "gpt-5",
+              sessionId: "direct-session",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg: OpenClawConfig = {
+        session: {
+          store: storePath,
+        },
+      };
+
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: directSessionKey,
+          },
+          data,
+        }),
+      ).toBe("openai/gpt-5");
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: childSessionKey,
+          },
+          data,
+        }),
+      ).toBe("anthropic/claude-sonnet-4-5");
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 });

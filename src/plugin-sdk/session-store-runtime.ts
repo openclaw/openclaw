@@ -1,5 +1,6 @@
 // Narrow session-store helpers for channel hot paths.
 
+import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   listSessionEntries as listAccessorSessionEntries,
@@ -10,7 +11,6 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 import type { ResolvedSessionMaintenanceConfig } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -19,6 +19,7 @@ type SessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
+  readConsistency?: "latest";
   sessionKey: string;
   storePath?: string;
 };
@@ -89,6 +90,7 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }

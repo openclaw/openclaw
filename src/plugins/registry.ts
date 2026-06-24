@@ -2889,6 +2889,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   `plugin:${record.id}`,
                   {
                     allowSameOwnerRefresh: true,
+                    lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
                   },
                 );
                 if (!result.ok) {

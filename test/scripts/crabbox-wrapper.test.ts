@@ -732,8 +732,49 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "check:changed",
     ]);
 
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.scriptContent);
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
+    expect(output.args.slice(0, 7)).toEqual([
+      "run",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "wsl2",
+      "--provider",
+      "azure",
+    ]);
+    expect(output.args).toContain("--no-hydrate");
+    expect(output.args).toContain("--script");
+    expect(output.args).not.toContain("--shell");
+    expect(output.args.join(" ")).not.toContain("openclaw_crabbox_bootstrap_wsl2_js");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_wsl2_js");
+    expect(remoteCommand).toContain("node-v${node_version}-linux-${node_arch}.tar.gz");
+    expect(remoteCommand).toContain("sha256sum -c -");
+    expect(remoteCommand).toContain("corepack enable --install-directory");
+    expect(remoteCommand).toContain("pnpm install --frozen-lockfile");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_wsl2_js || exit $?");
+    expect(remoteCommand).toContain(
+      `{ openclaw_crabbox_env ${remoteChangedGateEnvPrefix} corepack pnpm check:changed\n}`,
+    );
+    expect(result.stderr).toContain("provider=azure");
+  });
+
+  it("keeps WSL2 non-JavaScript commands on the default hydrate path", () => {
+    const result = runWrapper(azureProviderHelp, [
+      "run",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "wsl2",
+      "--",
+      "echo",
+      "ok",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).toEqual([
       "run",
       "--target",
       "windows",
@@ -742,11 +783,11 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "--provider",
       "azure",
       "--",
-      "corepack",
-      "pnpm",
-      "check:changed",
+      "echo",
+      "ok",
     ]);
-    expect(result.stderr).toContain("provider=azure");
+    expect(output.args).not.toContain("--no-hydrate");
+    expect(output.args).not.toContain("--shell");
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
@@ -1183,6 +1224,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("/Applications/Xcode-26*.app");
     expect(remoteCommand).toContain('sudo xcode-select -s "$openclaw_developer"');
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("xcodebuild -version");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(
       remoteCommand,
@@ -1204,6 +1247,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("pnpm --version >&2");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expectGroupedShellCommand(remoteCommand, "pnpm mac:package");
   });
 
@@ -1567,7 +1611,16 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   it("preflights Swift and JS tooling for raw AWS macOS dist package scripts", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-      ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/package-mac-dist.sh"],
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "bash",
+        "scripts/package-mac-dist.sh",
+      ],
     );
 
     const output = parseFakeCrabboxOutput(result);
@@ -1599,7 +1652,16 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   it("keeps raw AWS macOS build-and-run scripts Swift-only", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-      ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/build-and-run-mac.sh"],
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "bash",
+        "scripts/build-and-run-mac.sh",
+      ],
     );
 
     const output = parseFakeCrabboxOutput(result);
@@ -2234,6 +2296,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
     expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
 

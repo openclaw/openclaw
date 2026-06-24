@@ -177,6 +177,10 @@ export {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
 export {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "../agents/provider-request-config.js";
+export {
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
