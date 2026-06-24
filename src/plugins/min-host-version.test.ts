@@ -128,3 +128,66 @@ describe("min-host-version", () => {
     },
   );
 });
+
+describe("checkMinHostVersion prerelease precedence", () => {
+  it("rejects an older prerelease host against a newer prerelease floor", () => {
+    expect(
+      checkMinHostVersion({
+        currentVersion: "2026.5.1-beta.1",
+        minHostVersion: ">=2026.5.1-beta.3",
+      }),
+    ).toEqual({
+      ok: false,
+      kind: "incompatible",
+      requirement: { raw: ">=2026.5.1-beta.3", minimumLabel: "2026.5.1-beta.3" },
+      currentVersion: "2026.5.1-beta.1",
+    });
+  });
+
+  it("rejects a prerelease host against the stable release floor", () => {
+    expect(
+      checkMinHostVersion({ currentVersion: "2026.5.1-beta.1", minHostVersion: ">=2026.5.1" }),
+    ).toEqual({
+      ok: false,
+      kind: "incompatible",
+      requirement: { raw: ">=2026.5.1", minimumLabel: "2026.5.1" },
+      currentVersion: "2026.5.1-beta.1",
+    });
+  });
+
+  it("accepts a newer prerelease host against an older prerelease floor", () => {
+    expect(
+      checkMinHostVersion({
+        currentVersion: "2026.5.1-beta.3",
+        minHostVersion: ">=2026.5.1-beta.1",
+      }),
+    ).toEqual({ ok: true, requirement: BETA_MIN_HOST_REQUIREMENT });
+  });
+});
+
+describe("checkMinHostVersion stable correction releases", () => {
+  it("accepts a stable correction host against its base stable floor", () => {
+    // 2026.5.3-1 is a stable correction release that ships after 2026.5.3, so it must satisfy the
+    // base floor; treating "-1" as a semver prerelease would wrongly reject the running host.
+    expect(
+      checkMinHostVersion({ currentVersion: "2026.5.3-1", minHostVersion: ">=2026.5.3" }),
+    ).toEqual({ ok: true, requirement: { raw: ">=2026.5.3", minimumLabel: "2026.5.3" } });
+  });
+
+  it("accepts a stable correction host against the same correction floor", () => {
+    expect(
+      checkMinHostVersion({ currentVersion: "2026.5.3-1", minHostVersion: ">=2026.5.3-1" }),
+    ).toEqual({ ok: true, requirement: { raw: ">=2026.5.3-1", minimumLabel: "2026.5.3-1" } });
+  });
+
+  it("rejects the base stable host against a later correction floor", () => {
+    expect(
+      checkMinHostVersion({ currentVersion: "2026.5.3", minHostVersion: ">=2026.5.3-1" }),
+    ).toEqual({
+      ok: false,
+      kind: "incompatible",
+      requirement: { raw: ">=2026.5.3-1", minimumLabel: "2026.5.3-1" },
+      currentVersion: "2026.5.3",
+    });
+  });
+});
