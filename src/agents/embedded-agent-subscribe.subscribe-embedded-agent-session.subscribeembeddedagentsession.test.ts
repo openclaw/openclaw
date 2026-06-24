@@ -359,6 +359,29 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("suppressLiveStreamOutput skips per-chunk preview but still delivers final text", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onAgentEvent,
+      suppressLiveStreamOutput: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Hello ");
+    emitAssistantTextDelta(emit, "world");
+
+    // No live preview events while suppressed (the per-chunk parsing path is skipped).
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toHaveLength(0);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedHarness({

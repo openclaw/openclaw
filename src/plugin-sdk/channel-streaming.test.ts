@@ -433,6 +433,14 @@ describe("channel-streaming", () => {
     ).toBe("✍️ Write: /tmp/demo/style.css");
     expect(
       formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "status",
+        title: "Fast",
+        summary: "💨Fast: auto-off(75s>=60s)",
+      }),
+    ).toBe("💨Fast: auto-off(75s>=60s)");
+    expect(
+      formatChannelProgressDraftLine({
         event: "patch",
         modified: ["/tmp/demo/index.html", "/tmp/demo/style.css"],
       }),
@@ -601,16 +609,16 @@ describe("channel-streaming", () => {
     expect(updated[0]).toMatchObject({
       id: "tool:call-1-output",
       kind: "command-output",
-      detail: "completed",
+      detail: "install dependencies",
       status: "completed",
-      text: "🛠️ completed",
+      text: "🛠️ install dependencies",
     });
     expect(
       formatChannelProgressDraftText({
         lines: updated,
         entry: { streaming: { progress: { label: false } } },
       }),
-    ).toBe("🛠️ completed");
+    ).toBe("🛠️ install dependencies");
 
     const recoveredItemLine = buildChannelProgressDraftLine({
       event: "item",
@@ -632,19 +640,20 @@ describe("channel-streaming", () => {
     if (!recoveredItemLine || !recoveredCommandLine) {
       throw new Error("expected recovered command progress lines");
     }
-    expect(
-      mergeChannelProgressDraftLine([recoveredItemLine], recoveredCommandLine, {
-        maxLines: 4,
-      }),
-    ).toMatchObject([
+    const recoveredUpdated = mergeChannelProgressDraftLine(
+      [recoveredItemLine],
+      recoveredCommandLine,
+      { maxLines: 4 },
+    );
+    expect(recoveredUpdated).toMatchObject([
       {
         id: "command-2",
         kind: "command-output",
-        detail: "completed",
         status: "completed",
-        text: "🛠️ completed",
+        text: "🛠️ Bash",
       },
     ]);
+    expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

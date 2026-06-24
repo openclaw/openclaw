@@ -14,6 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  writeNpmBeforePolicyFixture,
+  writeNpmFreshnessConflictFixture,
+} from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
 
@@ -32,74 +36,6 @@ function linkRequiredShellTools(bin: string) {
   for (const tool of ["ln", "mkdir"]) {
     symlinkSync(`/bin/${tool}`, join(bin, tool));
   }
-}
-
-function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
-  writeFileSync(
-    path,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
-      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
-      "  printf 'null\\n'",
-      "  exit 0",
-      "fi",
-      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "before" ]]; then',
-      "  printf 'Wed May 13 2026 21:25:20 GMT-0300 (Brasilia Standard Time)\\n'",
-      "  exit 0",
-      "fi",
-      'for arg in "$@"; do',
-      '  if [[ "$arg" == --before=* ]]; then',
-      "    printf '%s\\n' 'Exit prior to config file resolving' >&2",
-      "    printf '%s\\n' 'cause' >&2",
-      "    printf '%s\\n' '--min-release-age cannot be provided when using --before' >&2",
-      "    exit 64",
-      "  fi",
-      "done",
-      'for arg in "$@"; do',
-      '  if [[ "$arg" == "--min-release-age=0" ]]; then',
-      "    exit 0",
-      "  fi",
-      "done",
-      "exit 65",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(path, 0o755);
-}
-
-function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
-  writeFileSync(
-    path,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
-      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
-      "  printf 'null\\n'",
-      "  exit 0",
-      "fi",
-      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "before" ]]; then',
-      "  printf 'Wed May 13 2026 21:25:20 GMT-0300 (Brasilia Standard Time)\\n'",
-      "  exit 0",
-      "fi",
-      'for arg in "$@"; do',
-      '  if [[ "$arg" == "--min-release-age=0" ]]; then',
-      "    printf '%s\\n' 'min-release-age should not be selected for project-only npmrc' >&2",
-      "    exit 64",
-      "  fi",
-      "done",
-      'for arg in "$@"; do',
-      '  if [[ "$arg" == --before=* ]]; then',
-      "    exit 0",
-      "  fi",
-      "done",
-      "exit 65",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(path, 0o755);
 }
 
 describe("install-cli.sh", () => {
@@ -220,6 +156,60 @@ describe("install-cli.sh", () => {
     expect(script).toContain("activate_repo_pnpm_version()");
     expect(script).toContain('"$corepack_cmd" prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  });
+
+  it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
+    const bin = join(tmp, "bin");
+    const outer = join(tmp, "outer");
+    const repo = join(tmp, "repo");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(outer, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
+    writeFileSync(
+      join(repo, "package.json"),
+      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      join(bin, "pnpm"),
+      ["#!/bin/bash", '[[ "${1:-}" == "--version" ]] && echo "11.8.0"', ""].join("\n"),
+    );
+    writeFileSync(
+      join(bin, "corepack"),
+      [
+        "#!/bin/bash",
+        'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else exit 1; fi',
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+    chmodSync(join(bin, "corepack"), 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `cd ${JSON.stringify(outer)}`,
+          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
+          'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
+          `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
+        ].join("\n"),
+        { PATH: `${bin}:${process.env.PATH ?? ""}` },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`cmd=${join(bin, "corepack")} pnpm`);
+      expect(result.stdout).toContain("run=11.2.2");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("links an existing usable Alpine/musl Node runtime without sudo", () => {

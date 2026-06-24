@@ -1,0 +1,91 @@
+title: Large tool-result prompt cache stability
+
+scenario:
+  id: runtime-long-context-cache-stability
+  surface: runtime
+  runtimeParityTier: soak
+  coverage:
+    primary:
+      - runtime.reasoning-and-cache-controls
+    secondary:
+      - runtime.long-context
+  objective: Exercise repeated same-session turns after a large tool result so prompt assembly and provider cache reuse remain stable.
+  successCriteria:
+    - The agent reads a large workspace fixture and returns the warmup marker from the capped read output.
+    - A follow-up turn reuses the same session and returns the hit marker.
+    - Mock-provider evidence shows the capped large tool result remained in the assembled prompt.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/reference/test.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/attempt.ts
+    - src/agents/embedded-agent-runner/tool-result-truncation.ts
+  execution:
+    kind: flow
+    summary: Read a large fixture, then verify a cache-sensitive follow-up turn.
+    config:
+      sessionKey: agent:qa:long-context-cache-stability
+      fixtureFile: large-cache-fixture.txt
+      cacheEvidenceNeedle: CACHE-FIXTURE-0550
+      warmupMarker: QA-LARGE-CACHE-WARMUP-OK
+      hitMarker: QA-LARGE-CACHE-HIT-OK
+
+flow:
+  steps:
+    - name: preserves the large tool-result prompt across follow-up turns
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: fixturePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+        - call: fs.writeFile
+          args:
+            - ref: fixturePath
+            - expr: "Array.from({ length: 1600 }, (_entry, index) => `CACHE-FIXTURE-${String(index + 1).padStart(4, '0')}: stable tool-result evidence for prompt-cache reuse across long sessions.\\n`).join('')"
+            - utf8
+        - set: sessionKey
+          value:
+            expr: config.sessionKey
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: "`Read ${config.fixtureFile}, verify it contains ${config.cacheEvidenceNeedle}, then reply exactly ${config.warmupMarker}.`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.warmupMarker)))"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: "`Using the already-read ${config.fixtureFile}, confirm ${config.cacheEvidenceNeedle} is still present and reply exactly ${config.hitMarker}.`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.hitMarker))).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - set: debugRequests
+          value:
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+        - assert:
+            expr: "!env.mock || debugRequests.some((request, index) => request.plannedToolName === 'read' && request.plannedToolArgs?.path === config.fixtureFile && typeof request.plannedToolCallId === 'string' && debugRequests.slice(index + 1).some((result, resultOffset) => result.toolOutputCallId === request.plannedToolCallId && String(result.toolOutput ?? '').includes(config.cacheEvidenceNeedle) && (String(result.toolOutput ?? '').includes('[Read output capped at 50KB') || (String(result.toolOutput ?? '').includes('...(truncated)...') && String(result.toolOutput ?? '').length <= 13000)) && debugRequests.slice(index + resultOffset + 2).some((followup) => followup.plannedToolName === 'read' && followup.plannedToolArgs?.path === config.fixtureFile && String(followup.allInputText ?? '').includes(config.cacheEvidenceNeedle) && (String(followup.allInputText ?? '').includes('[Read output capped at 50KB') || String(followup.allInputText ?? '').includes('...(truncated)...')))))"
+            message:
+              expr: "`large capped read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, plannedToolCallId: request.plannedToolCallId ?? null, toolOutputCallId: request.toolOutputCallId ?? null, toolOutputLength: String(request.toolOutput ?? '').length, toolOutputHasNeedle: String(request.toolOutput ?? '').includes(config.cacheEvidenceNeedle), toolOutputHasReadCap: String(request.toolOutput ?? '').includes('[Read output capped at 50KB'), toolOutputHasCodexTruncation: String(request.toolOutput ?? '').includes('...(truncated)...'), inputHasNeedle: String(request.allInputText ?? '').includes(config.cacheEvidenceNeedle), inputHasReadCap: String(request.allInputText ?? '').includes('[Read output capped at 50KB'), inputHasCodexTruncation: String(request.allInputText ?? '').includes('...(truncated)...') })))}`"
+      detailsExpr: "outbound?.text ?? config.hitMarker"

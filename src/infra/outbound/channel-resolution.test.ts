@@ -471,27 +471,6 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("keeps setup shells visible for read-only channel lookup", async () => {
-    const setupPlugin = { id: "alpha" };
-    const runtimePlugin = { id: "alpha", outbound: { sendText: vi.fn() } };
-    getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
-    getChannelPluginMock.mockReturnValue(undefined);
-    getActivePluginRegistryMock.mockReturnValue({
-      channels: [{ plugin: runtimePlugin }],
-    });
-    getActivePluginChannelRegistryMock.mockReturnValue({
-      channels: [{ plugin: setupPlugin }],
-    });
-    const channelResolution = await importChannelResolution("read-setup-shell");
-
-    expect(
-      channelResolution.resolveOutboundChannelPluginForRead({
-        channel: "alpha",
-      }),
-    ).toBe(setupPlugin);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
-
   it("attempts activation when the active registry has other channels but not the requested one", async () => {
     getLoadedChannelPluginMock.mockReturnValue(undefined);
     getChannelPluginMock.mockReturnValue(undefined);

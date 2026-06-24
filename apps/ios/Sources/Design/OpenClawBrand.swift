@@ -47,11 +47,13 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
 }
 
 enum OpenClawBrand {
-    static let accent = Color(uiColor: UIColor { traits in
+    static let uiAccent = UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 198 / 255.0, green: 62 / 255.0, blue: 56 / 255.0, alpha: 1)
             : UIColor(red: 183 / 255.0, green: 56 / 255.0, blue: 51 / 255.0, alpha: 1)
-    })
+    }
+
+    static let accent = Color(uiColor: Self.uiAccent)
     static let accentHot = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 232 / 255.0, green: 92 / 255.0, blue: 86 / 255.0, alpha: 1)
@@ -64,6 +66,7 @@ enum OpenClawBrand {
     })
     static let ok = Color(red: 34 / 255.0, green: 197 / 255.0, blue: 94 / 255.0)
     static let warn = Color(red: 245 / 255.0, green: 158 / 255.0, blue: 11 / 255.0)
+    static let info = Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
     static let graphite = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 20 / 255.0, green: 22 / 255.0, blue: 24 / 255.0, alpha: 1)

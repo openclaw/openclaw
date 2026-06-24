@@ -25,6 +25,7 @@ import {
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   fastWait,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   rateLimitsUpdated,
   runCodexAppServerAttempt,
@@ -48,9 +49,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -138,6 +137,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: (
@@ -439,6 +439,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           close,
           addNotificationHandler: () => () => undefined,
@@ -959,6 +960,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1040,6 +1042,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1147,6 +1150,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1253,6 +1257,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1347,6 +1352,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1514,6 +1520,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1581,6 +1588,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1677,6 +1685,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1797,6 +1806,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1891,6 +1901,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2004,6 +2015,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2113,6 +2125,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2209,6 +2222,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           getActiveSharedLeaseCountForUnscopedNotifications: () => 2,
           addNotificationHandler: (handler: typeof notify) => {
@@ -2316,6 +2330,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2409,6 +2424,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2522,6 +2538,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3150,6 +3167,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3225,6 +3243,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3308,6 +3327,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3399,6 +3419,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3481,6 +3502,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3559,6 +3581,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3637,6 +3660,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3722,6 +3746,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4191,6 +4216,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;

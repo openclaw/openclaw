@@ -12,7 +12,10 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { CliOutput } from "./cli-output.js";
@@ -415,6 +418,12 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channelContext: params.channelContext,
+        }),
       } as const;
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
@@ -548,6 +557,12 @@ export async function runPreparedCliAgent(
       ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
       : {}),
     ...buildAgentHookContextChannelFields(params),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+    }),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
@@ -1239,62 +1254,4 @@ export async function runPreparedCliAgent(
     throw new Error("CLI run completed without a result");
   }
   return runResult;
-}
-
-/** Legacy Claude-specific wrapper params for the generic CLI runner. */
-export type RunClaudeCliAgentParams = Omit<RunCliAgentParams, "provider" | "cliSessionId"> & {
-  provider?: string;
-  claudeSessionId?: string;
-};
-
-/** Converts legacy Claude CLI wrapper params into generic CLI runner params. */
-export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): RunCliAgentParams {
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    agentId: params.agentId,
-    trigger: params.trigger,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-    config: params.config,
-    prompt: params.prompt,
-    persistAssistantTranscript: params.persistAssistantTranscript,
-    storePath: params.storePath,
-    currentInboundEventKind: params.currentInboundEventKind,
-    provider: params.provider ?? "claude-cli",
-    model: params.model ?? "opus",
-    thinkLevel: params.thinkLevel,
-    timeoutMs: params.timeoutMs,
-    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-    runId: params.runId,
-    jobId: params.jobId,
-    extraSystemPrompt: params.extraSystemPrompt,
-    inputProvenance: params.inputProvenance,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    silentReplyPromptMode: params.silentReplyPromptMode,
-    extraSystemPromptStatic: params.extraSystemPromptStatic,
-    ownerNumbers: params.ownerNumbers,
-    // Legacy `claudeSessionId` callers predate the shared CLI session contract.
-    // Ignore it here so the compatibility wrapper does not accidentally resume
-    // an incompatible Claude session on the generic runner path.
-    images: params.images,
-    messageChannel: params.messageChannel,
-    messageProvider: params.messageProvider,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    currentInboundAudio: params.currentInboundAudio,
-    senderId: params.senderId,
-    senderIsOwner: params.senderIsOwner,
-  };
-}
-
-/** Runs the legacy Claude CLI wrapper through the generic CLI runner. */
-export async function runClaudeCliAgent(
-  params: RunClaudeCliAgentParams,
-): Promise<EmbeddedAgentRunResult> {
-  return runCliAgent(buildRunClaudeCliAgentParams(params));
 }

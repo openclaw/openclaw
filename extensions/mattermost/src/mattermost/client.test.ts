@@ -1,5 +1,16 @@
 // Mattermost tests cover client plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  };
+});
+
 import {
   createMattermostClient,
   createMattermostPost,
@@ -47,6 +58,55 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
     throw new Error("expected JSON object request body");
   }
   return parsed as Record<string, unknown>;
+}
+
+function streamingMattermostResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const arrayBuffer = vi.fn(async () => {
+    throw new Error("guarded Mattermost responses must stay streaming");
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+      arrayBuffer,
+    } as unknown as Response,
+    arrayBuffer,
+  };
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
@@ -98,6 +158,72 @@ describe("normalizeMattermostBaseUrl", () => {
 // ── createMattermostClient ───────────────────────────────────────────
 
 describe("createMattermostClient", () => {
+  it("keeps guarded Mattermost responses streaming until callers consume them", async () => {
+    const release = vi.fn(async () => {});
+    const { response, arrayBuffer } = streamingMattermostResponse({ id: "u1" });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).resolves.toEqual({ id: "u1" });
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels guarded Mattermost error bodies", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(512)}tail`, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    let caught: Error | undefined;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("Mattermost API 503 Service Unavailable");
+    expect(caught?.message).toContain("upstream unavailable");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases guarded Mattermost responses when upstream body reads fail", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("upstream body failed");
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow("upstream body failed");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("creates a client with normalized baseUrl", () => {
     const { mockFetch } = createMockFetch();
     const client = createMattermostClient({

@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
+import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
@@ -288,6 +289,7 @@ type QaEvidenceBuildBase = {
   channelDriver?: string;
   packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
+  repoRoot?: string;
   runner?: string;
 };
 
@@ -349,7 +351,7 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function resolveQaEvidenceProfile(params: {
+export function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
   explicit?: QaEvidenceProfile;
 }) {
@@ -388,9 +390,31 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
   return id ? { id } : undefined;
 }
 
-function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
+function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
+  try {
+    const ref = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: repoRoot ?? process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return ref || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveQaEvidenceEnvironment(params: {
+  env?: NodeJS.ProcessEnv;
+  repoRoot?: string;
+}) {
   return {
-    ref: env?.OPENCLAW_QA_REF?.trim() || env?.GITHUB_SHA?.trim() || null,
+    // GitHub's GITHUB_SHA describes the workflow event, not necessarily the
+    // checked-out ref selected by a manual or remote QA run.
+    ref:
+      params.env?.OPENCLAW_QA_REF?.trim() ||
+      resolveQaEvidenceCheckoutRef(params.repoRoot) ||
+      params.env?.GITHUB_SHA?.trim() ||
+      null,
     os: process.platform,
     nodeVersion: process.version,
   };
@@ -550,7 +574,10 @@ export function buildQaSuiteEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -622,7 +649,10 @@ function buildTestRunnerEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({
     env: params.env,
@@ -705,6 +735,20 @@ export function buildPlaywrightEvidenceSummary(
   });
 }
 
+export function buildScriptEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "script",
+    testKind: "script-test",
+    runner: params.runner ?? "script",
+  });
+}
+
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
     checks: readonly QaEvidenceLiveTransportCheckInput[];
@@ -712,7 +756,10 @@ export function buildLiveTransportEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
