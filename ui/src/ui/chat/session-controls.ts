@@ -353,7 +353,9 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
     return;
   }
   state.chatSessionPickerResult = projectChatSessionPickerResult(state, listResult);
-  if (guardId !== null) finishChatSessionPickerSearchRequest(state, guardId);
+  if (guardId !== null) {
+    finishChatSessionPickerSearchRequest(state, guardId);
+  }
 }
 
 async function saveChatSessionPickerRename(
