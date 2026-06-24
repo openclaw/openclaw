@@ -2208,6 +2208,45 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
+  it("scales fresh-thread mirrored continuity with the runtime context budget", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("budget-sensitive oldest anchor: keep the migration checklist", Date.now()),
+    );
+    for (let index = 0; index < 6; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(`budget filler ${index}: ${"x".repeat(18_000)}`, Date.now() + index + 1),
+      );
+    }
+    sessionManager.appendMessage(
+      assistantMessage("budget-sensitive recent anchor: continue the migration", Date.now() + 20),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 80_000;
+    params.prompt = "continue with budget-aware context";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeGreaterThan(100_000);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("budget-sensitive oldest anchor: keep the migration checklist");
+    expect(inputText).toContain("budget filler 0:");
+    expect(inputText).toContain("budget-sensitive recent anchor: continue the migration");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue with budget-aware context");
+  });
+
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2380,6 +2419,60 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("copilot mirror context also matters");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
+  });
+
+  it("scales stale-binding mirrored continuity with the runtime context budget", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
+    sessionManager.appendMessage(
+      userMessage(
+        "budget-sensitive stale anchor: preserve the handoff checklist",
+        bindingUpdatedAt + 1_000,
+      ),
+    );
+    for (let index = 0; index < 6; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `stale budget filler ${index}: ${"x".repeat(18_000)}`,
+          bindingUpdatedAt + 2_000 + index,
+        ),
+      );
+    }
+    sessionManager.appendMessage(
+      assistantMessage("budget-sensitive stale recent anchor", bindingUpdatedAt + 20_000),
+    );
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 80_000;
+    params.prompt = "continue from stale mirrored history";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeGreaterThan(100_000);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("old native-owned context");
+    expect(inputText).toContain("budget-sensitive stale anchor: preserve the handoff checklist");
+    expect(inputText).toContain("stale budget filler 0:");
+    expect(inputText).toContain("budget-sensitive stale recent anchor");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue from stale mirrored history");
   });
 
   it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
