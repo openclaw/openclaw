@@ -5,6 +5,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import { Type } from "typebox";
 import { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import { WORKBOARD_STATUSES } from "./types.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   const record = (ctx ?? {}) as Record<string, unknown>;
@@ -998,6 +999,28 @@ export function createWorkboardTools(params: {
           blocked: result.blocked.map(redactClaimToken),
           orchestrated: result.orchestrated.map(redactClaimToken),
         });
+      },
+    },
+    {
+      name: "workboard_move",
+      label: "Workboard Move",
+      description:
+        "Move a Workboard card to a different status (column). Requires claim scope for active cards.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          status: Type.String({ description: `Target status: ${WORKBOARD_STATUSES.join(", ")}.` }),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        const targetStatus = record.status as string;
+        if (!(WORKBOARD_STATUSES as readonly string[]).includes(targetStatus)) {
+          throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+        }
+        return redactedCardResult(await store.move(id, targetStatus, undefined));
       },
     },
     {

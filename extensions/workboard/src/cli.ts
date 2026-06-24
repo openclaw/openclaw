@@ -154,6 +154,43 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     );
 
   workboard
+    .command("move")
+    .argument("<id>", "Card id or prefix")
+    .description("Move a Workboard card to a different status (column)")
+    .option("--status <status>", "Target status")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { status?: string }) => {
+      if (!options.status) {
+        throw new Error("--status is required. Use: workboard move <id> --status <status>");
+      }
+      const cards = await params.store.list();
+      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+      if (!card) {
+        throw new Error(error);
+      }
+      const validStatuses = [
+        "triage",
+        "backlog",
+        "todo",
+        "scheduled",
+        "ready",
+        "running",
+        "review",
+        "blocked",
+        "done",
+      ];
+      if (!validStatuses.includes(options.status)) {
+        throw new Error(`status must be one of: ${validStatuses.join(", ")}.`);
+      }
+      const updated = await params.store.move(card.id, options.status, undefined);
+      if (options.json) {
+        writeJson({ card: redactClaimToken(updated) });
+      } else {
+        writeLine(formatCardLine(updated));
+      }
+    });
+
+  workboard
     .command("create")
     .argument("<title...>", "Card title")
     .description("Create a Workboard card")
