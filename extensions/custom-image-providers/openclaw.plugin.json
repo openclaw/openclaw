@@ -1,0 +1,48 @@
+{
+  "id": "custom-image-providers",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "contracts": {
+    "imageGenerationProviders": ["requesty", "pinai", "muskai"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "providerIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "providers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "label": { "type": "string" },
+            "defaultModel": { "type": "string" },
+            "models": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "enableEdits": { "type": "boolean" },
+            "maxInputImages": { "type": "number" },
+            "sizes": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "apiKey": { "type": "string" },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
