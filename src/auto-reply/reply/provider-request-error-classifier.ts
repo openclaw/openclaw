@@ -3,7 +3,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   classifyProviderRuntimeFailureKind,
-} from "../../agents/embedded-agent-helpers.js";
+} from "../../agents/embedded-agent-helpers/errors.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
@@ -37,7 +38,11 @@ export function classifyProviderRequestError(
   err: unknown,
 ): ProviderRequestErrorClassification | undefined {
   const technicalMessage = formatErrorMessage(err);
-  if (classifyProviderRuntimeFailureKind(technicalMessage) === "auth_invalid_token") {
+  const isTypedAuthFailure = isFailoverError(err) && err.reason === "auth" && err.status === 401;
+  if (
+    isTypedAuthFailure ||
+    classifyProviderRuntimeFailureKind(technicalMessage) === "auth_invalid_token"
+  ) {
     return {
       code: "provider_authentication_error",
       userMessage: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
