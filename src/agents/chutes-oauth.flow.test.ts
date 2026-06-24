@@ -249,7 +249,8 @@ describe("chutes-oauth", () => {
  *     (the bounded reader preserves the same JSON.parse contract).
  */
 describe("chutes-oauth bounded reader", () => {
-  function createStreamingJsonResponse({ totalBytes, chunkSize = 1024 * 1024 }) {
+  function createStreamingJsonResponse(opts: { totalBytes: number; chunkSize?: number }) {
+    const { totalBytes, chunkSize = 1024 * 1024 } = opts;
     let written = 0;
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
