@@ -60,18 +60,5 @@ export function createAnthropicProvider(): ProviderPlugin {
         },
       },
     ],
-    classifyFailoverReason(ctx) {
-      const code = ctx.code?.trim().toUpperCase();
-      if (!code) {
-        return null;
-      }
-      if (code === "RATE_LIMIT_ERROR") {
-        return "rate_limit";
-      }
-      if (code === "API_ERROR") {
-        return "timeout";
-      }
-      return null;
-    },
   };
 }

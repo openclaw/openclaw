@@ -891,11 +891,32 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
-function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
+/** Provider-owned code-to-reason mappings keyed by "provider:code". */
+const PROVIDER_CODE_REASON_MAP: Record<string, FailoverReason> = {
+  "openai:SERVER_ERROR": "server_error",
+  "openai:INSUFFICIENT_QUOTA": "billing",
+  "google:UNAVAILABLE": "overloaded",
+  "google:DEADLINE_EXCEEDED": "timeout",
+  "google:INTERNAL": "server_error",
+  "google-antigravity:UNAVAILABLE": "overloaded",
+  "google-antigravity:DEADLINE_EXCEEDED": "timeout",
+  "google-antigravity:INTERNAL": "server_error",
+  "google-vertex:UNAVAILABLE": "overloaded",
+  "google-vertex:DEADLINE_EXCEEDED": "timeout",
+  "google-vertex:INTERNAL": "server_error",
+  "anthropic:RATE_LIMIT_ERROR": "rate_limit",
+  "anthropic:API_ERROR": "timeout",
+};
+
+function classifyFailoverReasonFromCode(
+  raw: string | undefined,
+  provider?: string,
+): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
     return null;
   }
+  // Generic codes (cross-provider).
   switch (normalized) {
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
@@ -913,8 +934,12 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "OVERLOADED_ERROR":
       return "overloaded";
   }
-  // Provider-specific code classification now lives in each provider's
-  // classifyFailoverReason hook; the core classifier stays generic.
+  // Provider-owned code mappings.
+  if (provider) {
+    const key = `${normalizeOptionalLowercaseString(provider)}:${normalized}`;
+    const mapped = PROVIDER_CODE_REASON_MAP[key];
+    if (mapped) return mapped;
+  }
   return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
 }
 
@@ -1180,7 +1205,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : mergeMessageAndDetailClassification(messageClassification, detailClassification);
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  const codeReason = classifyFailoverReasonFromCode(signal.code, signal.provider);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
