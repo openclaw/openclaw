@@ -1,6 +1,6 @@
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { RouteId } from "../app-routes.ts";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./dashboard-header.ts";
 import "./theme-mode-toggle.ts";
@@ -12,7 +12,7 @@ export class AppTopbar extends LitElement {
     return this;
   }
 
-  @property({ attribute: false }) routeId?: RouteId;
+  @property({ attribute: false }) routeId?: NavigationRouteId;
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) agentLabel = "";
   @property({ attribute: false }) navDrawerOpen = false;
@@ -22,14 +22,16 @@ export class AppTopbar extends LitElement {
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onToggleDrawer?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
+  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) overviewHref = "";
+  @property({ attribute: false }) searchDisabled = false;
 
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
   }
 
-  private readonly handleNavigate = (event: CustomEvent<RouteId>) => {
+  private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
     this.onNavigate?.(event.detail);
   };
 
@@ -56,12 +58,14 @@ export class AppTopbar extends LitElement {
               .routeId=${this.routeId}
               .basePath=${this.basePath}
               .agentLabel=${this.agentLabel}
+              .overviewHref=${this.overviewHref}
               @navigate=${this.handleNavigate}
             ></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
             <button
               class="topbar-search"
+              ?disabled=${this.searchDisabled || !this.onOpenPalette}
               @click=${() => this.onOpenPalette?.()}
               title=${t("chat.commandPaletteTitle")}
               aria-label=${t("chat.openCommandPalette")}

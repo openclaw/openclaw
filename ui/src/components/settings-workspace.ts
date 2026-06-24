@@ -8,10 +8,9 @@ import {
 import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
-import type { AppViewState } from "../ui/app-view-state.ts";
 
 function renderSettingsSectionNav(
-  state: AppViewState,
+  basePath: string,
   currentRouteId: RouteId,
   navigate: (routeId: RouteId) => void,
 ) {
@@ -22,7 +21,7 @@ function renderSettingsSectionNav(
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
       ${SETTINGS_NAVIGATION_ROUTES.map((routeId) => {
         const active = currentRouteId === routeId;
-        const href = pathForRoute(routeId, state.basePath);
+        const href = pathForRoute(routeId, basePath);
         return html`
           <a
             href=${href}
@@ -55,14 +54,14 @@ function renderSettingsSectionNav(
 }
 
 export function renderSettingsWorkspace(
-  state: AppViewState,
+  basePath: string,
   body: unknown,
   routeId: RouteId,
   navigate: (routeId: RouteId) => void,
 ) {
   return html`
     <section class="settings-workspace">
-      ${renderSettingsSectionNav(state, routeId, navigate)}
+      ${renderSettingsSectionNav(basePath, routeId, navigate)}
       <div class="settings-workspace__body">${body}</div>
     </section>
   `;

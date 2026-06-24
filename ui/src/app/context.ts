@@ -1,6 +1,8 @@
-import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { Router } from "../router/types.ts";
-import type { RouterOutletSelection, RouterOutletSnapshotStore } from "./router-outlet.ts";
+import { createContext } from "@lit/context";
+import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
+import type { RouteId } from "../app-routes.ts";
+import type { RouteLocation } from "../router/types.ts";
+import type { ApplicationSessions } from "./sessions.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export type ApplicationGatewaySnapshot = {
@@ -26,6 +28,7 @@ export type ApplicationGateway = {
   start: () => void;
   stop: () => void;
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
+  subscribeEvents: (listener: GatewayEventListener) => () => void;
 };
 
 export type ApplicationTheme = {
@@ -33,27 +36,31 @@ export type ApplicationTheme = {
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
 };
 
-export type ApplicationPageContext<TRouteId extends string = string> = {
+export type ApplicationNavigationPreferencesSnapshot = {
+  navCollapsed: boolean;
+  navGroupsCollapsed: Record<string, boolean>;
+  recentSessionsCollapsed: boolean;
+};
+
+export type ApplicationNavigationPreferences = {
+  readonly snapshot: ApplicationNavigationPreferencesSnapshot;
+  update: (patch: Partial<ApplicationNavigationPreferencesSnapshot>) => void;
+  subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
+};
+
+export type ApplicationNavigationOptions = Pick<RouteLocation, "search" | "hash">;
+
+export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly assistantName: string;
   readonly gateway: ApplicationGateway;
+  readonly sessions: ApplicationSessions;
+  readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
-  readonly navigate: (routeId: TRouteId) => void;
+  readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
-export type StableApplicationContext<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = ApplicationPageContext<TRouteId> & {
-  readonly router: Router<TRouteId, ApplicationPageContext<TRouteId>, TModule, TData>;
-  readonly routeSnapshot: RouterOutletSnapshotStore<TRouteId, TModule, TData>;
-  readonly dispose: () => void;
-};
-
-export type ApplicationRouteSelection<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = RouterOutletSelection<TRouteId, TModule, TData>;
+export const applicationContext =
+  createContext<ApplicationContext<RouteId>>("openclaw.application");

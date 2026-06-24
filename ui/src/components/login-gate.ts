@@ -3,6 +3,7 @@ import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-routes.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
@@ -11,7 +12,6 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { controlUiPublicAssetPath } from "../ui/public-assets.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 

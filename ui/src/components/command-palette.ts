@@ -1,11 +1,10 @@
 // Control UI component renders the command palette.
 import { LitElement, html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../app-routes.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { SLASH_COMMANDS } from "../ui/chat/slash-commands.ts";
 import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
@@ -16,17 +15,6 @@ type PaletteItem = {
   action: string;
   description?: string;
 };
-
-function buildSlashPaletteItems(): PaletteItem[] {
-  return SLASH_COMMANDS.map((command) => ({
-    id: `slash:${command.name}`,
-    label: `/${command.name}`,
-    icon: command.icon ?? "terminal",
-    category: "search",
-    action: `/${command.name}`,
-    description: command.description,
-  }));
-}
 
 function getPaletteBaseItems(): PaletteItem[] {
   return [
@@ -73,33 +61,25 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "nav:agents",
     },
     {
-      id: "skill-shell",
-      label: t("overview.palette.items.shellCommand"),
-      icon: "monitor",
-      category: "skills",
-      action: "/skill shell",
-      description: t("overview.palette.descriptions.shellCommand"),
-    },
-    {
-      id: "skill-debug",
-      label: t("overview.palette.items.debugMode"),
-      icon: "bug",
-      category: "skills",
+      id: "slash:verbose",
+      label: "/verbose",
+      icon: "terminal",
+      category: "search",
       action: "/verbose full",
-      description: t("overview.palette.descriptions.debugMode"),
+      description: "Toggle verbose mode.",
     },
   ];
 }
 
 function getPaletteItemsInternal(): PaletteItem[] {
-  return [...buildSlashPaletteItems(), ...getPaletteBaseItems()];
+  return getPaletteBaseItems();
 }
 
 export function getPaletteItems(): readonly PaletteItem[] {
   return getPaletteItemsInternal();
 }
 
-export type CommandPaletteProps = {
+type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
@@ -425,15 +405,68 @@ export class CommandPalette extends LitElement {
     return this;
   }
 
-  @property({ attribute: false }) props?: CommandPaletteProps;
+  @property({ attribute: false }) onOpen?: () => void | Promise<void>;
+  @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
+  @property({ attribute: false }) onSlashCommand?: (command: string) => void;
+  @state() private open = false;
+  @state() private query = "";
+  @state() private activeIndex = 0;
 
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
+    document.addEventListener("keydown", this.handleGlobalKeydown);
   }
 
+  override disconnectedCallback() {
+    document.removeEventListener("keydown", this.handleGlobalKeydown);
+    if (activeDialog) {
+      activeDialog.close();
+      restoreFocus();
+    }
+    activeProps = null;
+    super.disconnectedCallback();
+  }
+
+  openPalette() {
+    this.open = true;
+    this.query = "";
+    this.activeIndex = 0;
+  }
+
+  private readonly togglePalette = () => {
+    if (this.open) {
+      this.open = false;
+      restoreFocus();
+      return;
+    }
+    this.openPalette();
+  };
+
+  private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      this.togglePalette();
+    }
+  };
+
   override render() {
-    return this.props ? renderCommandPalette(this.props) : nothing;
+    return renderCommandPalette({
+      open: this.open,
+      query: this.query,
+      activeIndex: this.activeIndex,
+      onOpen: this.onOpen,
+      onToggle: this.togglePalette,
+      onQueryChange: (query) => {
+        this.query = query;
+        this.activeIndex = 0;
+      },
+      onActiveIndexChange: (index) => {
+        this.activeIndex = index;
+      },
+      onNavigate: (routeId) => this.onNavigate?.(routeId),
+      onSlashCommand: (command) => this.onSlashCommand?.(command),
+    });
   }
 }
 
