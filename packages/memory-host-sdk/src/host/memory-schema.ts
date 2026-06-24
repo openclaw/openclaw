@@ -67,6 +67,46 @@ function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: stri
   }
 }
 
+function canonicalTableHasRows(db: DatabaseSync, table: string): boolean {
+  return db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get() !== undefined;
+}
+
+function tableRowCount(db: DatabaseSync, table: string): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as
+    | { count?: unknown }
+    | undefined;
+  return Number(row?.count ?? 0);
+}
+
+// Verify a legacy table was fully copied before the caller drops it. When the
+// canonical table was empty before the copy, INSERT OR IGNORE from its single
+// legacy source cannot collide, so a row-count match proves every row landed.
+// Only a canonical table that already held rows can hide a key whose value
+// differs from legacy, so the per-row full-tuple anti-join runs only then.
+// Skipping it for the common (empty) case keeps large stores (90k+ chunks,
+// 170k+ cache rows) from spending the whole migration window comparing
+// text/embedding blobs row by row, timing out, and rolling the savepoint back
+// on every interrupt — which left the legacy tables in place and re-ran the
+// migration forever.
+function verifyLegacyRowsCopied(
+  db: DatabaseSync,
+  params: {
+    canonicalPrefilled: boolean;
+    legacyTable: string;
+    canonicalTable: string;
+    conflictQuery: string;
+    label: string;
+  },
+): void {
+  if (params.canonicalPrefilled) {
+    assertLegacyRowsCopied(db, params.conflictQuery, params.label);
+    return;
+  }
+  if (tableRowCount(db, params.canonicalTable) !== tableRowCount(db, params.legacyTable)) {
+    throw new Error(`legacy memory ${params.label} rows conflict with canonical memory index rows`);
+  }
+}
+
 function migrateCanonicalMemoryIndexSourcesPrimaryKey(db: DatabaseSync): void {
   if (
     !tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS) ||
@@ -132,6 +172,9 @@ function migrateLegacyMemoryIndexTables(
 
   db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
   try {
+    const metaPrefilled = canonicalTableHasRows(db, MEMORY_INDEX_META_TABLE);
+    const sourcesPrefilled = canonicalTableHasRows(db, MEMORY_INDEX_SOURCES_TABLE);
+    const chunksPrefilled = canonicalTableHasRows(db, MEMORY_INDEX_CHUNKS_TABLE);
     db.exec(`
       INSERT OR IGNORE INTO ${MEMORY_INDEX_META_TABLE} (key, value)
       SELECT key, value FROM meta;
@@ -145,19 +188,24 @@ function migrateLegacyMemoryIndexTables(
       SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       FROM chunks;
     `);
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
+    verifyLegacyRowsCopied(db, {
+      canonicalPrefilled: metaPrefilled,
+      legacyTable: "meta",
+      canonicalTable: MEMORY_INDEX_META_TABLE,
+      label: "meta",
+      conflictQuery: `SELECT COUNT(*) AS missing
        FROM meta AS legacy
        WHERE NOT EXISTS (
          SELECT 1 FROM ${MEMORY_INDEX_META_TABLE} AS canonical
          WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
        )`,
-      "meta",
-    );
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
+    });
+    verifyLegacyRowsCopied(db, {
+      canonicalPrefilled: sourcesPrefilled,
+      legacyTable: "files",
+      canonicalTable: MEMORY_INDEX_SOURCES_TABLE,
+      label: "files",
+      conflictQuery: `SELECT COUNT(*) AS missing
        FROM files AS legacy
        WHERE NOT EXISTS (
          SELECT 1 FROM ${MEMORY_INDEX_SOURCES_TABLE} AS canonical
@@ -167,11 +215,13 @@ function migrateLegacyMemoryIndexTables(
            AND canonical.mtime IS legacy.mtime
            AND canonical.size IS legacy.size
        )`,
-      "files",
-    );
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
+    });
+    verifyLegacyRowsCopied(db, {
+      canonicalPrefilled: chunksPrefilled,
+      legacyTable: "chunks",
+      canonicalTable: MEMORY_INDEX_CHUNKS_TABLE,
+      label: "chunks",
+      conflictQuery: `SELECT COUNT(*) AS missing
        FROM chunks AS legacy
        WHERE NOT EXISTS (
          SELECT 1 FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
@@ -186,8 +236,7 @@ function migrateLegacyMemoryIndexTables(
            AND canonical.embedding IS legacy.embedding
            AND canonical.updated_at IS legacy.updated_at
        )`,
-      "chunks",
-    );
+    });
     if (
       preservedEmbeddingCacheTable !== "embedding_cache" &&
       tableHasExactColumns(db, "embedding_cache", [
@@ -211,15 +260,21 @@ function migrateLegacyMemoryIndexTables(
           updated_at INTEGER NOT NULL,
           PRIMARY KEY (provider, model, provider_key, hash)
         );
+      `);
+      const cachePrefilled = canonicalTableHasRows(db, MEMORY_EMBEDDING_CACHE_TABLE);
+      db.exec(`
         INSERT OR IGNORE INTO ${MEMORY_EMBEDDING_CACHE_TABLE} (
           provider, model, provider_key, hash, embedding, dims, updated_at
         )
         SELECT provider, model, provider_key, hash, embedding, dims, updated_at
         FROM embedding_cache;
       `);
-      assertLegacyRowsCopied(
-        db,
-        `SELECT COUNT(*) AS missing
+      verifyLegacyRowsCopied(db, {
+        canonicalPrefilled: cachePrefilled,
+        legacyTable: "embedding_cache",
+        canonicalTable: MEMORY_EMBEDDING_CACHE_TABLE,
+        label: "embedding_cache",
+        conflictQuery: `SELECT COUNT(*) AS missing
          FROM embedding_cache AS legacy
          WHERE NOT EXISTS (
            SELECT 1 FROM ${MEMORY_EMBEDDING_CACHE_TABLE} AS canonical
@@ -231,8 +286,7 @@ function migrateLegacyMemoryIndexTables(
              AND canonical.dims IS legacy.dims
              AND canonical.updated_at IS legacy.updated_at
          )`,
-        "embedding_cache",
-      );
+      });
       db.exec("DROP TABLE embedding_cache");
     }
     for (const trigger of LEGACY_MEMORY_INDEX_TRIGGERS) {

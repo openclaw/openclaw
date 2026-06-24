@@ -261,4 +261,49 @@ describe("memory index schema", () => {
       db.close();
     }
   });
+
+  it("keeps legacy tables when an empty-canonical copy loses rows", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      // Legacy meta without a primary key can hold two rows for one key. The
+      // canonical meta PK collapses them, so the cheap empty-canonical row-count
+      // check must detect the shortfall and keep the legacy tables rather than
+      // dropping data — the same fail-closed guarantee as the full anti-join.
+      db.exec(`
+        CREATE TABLE meta (key TEXT, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO meta VALUES ('memory_index_meta_v1', 'first');
+        INSERT INTO meta VALUES ('memory_index_meta_v1', 'second');
+      `);
+
+      expect(() =>
+        ensureMemoryIndexSchema({
+          db,
+          cacheEnabled: false,
+          ftsEnabled: false,
+        }),
+      ).toThrow("legacy memory meta rows conflict");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM meta").get()).toEqual({ count: 2 });
+    } finally {
+      db.close();
+    }
+  });
 });
