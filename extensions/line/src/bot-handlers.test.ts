@@ -350,10 +350,8 @@ describe("handleLineWebhookEvents", () => {
     upsertPairingRequestMock.mockReset();
     upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
     downloadLineMediaMock.mockReset();
-    downloadLineMediaMock.mockResolvedValue({
-      path: "/tmp/line-media/voice-note.m4a",
-      contentType: "audio/x-m4a",
-      size: 1234,
+    downloadLineMediaMock.mockImplementation(async () => {
+      throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
@@ -1013,6 +1011,11 @@ describe("handleLineWebhookEvents", () => {
 
   it("forwards LINE file names to media downloads", async () => {
     const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/voice-note.m4a",
+      contentType: "audio/x-m4a",
+      size: 1234,
+    });
     const event = createTestMessageEvent({
       message: {
         id: "file-audio-1",
