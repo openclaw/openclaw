@@ -1825,6 +1825,52 @@ describe("qa mock openai server", () => {
     expect(memorySearch.status).toBe(200);
     expect(await memorySearch.text()).toContain('"name":"memory_search"');
 
+    const memoryGetFromPathOnlySearchResult = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "MEMORY.md",
+                  snippet: "Hidden QA fact: the project codename is ORBIT-9.",
+                },
+              ],
+            }),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(memoryGetFromPathOnlySearchResult.status).toBe(200);
+    const memoryGetText = await memoryGetFromPathOnlySearchResult.text();
+    expect(memoryGetText).toContain('"name":"memory_get"');
+    expect(memoryGetText).toContain('\\"path\\":\\"MEMORY.md\\"');
+    expect(memoryGetText).toContain('\\"from\\":1');
+
     const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
       method: "POST",
       headers: {

@@ -558,6 +558,8 @@ describe("qa cli runtime", () => {
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
         "thread-follow-up",
+        "claude-cli-provider-capabilities",
+        "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
         "image-understanding-attachment",
         "native-image-generation",
