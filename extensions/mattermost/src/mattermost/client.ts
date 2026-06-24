@@ -20,7 +20,6 @@ const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // results) stays well under a megabyte; cap successful JSON the same way the
 // shared provider path is capped so an untrusted/self-hosted homeserver cannot
 // stream an unbounded body into the runtime before parsing.
-const MATTERMOST_JSON_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // Non-JSON success bodies are a rare fallback (the API is JSON-first); keep a
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
@@ -225,9 +224,7 @@ export function createMattermostClient(params: {
 
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`, {
-        maxBytes: MATTERMOST_JSON_RESPONSE_LIMIT_BYTES,
-      });
+      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
     }
     return (await readResponseTextLimited(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES)) as T;
   };
@@ -695,7 +692,6 @@ export async function uploadMattermostFile(
   const data = await readProviderJsonResponse<{ file_infos?: MattermostFileInfo[] }>(
     res,
     "Mattermost API /files",
-    { maxBytes: MATTERMOST_JSON_RESPONSE_LIMIT_BYTES },
   );
   const info = data.file_infos?.[0];
   if (!info?.id) {
