@@ -1246,11 +1246,11 @@ describe("deliverReplies", () => {
       chat: { id: "123" },
     });
     const bot = createBot({ sendMessage });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
 
     await deliverWith({
-      replies: [
-        { text: "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)" },
-      ],
+      replies: [{ text: oauthProfileText }],
       runtime,
       bot,
       richMessages: true,
@@ -1261,7 +1261,7 @@ describe("deliverReplies", () => {
     };
     const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
     expect(richMessage).toEqual({
-      html: "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)",
+      html: oauthProfileText,
       skip_entity_detection: true,
     });
   });
