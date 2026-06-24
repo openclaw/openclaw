@@ -42,7 +42,7 @@ function createMockStream(): ReturnType<StreamFn> {
     async *[Symbol.asyncIterator]() {
       // Minimal async stream surface for wrappers that decorate iteration.
     },
-  } as ReturnType<StreamFn>;
+  } as unknown as ReturnType<StreamFn>;
 }
 
 function captureAppliedCacheRetention(params: {
