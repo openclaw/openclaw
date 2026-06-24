@@ -3,14 +3,31 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  activeQaMaturityTaxonomySurfaces,
-  readQaMaturityTaxonomySource,
-} from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { parse as parseYaml } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const tempDirs = createTempDirTracker();
+
+type TaxonomyFixture = {
+  surfaces?: TaxonomySurfaceFixture[];
+};
+
+type TaxonomySurfaceFixture = {
+  id?: string;
+  status?: string;
+  categories?: TaxonomyCategoryFixture[];
+};
+
+type TaxonomyCategoryFixture = {
+  id?: string;
+  name?: string;
+  features?: TaxonomyFeatureFixture[];
+};
+
+type TaxonomyFeatureFixture = {
+  coverageIds?: string[];
+};
 
 afterEach(() => {
   tempDirs.cleanup();
@@ -87,11 +104,16 @@ function writeQaEvidence(params: {
 }
 
 function allProfileScorecardFixture() {
-  const taxonomy = readQaMaturityTaxonomySource();
-  const categoryReports = activeQaMaturityTaxonomySurfaces(taxonomy).flatMap((surface) =>
-    surface.categories.map((category) => {
+  const taxonomy = parseYaml(
+    fs.readFileSync(path.join(repoRoot, "taxonomy.yaml"), "utf8"),
+  ) as TaxonomyFixture;
+  const activeSurfaces = (taxonomy.surfaces ?? []).filter(
+    (surface) => surface.status !== "retired",
+  );
+  const categoryReports = activeSurfaces.flatMap((surface) =>
+    (surface.categories ?? []).map((category) => {
       const coverageIds = [
-        ...new Set(category.features.flatMap((feature) => feature.coverageIds)),
+        ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
       ].sort();
       return {
         id: `${surface.id}.${category.id}`,
