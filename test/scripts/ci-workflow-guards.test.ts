@@ -200,12 +200,14 @@ describe("ci workflow guards", () => {
     const installStep = workflow.jobs.android.steps.find(
       (step) => step.name === "Install Android SDK packages",
     );
-    const packageId = `platforms;android-${appCompileSdk}`;
+    const installPackageMatch = installStep.run.match(/"platforms;android-(\d+(?:\.\d+)?)"/u);
+
+    expect(installPackageMatch).not.toBeNull();
+    const installedPlatformVersion = installPackageMatch?.[1] ?? "";
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
-    expect(installStep.run).toContain(`"${packageId}"`);
-    expect(installStep.run).not.toContain(`${packageId}.0`);
+    expect(Number(installedPlatformVersion.split(".")[0])).toBe(appCompileSdk);
+    expect(cacheStep.with.key).toContain(`platform-${installedPlatformVersion}-`);
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {
