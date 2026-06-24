@@ -758,7 +758,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(
       readMemoryRows(agentPath)
         .chunks.map((chunk) => chunk.id)
-        .sort(),
+        .toSorted(),
     ).toEqual(["chunk-defaults", "chunk-top"]);
     await expect(fs.access(`${defaultsPath}.migrated`)).resolves.toBeUndefined();
     await expect(fs.access(`${topLevelPath}.migrated`)).resolves.toBeUndefined();
@@ -1185,13 +1185,13 @@ describe("memory-core doctor dreaming migration", () => {
 
     const retryEntriesBefore = (await fs.readdir(path.join(stateDir, "memory")))
       .filter((entry) => entry.startsWith("main.retry-"))
-      .sort();
+      .toSorted();
     const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(
       migrationParams(repairedConfig),
     );
     const retryEntriesAfter = (await fs.readdir(path.join(stateDir, "memory")))
       .filter((entry) => entry.startsWith("main.retry-"))
-      .sort();
+      .toSorted();
     expect(secondRun.changes).not.toEqual(
       expect.arrayContaining([
         expect.stringContaining("Copied Memory Core legacy memory index sidecar retry path"),
