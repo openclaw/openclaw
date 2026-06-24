@@ -7,7 +7,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
-import { derivePromptTokens, normalizeUsage } from "../../usage.js";
+import { derivePromptTokens, hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
@@ -194,8 +194,10 @@ export function buildUsageAgentMetaFields(params: {
   if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
     usage.total = params.lastTurnTotal;
   }
-  const lastCallUsage =
-    normalizeUsage(params.lastAssistantUsage as never) ?? toLastCallUsage(params.usageAccumulator);
+  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
+  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
+    ? lastAssistantUsage
+    : toLastCallUsage(params.usageAccumulator);
   const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
   return {
     usage,

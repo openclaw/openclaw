@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   buildErrorAgentMeta,
+  buildUsageAgentMetaFields,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveNextSameModelRateLimitRetryCount,
@@ -157,6 +158,48 @@ describe("resolveNextSameModelRateLimitRetryCount", () => {
       retriedSameModelRateLimit: true,
     });
     expect(retriesSoFar).toBe(1);
+  });
+});
+
+describe("buildUsageAgentMetaFields", () => {
+  it("uses accumulated last-call usage when the assistant snapshot is zeroed", () => {
+    const usageAccumulator = createUsageAccumulator();
+    usageAccumulator.input = 5;
+    usageAccumulator.output = 10;
+    usageAccumulator.total = 15;
+    usageAccumulator.lastInput = 5;
+    usageAccumulator.lastOutput = 10;
+    usageAccumulator.lastTotal = 15;
+
+    expect(
+      buildUsageAgentMetaFields({
+        usageAccumulator,
+        lastAssistantUsage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+        },
+        lastRunPromptUsage: undefined,
+      }),
+    ).toEqual({
+      usage: {
+        input: 5,
+        output: 10,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 15,
+      },
+      lastCallUsage: {
+        input: 5,
+        output: 10,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 15,
+      },
+      promptTokens: undefined,
+    });
   });
 });
 
