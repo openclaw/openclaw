@@ -1,4 +1,5 @@
 /** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -20,6 +21,8 @@ import type {
   ImageGenerationResult,
   ImageGenerationSourceImage,
 } from "./types.js";
+
+const IMAGE_GENERATION_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 // Factory for providers that expose OpenAI-style /images/generations and
 // /images/edits endpoints while still allowing provider-specific bodies.
@@ -269,13 +272,26 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
-          ...options.response,
-          malformedResponseError:
-            mode === "edit"
-              ? `${options.label} image edit response malformed`
-              : `${options.label} image generation response malformed`,
-        });
+        const imageBytes = await readResponseWithLimit(
+          response,
+          IMAGE_GENERATION_API_RESPONSE_MAX_BYTES,
+          {
+            onOverflow: ({ maxBytes }) =>
+              new Error(
+                `${options.label} image ${mode === "edit" ? "edit" : "generation"} response exceeds ${maxBytes} bytes`,
+              ),
+          },
+        );
+        const images = parseOpenAiCompatibleImageResponse(
+          JSON.parse(new TextDecoder().decode(imageBytes)) as unknown,
+          {
+            ...options.response,
+            malformedResponseError:
+              mode === "edit"
+                ? `${options.label} image edit response malformed`
+                : `${options.label} image generation response malformed`,
+          },
+        );
         if (images.length === 0) {
           throw new Error(
             options.emptyResponseError ??
