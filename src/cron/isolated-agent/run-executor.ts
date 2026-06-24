@@ -2,6 +2,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
@@ -269,6 +273,25 @@ export function createCronPromptExecutor(params: {
     sourceDelivery: params.sourceDelivery,
   });
 
+  // CLI providers surface their own terminal classification; only the embedded
+  // branch returns fallback-safe result-level failures (reasoning-only,
+  // empty-visible, incomplete_turn) that the model-fallback loop must reclassify
+  // to advance to the configured fallback. Resolve CLI-ness once so the run path
+  // and the classifier agree on which branch produced a candidate result.
+  const resolveCronExecutionProvider = (provider: string, model: string) => {
+    const executionProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider,
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        modelId: model,
+      }) ?? provider;
+    return {
+      executionProvider,
+      isCli: isCliProvider(executionProvider, params.cfgWithAgentDefaults),
+    };
+  };
+
   const runPrompt = async (promptText: string) => {
     const modelPrompt = deliveryTargetRuntimeContext
       ? `${promptText}\n\n${deliveryTargetRuntimeContext}`.trim()
@@ -295,22 +318,28 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      // Returned result-level failures (reasoning-only/empty/incomplete_turn) do
+      // not throw, so without a classifier the loop treats the first candidate as
+      // a success and never engages the configured fallback chain. Scope this to
+      // the embedded branch; the CLI runner owns its own terminal classification.
+      classifyResult: ({ provider, model, result }) =>
+        resolveCronExecutionProvider(provider, model).isCli
+          ? null
+          : classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
-        const executionProvider =
-          resolveCliRuntimeExecutionProvider({
-            provider: providerOverride,
-            cfg: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-            modelId: modelOverride,
-          }) ?? providerOverride;
+        const { executionProvider, isCli } = resolveCronExecutionProvider(
+          providerOverride,
+          modelOverride,
+        );
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
-        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
+        if (isCli) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
             : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
