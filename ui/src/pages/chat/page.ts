@@ -17,6 +17,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveSessionCreateParams } from "../../app/sessions.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -34,10 +35,10 @@ import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
 import {
-  createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
   renderChatControls,
@@ -116,6 +117,13 @@ type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
   readonly updateComplete: Promise<unknown>;
 };
+
+const NEW_SESSION_ACTIVE_RUN_MESSAGE =
+  "Start a new session after the active run or queued messages finish.";
+const NEW_SESSION_LIST_LOADING_MESSAGE =
+  "Session list is still refreshing. Try New Chat again in a moment.";
+const NEW_SESSION_CREATE_FAILED_MESSAGE =
+  "New Chat could not create a new session. Try again in a moment.";
 
 type ChatPageHost = ChatHost &
   ChatState &
@@ -226,6 +234,21 @@ type ChatPageHost = ChatHost &
     fetchRealtimeTalkCatalog: () => Promise<void>;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
   };
+
+function canCreateChatSession(
+  state: Pick<
+    ChatPageHost,
+    "chatLoading" | "chatSending" | "chatRunId" | "chatStream" | "chatQueue"
+  >,
+) {
+  return (
+    !state.chatLoading &&
+    !state.chatSending &&
+    !state.chatRunId &&
+    state.chatStream === null &&
+    state.chatQueue.length === 0
+  );
+}
 
 function resolveChatAgentId(
   state: Pick<ChatPageHost, "sessionKey" | "agentsList" | "assistantAgentId" | "hello">,
@@ -808,6 +831,65 @@ export class ChatPage extends LitElement {
     );
   }
 
+  private readonly createSession = async (): Promise<boolean> => {
+    const state = this.state;
+    if (!state || !state.client || !state.connected) {
+      return false;
+    }
+    if (!canCreateChatSession(state)) {
+      state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
+      state.chatError = state.lastError;
+      state.requestUpdate?.();
+      return false;
+    }
+    if (state.sessionsLoading) {
+      state.lastError = NEW_SESSION_LIST_LOADING_MESSAGE;
+      state.chatError = state.lastError;
+      state.requestUpdate?.();
+      return false;
+    }
+
+    state.lastError = null;
+    state.chatError = null;
+    const previousSessionKey = state.sessionKey;
+    const preservedDraft = state.chatMessage;
+    const preservedAttachments = state.chatAttachments;
+    const nextSessionKey = await this.context.sessions.create({
+      ...resolveSessionCreateParams(
+        previousSessionKey,
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+          resolveAgentIdFromSessionKey(previousSessionKey),
+      ),
+    });
+    if (
+      !nextSessionKey ||
+      state.sessionKey !== previousSessionKey ||
+      !canCreateChatSession(state)
+    ) {
+      if (!nextSessionKey) {
+        state.lastError =
+          state.sessionsError ??
+          (state.sessionsLoading
+            ? NEW_SESSION_LIST_LOADING_MESSAGE
+            : NEW_SESSION_CREATE_FAILED_MESSAGE);
+        state.chatError = state.lastError;
+        state.requestUpdate?.();
+      }
+      return false;
+    }
+    switchChatSession(state, nextSessionKey, {
+      syncUrl: false,
+      requestUpdate: false,
+    });
+    state.chatMessage = preservedDraft;
+    state.chatAttachments = preservedAttachments;
+    state.requestUpdate?.();
+    this.context.replace("chat", {
+      search: `?session=${encodeURIComponent(nextSessionKey)}`,
+    });
+    return true;
+  };
+
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
@@ -1095,15 +1177,7 @@ export class ChatPage extends LitElement {
         state.chatSideResult = null;
         state.requestUpdate?.();
       },
-      onNewSession: () =>
-        void createChatSession(state as never, {
-          source: "user",
-          onSessionCreated: (sessionKey) => {
-            this.context.replace("chat", {
-              search: `?session=${encodeURIComponent(sessionKey)}`,
-            });
-          },
-        }),
+      onNewSession: () => void this.createSession(),
       onClearHistory: () => void clearChatHistory(state),
       agentsList: state.agentsList,
       currentAgentId,

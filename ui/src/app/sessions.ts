@@ -1,5 +1,12 @@
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewayHelloOk, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { isCronSessionKey } from "../lib/session-display.ts";
+import {
+  isSessionKeyTiedToAgent,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/session-key.ts";
 import type { ApplicationGateway } from "./context.ts";
 
 export type ApplicationSessionsSnapshot = {
@@ -13,6 +20,21 @@ export type ApplicationSessionListOptions = {
   search?: string;
   offset?: number;
   limit?: number;
+};
+
+export type ApplicationSessionNavigationInput = {
+  result: SessionsListResult | null;
+  sessionKey: string;
+  assistantAgentId?: string | null;
+  hello?: GatewayHelloOk | null;
+};
+
+export type ApplicationSessionNavigation = {
+  currentSessionKey: string;
+  selectedAgentId: string;
+  defaultAgentId: string;
+  selectedSession?: GatewaySessionRow;
+  recentSessions: GatewaySessionRow[];
 };
 
 export type ApplicationSessions = {
@@ -36,6 +58,58 @@ const SESSION_LIST_PARAMS = {
 
 function isSessionEvent(event: GatewayEventFrame): boolean {
   return event.event === "sessions.changed" || event.event === "session.operation";
+}
+
+export function resolveApplicationSessionNavigation(
+  input: ApplicationSessionNavigationInput,
+): ApplicationSessionNavigation {
+  const currentSessionKey = input.sessionKey.trim();
+  const defaultAgentId = resolveUiSelectedGlobalAgentId({
+    assistantAgentId: input.assistantAgentId,
+    hello: input.hello,
+  });
+  const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
+  const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
+  const recentSessions = (input.result?.sessions ?? [])
+    .filter(
+      (row) =>
+        !row.archived &&
+        row.kind !== "global" &&
+        row.kind !== "unknown" &&
+        row.kind !== "cron" &&
+        !isCronSessionKey(row.key) &&
+        !isSubagentSessionKey(row.key) &&
+        !row.spawnedBy &&
+        (!shouldFilterByAgent || isSessionKeyTiedToAgent(row.key, selectedAgentId, defaultAgentId)),
+    )
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .slice(0, 5);
+  return {
+    currentSessionKey,
+    selectedAgentId,
+    defaultAgentId,
+    selectedSession: input.result?.sessions.find((row) => row.key === currentSessionKey),
+    recentSessions,
+  };
+}
+
+export function resolveSessionCreateParams(
+  sessionKey: string,
+  agentId: string,
+  options: { emitCommandHooksWithoutParent?: boolean } = {},
+) {
+  const normalizedSessionKey = sessionKey.trim();
+  const parentSessionKey =
+    normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
+      ? normalizedSessionKey
+      : undefined;
+  return {
+    agentId,
+    ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
+    ...(parentSessionKey === undefined && options.emitCommandHooksWithoutParent !== undefined
+      ? { emitCommandHooks: options.emitCommandHooksWithoutParent }
+      : {}),
+  };
 }
 
 export function createApplicationSessions(gateway: ApplicationGateway): ApplicationSessions {

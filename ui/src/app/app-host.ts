@@ -1,9 +1,8 @@
 import { consume, ContextProvider } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
-import "../components/app-sidebar.ts";
+import { SESSION_NAVIGATED_EVENT } from "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
@@ -22,7 +21,6 @@ import {
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
 } from "../lib/dom-tooltips.ts";
-import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
@@ -30,6 +28,22 @@ import { type RouterOutletSelection } from "./router-outlet.ts";
 import "./router-outlet.ts";
 
 const ACTIVE_ROUTE_IDS = ["chat"] as const;
+
+function resolveRouteAgentLabel(data: unknown): string {
+  if (!data || typeof data !== "object" || !("headerContext" in data)) {
+    return "";
+  }
+  const headerContext = data.headerContext;
+  if (
+    !headerContext ||
+    typeof headerContext !== "object" ||
+    !("agentLabel" in headerContext) ||
+    typeof headerContext.agentLabel !== "string"
+  ) {
+    return "";
+  }
+  return headerContext.agentLabel.trim();
+}
 
 function resolveOnboardingMode(): boolean {
   const raw = new URLSearchParams(globalThis.location?.search ?? "").get("onboarding");
@@ -181,8 +195,6 @@ class OpenClawShell extends LitElement {
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
   @state() private gatewayVersion = "";
-  @state() private sessionsResult: SessionsListResult | null = null;
-  @state() private sessionsLoading = false;
   @state() private routeSelection: RouterOutletSelection<RouteId, unknown, unknown> = {
     status: "idle",
     active: undefined,
@@ -203,7 +215,6 @@ class OpenClawShell extends LitElement {
 
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
-  private stopSessionsSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
   private stopOverlaySubscription: (() => void) | undefined;
 
@@ -231,6 +242,7 @@ class OpenClawShell extends LitElement {
     super.connectedCallback();
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    this.addEventListener(SESSION_NAVIGATED_EVENT, this.handleSessionNavigated);
     this.addEventListener("pointerover", this.nativeTitleTooltipPointerOver);
     this.addEventListener("pointerout", this.nativeTitleTooltipPointerOut);
     this.addEventListener("focusin", this.nativeTitleTooltipFocusIn);
@@ -250,7 +262,6 @@ class OpenClawShell extends LitElement {
       !context ||
       this.stopGatewaySubscription ||
       this.stopNavigationSubscription ||
-      this.stopSessionsSubscription ||
       this.stopRouteSubscription ||
       this.stopOverlaySubscription
     ) {
@@ -259,10 +270,6 @@ class OpenClawShell extends LitElement {
     this.updateNavigationPreferences(context.navigation.snapshot);
     this.stopNavigationSubscription = context.navigation.subscribe((snapshot) => {
       this.updateNavigationPreferences(snapshot);
-    });
-    this.updateSessions(context.sessions.snapshot);
-    this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
-      this.updateSessions(snapshot);
     });
     this.updateGatewayStatus(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
@@ -284,12 +291,11 @@ class OpenClawShell extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    this.removeEventListener(SESSION_NAVIGATED_EVENT, this.handleSessionNavigated);
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopNavigationSubscription?.();
     this.stopNavigationSubscription = undefined;
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
     this.stopRouteSubscription?.();
     this.stopRouteSubscription = undefined;
     this.stopOverlaySubscription?.();
@@ -377,6 +383,10 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
+  private readonly handleSessionNavigated = () => {
+    this.closeNavDrawer({ restoreFocus: true });
+  };
+
   private readonly updateGatewayStatus = (snapshot: {
     connected: boolean;
     hello: ApplicationRuntime["context"]["gateway"]["snapshot"]["hello"];
@@ -397,13 +407,6 @@ class OpenClawShell extends LitElement {
     this.recentSessionsCollapsed = snapshot.recentSessionsCollapsed;
   };
 
-  private readonly updateSessions = (
-    snapshot: ApplicationRuntime["context"]["sessions"]["snapshot"],
-  ) => {
-    this.sessionsResult = snapshot.result;
-    this.sessionsLoading = snapshot.loading;
-  };
-
   override render() {
     const context = this.context;
     const runtime = this.runtime;
@@ -418,12 +421,7 @@ class OpenClawShell extends LitElement {
     const onSlashCommand = this.commandPaletteTarget?.owner.isConnected
       ? this.commandPaletteTarget.onSlashCommand
       : undefined;
-    const routeSessionKey =
-      activeRoute === "chat"
-        ? new URLSearchParams(renderedMatch?.location.search).get("session")?.trim() ||
-          context.gateway.snapshot.sessionKey
-        : "";
-    const agentLabel = routeSessionKey ? resolveAgentIdFromSessionKey(routeSessionKey) : "";
+    const agentLabel = resolveRouteAgentLabel(renderedMatch?.data ?? selection.active?.data);
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -467,8 +465,6 @@ class OpenClawShell extends LitElement {
             .connected=${this.gatewayConnected}
             .version=${this.gatewayVersion}
             .navGroupsCollapsed=${this.navGroupsCollapsed}
-            .sessionsResult=${this.sessionsResult}
-            .sessionsLoading=${this.sessionsLoading}
             .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
             .onToggleCollapsed=${() => {
