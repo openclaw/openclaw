@@ -1,4 +1,5 @@
 // Web media tests cover loading media for web UI and browser surfaces.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -717,7 +718,7 @@ describe("loadWebMedia", () => {
           "report.html",
         );
         // Provenance is the trust signal — staging alone is not enough.
-        await markTrustedGeneratedHtmlPath(saved.path);
+        await markTrustedGeneratedHtmlPath(saved.path, Buffer.from(html, "utf8"));
         expect(path.resolve(saved.path)).not.toContain(
           path.resolve(resolvePreferredOpenClawTmpDir()),
         );
@@ -763,6 +764,53 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("rejects an outbound-staged HTML whose bytes were replaced after the provenance marker (content-bound trust)", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        // B1: the bytes that were staged and whose digest we mark as trusted.
+        const original = Buffer.from(
+          "<!doctype html><title>Original</title><h1>Original</h1>\n",
+          "utf8",
+        );
+        const saved = await saveMediaBuffer(
+          original,
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        // Bind provenance to the SHA-256 + size of B1 (real digest, never hardcoded).
+        await markTrustedGeneratedHtmlPath(saved.path, original);
+
+        // Replacement attack: overwrite the same path with DIFFERENT html bytes B2.
+        const replaced = Buffer.from(
+          "<!doctype html><title>Attacker</title><body>swapped payload</body>\n",
+          "utf8",
+        );
+        expect(createHash("sha256").update(replaced).digest("hex")).not.toBe(
+          createHash("sha256").update(original).digest("hex"),
+        );
+        await fs.writeFile(saved.path, replaced);
+
+        // Host-read must be rejected: the row exists but the bytes no longer match.
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("writes a trusted-generated-html provenance row keyed by the staged file's realpath", async () => {
     const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
     try {
@@ -772,14 +820,15 @@ describe("loadWebMedia", () => {
         const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
         const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
           await import("../infra/kysely-sync.js");
+        const htmlBuffer = Buffer.from("<!doctype html><title>Provenance</title>\n", "utf8");
         const saved = await saveMediaBuffer(
-          Buffer.from("<!doctype html><title>Provenance</title>\n", "utf8"),
+          htmlBuffer,
           "text/html",
           "outbound",
           1024 * 1024,
           "report.html",
         );
-        await markTrustedGeneratedHtmlPath(saved.path);
+        await markTrustedGeneratedHtmlPath(saved.path, htmlBuffer);
 
         const resolved = await fs.realpath(saved.path);
         const { db } = openOpenClawStateDatabase();
@@ -788,6 +837,8 @@ describe("loadWebMedia", () => {
             realpath: string;
             kind: string;
             version: number;
+            sha256: string;
+            size_bytes: number;
             created_at_ms: number;
           };
         };
@@ -800,6 +851,8 @@ describe("loadWebMedia", () => {
         );
         expect(row?.kind).toBe("trusted-generated-html");
         expect(row?.version).toBe(1);
+        expect(row?.sha256).toBe(createHash("sha256").update(htmlBuffer).digest("hex"));
+        expect(row?.size_bytes).toBe(htmlBuffer.length);
         expect(typeof row?.created_at_ms).toBe("number");
         expect(row?.created_at_ms).toBeGreaterThan(0);
 
@@ -827,14 +880,15 @@ describe("loadWebMedia", () => {
         const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
         const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
           await import("../infra/kysely-sync.js");
+        const htmlBuffer = Buffer.from("<!doctype html><title>Sweep</title>\n", "utf8");
         const saved = await saveMediaBuffer(
-          Buffer.from("<!doctype html><title>Sweep</title>\n", "utf8"),
+          htmlBuffer,
           "text/html",
           "outbound",
           1024 * 1024,
           "report.html",
         );
-        await markTrustedGeneratedHtmlPath(saved.path);
+        await markTrustedGeneratedHtmlPath(saved.path, htmlBuffer);
         const resolved = await fs.realpath(saved.path);
 
         type ProvenanceDb = {
@@ -963,29 +1017,29 @@ describe("loadWebMedia", () => {
 
         // Expectation A: markTrustedGeneratedHtmlPath must throw because the
         // realpath resolves outside the outbound staging dir.
-        await expect(markTrustedGeneratedHtmlPath(linkPath)).rejects.toThrow(
-          /refusing to mark path outside outbound staging dir/i,
-        );
+        await expect(
+          markTrustedGeneratedHtmlPath(linkPath, Buffer.from("<!doctype html><title>x</title>")),
+        ).rejects.toThrow(/refusing to mark path outside outbound staging dir/i);
 
         // Expectation B: even if a forged provenance row existed for the
         // symlink target's realpath, loadWebMedia must reject because the
         // reader-side containment check filters by realpath against the
         // outbound root.
-        const { runOpenClawStateWriteTransaction } = await import(
-          "../state/openclaw-state-db.js"
-        );
-        const { getNodeSqliteKysely, executeSqliteQuerySync } = await import(
-          "../infra/kysely-sync.js"
-        );
+        const { runOpenClawStateWriteTransaction } = await import("../state/openclaw-state-db.js");
+        const { getNodeSqliteKysely, executeSqliteQuerySync } =
+          await import("../infra/kysely-sync.js");
         type ProvenanceDb = {
           outbound_media_provenance: {
             realpath: string;
             kind: string;
             version: number;
+            sha256: string;
+            size_bytes: number;
             created_at_ms: number;
           };
         };
         const escapeRealpath = await fs.realpath(escapeFile);
+        const escapeBytes = await fs.readFile(escapeFile);
         runOpenClawStateWriteTransaction(({ db }) => {
           executeSqliteQuerySync(
             db,
@@ -995,6 +1049,8 @@ describe("loadWebMedia", () => {
                 realpath: escapeRealpath,
                 kind: "trusted-generated-html",
                 version: 1,
+                sha256: createHash("sha256").update(escapeBytes).digest("hex"),
+                size_bytes: escapeBytes.length,
                 created_at_ms: Date.now(),
               }),
           );

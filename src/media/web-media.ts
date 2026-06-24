@@ -1,4 +1,5 @@
 // Web media helpers load local and remote media for web-facing surfaces.
+import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
@@ -313,13 +314,19 @@ function hasHtmlDocumentShape(text: string): boolean {
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
 }
 
-async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined): Promise<boolean> {
+type HostReadHtmlTrust =
+  | { source: "temp-root" }
+  | { source: "outbound"; expectedSha256: string; expectedSize: number };
+
+async function isTrustedGeneratedHostReadHtmlPath(
+  filePath: string | undefined,
+): Promise<HostReadHtmlTrust | undefined> {
   if (!filePath) {
-    return false;
+    return undefined;
   }
   const info = await lstat(filePath).catch(() => undefined);
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-    return false;
+    return undefined;
   }
   const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
@@ -327,15 +334,18 @@ async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined):
     realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
   if (!resolvedFilePath) {
-    return false;
+    return undefined;
   }
   if (tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)) {
-    return true;
+    return { source: "temp-root" };
   }
   if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
-    return await hasTrustedGeneratedHtmlMarker(resolvedFilePath);
+    const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
+    return marker
+      ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
+      : undefined;
   }
-  return false;
+  return undefined;
 }
 
 const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
@@ -343,30 +353,30 @@ const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
 
 type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
 
-async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<boolean> {
+async function getTrustedGeneratedHtmlMarker(
+  resolvedFilePath: string,
+): Promise<{ sha256: string; size: number } | undefined> {
   try {
     const { db } = openOpenClawStateDatabase();
     const row = executeSqliteQueryTakeFirstSync(
       db,
       getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
         .selectFrom("outbound_media_provenance")
-        .select(["kind", "version"])
+        .select(["kind", "version", "sha256", "size_bytes"])
         .where("realpath", "=", resolvedFilePath),
     );
     const matched =
       row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
       row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION;
     if (shouldLogVerbose()) {
-      logVerbose(
-        `trusted-html marker: ${matched ? "hit" : "miss"} (${resolvedFilePath})`,
-      );
+      logVerbose(`trusted-html marker: ${matched ? "hit" : "miss"} (${resolvedFilePath})`);
     }
-    return matched;
+    return matched ? { sha256: row.sha256, size: row.size_bytes } : undefined;
   } catch (err) {
     logVerbose(
       `trusted-html marker: lookup failed (${resolvedFilePath}): ${formatErrorMessage(err)}`,
     );
-    return false;
+    return undefined;
   }
 }
 
@@ -380,7 +390,10 @@ async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<
  * pruneStaleTrustedGeneratedHtmlMarkers, which runs from the media-store
  * retention pass (src/media/store.ts cleanOldMedia).
  */
-export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
+export async function markTrustedGeneratedHtmlPath(
+  filePath: string,
+  contents: Buffer,
+): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
   if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
@@ -389,6 +402,8 @@ export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<vo
     );
   }
   const now = Date.now();
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const sizeBytes = contents.length;
   runOpenClawStateWriteTransaction(({ db }) => {
     executeSqliteQuerySync(
       db,
@@ -398,12 +413,16 @@ export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<vo
           realpath: resolvedFilePath,
           kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
           version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+          sha256,
+          size_bytes: sizeBytes,
           created_at_ms: now,
         })
         .onConflict((conflict) =>
           conflict.column("realpath").doUpdateSet({
             kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
             version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+            sha256,
+            size_bytes: sizeBytes,
             created_at_ms: now,
           }),
         ),
@@ -450,7 +469,7 @@ function isTrustedGeneratedHostReadHtml(params: {
   filePath?: string;
   sniffedContentType?: string;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): boolean {
   const sniffedMime = normalizeMimeType(params.sniffedContentType);
   if (sniffedMime && sniffedMime !== "text/html") {
@@ -460,7 +479,19 @@ function isTrustedGeneratedHostReadHtml(params: {
     return false;
   }
   const text = getValidatedHostReadText(params.buffer);
-  return text !== undefined && hasHtmlDocumentShape(text);
+  if (text === undefined || !hasHtmlDocumentShape(text)) {
+    return false;
+  }
+  if (params.trustedGeneratedHtmlPath.source === "temp-root") {
+    return true;
+  }
+  if (params.buffer?.length !== params.trustedGeneratedHtmlPath.expectedSize) {
+    return false;
+  }
+  return (
+    createHash("sha256").update(params.buffer).digest("hex") ===
+    params.trustedGeneratedHtmlPath.expectedSha256
+  );
 }
 
 function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string): boolean {
@@ -503,7 +534,7 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
@@ -1165,11 +1196,11 @@ async function loadWebMediaInternal(
   const hostReadDeclaredMime = hostReadCapability
     ? normalizeMimeType(mimeTypeFromFilePath(mediaUrl))
     : undefined;
-  const trustedGeneratedHtmlPath =
+  const htmlTrust =
     hostReadDeclaredMime === "text/html"
       ? await isTrustedGeneratedHostReadHtmlPath(mediaUrl)
-      : false;
-  if (hostReadDeclaredMime === "text/html" && !trustedGeneratedHtmlPath) {
+      : undefined;
+  if (hostReadDeclaredMime === "text/html" && !htmlTrust) {
     throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
 
@@ -1213,7 +1244,7 @@ async function loadWebMediaInternal(
       filePath: mediaUrl,
       kind,
       buffer: data,
-      trustedGeneratedHtmlPath,
+      trustedGeneratedHtmlPath: htmlTrust,
     });
   }
   let fileName = resolveLocalMediaFileName(mediaUrl);
@@ -1228,7 +1259,7 @@ async function loadWebMediaInternal(
     contentType: mime,
     kind,
     fileName,
-    trustedGeneratedHtmlSource: trustedGeneratedHtmlPath && hostReadDeclaredMime === "text/html",
+    trustedGeneratedHtmlSource: Boolean(htmlTrust && hostReadDeclaredMime === "text/html"),
   });
 }
 

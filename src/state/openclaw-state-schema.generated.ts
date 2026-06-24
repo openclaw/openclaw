@@ -1234,5 +1234,7 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,
   version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
 );\n`;

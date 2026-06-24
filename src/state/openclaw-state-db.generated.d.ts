@@ -713,6 +713,8 @@ export interface OutboundMediaProvenance {
   created_at_ms: number;
   kind: string;
   realpath: string;
+  sha256: string;
+  size_bytes: number;
   version: number;
 }
 
