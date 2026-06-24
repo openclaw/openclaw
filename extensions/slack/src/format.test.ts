@@ -93,4 +93,12 @@ describe("normalizeSlackOutboundText", () => {
   it("normalizes markdown for outbound send/update paths", () => {
     expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
+
+  it("escapes a stray '<' without destroying a following valid Slack token", () => {
+    // The stray "<" must not let the angle-token match span across it and escape the real mention/link.
+    expect(normalizeSlackOutboundText("if x < 10 ping <@U123>")).toBe("if x &lt; 10 ping <@U123>");
+    expect(normalizeSlackOutboundText("5 < 10 so see <https://docs.example.com|the docs>")).toBe(
+      "5 &lt; 10 so see <https://docs.example.com|the docs>",
+    );
+  });
 });

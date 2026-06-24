@@ -13,7 +13,10 @@ function escapeSlackMrkdwnSegment(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
+// Exclude "<" from the token body so a stray "<" in ordinary text (e.g. "x < 10 ping <@U1>") cannot
+// make the match span across it and swallow a following valid Slack token, which would then be
+// escaped and destroyed. Slack angle tokens never contain a nested "<".
+const SLACK_ANGLE_TOKEN_RE = /<[^<>\n]+>/g;
 
 function isAllowedSlackAngleToken(token: string): boolean {
   if (!token.startsWith("<") || !token.endsWith(">")) {
