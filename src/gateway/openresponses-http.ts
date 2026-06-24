@@ -12,11 +12,13 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
+import { normalizeUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
@@ -33,6 +35,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
   isReplaceableAssistantStreamEvent,
   resolveAssistantStreamDeltaText,
@@ -763,7 +766,59 @@ export async function handleOpenResponsesHttpRequest(
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
+      const agentMeta = (
+        result as {
+          meta?: {
+            agentMeta?: {
+              usage?: unknown;
+              provider?: string;
+              model?: string;
+              lastCallUsage?: unknown;
+            };
+          };
+        } | null
+      )?.meta?.agentMeta;
       const meta = (result as { meta?: unknown } | null)?.meta;
+
+      // Emit model.usage diagnostic so HTTP ingress traffic is visible to
+      // diagnostics consumers (Langfuse, OTEL, Prometheus) just like channel
+      // and cron turns. The raw usage from agentMeta carries the full breakdown.
+      if (agentMeta?.usage && isDiagnosticsEnabled(opts.config)) {
+        const normalized = normalizeUsage(agentMeta.usage as Parameters<typeof normalizeUsage>[0]);
+        if (normalized) {
+          const input = normalized.input ?? 0;
+          const output = normalized.output ?? 0;
+          const cacheRead = normalized.cacheRead ?? 0;
+          const cacheWrite = normalized.cacheWrite ?? 0;
+          const usagePromptTokens = input + cacheRead + cacheWrite;
+          const totalTokens = normalized.total ?? usagePromptTokens + output;
+          const costConfig = resolveModelCostConfig({
+            provider: agentMeta.provider ?? "",
+            model: agentMeta.model ?? "",
+            config: opts.config,
+          });
+          const costUsd = estimateUsageCost({ usage: normalized, cost: costConfig });
+          emitTrustedDiagnosticEvent({
+            type: "model.usage",
+            sessionKey,
+            sessionId: responseId,
+            channel: messageChannel,
+            provider: agentMeta.provider ?? "",
+            model: agentMeta.model ?? "",
+            usage: {
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              promptTokens: usagePromptTokens,
+              total: totalTokens,
+            },
+            lastCallUsage: undefined,
+            costUsd,
+            durationMs: 0,
+          });
+        }
+      }
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
