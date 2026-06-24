@@ -668,6 +668,65 @@ describe("acquireSessionWriteLock", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
+  it("acquireSessionWriteLock bounds maxHoldMs by timeoutMs plus grace", async () => {
+    // When no explicit maxHoldMs is provided, the effective hold limit must be
+    // bounded by timeoutMs + graceMs so a holder cannot starve other acquirers
+    // past their acquire timeout.  Previously the default maxHoldMs (300 s)
+    // was used even when the acquire timeout was only 60 s, causing
+    // SessionWriteLockTimeoutError for concurrent sessions.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(sessionFile, "", "utf8");
+    try {
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 1_000,
+      });
+      try {
+        // The lock was acquired with a bounded hold.  If the holder exceeds
+        // timeoutMs + graceMs without releasing, the watchdog is allowed to
+        // force-release it rather than letting it block other acquirers
+        // indefinitely.
+        const payload = await import("node:fs/promises").then((m) =>
+          m.readFile(`${sessionFile}.lock`, "utf8"),
+        );
+        const parsed = JSON.parse(payload) as { maxHoldMs?: number };
+        expect(parsed.maxHoldMs).toBeLessThanOrEqual(1_000 + 120_000);
+        expect(parsed.maxHoldMs).toBeGreaterThan(0);
+      } finally {
+        await lock.release();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("acquireSessionWriteLock respects explicit maxHoldMs below the timeout-derived bound", async () => {
+    // If the caller explicitly requests a maxHoldMs below the timeout-derived
+    // bound, the lower value must be honored.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-explicit-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(sessionFile, "", "utf8");
+    try {
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 60_000,
+        maxHoldMs: 5_000,
+      });
+      try {
+        const payload = await import("node:fs/promises").then((m) =>
+          m.readFile(`${sessionFile}.lock`, "utf8"),
+        );
+        const parsed = JSON.parse(payload) as { maxHoldMs?: number };
+        expect(parsed.maxHoldMs).toBe(5_000);
+      } finally {
+        await lock.release();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the session write-lock acquire timeout", () => {
     expect(resolveSessionWriteLockAcquireTimeoutMs()).toBe(60_000);
     expect(

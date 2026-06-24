@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.6.10
+
+### Fixes
+
+- **Session write lock:** bound `maxHoldMs` by the acquire `timeoutMs` + grace so a plugin hook that runs a long operation (e.g. active-memory sub-agent) can no longer hold the session write lock for the full default 5 min while other acquirers time out after 60 s, producing `SessionWriteLockTimeoutError` for concurrent sessions.
+
 ## 2026.6.9
 
 ### Highlights

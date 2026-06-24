@@ -895,7 +895,17 @@ export async function acquireSessionWriteLock(params: {
     allowInfinity: true,
   });
   const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
-  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
+  // Bound maxHoldMs by the acquire timeout + grace so a holder cannot block
+  // other acquirers past their timeout.  Without this, a plugin hook that
+  // runs a long operation (e.g. active-memory sub-agent) while holding the
+  // session write lock would hold it for the full default maxHoldMs (5 min)
+  // even though other acquirers time out after 60 s, producing
+  // SessionWriteLockTimeoutError for every other session that shares the lock.
+  const maxHoldFromTimeout = resolveSessionLockMaxHoldFromTimeout({ timeoutMs });
+  const maxHoldMs = Math.min(
+    resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs),
+    maxHoldFromTimeout,
+  );
   const orphanPayloadGraceMs = resolveOrphanLockPayloadGraceMs(timeoutMs);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
