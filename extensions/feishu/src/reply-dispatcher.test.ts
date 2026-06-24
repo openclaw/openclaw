@@ -703,6 +703,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("strips prose from identity emoji in streaming and static card headers", async () => {
+    const identity = {
+      name: "CC",
+      emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      theme: "green" as const,
+    };
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expectStreamingStartOptions(0, {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC", template: "green" },
+    });
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+    const { options: staticOptions } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await staticOptions.deliver({ text: "| a | b |\n| - | - |" }, { kind: "final" });
+
+    expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC", template: "green" },
+    });
+  });
+
   it("closes streaming with block text when final reply is missing", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
