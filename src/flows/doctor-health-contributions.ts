@@ -1292,6 +1292,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({

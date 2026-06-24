@@ -288,6 +288,7 @@ export interface CronJobs {
   payload_model: string | null;
   payload_thinking: string | null;
   payload_timeout_seconds: number | null;
+  payload_tools_allow_is_default: number | null;
   payload_tools_allow_json: string | null;
   running_at_ms: number | null;
   runtime_updated_at_ms: number | null;

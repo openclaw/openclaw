@@ -953,7 +953,7 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
-    expect(richMessage?.html).toContain("<table>");
+    expect(richMessage?.html).toContain("<table bordered striped>");
   });
 
   it("skips rich entity detection for provider-prefixed email text", async () => {

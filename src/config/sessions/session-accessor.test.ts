@@ -28,6 +28,7 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionEntryCandidateTarget,
   resolveSessionEntryAccessTarget,
   restoreSessionFromCompactionCheckpoint,
   resolveSessionTranscriptReadTarget,
@@ -224,6 +225,69 @@ describe("session accessor file-backed seam", () => {
       updatedAt: now + 2,
     });
     expect(persisted.main).toBeUndefined();
+  });
+
+  it("resolves status-style ordered candidate keys without exposing the store", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:current": {
+          label: "literal-current",
+          sessionId: "session-current",
+          updatedAt: 30,
+        },
+        "agent:main:main": {
+          label: "main",
+          sessionId: "session-main",
+          updatedAt: 10,
+        },
+      } satisfies Record<string, SessionEntry>),
+      "utf8",
+    );
+
+    const resolved = resolveSessionEntryCandidateTarget({
+      agentId: "main",
+      candidateKeys: ["agent:main:main", "agent:main:current"],
+      cfg: { session: { store: storePath } },
+    });
+
+    expect(resolved).toEqual({
+      agentId: "main",
+      candidateKey: "agent:main:main",
+      entry: expect.objectContaining({
+        label: "main",
+        sessionId: "session-main",
+      }),
+      persisted: true,
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("returns an implicit candidate fallback without persisting it", () => {
+    const resolved = resolveSessionEntryCandidateTarget({
+      agentId: "main",
+      candidateKeys: ["agent:main:missing"],
+      cfg: { session: { store: storePath } },
+      fallback: {
+        sessionKey: "agent:main:current",
+        entry: {
+          sessionId: "",
+          updatedAt: 40,
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      agentId: "main",
+      candidateKey: "agent:main:current",
+      entry: {
+        sessionId: "",
+        updatedAt: 40,
+      },
+      persisted: false,
+      sessionKey: "agent:main:current",
+    });
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 
   it("purges deleted-agent entries from the current locked store", async () => {

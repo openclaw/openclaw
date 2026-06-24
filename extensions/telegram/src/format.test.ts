@@ -254,7 +254,7 @@ describe("markdownToTelegramHtml", () => {
         `| ${Array.from({ length: columns }, (_, index) => String(index + 1)).join(" | ")} |`,
       ].join("\n");
 
-    expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
+    expect(markdownToTelegramRichHtml(table(20))).toContain("<table bordered striped>");
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
@@ -293,6 +293,19 @@ describe("markdownToTelegramHtml", () => {
 
     expect(html).toContain("<td><b>API</b></td>");
     expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
+  });
+
+  it("preserves markdown table column alignment in rich tables", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Feature | Status | Count |\n| :--- | :---: | ---: |\n| Rich tables | Fixed | 2 |",
+    );
+
+    expect(html).toContain('<th align="left">Feature</th>');
+    expect(html).toContain('<th align="center">Status</th>');
+    expect(html).toContain('<th align="right">Count</th>');
+    expect(html).toContain('<td align="left">Rich tables</td>');
+    expect(html).toContain('<td align="center">Fixed</td>');
+    expect(html).toContain('<td align="right">2</td>');
   });
 
   it("does not auto-linkify bare URLs when entity detection is skipped", () => {
