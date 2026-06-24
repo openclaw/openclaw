@@ -1,4 +1,12 @@
-# Amazon AWS Services Plugin
+---
+summary: "Use Amazon AWS services (Polly TTS, Transcribe STT, Nova Sonic voice) in OpenClaw"
+read_when:
+  - You want Amazon Polly text-to-speech
+  - You want Amazon Transcribe speech-to-text
+  - You want Nova Sonic realtime voice conversations
+  - You already have AWS credentials configured
+title: "Amazon"
+---
 
 Unified Amazon plugin providing **Polly TTS**, **Transcribe STT**, and **Nova Sonic realtime voice**.
 
@@ -54,7 +62,7 @@ plugins:
 | `enabled`     | `true`                    | Enable/disable Nova Sonic                                               |
 | `region`      | `us-east-1`              | AWS region                                                              |
 | `model`       | `amazon.nova-sonic-v1:0` | Model ID (`amazon.nova-sonic-v1:0` or `amazon.nova-2-sonic-v1:0`)       |
-| `voice`       | `tiffany`                | Voice ID (tiffany, matthew, amy, olivia, lupe, carlos, ambre, florian, lennart, beatrice, lorenzo, tina, carolina, leo, kiara, arjun) |
+| `voice`       | `tiffany`                | Voice ID (tiffany, matthew, amy)                                        |
 | `temperature` | `0.7`                    | Generation temperature                                                  |
 | `maxTokens`   | `4096`                   | Max output tokens                                                       |
 
@@ -77,6 +85,8 @@ The Nova Sonic bridge handles sample rate conversion automatically:
 
 - **Input**: OpenClaw telephony mu-law (8kHz) → upsample to PCM 16kHz → Nova Sonic
 - **Output**: Nova Sonic PCM 24kHz → downsample to 8kHz → mu-law → OpenClaw telephony
+
+When using browser Talk (PCM 24kHz), the bridge passes audio through without resampling.
 
 ## Regional Availability
 

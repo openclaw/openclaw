@@ -12,7 +12,7 @@ import type {
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { mulawToPcm16Resampled, pcm16ResampledToMulaw, mulawToPcm16, pcm16ToMulaw, resamplePcm16 } from "../shared/audio-utils.js";
+import { mulawToPcm16Resampled, pcm16ResampledToMulaw, resamplePcm16 } from "../shared/audio-utils.js";
 import { getAwsClient } from "../shared/client-cache.js";
 
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -55,8 +55,8 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   private latestMediaTimestamp = 0;
   private responseStartTimestamp: number | null = null;
   private markQueue: string[] = [];
-  private promptName: string = "";
-  private audioContentName: string = "";
+  private promptName = "";
+  private audioContentName = "";
 
   constructor(private readonly config: NovaSonicBridgeConfig) {
     this.client = getBedrockClient(config.region);
@@ -399,7 +399,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       }
 
       this.config.onReady?.();
-      void this.processOutputStream(response as InvokeModelWithBidirectionalStreamCommandOutput);
+      void this.processOutputStream(response);
     } catch (err) {
       this.config.onError?.(err instanceof Error ? err : new Error(String(err)));
       throw err;
@@ -417,7 +417,9 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     }
     this.reconnectAttempts += 1;
     const delay = BASE_RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delay);
+    });
     if (this.intentionallyClosed) {
       return;
     }
@@ -469,18 +471,15 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(err instanceof Error ? err : new Error(String(err)));
         this.reconnecting = true;
         void this.attemptReconnect();
-        return;
       }
     } finally {
       this.connected = false;
-      if (this.reconnecting) {
-        // Skip onClose — reconnect is in progress
-        return;
-      }
-      if (!this.intentionallyClosed) {
-        this.config.onClose?.("error");
-      } else {
-        this.config.onClose?.("completed");
+      if (!this.reconnecting) {
+        if (!this.intentionallyClosed) {
+          this.config.onClose?.("error");
+        } else {
+          this.config.onClose?.("completed");
+        }
       }
     }
   }
@@ -577,7 +576,6 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     if (eventObj.sessionEnd) {
       this.connected = false;
       this.config.onClose?.("completed");
-      return;
     }
   }
 

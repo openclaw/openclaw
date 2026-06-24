@@ -1,7 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildPollySpeechProvider } from "./polly/speech-provider.js";
-import { buildTranscribeMediaProvider } from "./transcribe/media-understanding-provider.js";
-import { buildNovaSonicVoiceProvider } from "./nova-sonic/realtime-voice-provider.js";
+import { buildPollySpeechProvider } from "./src/polly/speech-provider.js";
+import { buildTranscribeMediaProvider } from "./src/transcribe/media-understanding-provider.js";
+import { buildNovaSonicVoiceProvider } from "./src/nova-sonic/realtime-voice-provider.js";
 
 export default definePluginEntry({
   id: "amazon",

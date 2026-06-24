@@ -46,8 +46,8 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
         name === "ThrottlingException" ||
         name === "ServiceUnavailableException" ||
         name === "InternalServiceException";
-      if (!isRetryable || attempt === maxAttempts) throw err;
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      if (!isRetryable || attempt === maxAttempts) { throw err; }
+      await new Promise<void>((r) => { setTimeout(r, 500 * 2 ** (attempt - 1)); });
     }
   }
   throw new Error("unreachable");

@@ -47,7 +47,7 @@ export function buildNovaSonicVoiceProvider(
 ): RealtimeVoiceProviderPlugin | null {
   const novaSonicConfig = (pluginConfig?.novaSonic ?? {}) as Record<string, unknown>;
   const config = normalizeConfig(novaSonicConfig);
-  if (!config.enabled) return null;
+  if (!config.enabled) { return null; }
 
   const capabilities: RealtimeVoiceProviderCapabilities = {
     transports: ["gateway-relay"],
@@ -75,20 +75,20 @@ export function buildNovaSonicVoiceProvider(
     },
 
     isConfigured: ({ providerConfig }) => {
-      const config = normalizeConfig((providerConfig ?? {}) as Record<string, unknown>);
-      return config.enabled;
+      const resolved = normalizeConfig((providerConfig ?? {}) as Record<string, unknown>);
+      return resolved.enabled;
     },
 
     createBridge: (req) => {
-      const config = normalizeConfig((req.providerConfig ?? {}) as Record<string, unknown>);
+      const resolved = normalizeConfig((req.providerConfig ?? {}) as Record<string, unknown>);
 
       return new NovaSonicVoiceBridge({
         ...req,
-        region: config.region,
-        model: config.model,
-        voice: config.voice,
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
+        region: resolved.region,
+        model: resolved.model,
+        voice: resolved.voice,
+        temperature: resolved.temperature,
+        maxTokens: resolved.maxTokens,
       });
     },
   };

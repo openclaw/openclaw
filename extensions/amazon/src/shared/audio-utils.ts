@@ -59,7 +59,7 @@ export function pcm16ToMulaw(pcm: Buffer): Buffer {
  * @returns Resampled PCM buffer
  */
 export function resamplePcm16(pcm: Buffer, fromRate: number, toRate: number): Buffer {
-  if (fromRate === toRate) return pcm;
+  if (fromRate === toRate) { return pcm; }
   const srcSamples = pcm.length / 2;
   const dstSamples = Math.round((srcSamples * toRate) / fromRate);
   const out = Buffer.alloc(dstSamples * 2);

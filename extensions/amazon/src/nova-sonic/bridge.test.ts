@@ -16,6 +16,8 @@ vi.mock("../shared/client-cache.js", () => ({
 describe("NovaSonicVoiceBridge protocol", () => {
   it("builds sessionStart with inferenceConfiguration and turnDetectionConfiguration", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
@@ -38,6 +40,8 @@ describe("NovaSonicVoiceBridge protocol", () => {
 
   it("builds promptStart with correct audioOutputConfiguration", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "matthew",
@@ -56,6 +60,8 @@ describe("NovaSonicVoiceBridge protocol", () => {
 
   it("builds system prompt events with contentStart/textInput/contentEnd", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
@@ -80,6 +86,8 @@ describe("NovaSonicVoiceBridge protocol", () => {
 
   it("builds audio contentStart with audioInputConfiguration", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
@@ -103,6 +111,8 @@ describe("NovaSonicVoiceBridge protocol", () => {
 
   it("returns empty events array when no system instructions", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
@@ -114,10 +124,12 @@ describe("NovaSonicVoiceBridge protocol", () => {
 
   it("includes tool configuration in promptStart when tools provided", () => {
     const bridge = new NovaSonicVoiceBridge({
+      onAudio: () => {},
+      onClearAudio: () => {},
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
-      tools: [{ name: "get_weather", description: "Get weather", parameters: { type: "object" } }],
+      tools: [{ name: "get_weather", description: "Get weather", parameters: { type: "object", properties: {} } }],
     });
 
     const event = (bridge as any).buildPromptStartEvent("prompt-456");

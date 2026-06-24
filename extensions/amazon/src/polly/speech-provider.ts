@@ -119,7 +119,7 @@ export function buildPollySpeechProvider(
 ): SpeechProviderPlugin | null {
   const pollyConfig = (pluginConfig?.polly ?? {}) as Record<string, unknown>;
   const config = readPollyConfig(pollyConfig);
-  if (!config.enabled) return null;
+  if (!config.enabled) { return null; }
 
   return {
     id: "amazon-polly",
@@ -135,9 +135,9 @@ export function buildPollySpeechProvider(
     parseDirectiveToken,
 
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
+      const baseRaw = baseTtsConfig as Record<string, unknown>;
       const base = readPollyConfig(
-        ((baseTtsConfig as Record<string, unknown>)?.polly as Record<string, unknown>) ??
-          (baseTtsConfig as Record<string, unknown>),
+        (baseRaw?.polly as Record<string, unknown>) ?? baseRaw,
       );
       return {
         ...base,
