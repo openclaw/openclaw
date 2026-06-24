@@ -1,134 +1,71 @@
 // Skill Workshop page owns its Control UI render glue.
-import { html } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import type { RouteRenderContext } from "../../app-routes.ts";
+import { consume } from "@lit/context";
+import { html, LitElement, nothing } from "lit";
+import { property } from "lit/decorators.js";
+import { applicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentId } from "../../lib/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { createChatSessionsLoadOverrides } from "../chat/data.ts";
-import { loadChatHistory } from "../chat/gateway.ts";
-import { switchChatSessionAndWait } from "../chat/session-switch.ts";
-import { createSessionAndRefresh, loadSessions } from "../sessions/data.ts";
 import {
   countSkillWorkshopProposals,
+  createSkillWorkshopState,
+  loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
-} from "./data.ts";
+  type SkillWorkshopContext,
+  type SkillWorkshopRouteData,
+  type SkillWorkshopState,
+} from "./proposals.ts";
+import {
+  loadSkillWorkshopMode,
+  loadSkillWorkshopUseCurrentChatForRevisions,
+  saveSkillWorkshopMode,
+  saveSkillWorkshopUseCurrentChatForRevisions,
+} from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
 import { filterSkillWorkshopProposals } from "./view.ts";
 
-function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
-  state.setSkillWorkshopUseCurrentChatForRevisions(enabled);
-}
+export type SkillWorkshopPageContext = SkillWorkshopContext & {
+  assistantName: string;
+};
 
-function setSkillWorkshopMode(state: AppViewState, mode: AppViewState["skillWorkshopMode"]): void {
-  state.setSkillWorkshopMode(mode);
-}
+export type SkillWorkshopRevisionRequest = (
+  instructions: string,
+  proposal: SkillWorkshopState["skillWorkshopProposals"][number],
+  proposalAgentId: string,
+) => Promise<void>;
 
-function findSkillWorkshopRevisionSessionRow(
-  state: AppViewState,
-  sessionKey: string | undefined,
-): GatewaySessionRow | null {
-  const key = normalizeOptionalString(sessionKey);
-  if (!key) {
-    return null;
-  }
-  const current = state.sessionsResult?.sessions.find((row) => row.key === key);
-  if (current) {
-    return current;
-  }
-  for (const rows of Object.values(state.chatAgentSessionRowsByAgent ?? {})) {
-    const cached = rows.find((row) => row.key === key);
-    if (cached) {
-      return cached;
-    }
-  }
-  return null;
-}
+type SkillWorkshopRenderContext = {
+  context: SkillWorkshopPageContext;
+  onRevisionRequest?: SkillWorkshopRevisionRequest;
+};
 
-function isUsableSkillWorkshopRevisionSession(
-  row: GatewaySessionRow | null,
-): row is GatewaySessionRow {
-  return Boolean(row && !row.archived && !row.hasActiveRun);
-}
-
-async function ensureSkillWorkshopRevisionSessionsLoaded(
-  state: AppViewState,
-  agentId: string,
-): Promise<void> {
-  const resultAgentId = normalizeOptionalString(state.sessionsResultAgentId);
-  if (resultAgentId === agentId && state.sessionsResult?.sessions.length) {
+function setSkillWorkshopUseCurrentChatForRevisions(
+  state: SkillWorkshopState,
+  enabled: boolean,
+  requestUpdate: () => void,
+): void {
+  if (state.skillWorkshopUseCurrentChatForRevisions === enabled) {
     return;
   }
-  await loadSessions(state, {
-    ...createChatSessionsLoadOverrides(state),
-    agentId,
-  });
+  state.skillWorkshopUseCurrentChatForRevisions = enabled;
+  saveSkillWorkshopUseCurrentChatForRevisions(enabled);
+  requestUpdate();
 }
 
-async function resolveSkillWorkshopRevisionSessionKey(
-  state: AppViewState,
-  proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
-  proposalAgentId: string,
-): Promise<string | null> {
-  if (state.skillWorkshopUseCurrentChatForRevisions) {
-    return normalizeOptionalString(state.sessionKey) ?? null;
+function setSkillWorkshopMode(
+  state: SkillWorkshopState,
+  mode: SkillWorkshopState["skillWorkshopMode"],
+  requestUpdate: () => void,
+) {
+  if (state.skillWorkshopMode === mode) {
+    return;
   }
-
-  const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
-  await ensureSkillWorkshopRevisionSessionsLoaded(state, agentId);
-
-  const originRow = findSkillWorkshopRevisionSessionRow(state, proposal.origin?.sessionKey);
-  if (isUsableSkillWorkshopRevisionSession(originRow)) {
-    return originRow.key;
-  }
-
-  return createSessionAndRefresh(
-    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
-    {
-      agentId,
-      label: `Skill Workshop: ${proposal.slug || proposal.key}`.slice(0, 80),
-    },
-    {
-      ...createChatSessionsLoadOverrides(state),
-      agentId,
-    },
-  );
+  state.skillWorkshopMode = mode;
+  saveSkillWorkshopMode(mode);
+  requestUpdate();
 }
 
-async function sendSkillWorkshopRevisionRequest(
-  state: AppViewState,
-  instructions: string,
-  proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
-  proposalAgentId: string,
-  navigate: RouteRenderContext["navigate"],
-): Promise<void> {
-  if (!state.client || !state.connected) {
-    throw new Error("Gateway is not connected.");
-  }
-  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal, proposalAgentId);
-  if (!sessionKey) {
-    throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
-  }
-  navigate("chat");
-  if (state.sessionKey === sessionKey) {
-    await loadChatHistory(state);
-  } else {
-    await switchChatSessionAndWait(state, sessionKey);
-  }
-  const scopedProposalAgentId = proposal.origin?.agentId?.trim() || proposalAgentId;
-  await state.handleSendChat(instructions, {
-    restoreDraft: true,
-    skillWorkshopRevision: {
-      proposalId: proposal.key,
-      agentId: scopedProposalAgentId,
-    },
-  });
-}
-
-function renderSkillWorkshopHeaderControls(state: AppViewState) {
+function renderSkillWorkshopHeaderControls(state: SkillWorkshopState) {
   const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
   return html`
     <div class="sw-header-controls">
@@ -144,6 +81,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
             setSkillWorkshopUseCurrentChatForRevisions(
               state,
               (event.currentTarget as HTMLInputElement).checked,
+              requestUpdate,
             )}
         />
         <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
@@ -161,7 +99,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
           role="tab"
           aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
           title="Board view"
-          @click=${() => setSkillWorkshopMode(state, "board")}
+          @click=${() => setSkillWorkshopMode(state, "board", requestUpdate)}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
             <rect x="3" y="4" width="7" height="16" rx="1.5" />
@@ -176,7 +114,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
           role="tab"
           aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
           title="Today view"
-          @click=${() => setSkillWorkshopMode(state, "today")}
+          @click=${() => setSkillWorkshopMode(state, "today", requestUpdate)}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
             <circle cx="12" cy="12" r="4" />
@@ -193,8 +131,9 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
 }
 
 export function renderSkillWorkshopPage(
-  state: AppViewState,
-  navigate: RouteRenderContext["navigate"],
+  state: SkillWorkshopState,
+  { context, onRevisionRequest }: SkillWorkshopRenderContext,
+  requestUpdate: () => void,
 ) {
   const pageClass =
     state.skillWorkshopMode === "today"
@@ -227,7 +166,8 @@ export function renderSkillWorkshopPage(
             selectedIndex < 0
               ? 0
               : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
-          selectSkillWorkshopProposal(state, visibleProposals[nextIndex].key);
+          selectSkillWorkshopProposal(state, context, visibleProposals[nextIndex].key);
+          requestUpdate();
         };
         const selectVisibleFallback = (proposals: typeof visibleProposals) => {
           if (
@@ -237,7 +177,8 @@ export function renderSkillWorkshopPage(
             return;
           }
           state.skillWorkshopFilePreviewKey = null;
-          selectSkillWorkshopProposal(state, proposals[0].key);
+          selectSkillWorkshopProposal(state, context, proposals[0].key);
+          requestUpdate();
         };
         return renderSkillWorkshop({
           loading: state.skillWorkshopLoading,
@@ -255,10 +196,11 @@ export function renderSkillWorkshopPage(
           actionNotice: state.skillWorkshopActionNotice,
           revisionKey: state.skillWorkshopRevisionKey,
           revisionDraft: state.skillWorkshopRevisionDraft,
-          assistantName: state.assistantName,
+          assistantName: context.assistantName,
           counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
           onStatusFilterChange: (status) => {
             state.skillWorkshopStatusFilter = status;
+            requestUpdate();
             selectVisibleFallback(
               filterSkillWorkshopProposals(
                 state.skillWorkshopProposals,
@@ -269,6 +211,7 @@ export function renderSkillWorkshopPage(
           },
           onQueryChange: (query) => {
             state.skillWorkshopQuery = query;
+            requestUpdate();
             selectVisibleFallback(
               filterSkillWorkshopProposals(
                 state.skillWorkshopProposals,
@@ -277,40 +220,128 @@ export function renderSkillWorkshopPage(
               ),
             );
           },
-          onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
-          onQueueWidthChange: (width) => (state.skillWorkshopQueueWidth = width),
-          onModeChange: (mode) => setSkillWorkshopMode(state, mode),
+          onFilePreviewQueryChange: (query) => {
+            state.skillWorkshopFilePreviewQuery = query;
+            requestUpdate();
+          },
+          onQueueWidthChange: (width) => {
+            state.skillWorkshopQueueWidth = width;
+            requestUpdate();
+          },
+          onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
           onSelect: (key) => {
             state.skillWorkshopFilePreviewKey = null;
-            selectSkillWorkshopProposal(state, key);
+            selectSkillWorkshopProposal(state, context, key);
+            requestUpdate();
           },
           onPrev: () => selectRelativeProposal(-1),
           onNext: () => selectRelativeProposal(1),
-          onApply: (key) => void runSkillWorkshopLifecycleAction(state, "apply", key),
+          onApply: (key) => {
+            void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
+              requestUpdate,
+            );
+            requestUpdate();
+          },
           onRevise: (key) => {
             state.skillWorkshopRevisionKey = key;
             state.skillWorkshopRevisionDraft = "";
+            requestUpdate();
           },
-          onReject: (key) => void runSkillWorkshopLifecycleAction(state, "reject", key),
-          onRevisionDraftChange: (draft) => (state.skillWorkshopRevisionDraft = draft),
+          onReject: (key) => {
+            void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
+              requestUpdate,
+            );
+            requestUpdate();
+          },
+          onRevisionDraftChange: (draft) => {
+            state.skillWorkshopRevisionDraft = draft;
+            requestUpdate();
+          },
           onRevisionCancel: () => {
             state.skillWorkshopRevisionKey = null;
             state.skillWorkshopRevisionDraft = "";
+            requestUpdate();
           },
           onRevisionSubmit: (key) =>
-            void requestSkillWorkshopRevision(state, key, (message, proposal, agentId) =>
-              sendSkillWorkshopRevisionRequest(state, message, proposal, agentId, navigate),
-            ),
+            onRevisionRequest
+              ? void requestSkillWorkshopRevision(state, context, key, onRevisionRequest).finally(
+                  requestUpdate,
+                )
+              : undefined,
           onPreviewFile: (key, path) => {
             state.skillWorkshopSelectedKey = key;
             state.skillWorkshopFilePreviewKey = path;
+            requestUpdate();
           },
           onClosePreview: () => {
             state.skillWorkshopFilePreviewKey = null;
             state.skillWorkshopFilePreviewQuery = "";
+            requestUpdate();
           },
         });
       })()}
     </section>
   `;
+}
+
+export class SkillWorkshopPage extends LitElement {
+  override createRenderRoot() {
+    return this;
+  }
+
+  @consume({ context: applicationContext, subscribe: false })
+  private context?: SkillWorkshopPageContext;
+  @property({ attribute: false }) data?: SkillWorkshopRouteData;
+  @property({ attribute: false }) onRevisionRequest?: SkillWorkshopRevisionRequest;
+
+  private state?: SkillWorkshopState;
+  private stopGatewaySubscription?: () => void;
+
+  override willUpdate() {
+    if (!this.state && this.context) {
+      this.state = createSkillWorkshopState(this.data);
+      this.state.skillWorkshopMode = loadSkillWorkshopMode();
+      this.state.skillWorkshopUseCurrentChatForRevisions =
+        loadSkillWorkshopUseCurrentChatForRevisions();
+    }
+  }
+
+  override firstUpdated() {
+    const context = this.context;
+    if (!this.state || !context) {
+      return;
+    }
+    this.stopGatewaySubscription = context.gateway.subscribe(() => {
+      if (!this.state || !this.context || !this.context.gateway.snapshot.connected) {
+        return;
+      }
+      void loadSkillWorkshopProposals(this.state, this.context).finally(() => this.requestUpdate());
+    });
+    if (!this.data?.skillWorkshopLoaded && context.gateway.snapshot.connected) {
+      void loadSkillWorkshopProposals(this.state, context).finally(() => this.requestUpdate());
+    }
+  }
+
+  override disconnectedCallback() {
+    this.stopGatewaySubscription?.();
+    this.stopGatewaySubscription = undefined;
+    if (this.state?.skillWorkshopActionNoticeTimer) {
+      globalThis.clearTimeout(this.state.skillWorkshopActionNoticeTimer);
+    }
+    super.disconnectedCallback();
+  }
+
+  override render() {
+    return this.state && this.context
+      ? renderSkillWorkshopPage(
+          this.state,
+          { context: this.context, onRevisionRequest: this.onRevisionRequest },
+          () => this.requestUpdate(),
+        )
+      : nothing;
+  }
+}
+
+if (!customElements.get("openclaw-skill-workshop-page")) {
+  customElements.define("openclaw-skill-workshop-page", SkillWorkshopPage);
 }

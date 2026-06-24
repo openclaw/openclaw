@@ -668,7 +668,7 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
 
   return html`
     ${renderSettingsWorkspace(
-      state,
+      state.basePath,
       html`
         <section class="content-header">
           <div>
