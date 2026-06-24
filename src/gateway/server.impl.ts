@@ -1,5 +1,6 @@
 // Gateway server implementation builds runtime state, method registries, HTTP
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
+import { createServer, type Server as NodeHttpServer } from "node:http";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -476,7 +477,15 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
 };
 
+export type GatewayActivationState = "deferred" | "activating" | "active" | "failed" | "closed";
+
+export type GatewayActivationInput = {
+  activationId: string;
+};
+
 export type GatewayServer = {
+  activate: (input: GatewayActivationInput) => Promise<void>;
+  activationState: () => GatewayActivationState;
   close: (opts?: GatewayCloseOptions) => Promise<void>;
 };
 
@@ -526,6 +535,16 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
+   * Experimental loopback control port for deferred activation.
+   * Only valid with `activationMode: "deferred"`.
+   */
+  activationControlPort?: number;
+  /**
+   * Experimental deferred activation mode for a parked, userless Gateway.
+   * This is internal while the activation boundary is proven.
+   */
+  activationMode?: "deferred";
+  /**
    * Let post-listen sidecars (channels, plugin services) finish in the background.
    * Defaults to false so gateway startup waits until sidecars are ready.
    */
@@ -548,10 +567,126 @@ const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
   return runSetupWizard(...args);
 };
 
+async function closeNodeHttpServer(server: NodeHttpServer | null): Promise<void> {
+  if (!server?.listening) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function listenNodeHttpServer(server: NodeHttpServer, port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+async function createDeferredGatewayServer(
+  port: number,
+  opts: GatewayServerOptions,
+): Promise<GatewayServer> {
+  let activationState: GatewayActivationState = "deferred";
+  let activationId: string | null = null;
+  let activeServer: GatewayServer | null = null;
+  let activationControlServer: NodeHttpServer | null = null;
+
+  const activeOpts: GatewayServerOptions = { ...opts };
+  delete activeOpts.activationControlPort;
+  delete activeOpts.activationMode;
+
+  const activate = async (input: GatewayActivationInput) => {
+    if (activationState === "closed") {
+      throw new Error("Cannot activate a closed Gateway");
+    }
+    if (activationState === "active" || activationId !== null) {
+      throw new Error("Gateway is already activated");
+    }
+    activationState = "activating";
+    activationId = input.activationId;
+    try {
+      activeServer = await startGatewayServer(port, activeOpts);
+      activationState = "active";
+    } catch (err) {
+      activationState = "failed";
+      throw err;
+    }
+  };
+
+  if (typeof opts.activationControlPort === "number") {
+    activationControlServer = createServer((req, res) => {
+      const sendJson = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      if (req.method === "GET" && req.url === "/readyz") {
+        sendJson(activationState === "active" ? 200 : 503, { state: activationState });
+        return;
+      }
+      if (req.method === "POST" && req.url === "/activate") {
+        let rawBody = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          rawBody += chunk;
+        });
+        req.on("end", () => {
+          void (async () => {
+            const parsed = rawBody ? (JSON.parse(rawBody) as { activationId?: unknown }) : {};
+            const nextActivationId =
+              typeof parsed.activationId === "string" && parsed.activationId.trim()
+                ? parsed.activationId.trim()
+                : "control";
+            await activate({ activationId: nextActivationId });
+            sendJson(200, { state: activationState });
+          })().catch((err: unknown) => {
+            sendJson(500, { error: String(err), state: activationState });
+          });
+        });
+        return;
+      }
+      sendJson(404, { error: "not found", state: activationState });
+    });
+    await listenNodeHttpServer(activationControlServer, opts.activationControlPort);
+  }
+
+  return {
+    activate,
+    activationState: () => activationState,
+    close: async (closeOpts) => {
+      try {
+        await activeServer?.close(closeOpts);
+        await closeNodeHttpServer(activationControlServer);
+      } finally {
+        activationState = "closed";
+      }
+    },
+  };
+}
+
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  if (opts.activationMode === "deferred") {
+    return await createDeferredGatewayServer(port, opts);
+  }
+  let activationState: GatewayActivationState = "active";
   normalizeStateDirEnv(process.env);
   // runGatewayLoop calls this after closing the previous server on both fresh
   // and in-process restarts, making retired plugin generations safe to remove.
@@ -1823,6 +1958,10 @@ export async function startGatewayServer(
   const close = createCloseHandler();
 
   return {
+    activate: async () => {
+      throw new Error("Gateway is already activated");
+    },
+    activationState: () => activationState,
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
@@ -1838,6 +1977,7 @@ export async function startGatewayServer(
         await runClosePrelude();
         await close(optsLocal);
       } finally {
+        activationState = "closed";
         clearFallbackGatewayContextForServer();
       }
     },
