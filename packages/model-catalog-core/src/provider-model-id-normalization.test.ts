@@ -48,6 +48,27 @@ describe("provider model id policy normalization", () => {
     );
   });
 
+  it("keeps exact normalized alias keys ahead of normalized fallback matches", () => {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: {
+              aliases: {
+                " GPT-5.4 ": "variant-target",
+                "gpt-5.4": "exact-target",
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("openai", "gpt-5.4", policies)).toBe(
+      "exact-target",
+    );
+  });
+
   it("normalizes provider-prefixed Google catalog refs behind gateway prefixes", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId(

@@ -73,6 +73,10 @@ function resolvePolicyAlias(
   modelId: string,
 ): string | undefined {
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const exactTarget = aliases?.[normalizedModelId];
+  if (exactTarget !== undefined) {
+    return exactTarget;
+  }
   for (const [alias, target] of Object.entries(aliases ?? {})) {
     if (normalizeLowercaseStringOrEmpty(alias) === normalizedModelId) {
       return target;
