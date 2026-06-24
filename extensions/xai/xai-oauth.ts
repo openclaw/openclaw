@@ -501,17 +501,18 @@ async function resolveXaiOAuthRefreshTokenEndpoint(
   if (!cachedEndpoint) {
     return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
   }
+  let endpoint: URL;
   try {
-    const endpoint = new URL(cachedEndpoint);
-    if (`${endpoint.origin}${endpoint.pathname}` !== XAI_LEGACY_OAUTH_TOKEN_ENDPOINT) {
-      return cachedEndpoint;
-    }
-    // Older persisted xAI OAuth credentials can point at the retired endpoint;
-    // rediscover once so refresh writes back the current OAuth token endpoint.
-    return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
+    endpoint = new URL(cachedEndpoint);
   } catch {
     return cachedEndpoint;
   }
+  if (`${endpoint.origin}${endpoint.pathname}` !== XAI_LEGACY_OAUTH_TOKEN_ENDPOINT) {
+    return cachedEndpoint;
+  }
+  // Older persisted xAI OAuth credentials can point at the retired endpoint;
+  // rediscover once so refresh writes back the current OAuth token endpoint.
+  return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
 }
 
 async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): Promise<void> {

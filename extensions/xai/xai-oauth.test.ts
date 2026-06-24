@@ -252,6 +252,26 @@ describe("xAI OAuth", () => {
     });
   });
 
+  it("does not reuse the stale xAI OAuth token endpoint when discovery fails", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      expect(requestUrl(url)).toBe(XAI_OAUTH_DISCOVERY_URL);
+      throw new Error("discovery unavailable");
+    });
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+      "discovery unavailable",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not coerce partial xAI expires_in values", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({
