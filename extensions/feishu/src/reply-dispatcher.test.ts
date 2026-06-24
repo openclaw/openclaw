@@ -705,7 +705,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("strips prose from identity emoji in streaming and static card headers", async () => {
     const identity = {
-      name: "CC",
+      name: "Agent",
       emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
       theme: "green" as const,
     };
@@ -716,7 +716,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
     expectStreamingStartOptions(0, {
-      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC", template: "green" },
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
     });
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -736,7 +736,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await staticOptions.deliver({ text: "| a | b |\n| - | - |" }, { kind: "final" });
 
     expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
-      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC", template: "green" },
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
     });
   });
 

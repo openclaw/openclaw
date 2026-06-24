@@ -366,13 +366,13 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       text: "| a | b |\n| - | - |",
       accountId: "main",
       identity: {
-        name: "CC",
+        name: "Agent",
         emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
       },
     });
 
     expect(sendStructuredCardCall()?.header).toEqual({
-      title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC",
+      title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent",
       template: "blue",
     });
     expectFeishuResult(result, "card_msg");
@@ -593,7 +593,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       text: "Choose an action",
       accountId: "main",
       identity: {
-        name: "CC",
+        name: "Agent",
         emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
       },
       payload: {
@@ -619,7 +619,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     const card = sendCardCall()?.card;
     expect(card.schema).toBe("2.0");
     expect(card.header).toEqual({
-      title: { tag: "plain_text", content: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 CC" },
+      title: { tag: "plain_text", content: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent" },
       template: "blue",
     });
     expect(card.body.elements[0]).toEqual({ tag: "markdown", content: "Choose an action" });
