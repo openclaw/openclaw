@@ -54,7 +54,7 @@ let sharedDirectAgent: UndiciDispatcher | undefined;
 
 function resolveSharedDirectAgent(): UndiciDispatcher {
   if (!sharedDirectAgent) {
-    sharedDirectAgent = createHttp1Agent();
+    sharedDirectAgent = createHttp1Agent(undefined, DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
   }
   return sharedDirectAgent;
 }
