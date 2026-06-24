@@ -101,6 +101,10 @@ function buildAgentToolResultMiddlewareFactory(
         isAcceptedSessionSpawn &&
         (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
+        // Pass the live observer + toolName so a missing pending entry still emits a
+        // presentation-only clear (retiring stale channel progress), matching the Codex
+        // dynamic-tool path. When a pending entry exists, finalize keeps using its own
+        // recorded observer/tool, so these only act as the no-pending fallback.
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
           runId,
