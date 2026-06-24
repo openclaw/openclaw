@@ -253,12 +253,19 @@ function readRequiredFlagValue(argv: string[], index: number, flag: string): str
 }
 
 function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
       readRequiredFlagValue(argv, index, arg);
       index += 1;
       continue;

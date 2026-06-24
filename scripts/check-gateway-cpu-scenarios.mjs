@@ -24,6 +24,13 @@ const DEFAULT_QA_SCENARIOS = [
   "memory-failure-fallback",
   "gateway-restart-inflight-run",
 ];
+const SINGLE_VALUE_FLAGS = new Set([
+  "--cpu-core-warn",
+  "--hot-wall-warn-ms",
+  "--output-dir",
+  "--runs",
+  "--warmup",
+]);
 const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
@@ -49,8 +56,15 @@ function parseArgs(argv) {
     cpuCoreWarn: DEFAULT_CPU_CORE_WARN,
     hotWallWarnMs: DEFAULT_HOT_WALL_WARN_MS,
   };
+  const seenSingleValueFlags = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (SINGLE_VALUE_FLAGS.has(arg)) {
+      if (seenSingleValueFlags.has(arg)) {
+        throw new Error(`${arg} was provided more than once`);
+      }
+      seenSingleValueFlags.add(arg);
+    }
     const readValue = () => {
       const value = args[index + 1];
       if (!value || value.startsWith("-")) {

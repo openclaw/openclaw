@@ -111,6 +111,19 @@ describe("gateway CPU scenario guard", () => {
     }
   });
 
+  it("rejects duplicate single-value controls before running scenarios", () => {
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--output-dir", makeTempRoot()]),
+    ).toThrow("--output-dir was provided more than once");
+
+    const result = runCli("--runs", "1", "--runs", "2");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--runs was provided more than once");
+    expectNoNodeStack(result.stderr);
+  });
+
   it("reports CLI argument errors without a Node stack trace", () => {
     const result = runCli("--wat");
 

@@ -90,6 +90,9 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
       "--output requires a value",
     );
+    expect(() =>
+      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
+    ).toThrow("--output was provided more than once");
     expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
     expect(() =>
       testing.parseOptions(["--case", "skipChannels", "--case", "skipChannels"]),
