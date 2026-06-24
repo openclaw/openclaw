@@ -190,6 +190,9 @@ export function parsePlatformList(value: string): Set<Platform> {
   const result = new Set<Platform>();
   for (const entry of normalized.split(",")) {
     if (entry === "macos" || entry === "windows" || entry === "linux") {
+      if (result.has(entry)) {
+        die(`duplicate --platform entry: ${entry}`);
+      }
       result.add(entry);
     } else {
       die(`invalid --platform entry: ${entry}`);

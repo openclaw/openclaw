@@ -237,6 +237,47 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn when local provider readiness probe was intentionally skipped", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+        skipped: true,
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when local provider skipped readiness but configured local model is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "/definitely/missing/openclaw-memory-model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+        skipped: true,
+      },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain('Memory search provider is set to "local"');
+  });
+
   it("warns when local provider readiness probe is inconclusive", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
