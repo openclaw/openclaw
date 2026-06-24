@@ -68,7 +68,8 @@ async function expectJobDoesNotRefireWhenNextRunIsUnresolved(params: {
 function createEveryUnresolvedFixture(params: {
   id: string;
   scheduledAt: number;
-  everyMs?: number | unknown;
+  everyMs?: number;
+  invalidEveryMs?: boolean;
   consecutiveErrors?: number;
 }): CronJob {
   return {
@@ -77,7 +78,10 @@ function createEveryUnresolvedFixture(params: {
     enabled: true,
     createdAtMs: params.scheduledAt - 86_400_000,
     updatedAtMs: params.scheduledAt - 86_400_000,
-    schedule: { kind: "every", everyMs: params.everyMs ?? 60_000 },
+    schedule: {
+      kind: "every",
+      everyMs: params.invalidEveryMs ? ("abc" as unknown as number) : (params.everyMs ?? 60_000),
+    },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "ping" },
@@ -198,7 +202,7 @@ describe("#66019 unresolved next-run repro", () => {
       name: "error retry with non-finite everyMs",
       id: "cron-66019-every-error-invalid-interval",
       scheduledAt: Date.parse("2026-04-13T16:05:00.000Z"),
-      everyMs: "abc" as unknown as number,
+      invalidEveryMs: true,
       consecutiveErrors: 1,
       status: "error" as const,
       mockNextRun: false,
@@ -217,18 +221,28 @@ describe("#66019 unresolved next-run repro", () => {
       name: "successful completion with non-finite everyMs",
       id: "cron-66019-every-success-invalid-interval",
       scheduledAt: Date.parse("2026-04-13T16:15:00.000Z"),
-      everyMs: "abc" as unknown as number,
+      invalidEveryMs: true,
       status: "ok" as const,
       mockNextRun: false,
       expectedMsg: "cron: next run unresolved after successful completion; clearing schedule",
     },
   ])(
     "warns and clears every unresolved next run: $name",
-    async ({ id, scheduledAt, everyMs, consecutiveErrors, status, mockNextRun, expectedMsg }) => {
+    async ({
+      id,
+      scheduledAt,
+      everyMs,
+      invalidEveryMs,
+      consecutiveErrors,
+      status,
+      mockNextRun,
+      expectedMsg,
+    }) => {
       const everyJob = createEveryUnresolvedFixture({
         id,
         scheduledAt,
         everyMs,
+        invalidEveryMs,
         consecutiveErrors,
       });
       const { state, warnLogs } = createWarnCapturingState(scheduledAt);
