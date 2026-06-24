@@ -522,6 +522,48 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips the toolsAllow default-cap flag through SQLite", async () => {
+    // The flag must survive a gateway restart: without it, a CLI-resolved run
+    // would re-hit the prepare.ts toolsAllow rejection after reload (#91499).
+    const store = await makeStorePath();
+    const payload = makeStore("tools-allow-default-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("does not persist a default-cap flag for an explicit toolsAllow restriction", async () => {
+    // An explicit user restriction is fail-closed: it carries no flag, so a CLI
+    // run still surfaces the prepare.ts rejection rather than silently dropping
+    // the requested policy.
+    const store = await makeStorePath();
+    const payload = makeStore("tools-allow-explicit-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read"],
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    const reloaded = (await loadCronStore(store.storePath)).jobs[0]?.payload;
+    expect(reloaded).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
+    expect(reloaded && "toolsAllowIsDefault" in reloaded).toBe(false);
+  });
+
   it("round-trips command payloads through SQLite", async () => {
     const store = await makeStorePath();
     const payload = makeStore("command-job", true);
