@@ -34,7 +34,7 @@ describe("group runtime loading", () => {
       "Your text replies are automatically sent to this group chat.",
     );
     expect(groupChatContext).toContain(
-      "For ordinary text, do not use the message tool to send to this same group; just reply normally.",
+      "For ordinary text, do not use the message tool to send to this same destination; just reply normally.",
     );
     expect(groupChatContext).toContain(
       "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
@@ -154,6 +154,20 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
     });
     expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
+  });
+
+  it("uses channel wording when the authoritative chat type is channel", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+
+    expect(context).toContain("You are in a Mattermost channel.");
+    expect(context).toContain("Your text replies are automatically sent to this channel.");
+    expect(context).toContain("do not use the message tool to send to this same destination");
+    expect(context).toContain("attachments to this same channel/thread");
+    expect(context).not.toContain("group chat");
   });
 
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {

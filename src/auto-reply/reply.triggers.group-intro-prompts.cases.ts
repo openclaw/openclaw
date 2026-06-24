@@ -82,6 +82,26 @@ export function registerGroupIntroPromptCases(): void {
         forbidden: ["Avoid Markdown tables"],
       },
       {
+        name: "mattermost-channel",
+        message: {
+          Body: "release status",
+          From: "mattermost:channel:town-square",
+          To: "channel:town-square",
+          ChatType: "channel",
+          GroupSubject: "Town Square",
+          Provider: "mattermost",
+        },
+        expected: [
+          "You are in a Mattermost channel.",
+          "Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+          groupParticipationNote,
+          groupSilentNote,
+          groupSilentProseGuard,
+          "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
+        ],
+        forbidden: ["Mattermost group chat"],
+      },
+      {
         name: "whatsapp-always-on",
         setup: (cfg) => {
           cfg.channels ??= {};
