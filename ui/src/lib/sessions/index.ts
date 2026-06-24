@@ -3,11 +3,17 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewayHelloOk, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
+  isUiGlobalSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SessionSnapshot = {
   result: SessionsListResult | null;
@@ -37,6 +43,20 @@ export type SessionNavigation = {
   recentSessions: GatewaySessionRow[];
 };
 
+export type SessionScopeHost = {
+  assistantAgentId?: string | null;
+  agentsList?: {
+    defaultId?: string | null;
+    mainKey?: string | null;
+    agents?: Array<{ id: string }>;
+  } | null;
+  hello: GatewayHelloOk | null;
+};
+
+export type SessionScopeHostWithKey = SessionScopeHost & {
+  sessionKey: string;
+};
+
 export type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
@@ -59,7 +79,78 @@ export type SessionCapability = {
   dispose: () => void;
 };
 
-export function projectSessionRows(
+function readHelloDefaultAgentId(host: Pick<SessionScopeHost, "hello">): string | undefined {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
+}
+
+export function scopedAgentIdForSession(
+  host: SessionScopeHost,
+  sessionKey: string | undefined | null,
+): string | undefined {
+  return isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
+}
+
+export function scopedAgentParamsForSession(
+  host: SessionScopeHost,
+  sessionKey: string,
+): { agentId?: string } {
+  const agentId = isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : resolveUiGlobalAliasAgentId(host, sessionKey);
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function scopedAgentListParamsForSession(
+  host: SessionScopeHost,
+  sessionKey: string,
+): { agentId?: string } {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const agentId =
+    parsed?.agentId ??
+    (normalizedSessionKey === "global"
+      ? resolveUiKnownSelectedGlobalAgentId(host)
+      : normalizedSessionKey === "unknown"
+        ? undefined
+        : resolveUiDefaultAgentId(host));
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function visibleSessionMatches(
+  host: SessionScopeHostWithKey,
+  sessionKey: string,
+  agentId: string | undefined,
+): boolean {
+  if (host.sessionKey !== sessionKey) {
+    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
+    if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
+      return false;
+    }
+    const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
+    return expectedAgentId
+      ? normalizeAgentId(hostAliasAgentId) === normalizeAgentId(expectedAgentId)
+      : normalizeAgentId(hostAliasAgentId) === resolveUiDefaultAgentId(host);
+  }
+  if (!isUiGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
+  const expectedAgentId = agentId
+    ? normalizeAgentId(agentId)
+    : host.agentsList?.defaultId
+      ? normalizeAgentId(host.agentsList.defaultId)
+      : readHelloDefaultAgentId(host);
+  return expectedAgentId
+    ? normalizeAgentId(selectedAgentId ?? "") === normalizeAgentId(expectedAgentId)
+    : selectedAgentId === undefined;
+}
+
+export function getVisibleSessionRows(
   result: SessionsListResult | null,
   options: {
     currentSessionKey?: string;
@@ -104,7 +195,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   });
   const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
   const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
-  const recentSessions = projectSessionRows(input.result, {
+  const recentSessions = getVisibleSessionRows(input.result, {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,

@@ -1,5 +1,6 @@
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../lib/session-key.ts";
+import { scopedAgentListParamsForSession } from "../../lib/sessions/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
 import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";
@@ -12,10 +13,7 @@ import { loadChatHistory, type ChatState } from "./gateway.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
-import {
-  createChatSessionsLoadOverrides,
-  scopedAgentListParamsForSession,
-} from "./session-scope.ts";
+import { createChatSessionsLoadOverrides } from "./session-scope.ts";
 import type { ChatQueueItem } from "./types.ts";
 
 type SessionSwitchHost = AppViewState &

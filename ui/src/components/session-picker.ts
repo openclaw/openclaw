@@ -5,7 +5,7 @@ import type { SessionsListResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { projectSessionRows, type SessionCapability } from "../lib/sessions/index.ts";
+import { getVisibleSessionRows, type SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 
@@ -261,7 +261,7 @@ export class SessionPicker extends LitElement {
   }
 
   private rows() {
-    return projectSessionRows(this.result, {
+    return getVisibleSessionRows(this.result, {
       currentSessionKey: this.currentSessionKey,
       agentId: this.agentId,
       defaultAgentId: this.defaultAgentId,

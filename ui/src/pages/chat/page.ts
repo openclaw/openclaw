@@ -37,7 +37,10 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
-import { resolveSessionCreateParams } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionCreateParams,
+  scopedAgentParamsForSession,
+} from "../../lib/sessions/index.ts";
 import {
   dismissChatError,
   dismissRealtimeTalkError,
@@ -97,7 +100,6 @@ import {
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
-import { scopedAgentParamsForSession } from "./session-scope.ts";
 import { switchChatSession } from "./session-switch.ts";
 import { createSessionWorkspaceProps, type SessionWorkspaceHost } from "./session-workspace.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";

@@ -20,6 +20,12 @@ import {
 } from "../../lib/session-key.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
+  scopedAgentIdForSession,
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/index.ts";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
@@ -80,11 +86,7 @@ import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
 import {
   createChatSessionsLoadOverrides,
-  scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
-  scopedAgentListParamsForSession,
-  scopedAgentParamsForSession,
-  visibleSessionMatches,
 } from "./session-scope.ts";
 import type { ChatSideResult } from "./side-result.ts";
 import type {

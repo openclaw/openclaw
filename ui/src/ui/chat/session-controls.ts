@@ -24,15 +24,15 @@ import {
 } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import {
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+} from "../../lib/sessions/index.ts";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../pages/agents/data.ts";
-import {
-  createChatSessionsLoadOverrides,
-  scopedAgentListParamsForSession,
-  scopedAgentParamsForSession,
-} from "../../pages/chat/session-scope.ts";
+import { createChatSessionsLoadOverrides } from "../../pages/chat/session-scope.ts";
 import { loadSessions, patchSession } from "../../pages/sessions/data.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";

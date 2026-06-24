@@ -23,13 +23,13 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../lib/session-key.ts";
+import {
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+} from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { refreshChat } from "../pages/chat/data.ts";
-import {
-  createChatSessionsLoadOverrides,
-  scopedAgentParamsForSession,
-  scopedAgentListParamsForSession,
-} from "../pages/chat/session-scope.ts";
+import { createChatSessionsLoadOverrides } from "../pages/chat/session-scope.ts";
 import {
   resetChatStateForSessionSwitch,
   switchChatSession,

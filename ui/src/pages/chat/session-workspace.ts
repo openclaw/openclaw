@@ -5,9 +5,9 @@ import type {
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
+import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { scopedAgentParamsForSession, type ChatAgentScopeHost } from "./session-scope.ts";
 import type { ChatProps } from "./view.ts";
 
 type SessionWorkspaceProps = NonNullable<ChatProps["sessionWorkspace"]>;
@@ -42,7 +42,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   assistantAgentId?: string | null;
-  agentsList?: ChatAgentScopeHost["agentsList"];
+  agentsList?: SessionScopeHost["agentsList"];
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
   requestUpdate?: () => void;
