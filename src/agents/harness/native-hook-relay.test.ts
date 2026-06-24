@@ -6,6 +6,11 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentToolResultMiddleware } from "../../plugins/agent-tool-result-middleware-types.js";
 import {
@@ -29,6 +34,7 @@ import {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   testing.clearNativeHookRelaysForTests();
@@ -2329,6 +2335,46 @@ describe("native hook relay registry", () => {
       runtime: "codex",
       sessionId: "session-1",
     });
+  });
+
+  it("loads lazy Codex middleware from the relay registration config", async () => {
+    setRuntimeConfigSnapshot({
+      plugins: { entries: { tokenjuice: { enabled: false } } },
+    } satisfies OpenClawConfig);
+    const relayConfig = {
+      plugins: { entries: { tokenjuice: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      config: relayConfig,
+      runId: "run-1",
+    });
+    const output = Array.from(
+      { length: 400 },
+      (_, index) => `line ${index}: ${"x".repeat(160)}`,
+    ).join("\n");
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        cwd: "/repo",
+        turn_id: "turn-1",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "cat big.log" },
+        tool_response: { output, exit_code: 0 },
+      },
+    });
+
+    expect(response.exitCode).toBe(2);
+    expect(response.stdout).toBe("");
+    expect(response.stderr).toContain("large document summary");
   });
 
   it("returns Codex feedback when native PostToolUse middleware rewrites the result", async () => {

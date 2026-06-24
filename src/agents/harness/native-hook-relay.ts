@@ -1515,13 +1515,17 @@ async function runNativeHookRelayPostToolUse(params: {
   if (nativeHookRelayHasCodexToolResultMiddleware(params.registration)) {
     // Codex native PostToolUse replaces model-visible output via exit-code-2
     // feedback. Keep raw after_tool_call below for existing hook observers.
-    const middlewareRunner = createAgentToolResultMiddlewareRunner({
-      runtime: "codex",
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      runId: params.registration.runId,
-    });
+    const middlewareRunner = createAgentToolResultMiddlewareRunner(
+      {
+        runtime: "codex",
+        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+        sessionId: params.registration.sessionId,
+        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+        runId: params.registration.runId,
+      },
+      undefined,
+      params.registration.config ? { config: params.registration.config } : undefined,
+    );
     const middlewareInputResult = coerceNativeHookRelayToolResponseForMiddleware(result);
     const originalModelText = readNativeHookRelayToolResultText(middlewareInputResult);
     const middlewareResult = await middlewareRunner.applyToolResultMiddleware({

@@ -2,6 +2,7 @@
  * Runs native harness tool-result middleware around tool execution results.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -33,6 +34,10 @@ type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
 type MiddlewareToolResultCoerceOptions = {
   sanitizeContent?: boolean;
   sanitizeDetails?: boolean;
+};
+
+type AgentToolResultMiddlewareRunnerOptions = {
+  config?: OpenClawConfig;
 };
 
 function isValidMiddlewareContentBlock(value: unknown): boolean {
@@ -474,6 +479,7 @@ function reconcileDeliveredMessagingFailure(
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
+  options: AgentToolResultMiddlewareRunnerOptions = {},
 ) {
   const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
   let resolvedHandlers = handlers;
@@ -482,6 +488,7 @@ export function createAgentToolResultMiddlewareRunner(
       await import("../../plugins/agent-tool-result-middleware-loader.js");
     return loadAgentToolResultMiddlewaresForRuntime({
       runtime: ctx.runtime,
+      ...(options.config ? { config: options.config } : {}),
     });
   });
   const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
