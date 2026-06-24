@@ -2641,6 +2641,43 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
+  it("fails clearly when gateway TTS output is requested through a configured SSH remote", async () => {
+    const gatewayConnection = await import("../gateway/connection-details.js");
+    mocks.loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config gateway.remote.url",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "tts",
+          "convert",
+          "--gateway",
+          "--text",
+          "hello",
+          "--output",
+          "hello.mp3",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+  });
+
   it("uses only embedding providers for embedding creation", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
