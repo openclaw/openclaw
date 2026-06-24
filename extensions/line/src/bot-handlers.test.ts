@@ -139,10 +139,10 @@ vi.mock("./download.js", () => ({
 }));
 
 const { pushMessageLineMock, replyMessageLineMock } = vi.hoisted(() => ({
-  pushMessageLineMock: vi.fn(async () => {
+  pushMessageLineMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => {
     throw new Error("pushMessageLine should not be called from bot-handlers tests");
   }),
-  replyMessageLineMock: vi.fn(async () => {
+  replyMessageLineMock: vi.fn(async (..._args: unknown[]): Promise<void> => {
     throw new Error("replyMessageLine should not be called from bot-handlers tests");
   }),
 }));
@@ -1145,7 +1145,10 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents([event2], context);
 
     expect(replyMessageLineMock).toHaveBeenCalledTimes(1);
-    expect(replyMessageLineMock.mock.calls[0]?.[1]?.[0]?.text).toContain("still being processed");
+    const replyMessages = (replyMessageLineMock.mock.calls[0] as unknown[])?.[1] as
+      | Array<{ text?: string }>
+      | undefined;
+    expect(replyMessages?.[0]?.text).toContain("still being processed");
 
     resolveFirst?.();
     await firstRun;
