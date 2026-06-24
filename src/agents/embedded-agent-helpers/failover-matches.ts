@@ -121,6 +121,10 @@ const ERROR_PATTERNS = {
     "upstream error",
     "upstream connect error",
     "connection reset",
+    // Provider-side relay/transport failure (#95519): distinct from a model
+    // error — the upstream call itself failed before reaching the model.
+    "upstream_error",
+    "upstream request failed",
     // Chinese provider server error messages
     "内部错误",
     "服务器错误",

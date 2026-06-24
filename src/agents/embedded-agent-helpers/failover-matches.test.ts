@@ -179,6 +179,25 @@ describe("server error status classification", () => {
   });
 });
 
+describe("upstream_error transport failure classification (#95519)", () => {
+  it("classifies a raw {error:{type:'upstream_error'}} JSON body as a server error (fallbackable)", () => {
+    // Provider-side relay/transport failure shaped like OpenAI's error
+    // envelope — distinct from a model-level error, must engage the
+    // configured fallback chain rather than ending the turn immediately.
+    const raw =
+      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
+    expect(classifyFailoverReason(raw)).toBe("server_error");
+  });
+
+  it("classifies the bare message 'Upstream request failed' as transient", () => {
+    expect(classifyFailoverReason("Upstream request failed")).toBe("timeout");
+  });
+
+  it("matches isServerErrorMessage for the bare upstream_error type string", () => {
+    expect(isServerErrorMessage("upstream_error")).toBe(true);
+  });
+});
+
 describe("generic assistant error text classification (#93931)", () => {
   it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
     // The generic error text wraps provider availability failures (model not

@@ -1658,7 +1658,13 @@ function isStructuredServerErrorMessage(raw: string): boolean {
     return false;
   }
   const value = normalizeLowercaseStringOrEmpty(raw);
-  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+  return (
+    value.includes('"type":"server_error"') ||
+    value.includes('"code":"server_error"') ||
+    // Upstream provider transport failures (#95519): `{"error":{"type":"upstream_error", ...}}`
+    // is a transient relay failure, not a primary-provider model error.
+    value.includes('"type":"upstream_error"')
+  );
 }
 
 export function parseImageDimensionError(raw: string): {
