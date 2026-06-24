@@ -29,6 +29,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
+  "abortedLastRunAttempts",
   "restartRecoveryRuns",
   "goal",
   "sessionStartedAt",
@@ -127,6 +128,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "systemPromptReport",
   "pluginDebugEntries",
   "acp",
+  "quarantinedAt",
+  "quarantineReason",
   "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 

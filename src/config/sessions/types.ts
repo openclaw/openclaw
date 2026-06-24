@@ -259,6 +259,16 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Counter incremented each time the session is marked for restart recovery.
+   * Bound by MAX_RECOVERY_RETRIES to prevent a wedged session from death-looping
+   * the gateway across restarts — see #95750. */
+  abortedLastRunAttempts?: number;
+  /** Timestamp (ms) when this session was quarantined after exhausting the
+   * cross-boot restart-recovery retry budget.  A quarantined session skips
+   * automatic recovery but still accepts new inbound traffic. */
+  quarantinedAt?: number;
+  /** Machine-readable reason set when the session was quarantined. */
+  quarantineReason?: string;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */

@@ -56,6 +56,25 @@ const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
 
+const QUARANTINE_REASON_EXCEEDED_RETRIES = "exceeded_restart_retry_budget";
+
+function quarantineSession(
+  entry: SessionEntry,
+  sessionKey: string,
+  attempts: number,
+): void {
+  const now = Date.now();
+  entry.abortedLastRun = false;
+  entry.quarantinedAt = now;
+  entry.quarantineReason = QUARANTINE_REASON_EXCEEDED_RETRIES;
+  entry.updatedAt = now;
+  log.warn(
+    `quarantined ${sessionKey} after ${attempts} aborted-restart attempts ` +
+      `(>= ${MAX_RECOVERY_RETRIES}); the session will not be auto-resumed until ` +
+      `a new inbound turn clears the quarantine`,
+  );
+}
+
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return true;
@@ -255,6 +274,7 @@ export async function markRestartAbortedMainSessions(params: {
           const wasRunning = entry.status === "running";
           entry.status = "running";
           entry.abortedLastRun = true;
+          entry.abortedLastRunAttempts = (entry.abortedLastRunAttempts ?? 0) + 1;
           if (!wasRunning) {
             entry.startedAt = undefined;
             entry.endedAt = undefined;
@@ -362,6 +382,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
             continue;
           }
           entry.abortedLastRun = true;
+          entry.abortedLastRunAttempts = (entry.abortedLastRunAttempts ?? 0) + 1;
           entry.updatedAt = Date.now();
           replacements.push({ sessionKey, entry });
           counts.marked++;
@@ -452,6 +473,7 @@ async function markSessionFailed(params: {
       }
       entry.status = "failed";
       entry.abortedLastRun = true;
+      entry.abortedLastRunAttempts = (entry.abortedLastRunAttempts ?? 0) + 1;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
       entry.pendingFinalDelivery = undefined;
@@ -611,6 +633,9 @@ async function resumeMainSession(params: {
         }
         const now = Date.now();
         entry.abortedLastRun = false;
+        entry.abortedLastRunAttempts = 0;
+        entry.quarantinedAt = undefined;
+        entry.quarantineReason = undefined;
         entry.updatedAt = now;
         if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
           if (sanitizedPendingText) {
@@ -681,6 +706,7 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
           continue;
         }
         entry.abortedLastRun = true;
+        entry.abortedLastRunAttempts = (entry.abortedLastRunAttempts ?? 0) + 1;
         replacements.push({ sessionKey, entry });
         counts.marked++;
       }
@@ -726,8 +752,8 @@ async function recoverStore(params: {
   resumedSessionKeys: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+}): Promise<{ recovered: number; failed: number; skipped: number; quarantined: number }> {
+  const result = { recovered: 0, failed: 0, skipped: 0, quarantined: 0 };
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -781,6 +807,24 @@ async function recoverStore(params: {
     const resumeDedupeKey = sessionKey;
     if (params.resumedSessionKeys.has(resumeDedupeKey)) {
       result.skipped++;
+      continue;
+    }
+
+    // Quarantine sessions that have exceeded the cross-boot retry budget.
+    // This runs AFTER the skip/routing/owner/dedupe guards so that only
+    // sessions that would actually be recovered are subject to quarantine.
+    // Without this ceiling a repeatedly-wedged session would death-loop the
+    // gateway across restarts — see #95750.
+    if ((entry.abortedLastRunAttempts ?? 0) > MAX_RECOVERY_RETRIES) {
+      quarantineSession(entry, sessionKey, entry.abortedLastRunAttempts ?? 0);
+      await applyRestartRecoveryLifecycle({
+        storePath: params.storePath,
+        update: () => ({
+          result: undefined,
+          replacements: [{ sessionKey, entry }],
+        }),
+      });
+      result.quarantined++;
       continue;
     }
 
@@ -884,8 +928,8 @@ export async function recoverRestartAbortedMainSessions(
     activeSessionIds?: Iterable<string>;
     activeSessionKeys?: Iterable<string>;
   } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+): Promise<{ recovered: number; failed: number; skipped: number; quarantined: number }> {
+  const result = { recovered: 0, failed: 0, skipped: 0, quarantined: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
@@ -899,11 +943,12 @@ export async function recoverRestartAbortedMainSessions(
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+	      result.quarantined += storeResult.quarantined;
   }
 
-  if (result.recovered > 0 || result.failed > 0) {
+  if (result.recovered > 0 || result.failed > 0 || result.quarantined > 0) {
     log.info(
-      `main-session restart recovery complete: recovered=${result.recovered} failed=${result.failed} skipped=${result.skipped}`,
+      `main-session restart recovery complete: recovered=${result.recovered} failed=${result.failed} skipped=${result.skipped} quarantined=${result.quarantined}`,
     );
   }
   return result;
@@ -918,7 +963,7 @@ export async function recoverStartupOrphanedMainSessions(
     updatedBeforeMs?: number;
     resumedSessionKeys?: Set<string>;
   } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+): Promise<{ marked: number; recovered: number; failed: number; skipped: number; quarantined: number }> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
@@ -939,6 +984,7 @@ export async function recoverStartupOrphanedMainSessions(
     recovered: recovered.recovered,
     failed: recovered.failed,
     skipped: marked.skipped + recovered.skipped,
+    quarantined: recovered.quarantined,
   };
 }
 

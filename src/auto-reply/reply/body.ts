@@ -31,6 +31,9 @@ export async function applySessionHints(params: {
     if (params.sessionEntry && params.sessionStore && params.sessionKey) {
       const updatedAt = Date.now();
       params.sessionEntry.abortedLastRun = false;
+      params.sessionEntry.abortedLastRunAttempts = 0;
+      params.sessionEntry.quarantinedAt = undefined;
+      params.sessionEntry.quarantineReason = undefined;
       params.sessionEntry.updatedAt = updatedAt;
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
@@ -43,6 +46,9 @@ export async function applySessionHints(params: {
           },
           () => ({
             abortedLastRun: false,
+            abortedLastRunAttempts: 0,
+            quarantinedAt: undefined,
+            quarantineReason: undefined,
             updatedAt,
           }),
           { fallbackEntry: params.sessionEntry },

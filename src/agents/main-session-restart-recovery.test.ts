@@ -196,7 +196,13 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
 
-    expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(recovery).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
+
+    // Successful resume must reset the attempt counter and clear any quarantine.
+    const recoveredEntry = loadSessionStore(storePath)["agent:main:issue-82433"];
+    expect(recoveredEntry?.abortedLastRunAttempts).toBe(0);
+    expect(recoveredEntry?.quarantinedAt).toBeUndefined();
+    expect(recoveredEntry?.quarantineReason).toBeUndefined();
   });
 
   it("persists abort-registry runs after their event context was cleared", async () => {
@@ -769,7 +775,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     const resumeParams = firstGatewayParams();
     expect(resumeParams.sessionKey).toBe("agent:main:main");
@@ -808,7 +814,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     const resumeParams = firstGatewayParams();
     expect(resumeParams).toMatchObject({
       sessionKey: "agent:main:discord:direct:123",
@@ -845,7 +851,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(firstGatewayParams().deliver).toBe(false);
   });
 
@@ -875,7 +881,7 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(firstGatewayParams().deliver).toBe(false);
   });
 
@@ -906,7 +912,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
@@ -945,7 +951,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(firstGatewayParams()).toMatchObject({
       deliver: true,
@@ -1003,7 +1009,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(firstGatewayParams().message).toContain("The final answer is 42.");
     expect(firstGatewayParams().message).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(firstGatewayParams().message).not.toContain("Conversation info");
@@ -1032,7 +1038,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(firstGatewayParams().message).toContain("assistant final was already captured");
     const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
@@ -1059,7 +1065,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 0, failed: 0, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -1104,7 +1110,7 @@ describe("main-session-restart-recovery", () => {
       activeSessionIds: ["active-key-session", "active-id-session"],
     });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 2 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 2 });
     expect(callGateway).toHaveBeenCalledOnce();
     const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:active-key"]?.abortedLastRun).toBe(true);
@@ -1133,7 +1139,7 @@ describe("main-session-restart-recovery", () => {
       activeSessionIds: ["new-current-session"],
     });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
@@ -1229,7 +1235,7 @@ describe("main-session-restart-recovery", () => {
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(recovered).toEqual({ recovered: 2, failed: 0, skipped: 0 });
+    expect(recovered).toMatchObject({ recovered: 2, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledTimes(2);
     store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
@@ -1298,7 +1304,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
@@ -1326,7 +1332,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
       | { method?: string; params?: Record<string, unknown> }
@@ -1351,5 +1357,58 @@ describe("main-session-restart-recovery", () => {
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
+  });
+
+  it("quarantines sessions that exceed the cross-boot retry budget (regression #95750)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:telegram:dm": {
+        status: "running",
+        abortedLastRun: true,
+        abortedLastRunAttempts: 4, // > MAX_RECOVERY_RETRIES
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+      },
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 0, skipped: 0, quarantined: 1 });
+
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const store = loadSessionStore(storePath);
+    const entry = store["agent:main:telegram:dm"];
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.quarantinedAt).toBeGreaterThan(0);
+    expect(entry?.quarantineReason).toBe("exceeded_restart_retry_budget");
+    // callGateway must NOT have been called for a quarantined session
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("increments abortedLastRunAttempts at each mark phase (regression #95750)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    // Seed a session with 3 prior attempts (at ceiling), then mark again
+    // to verify the counter crosses MAX_RECOVERY_RETRIES.
+    await writeStore(sessionsDir, {
+      "agent:main:telegram:dm": {
+        status: "running",
+        abortedLastRun: false,
+        abortedLastRunAttempts: 3,
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+      },
+    });
+
+    await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      additionalCfgs: [],
+      sessionKeys: ["agent:main:telegram:dm"],
+    });
+
+    const store = loadSessionStore(storePath);
+    const entry = store["agent:main:telegram:dm"];
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortedLastRunAttempts).toBe(4); // 3 → 4, crosses MAX_RECOVERY_RETRIES
   });
 });
