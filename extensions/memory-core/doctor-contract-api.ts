@@ -327,6 +327,16 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
+       WHERE chunk.id = legacy.id
+     )`,
+    `${LEGACY_MEMORY_VECTOR_TABLE} chunk references`,
+  );
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
      JOIN main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical ON canonical.id = legacy.id
      WHERE canonical.embedding IS NOT legacy.embedding`,
     LEGACY_MEMORY_VECTOR_TABLE,
@@ -345,7 +355,6 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-     JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical
        WHERE canonical.id = legacy.id
@@ -380,6 +389,12 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
        WHERE canonical.id = legacy.id
+         AND canonical.text IS legacy.text
+         AND canonical.path IS legacy.path
+         AND canonical.source IS legacy.source
+         AND canonical.model IS legacy.model
+         AND canonical.start_line IS legacy.start_line
+         AND canonical.end_line IS legacy.end_line
      )`,
     "fts",
   );

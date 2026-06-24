@@ -212,6 +212,44 @@ async function createUnrelatedCanonicalMemoryIndex(
   }
 }
 
+async function createCanonicalLegacyMemoryRowsWithFts(agentPath: string, ftsText: string) {
+  await fs.mkdir(path.dirname(agentPath), { recursive: true });
+  const db = new DatabaseSync(agentPath);
+  try {
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: true,
+      ftsEnabled: true,
+    });
+    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+      "memory_index_meta_v1",
+      '{"vectorDims":3}',
+    );
+    db.prepare(
+      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+    ).run("MEMORY.md", "memory", "file-hash", 10, 20);
+    db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "chunk-1",
+      "MEMORY.md",
+      "memory",
+      1,
+      2,
+      "chunk-hash",
+      "embed-model",
+      "remember this",
+      "[1,0,0]",
+      30,
+    );
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(ftsText, "chunk-1", "MEMORY.md", "memory", "embed-model", 1, 2);
+  } finally {
+    db.close();
+  }
+}
+
 async function createMismatchedCanonicalVectorIndex(agentPath: string): Promise<void> {
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   const db = new DatabaseSync(agentPath, { allowExtension: true });
@@ -1077,6 +1115,48 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining(
         "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec rows conflict with canonical memory index rows",
+      ),
+    ]);
+    expect(result.changes).toEqual([]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
+  it("leaves legacy vector sidecars in place when vector rows have no chunk", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { vector: true });
+    const legacyDb = new DatabaseSync(legacyPath);
+    try {
+      legacyDb.exec("DELETE FROM chunks");
+    } finally {
+      legacyDb.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec chunk references rows conflict",
+      ),
+    ]);
+    expect(result.changes).toEqual([]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
+  it("leaves legacy sidecars in place when canonical FTS rows conflict", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "stale text");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory fts rows conflict",
       ),
     ]);
     expect(result.changes).toEqual([]);
