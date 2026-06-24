@@ -1406,6 +1406,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             queueId,
             queuePolicy,
           }).catch((markErr: unknown) => {
+            // markQueuedPlatformOutcomeUnknown failed (e.g. DB write error).
+            // Fall back to failDelivery so the entry is not silently abandoned.
+            // This is a last-resort path: the entry will re-enter
+            // send_attempt_started and be subject to the same drain/reconcile
+            // semantics as before the patch. It does NOT mean failDelivery is
+            // correct when send evidence exists — only that we cannot safely
+            // advance the state without a successful DB write.
             log.warn(
               `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
             );
