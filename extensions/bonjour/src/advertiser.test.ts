@@ -141,17 +141,48 @@ describe("gateway bonjour advertiser", () => {
     txt?: unknown;
   };
 
-  const prevEnv = { ...process.env };
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalVitest = process.env.VITEST;
+  const originalOpenClawMdnsHostname = process.env.OPENCLAW_MDNS_HOSTNAME;
+  const originalOpenClawDisableBonjour = process.env.OPENCLAW_DISABLE_BONJOUR;
+  const originalFlyMachineId = process.env.FLY_MACHINE_ID;
+  const originalFlyAppName = process.env.FLY_APP_NAME;
+
+  function restoreBonjourTestEnv() {
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalVitest === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = originalVitest;
+    }
+    if (originalOpenClawMdnsHostname === undefined) {
+      delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    } else {
+      process.env.OPENCLAW_MDNS_HOSTNAME = originalOpenClawMdnsHostname;
+    }
+    if (originalOpenClawDisableBonjour === undefined) {
+      delete process.env.OPENCLAW_DISABLE_BONJOUR;
+    } else {
+      process.env.OPENCLAW_DISABLE_BONJOUR = originalOpenClawDisableBonjour;
+    }
+    if (originalFlyMachineId === undefined) {
+      delete process.env.FLY_MACHINE_ID;
+    } else {
+      process.env.FLY_MACHINE_ID = originalFlyMachineId;
+    }
+    if (originalFlyAppName === undefined) {
+      delete process.env.FLY_APP_NAME;
+    } else {
+      process.env.FLY_APP_NAME = originalFlyAppName;
+    }
+  }
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
-    }
+    restoreBonjourTestEnv();
 
     createService.mockClear();
     getResponder.mockReset();
@@ -280,6 +311,39 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("auto-disables Bonjour in Cloudflare Cloudchamber containers", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\n",
+    );
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("does not treat cloudchamber.service as a container marker", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/system.slice/cloudchamber.service\n");
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+    await started.stop();
   });
 
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
