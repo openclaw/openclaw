@@ -1,6 +1,9 @@
 // Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+const VOLCENGINE_TTS_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
 
@@ -158,7 +161,9 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
   });
 
   try {
-    const frames = parseSeedTtsFrames(await response.text());
+    const frames = parseSeedTtsFrames(
+      await readResponseTextLimited(response, VOLCENGINE_TTS_BODY_LIMIT_BYTES),
+    );
     const chunks: Buffer[] = [];
     for (const frame of frames) {
       if (frame.code === 0) {
@@ -240,7 +245,9 @@ async function legacyVolcengineTTS(
   });
 
   try {
-    const body = parseLegacyTtsResponse(await response.text());
+    const body = parseLegacyTtsResponse(
+      await readResponseTextLimited(response, VOLCENGINE_TTS_BODY_LIMIT_BYTES),
+    );
     if (!response.ok || body.code !== 3000 || !body.data) {
       throw new Error(
         `Volcengine TTS error ${body.code ?? response.status}: ${body.message ?? "unknown"}`,
