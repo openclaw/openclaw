@@ -1653,12 +1653,13 @@ function isJsonApiInternalServerError(raw: string): boolean {
   return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
 }
 
+const STRUCTURED_SERVER_ERROR_RE = /"(?:type|code)"\s*:\s*"(?:server|upstream)_error"/i;
+
 function isStructuredServerErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const value = normalizeLowercaseStringOrEmpty(raw);
-  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+  return STRUCTURED_SERVER_ERROR_RE.test(raw);
 }
 
 export function parseImageDimensionError(raw: string): {

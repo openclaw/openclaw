@@ -177,6 +177,19 @@ describe("server error status classification", () => {
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
+
+  it("classifies structured upstream_error payloads as server errors", () => {
+    const raw = JSON.stringify({
+      error: {
+        message: "Upstream request failed",
+        type: "upstream_error",
+        param: "",
+        code: null,
+      },
+    });
+
+    expect(classifyFailoverReason(raw)).toBe("server_error");
+  });
 });
 
 describe("generic assistant error text classification (#93931)", () => {
