@@ -1,4 +1,6 @@
 // Ollama tests cover stream plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -9,7 +11,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, createOllamaStreamFn, wrapOllamaCompatNumCtx } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -494,5 +496,78 @@ describe("createOllamaStreamFn thinking events", () => {
       reason: "aborted",
       error: { stopReason: "aborted" },
     });
+  });
+});
+
+describe("wrapOllamaCompatNumCtx", () => {
+  it("injects num_ctx without touching already-stringified tool_calls.function.arguments", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "search", arguments: '{"query":"weather"}' },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = wrapOllamaCompatNumCtx(baseStreamFn, 4096);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "ollama",
+        id: "glm-5.2:cloud",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect((capturedPayload?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(4096);
+    const messages = capturedPayload?.messages as Array<Record<string, unknown>>;
+    const toolCalls = messages[0]?.tool_calls as Array<{ function: { arguments: unknown } }>;
+    expect(toolCalls[0]?.function.arguments).toBe('{"query":"weather"}');
+  });
+
+  it("leaves legacy function_call arguments untouched as a string", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            function_call: { name: "search", arguments: '{"query":"weather"}' },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = wrapOllamaCompatNumCtx(baseStreamFn, 4096);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "ollama",
+        id: "glm-5.2:cloud",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    const messages = capturedPayload?.messages as Array<Record<string, unknown>>;
+    const functionCall = messages[0]?.function_call as { arguments: unknown };
+    expect(functionCall.arguments).toBe('{"query":"weather"}');
   });
 });
