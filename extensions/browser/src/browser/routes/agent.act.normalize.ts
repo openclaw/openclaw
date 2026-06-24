@@ -45,29 +45,66 @@ function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
-/**
- * Validate that nested batch actions cannot drift to a different target tab.
- * `referencesRequestTab` resolves an action's targetId through the same tab
- * alias resolution the route used, so a sub-action may reuse any supported alias
- * form (tabId/label/suggestedTargetId/raw id or unique prefix) of the request
- * tab; only ids that resolve to a different tab are rejected.
- */
-export function validateBatchTargetIds(
-  actions: BrowserActRequest[],
+/** Result of canonicalizing an action's targetId aliases against the request tab. */
+export type ActTargetIdCanonicalization =
+  | { ok: true; action: BrowserActRequest }
+  | { ok: false; error: string };
+
+function canonicalizeActTargetIdsInner(
+  action: BrowserActRequest,
+  canonicalTargetId: string,
   referencesRequestTab: (targetId: string) => boolean,
-): string | null {
-  for (const action of actions) {
-    if (action.targetId && !referencesRequestTab(action.targetId)) {
-      return "batched action targetId must match request targetId";
-    }
-    if (action.kind === "batch") {
-      const nestedError = validateBatchTargetIds(action.actions, referencesRequestTab);
-      if (nestedError) {
-        return nestedError;
-      }
-    }
+  batched: boolean,
+): ActTargetIdCanonicalization {
+  if (action.targetId && !referencesRequestTab(action.targetId)) {
+    return {
+      ok: false,
+      error: batched
+        ? "batched action targetId must match request targetId"
+        : "action targetId must match request targetId",
+    };
   }
-  return null;
+  // Rewrite an accepted alias to the canonical tab id so the Playwright executor
+  // (executeSingleAction reads `action.targetId ?? targetId`) hits the exact page
+  // lookup instead of a tabId/label/suggested/prefix alias that would miss it.
+  let next: BrowserActRequest = action.targetId
+    ? { ...action, targetId: canonicalTargetId }
+    : action;
+  if (next.kind === "batch") {
+    const actions: BrowserActRequest[] = [];
+    for (const sub of next.actions) {
+      const result = canonicalizeActTargetIdsInner(
+        sub,
+        canonicalTargetId,
+        referencesRequestTab,
+        true,
+      );
+      if (!result.ok) {
+        return result;
+      }
+      actions.push(result.action);
+    }
+    next = { ...next, actions };
+  }
+  return { ok: true, action: next };
+}
+
+/**
+ * Canonicalize every action targetId (top-level and nested batch sub-actions) to
+ * the resolved request tab's canonical id, rejecting ids that resolve to a
+ * different tab. `referencesRequestTab` resolves a targetId through the same tab
+ * alias resolution the route used, so any supported alias form
+ * (tabId/label/suggestedTargetId/raw id or unique prefix) of the request tab is
+ * accepted; only a genuinely different tab is rejected. Canonicalizing before
+ * dispatch is required because the Playwright executor looks up the page by exact
+ * targetId, so a surviving alias would break the action at runtime.
+ */
+export function canonicalizeActTargetIds(
+  action: BrowserActRequest,
+  canonicalTargetId: string,
+  referencesRequestTab: (targetId: string) => boolean,
+): ActTargetIdCanonicalization {
+  return canonicalizeActTargetIdsInner(action, canonicalTargetId, referencesRequestTab, false);
 }
 
 function normalizeFields(rawFields: unknown): BrowserFormField[] {

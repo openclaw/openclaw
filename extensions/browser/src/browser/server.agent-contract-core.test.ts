@@ -197,12 +197,13 @@ describe("browser control server", () => {
   );
 
   it(
-    "accepts a unique targetId prefix that resolves to the request tab",
+    "canonicalizes a unique targetId prefix to the request tab before dispatch",
     async () => {
       const base = await startServerAndBase();
-      // "abcd" is a unique prefix of the canonical targetId "abcd1234"; aliases
-      // and prefixes are documented tab references and must not trip the
-      // top-level targetId match.
+      // "abcd" is a unique prefix of the canonical targetId "abcd1234". The route
+      // must rewrite the action's targetId to the canonical id, because the
+      // Playwright executor reads `action.targetId ?? targetId` for an exact page
+      // lookup; a surviving alias would miss the lookup and break at runtime.
       const response = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "click",
         ref: "1",
@@ -210,14 +211,15 @@ describe("browser control server", () => {
       });
 
       expect(response.ok).toBe(true);
-      const clickArgs = mockFirstArg(pwMocks.clickViaPlaywright, 0, "click");
-      expect((clickArgs as { targetId?: string }).targetId).toBe("abcd1234");
+      const execArgs = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "executeAct");
+      const action = execArgs.action as { targetId?: string };
+      expect(action.targetId).toBe("abcd1234");
     },
     slowTimeoutMs,
   );
 
   it(
-    "accepts a batched sub-action targetId alias for the request tab",
+    "canonicalizes a batched sub-action targetId alias before dispatch",
     async () => {
       const base = await startServerAndBase();
       const response = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -228,8 +230,9 @@ describe("browser control server", () => {
       });
 
       expect(response.ok).toBe(true);
-      const batchArgs = mockFirstArg(pwMocks.batchViaPlaywright, 0, "batch");
-      expect((batchArgs as { targetId?: string }).targetId).toBe("abcd1234");
+      const execArgs = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "executeAct");
+      const action = execArgs.action as { actions?: Array<{ targetId?: string }> };
+      expect(action.actions?.[0]?.targetId).toBe("abcd1234");
     },
     slowTimeoutMs,
   );
