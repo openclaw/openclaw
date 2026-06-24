@@ -961,7 +961,7 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
-  it("runs maybeRepairBundledPluginLoadPaths after all other repair steps", async () => {
+  it("runs maybeRepairBundledPluginLoadPaths after repairMissingConfiguredPluginInstalls", async () => {
     const events: string[] = [];
     mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
       events.push("missing-installs");
