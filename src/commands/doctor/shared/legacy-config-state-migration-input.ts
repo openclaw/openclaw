@@ -24,7 +24,7 @@ export function resolveStateMigrationConfigInput(params: {
     return null;
   }
   const migrated = migrateLegacyConfig(migrationSource);
-  if (!migrated.config || migrated.partiallyValid) {
+  if (!migrated.config) {
     return null;
   }
   return {

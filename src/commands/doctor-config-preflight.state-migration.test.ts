@@ -213,6 +213,62 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
+  it("keeps plugin state migrations for partially valid legacy config repairs", async () => {
+    const resolvedConfig = {
+      gateway: { mode: "local", port: "not-a-port" },
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: "/custom/memory-{agentId}.sqlite",
+              vector: { enabled: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: false,
+      config: resolvedConfig,
+      sourceConfig: resolvedConfig,
+      parsed: resolvedConfig,
+      legacyIssues: [
+        {
+          path: "agents.defaults.memorySearch.store.path",
+          message:
+            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+        },
+      ],
+      warnings: [],
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            memorySearch: {
+              store: {
+                vector: { enabled: false },
+              },
+            },
+          }),
+          list: [{ id: "main" }],
+        }),
+      }),
+      pluginDoctorConfig: resolvedConfig,
+      env: process.env,
+      recoverCorruptTargetStore: undefined,
+    });
+  });
+
   it("limits invalid-config preflight to config-independent state migration", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
