@@ -257,4 +257,30 @@ describe("registerWorkboardCli", () => {
     });
     expect(moved.status).toBe("running");
   });
+
+  it("uses canonical WORKBOARD_STATUSES in move command validation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Status check", status: "todo" });
+    const program = createProgram(store);
+
+    // All valid statuses should work (skip scheduled which requires scheduledAt)
+    const validStatuses = [
+      "triage",
+      "backlog",
+      "todo",
+      "ready",
+      "running",
+      "review",
+      "blocked",
+      "done",
+    ];
+    for (const status of validStatuses) {
+      const output = await captureStdout(async () => {
+        await program.parseAsync(["workboard", "move", card.id, "--status", status], {
+          from: "user",
+        });
+      });
+      expect(output).toContain(card.title);
+    }
+  });
 });
