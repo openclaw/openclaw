@@ -69,6 +69,16 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   return openClawNativeCodexResponsesStreamFnForTest ?? params.currentStreamFn ?? streamSimple;
 }
 
+function hasOpenAICodexResponsesSessionStream(params: {
+  model: EmbeddedRunAttemptParams["model"];
+  currentStreamFn: StreamFn | undefined;
+}): boolean {
+  return (
+    isOpenAICodexResponsesModel(params.model) &&
+    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)
+  );
+}
+
 export function describeEmbeddedAgentStreamStrategy(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -93,6 +103,15 @@ export function describeEmbeddedAgentStreamStrategy(params: {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
+  }
+  if (
+    hasResolvedRuntimeApiKey(params.resolvedApiKey) &&
+    hasOpenAICodexResponsesSessionStream({
+      model: params.model,
+      currentStreamFn: params.currentStreamFn,
+    })
+  ) {
+    return "session-custom";
   }
   if (
     hasResolvedRuntimeApiKey(params.resolvedApiKey) &&
@@ -155,6 +174,33 @@ export function resolveEmbeddedAgentStreamFn(params: {
   });
   if (openClawNativeCodexResponsesStreamFn) {
     return wrapEmbeddedAgentStreamFn(openClawNativeCodexResponsesStreamFn, {
+      runSignal: params.signal,
+      resolvedApiKey: params.resolvedApiKey,
+      authProfileId: params.authProfileId,
+      authStorage: params.authStorage,
+      providerId: params.model.provider,
+      sessionId: params.sessionId,
+      promptCacheKey: params.promptCacheKey,
+      transformContext: (context) =>
+        context.systemPrompt
+          ? {
+              ...context,
+              systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+            }
+          : context,
+    });
+  }
+
+  if (
+    hasResolvedRuntimeApiKey(params.resolvedApiKey) &&
+    hasOpenAICodexResponsesSessionStream({
+      model: params.model,
+      currentStreamFn: params.currentStreamFn,
+    })
+  ) {
+    // Codex's OpenClaw session stream owns Responses continuation state; keep it
+    // native and only inject the resolved runtime auth/run context.
+    return wrapEmbeddedAgentStreamFn(currentStreamFn, {
       runSignal: params.signal,
       resolvedApiKey: params.resolvedApiKey,
       authProfileId: params.authProfileId,
