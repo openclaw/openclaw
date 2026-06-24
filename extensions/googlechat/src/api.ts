@@ -22,6 +22,13 @@ async function readGoogleChatJsonResponse<T>(response: Response, label: string):
   try {
     return await readProviderJsonResponse<T>(response, label);
   } catch (cause) {
+    // Preserve the bounded-reader overflow message verbatim so callers
+    // (and ClawSweeper reviewers) can see the canonical "<label>: JSON
+    // response exceeds <N> bytes" surface. Only wrap genuine parse errors.
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (/exceeds \d+ bytes/.test(message)) {
+      throw cause instanceof Error ? cause : new Error(message);
+    }
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
 }
