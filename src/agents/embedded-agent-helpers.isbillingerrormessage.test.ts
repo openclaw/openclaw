@@ -1,6 +1,5 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage } from "../llm/types.js";
 import {
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
@@ -53,31 +52,6 @@ const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
 const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
-
-function makeCodeOnlyAssistantError(params: {
-  provider: string;
-  code: string;
-}): AssistantMessage {
-  return {
-    role: "assistant",
-    api: params.provider,
-    provider: params.provider,
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "error",
-    errorCode: params.code,
-    errorMessage: "",
-    content: [],
-    timestamp: 0,
-  };
-}
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -1519,54 +1493,30 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
-  it.each([
-    { provider: "openai", code: "SERVER_ERROR", expected: "server_error" },
-    { provider: "google", code: "UNAVAILABLE", expected: "overloaded" },
-    { provider: "google", code: "DEADLINE_EXCEEDED", expected: "timeout" },
-    { provider: "google", code: "INTERNAL", expected: "server_error" },
-    { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
-    { provider: "google-antigravity", code: "UNAVAILABLE", expected: "overloaded" },
-    { provider: "openai", code: "INSUFFICIENT_QUOTA", expected: "billing" },
-    { provider: "anthropic", code: "RATE_LIMIT_ERROR", expected: "rate_limit" },
-    { provider: "anthropic", code: "API_ERROR", expected: "timeout" },
-  ] as const)(
-    "classifies assistant $provider code-only $code as $expected",
-    ({ provider, code, expected }) => {
-      expect(classifyAssistantFailoverReason(makeCodeOnlyAssistantError({ provider, code }))).toBe(
-        expected,
-      );
-    },
-  );
+  // Generic cross-provider codes still classify in core without a provider hook.
+  it("classifies generic resource-exhausted codes as rate_limit", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        code: "RESOURCE_EXHAUSTED",
+        message: "",
+      }),
+    ).toBe("rate_limit");
+  });
 
+  // Regression: message-less structured code signals must not be reported as
+  // empty responses, otherwise failover/cooldown never runs. Provider-native
+  // code -> reason mapping is owned by each provider plugin and covered there.
   it.each([
-    { provider: "gateway", code: "UNAVAILABLE" },
-    { provider: "openai", code: "API_ERROR" },
-    { provider: "openai-compatible", code: "INSUFFICIENT_QUOTA" },
-  ] as const)(
-    "does not classify non-provider-owned code-only $code for $provider",
-    ({ provider, code }) => {
-      expect(classifyAssistantFailoverReason(makeCodeOnlyAssistantError({ provider, code }))).toBe(
-        null,
-      );
-    },
-  );
-
-  it.each([
-    { provider: "google", code: "DEADLINE_EXCEEDED", expected: "timeout" },
-    { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
-    { provider: "anthropic", code: "RATE_LIMIT_ERROR", expected: "rate_limit" },
-    { provider: "openai", code: "INSUFFICIENT_QUOTA", expected: "unclassified" },
-    { provider: "openai", code: "SERVER_ERROR", expected: "unclassified" },
+    { provider: "openai", code: "SERVER_ERROR" },
+    { provider: "google", code: "UNAVAILABLE" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
   ] as const)(
     "does not report code-only $provider $code failures as empty responses",
-    ({ provider, code, expected }) => {
-      expect(
-        classifyProviderRuntimeFailureKind({
-          provider,
-          code,
-          message: "",
-        }),
-      ).toBe(expected);
+    ({ provider, code }) => {
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
+        "empty_response",
+      );
     },
   );
 

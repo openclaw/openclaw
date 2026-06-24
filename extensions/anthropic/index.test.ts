@@ -103,6 +103,33 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("native");
   });
 
+  it("classifies Anthropic-native code-only failover errors", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "RATE_LIMIT_ERROR",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "API_ERROR",
+      }),
+    ).toBe("timeout");
+    // Unknown codes fall through so core/generic classification still applies.
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "INSUFFICIENT_QUOTA",
+      }),
+    ).toBeUndefined();
+  });
+
   it("owns replay policy for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
