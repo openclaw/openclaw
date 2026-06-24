@@ -1470,6 +1470,19 @@ describe("config strict validation", () => {
       }
     });
 
+    it("accepts the maximum allowed value", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 500_000 } });
+      expect(res.ok).toBe(true);
+    });
+
+    it("rejects values exceeding the maximum", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 500_001 } });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      }
+    });
+
     it("allows omission (field is optional)", () => {
       const res = validateConfigObject({ gateway: { port: 18789 } });
       expect(res.ok).toBe(true);
