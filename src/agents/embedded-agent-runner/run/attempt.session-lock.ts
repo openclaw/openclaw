@@ -1171,6 +1171,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  // Tracks whether releaseHeldLockWithFence() bailed out because the active
+  // write-lock scope is still alive. When set, runWithPhysicalWriteLockScope
+  // re-attempts the release after the scope is deactivated so the held lock
+  // does not leak until the watchdog fires.
+  let releaseHeldLockDeferred = false;
   let retainedLockUseCount = 0;
   const retainedLockIdleWaiters = new Set<() => void>();
   let heldLockDraining = false;
@@ -1603,6 +1608,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // A retained session write is in progress and the caller is inside
+        // the active write-lock scope. Defer the release: when the write
+        // scope completes, runWithPhysicalWriteLockScope re-attempts
+        // releaseHeldLockWithFence after scope deactivation.
+        releaseHeldLockDeferred = true;
         return;
       }
       if (!heldLock) {
@@ -1639,20 +1649,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
-        // A retained session write is in progress. Cleanup must wait for it to
-        // complete before acquiring the held lock, otherwise acquireLock() below
-        // fails with EEXIST (the lock file is still held) and the cleanup
-        // path receives a noopLock that leaks the underlying file lock.
+        // A retained session write is in progress and the caller is inside the
+        // active write-lock scope. Do NOT await retainedLockIdleWaiters here —
+        // that waiter resolves when the retained use count reaches zero, which
+        // cannot happen until the current active scope unwinds. Awaiting from
+        // inside that same scope would self-deadlock.
         //
-        // This fixes a leak scenario where abort fires during a session write:
-        // releaseHeldLockWithFence() bails out (scope active), leaving heldLock
-        // set. acquireCleanupLock() then tries acquireLock() which fails, returns
-        // noopLock, and the held lock is never released.
-        if (retainedLockUseCount > 0) {
-          await new Promise<void>((resolve) => {
-            retainedLockIdleWaiters.add(resolve);
-          });
-        }
+        // Return undefined so acquireCleanupLock() falls through to
+        // acquireLock(). The held lock will be released by the scope-completion
+        // path in runWithPhysicalWriteLockScope, which re-attempts
+        // releaseHeldLockWithFence() when releaseHeldLockDeferred is set.
+        return undefined;
       }
       if (!heldLock) {
         return undefined;
@@ -1673,14 +1680,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
-        // A retained session write is in progress. Wait for it to complete
-        // before releasing the held lock, otherwise the session write lock
-        // file is never released and leaks until the watchdog timer fires.
-        if (retainedLockUseCount > 0) {
-          await new Promise<void>((resolve) => {
-            retainedLockIdleWaiters.add(resolve);
-          });
-        }
+        // A retained session write is in progress and the caller is inside the
+        // active write-lock scope. Do NOT await retainedLockIdleWaiters here —
+        // same self-deadlock risk described in takeHeldLockAfterRetainedIdle.
+        // The held lock will be released by the scope-completion path in
+        // runWithPhysicalWriteLockScope when releaseHeldLockDeferred is set.
+        return;
       }
       if (!heldLock) {
         return;
@@ -1741,6 +1746,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     }
     await releaseHeldLockAfterTakeover();
+    // If releaseHeldLockWithFence() bailed out earlier because the active
+    // write-lock scope was still alive, re-attempt the release now that the
+    // scope has been deactivated and the retained-use count has been released.
+    // At this point waitForRetainedLockIdle() will not self-wait because the
+    // current scope is no longer the active one.
+    //
+    // This fixes a lock-leak scenario where abort fires during a retained
+    // session write: releaseHeldLockWithFence bails out (scope active), leaving
+    // heldLock set. Without this re-attempt the held lock would only be released
+    // by the maxHoldMs watchdog (issue #95915).
+    if (releaseHeldLockDeferred) {
+      releaseHeldLockDeferred = false;
+      await releaseHeldLockWithFence();
+    }
     if (!outcome.ok) {
       throw outcome.error;
     }
