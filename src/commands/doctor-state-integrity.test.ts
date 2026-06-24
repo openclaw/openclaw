@@ -147,6 +147,9 @@ describe("structured state integrity findings", () => {
   });
 
   it("reports permissive state and config file permissions as structured findings", () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const stateDir = path.join(tempHome, ".openclaw");
     const configPath = path.join(tempHome, "openclaw.json");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o755 });
@@ -171,6 +174,46 @@ describe("structured state integrity findings", () => {
           severity: "warning",
           path: configPath,
           message: "Config file is group/world readable. Recommend chmod 600.",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps checking config permissions when the state directory is missing", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = path.join(tempHome, ".openclaw");
+    const configPath = path.join(tempHome, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+
+    const findings = detectStateIntegrityHealthIssues({}, { configPath }).map(
+      stateIntegrityIssueToHealthFinding,
+    );
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "error",
+          path: stateDir,
+          message:
+            "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "warning",
+          path: configPath,
+          message: "Config file is group/world readable. Recommend chmod 600.",
+        }),
+      ]),
+    );
+    expect(findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          message: expect.stringContaining("runtime directory is missing"),
         }),
       ]),
     );

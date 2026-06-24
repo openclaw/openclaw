@@ -1285,6 +1285,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/state-integrity",
         description: "State directory, config permission, and runtime state issues are findings.",
+        defaultEnabled: false,
         async detect(ctx) {
           const { detectStateIntegrityHealthIssues, stateIntegrityIssueToHealthFinding } =
             await import("../commands/doctor-state-integrity.js");

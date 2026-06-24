@@ -809,10 +809,9 @@ export function detectStateIntegrityHealthIssues(
   const stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {
     issues.push({ kind: "missing-state-dir", path: stateDir });
-    return issues;
   }
 
-  if (!canWriteDir(stateDir)) {
+  if (stateDirExists && !canWriteDir(stateDir)) {
     const hint = dirPermissionHint(stateDir);
     issues.push({
       kind: "state-dir-not-writable",
@@ -821,7 +820,7 @@ export function detectStateIntegrityHealthIssues(
     });
   }
 
-  if (process.platform !== "win32") {
+  if (stateDirExists && process.platform !== "win32") {
     try {
       const dirLstat = fs.lstatSync(stateDir);
       const isDirSymlink = dirLstat.isSymbolicLink();
@@ -850,25 +849,27 @@ export function detectStateIntegrityHealthIssues(
     }
   }
 
-  const dirCandidates = new Map<string, "Sessions dir" | "Session store dir" | "OAuth dir">();
-  dirCandidates.set(sessionsDir, "Sessions dir");
-  dirCandidates.set(storeDir, "Session store dir");
-  if (requireOAuthDir) {
-    dirCandidates.set(oauthDir, "OAuth dir");
-  }
-  for (const [dir, label] of dirCandidates) {
-    if (!existsDir(dir)) {
-      issues.push({ kind: "missing-runtime-dir", label, path: dir });
-      continue;
+  if (stateDirExists) {
+    const dirCandidates = new Map<string, "Sessions dir" | "Session store dir" | "OAuth dir">();
+    dirCandidates.set(sessionsDir, "Sessions dir");
+    dirCandidates.set(storeDir, "Session store dir");
+    if (requireOAuthDir) {
+      dirCandidates.set(oauthDir, "OAuth dir");
     }
-    if (!canWriteDir(dir)) {
-      const hint = dirPermissionHint(dir);
-      issues.push({
-        kind: "runtime-dir-not-writable",
-        label,
-        path: dir,
-        ...(hint ? { hint } : {}),
-      });
+    for (const [dir, label] of dirCandidates) {
+      if (!existsDir(dir)) {
+        issues.push({ kind: "missing-runtime-dir", label, path: dir });
+        continue;
+      }
+      if (!canWriteDir(dir)) {
+        const hint = dirPermissionHint(dir);
+        issues.push({
+          kind: "runtime-dir-not-writable",
+          label,
+          path: dir,
+          ...(hint ? { hint } : {}),
+        });
+      }
     }
   }
 
@@ -959,6 +960,7 @@ export function stateIntegrityIssueToHealthFinding(
         fixHint: "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
       };
   }
+  return assertNeverStateIntegrityIssue(issue);
 }
 
 export function stateIntegrityIssueToRepairEffect(
@@ -1011,6 +1013,13 @@ export function stateIntegrityIssueToRepairEffect(
         dryRunSafe: false,
       };
   }
+  return assertNeverStateIntegrityIssue(issue);
+}
+
+function assertNeverStateIntegrityIssue(issue: never): never {
+  throw new Error(
+    `Unhandled state integrity issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
 }
 
 /** Emits state integrity warnings and applies selected runtime repairs. */
