@@ -1,13 +1,13 @@
 // Migration apply tests cover backups, filtering, provider apply calls, and report output.
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { runMigrationApply } from "./apply.js";
 
-const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-migrate-apply-"));
+let stateDir = "";
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-migrate-apply-" });
 
 vi.mock("../../config/paths.js", async (importActual) => {
   const actual = await importActual<typeof import("../../config/paths.js")>();
@@ -36,6 +36,14 @@ function buildEmptyPlan(): MigrationPlan {
 }
 
 describe("runMigrationApply", () => {
+  beforeAll(async () => {
+    stateDir = await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
+
   it("uses the resolved provider id when forwarding Codex options", async () => {
     const plan = vi.fn(async () => buildEmptyPlan());
     const apply = vi.fn(async () => buildEmptyPlan());
