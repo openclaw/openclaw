@@ -4504,13 +4504,13 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   warnings: string[];
 }> {
   const env = params.env ?? process.env;
-  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
-  const oauthDir = resolveOAuthDir(env, stateDir);
   const stateDirResult = await autoMigrateLegacyStateDir({
     env,
     homedir: params.homedir,
     log: params.log,
   });
+  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
+  const oauthDir = resolveOAuthDir(env, stateDir);
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });

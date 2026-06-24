@@ -21,6 +21,8 @@ import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations,
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
@@ -398,6 +400,8 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
+  resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
@@ -788,6 +792,48 @@ describe("state migrations", () => {
     );
     expect(result.changes).toContain("plugin state migrated");
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("runs plugin doctor migrations against the canonical state dir after state-dir repair", async () => {
+    const root = await createTempDir();
+    const legacyStateDir = path.join(root, ".clawdbot");
+    const canonicalStateDir = path.join(root, ".openclaw");
+    await fs.mkdir(legacyStateDir, { recursive: true });
+    await fs.writeFile(path.join(legacyStateDir, "legacy.txt"), "legacy", "utf8");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: root };
+    delete env.OPENCLAW_STATE_DIR;
+    const cfg = createConfig();
+    const detectedStateDirs: string[] = [];
+    const migratedStateDirs: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-state-dir-test",
+          label: "Memory Core state dir test migration",
+          detectLegacyState: ({ stateDir }) => {
+            detectedStateDirs.push(stateDir);
+            return { preview: ["plugin state"] };
+          },
+          migrateLegacyState: ({ stateDir }) => {
+            migratedStateDirs.push(stateDir);
+            return { changes: ["plugin state migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("plugin state migrated");
+    expect(detectedStateDirs).toStrictEqual([canonicalStateDir]);
+    expect(migratedStateDirs).toStrictEqual([canonicalStateDir]);
+    await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
