@@ -44,7 +44,7 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
   }),
 });
 const NextcloudTalkWebhookEnvelopeSchema = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
+  type: z.string().min(1),
   object: z
     .object({
       type: z.string().min(1).optional(),
