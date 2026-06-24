@@ -3342,7 +3342,7 @@ describe("gateway agent handler", () => {
           ownerKey: "agent:work:main",
           label: "plugin:memory-core",
           task: "background plugin subagent task",
-          deliveryStatus: "not_applicable",
+          deliveryStatus: "pending",
         });
         expect(task.runtime).not.toBe("cli");
       });
