@@ -175,7 +175,14 @@
             "type": "string",
             "enum": ["disabled", "enabled"]
           },
-          "typingIndicator": { "type": "boolean" }
+          "typingIndicator": { "type": "boolean" },
+          "sendRateLimit": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "minIntervalMs": { "type": "integer", "minimum": 0 }
+            }
+          }
         }
       }
     },
@@ -213,6 +220,13 @@
         "enum": ["disabled", "enabled"]
       },
       "typingIndicator": { "type": "boolean" },
+      "sendRateLimit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minIntervalMs": { "type": "integer", "minimum": 0 }
+        }
+      },
       "accounts": {
         "type": "object",
         "additionalProperties": {

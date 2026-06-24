@@ -233,6 +233,28 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
   });
+
+  it("accepts top-level and account-level send rate limits", () => {
+    const result = FeishuConfigSchema.parse({
+      sendRateLimit: { minIntervalMs: 1200 },
+      accounts: {
+        bursty: {
+          sendRateLimit: { minIntervalMs: 250 },
+        },
+      },
+    });
+
+    expect(result.sendRateLimit?.minIntervalMs).toBe(1200);
+    expect(result.accounts?.bursty?.sendRateLimit?.minIntervalMs).toBe(250);
+  });
+
+  it("rejects negative send rate-limit intervals", () => {
+    const result = FeishuConfigSchema.safeParse({
+      sendRateLimit: { minIntervalMs: -1 },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("FeishuConfigSchema TTS overrides", () => {
