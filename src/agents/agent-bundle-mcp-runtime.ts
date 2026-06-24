@@ -45,6 +45,7 @@ type BundleMcpSession = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   connected: boolean;
+  retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
   connectPromise?: Promise<void>;
@@ -543,6 +544,9 @@ export function createSessionMcpRuntime(params: {
     session: BundleMcpSession,
     connectionTimeoutMs: number,
   ): Promise<void> => {
+    if (session.retiring) {
+      throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
+    }
     if (session.connected) {
       return;
     }
@@ -558,6 +562,18 @@ export function createSessionMcpRuntime(params: {
         session.connectPromise = undefined;
       });
     await session.connectPromise;
+  };
+  const retireSessionIfCurrent = async (
+    serverName: string,
+    session: BundleMcpSession,
+  ): Promise<boolean> => {
+    if (sessions.get(serverName) !== session) {
+      return false;
+    }
+    session.retiring = true;
+    sessions.delete(serverName);
+    await disposeSession(session);
+    return true;
   };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
@@ -622,6 +638,9 @@ export function createSessionMcpRuntime(params: {
               failIfDisposed();
 
               let session = sessions.get(serverName);
+              if (session?.retiring) {
+                session = undefined;
+              }
               const reusedSession = Boolean(session);
               if (!session) {
                 const client = new Client(
@@ -657,6 +676,7 @@ export function createSessionMcpRuntime(params: {
                   requestTimeoutMs: resolved.requestTimeoutMs,
                   supportsParallelToolCalls: resolved.supportsParallelToolCalls,
                   connected: false,
+                  retiring: false,
                   catalogUseCount: 0,
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
@@ -664,13 +684,18 @@ export function createSessionMcpRuntime(params: {
                 sessions.set(serverName, session);
               }
 
+              if (session.catalogUseCount === 0) {
+                session.sharedAcrossCatalogGenerations = false;
+              }
               if (reusedSession && session.catalogUseCount > 0) {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
+              let connectedForCatalog = false;
               try {
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
@@ -755,15 +780,14 @@ export function createSessionMcpRuntime(params: {
                 ];
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (
-                  !reusedSession &&
-                  !sharedWithNewerGeneration &&
-                  sessions.get(serverName) === session
-                ) {
+                if (!connectedForCatalog && !session.connected) {
+                  // Timed-out connects can still leave the SDK client bound to a
+                  // transport. Delete before async close so future catalogs start fresh.
+                  await retireSessionIfCurrent(serverName, session);
+                } else if (!reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed
                   // generation must not dispose a session a newer one already reused.
-                  await disposeSession(session);
-                  sessions.delete(serverName);
+                  await retireSessionIfCurrent(serverName, session);
                 }
                 failIfDisposed();
                 return {
@@ -774,6 +798,9 @@ export function createSessionMcpRuntime(params: {
                 } as ServerResult;
               } finally {
                 session.catalogUseCount -= 1;
+                if (session.catalogUseCount === 0) {
+                  session.sharedAcrossCatalogGenerations = false;
+                }
               }
             },
         );

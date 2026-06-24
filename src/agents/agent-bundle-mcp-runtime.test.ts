@@ -2195,6 +2195,252 @@ process.stdin.on("end", () => {
   );
 
   it(
+    "retires timed-out shared MCP sessions before later catalog retries",
+    { timeout: 8_000 },
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-timeout-retire-");
+      const triggerServerPath = path.join(tempDir, "trigger-server.mjs");
+      const triggerLogPath = path.join(tempDir, "trigger.log");
+      const slowServerPath = path.join(tempDir, "slow-server.mjs");
+      const slowLogPath = path.join(tempDir, "slow.log");
+      const firstConnectMarkerPath = path.join(tempDir, "first-connect.marker");
+
+      await writeExecutable(
+        triggerServerPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(triggerLogPath)};
+let buffer = "";
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: "timeout-trigger", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    log("sent initial tools/list_changed");
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [{ name: "poke", inputSchema: { type: "object", properties: {} } }],
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    log("sent call tools/list_changed");
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { isError: false, content: [{ type: "text", text: "poked" }] },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+      );
+
+      await writeExecutable(
+        slowServerPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(slowLogPath)};
+const markerPath = ${JSON.stringify(firstConnectMarkerPath)};
+let buffer = "";
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+async function isFirstConnect() {
+  try {
+    const handle = await fs.open(markerPath, "wx");
+    await handle.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    const response = {
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "timeout-slow", version: "1.0.0" },
+      },
+    };
+    if (await isFirstConnect()) {
+      log("slow first initialize");
+      setTimeout(() => send(response), 600);
+    } else {
+      log("fast retry initialize");
+      send(response);
+    }
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [{ name: "slow_tool", inputSchema: { type: "object", properties: {} } }],
+      },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      void handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-timeout-retire-test",
+        sessionKey: "agent:test:session-timeout-retire-test",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              trigger: {
+                command: process.execPath,
+                args: [triggerServerPath],
+                connectionTimeoutMs: 2_000,
+              },
+              slow: {
+                command: process.execPath,
+                args: [slowServerPath],
+                connectionTimeoutMs: 150,
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        const firstCatalog = runtime.getCatalog();
+        await waitForFileText(
+          triggerLogPath,
+          "sent initial tools/list_changed",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        const secondCatalog = await runtime.getCatalog();
+        await firstCatalog;
+
+        expect(secondCatalog.servers.trigger).toBeDefined();
+        expect(secondCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).toBe(true);
+        await waitForFileText(
+          slowLogPath,
+          "slow first initialize",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        await expect(runtime.callTool("trigger", "poke", {})).resolves.toMatchObject({
+          content: [{ type: "text", text: "poked" }],
+          isError: false,
+        });
+        await waitForFileText(
+          triggerLogPath,
+          "sent call tools/list_changed",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        await waitForPredicate(
+          () => runtime.peekCatalog() === null,
+          "manual list_changed to retry timed-out server",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        const retriedCatalog = await runtime.getCatalog();
+
+        expect(retriedCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).not.toBe(
+          true,
+        );
+        expect(retriedCatalog.servers.slow).toBeDefined();
+        expect(retriedCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+          "poke",
+          "slow_tool",
+        ]);
+        await waitForFileText(
+          slowLogPath,
+          "fast retry initialize",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
+
+  it(
     "does not dispose sessions shared with a newer catalog generation",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
