@@ -4087,7 +4087,13 @@ describe("embedded attempt session lock lifecycle", () => {
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("init-release")) })
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("held-release")) })
-      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("fallback-release")) });
+      .mockRejectedValueOnce(
+        new SessionWriteLockTimeoutError({
+          timeoutMs: lockOptions.timeoutMs,
+          owner: "pid=test",
+          lockPath: `${lockOptions.sessionFile}.lock`,
+        }),
+      );
 
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: acquireSessionWriteLockLocal,
@@ -4099,31 +4105,34 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.reacquireAfterPrompt();
 
     // Call acquireForCleanup from inside the active write scope.
-    // This must not deadlock.
-    await controller.withSessionWriteLock(async () => {
-      events.push("write-start");
-      // Calling acquireForCleanup inside the active scope exercises
-      // takeHeldLockAfterRetainedIdle's false branch. It must return
-      // undefined (not await retainedLockIdleWaiters).
-      const cleanupLock = await controller.acquireForCleanup();
-      // NoopLock — release is a safe no-op.
-      await cleanupLock.release();
-      events.push("cleanup-inside-done");
-    });
+    // This must not deadlock. The fallback acquireLock rejects with
+    // SessionWriteLockTimeoutError (same-pid lock-timeout branch),
+    // acquireCleanupLock catches it via isSessionWriteLockAcquireError
+    // and returns undefined → noopLock. The scope then detects
+    // takeoverDetected and throws EmbeddedAttemptSessionTakeoverError.
+    const takeoverError = await controller
+      .withSessionWriteLock(async () => {
+        events.push("write-start");
+        // Calling acquireForCleanup inside the active scope exercises
+        // takeHeldLockAfterRetainedIdle's false branch. It must return
+        // undefined (not await retainedLockIdleWaiters).
+        const cleanupLock = await controller.acquireForCleanup();
+        // NoopLock — release is a safe no-op.
+        await cleanupLock.release();
+        events.push("cleanup-inside-done");
+      })
+      .catch((error: unknown) => error);
 
-    // After the scope completes, the held lock is still set (acquireForCleanup
-    // inside the scope got a noopLock, not the held lock). A real cleanup
+    expect(takeoverError).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    // After the scope throws with takeover, the held lock is still set
+    // (takeHeldLockAfterRetainedIdle inside the scope returned undefined
+    // and the deferred release path was not triggered). A real cleanup
     // call outside the scope can take the held lock.
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
-    expect(events).toEqual([
-      "init-release",
-      "write-start",
-      "fallback-release",
-      "cleanup-inside-done",
-      "held-release",
-    ]);
+    expect(events).toEqual(["init-release", "write-start", "cleanup-inside-done", "held-release"]);
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
   });
 
