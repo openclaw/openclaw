@@ -1,7 +1,7 @@
 // Control UI component renders a copyable gateway connection command.
 import { html } from "lit";
 import { t } from "../i18n/index.ts";
-import { renderCopyButton } from "../ui/chat/copy-as-markdown.ts";
+import { renderCopyButton } from "./copy-button.ts";
 
 async function copyCommand(command: string) {
   try {

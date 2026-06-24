@@ -1,17 +1,21 @@
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import type { SessionsListResult } from "../api/types.ts";
 import {
   isSettingsNavigationRoute,
   navigationIconForRoute,
+  type NavigationRouteId,
   SIDEBAR_SECTIONS,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-routes.ts";
-import type { ThemeMode } from "../app/theme.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
+import "./session-picker.ts";
+import type { ApplicationSessions } from "../app/sessions.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { controlUiPublicAssetPath } from "../ui/public-assets.ts";
 import { icons } from "./icons.ts";
 
 export type SidebarRecentSession = {
@@ -31,7 +35,9 @@ export class AppSidebar extends LitElement {
   }
 
   @property({ attribute: false }) basePath = "";
-  @property({ attribute: false }) activeRouteId?: RouteId;
+  @property({ attribute: false }) activeRouteId?: NavigationRouteId;
+  @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
+  @property({ attribute: false }) getHref?: (routeId: NavigationRouteId) => string;
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) version = "";
@@ -40,23 +46,28 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) recentSessionsCollapsed = false;
   @property({ attribute: false }) newSessionDisabled = false;
   @property({ attribute: false }) newSessionTitle = "";
-  @property({ attribute: false }) sessionSelector: unknown = nothing;
+  @property({ attribute: false }) sessions?: ApplicationSessions;
+  @property({ attribute: false }) sessionsResult: SessionsListResult | null = null;
+  @property({ attribute: false }) currentSessionKey = "";
+  @property({ attribute: false }) sessionAgentId = "main";
+  @property({ attribute: false }) defaultAgentId = "main";
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onCreateSession?: () => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
+  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) onRecentSession?: (session: SidebarRecentSession) => void;
-  @property({ attribute: false }) onPreloadRoute?: (routeId: RouteId) => Promise<void>;
+  @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
+  @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
   }
 
-  private preloadRoute(routeId: RouteId, event: Event, immediate = false) {
-    if (routeId === this.activeRouteId || !this.onPreloadRoute) {
+  private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
+    if (routeId === this.activeRouteId || !this.isRouteEnabled(routeId) || !this.onPreloadRoute) {
       return;
     }
     const target = event.currentTarget;
@@ -88,12 +99,29 @@ export class AppSidebar extends LitElement {
     }
   }
 
-  private renderRoute(routeId: RouteId) {
+  private isRouteEnabled(routeId: NavigationRouteId): boolean {
+    return this.enabledRouteIds?.includes(routeId) ?? true;
+  }
+
+  private renderRoute(routeId: NavigationRouteId) {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
         : this.activeRouteId === routeId;
-    const href = pathForRoute(routeId, this.basePath);
+    const enabled = this.isRouteEnabled(routeId);
+    if (!enabled) {
+      return html`
+        <span class="nav-item nav-item--disabled" aria-disabled="true">
+          <span class="nav-item__icon" aria-hidden="true"
+            >${icons[navigationIconForRoute(routeId)]}</span
+          >
+          ${!this.collapsed
+            ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>`
+            : nothing}
+        </span>
+      `;
+    }
+    const href = this.getHref?.(routeId) ?? pathForRoute(routeId as RouteId, this.basePath);
     return html`
       <a
         href=${href}
@@ -189,7 +217,16 @@ export class AppSidebar extends LitElement {
             ? "sidebar-session-select--collapsed"
             : ""}"
         >
-          ${this.sessionSelector}
+          <openclaw-session-picker
+            .sessions=${this.sessions}
+            .sessionsResult=${this.sessionsResult}
+            .currentSessionKey=${this.currentSessionKey}
+            .agentId=${this.sessionAgentId}
+            .defaultAgentId=${this.defaultAgentId}
+            .connected=${this.connected}
+            .compact=${this.collapsed}
+            .onSelectSession=${this.onSelectSession}
+          ></openclaw-session-picker>
         </div>
         ${this.collapsed || this.recentSessions.length === 0
           ? nothing

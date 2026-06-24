@@ -1,15 +1,14 @@
-import { html, nothing } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
+import { property } from "lit/decorators.js";
 import { directive } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import type { RouteMatch, Router, RouterState } from "../router/types.ts";
-import type { AppViewState } from "../ui/app-view-state.ts";
-import { measureControlUiRender } from "../ui/control-ui-performance.ts";
 
 const PENDING_UI_DELAY_MS = 1_000;
 
-type RenderableModule<TContext, TData> = {
-  render: (context: TContext, data: TData | undefined) => unknown;
+type RenderableModule<TData> = {
+  render: (data: TData | undefined) => unknown;
 };
 
 export type RouterOutletOptions<
@@ -58,8 +57,8 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   };
 }
 
-export function createRouterOutletSnapshot<TRouteId extends string, TModule, TData>(
-  router: Router<TRouteId, unknown, TModule, TData>,
+export function createRouterOutletSnapshot<TRouteId extends string, TLoadContext, TModule, TData>(
+  router: Router<TRouteId, TLoadContext, TModule, TData>,
 ): RouterOutletSnapshotStore<TRouteId, TModule, TData> {
   let selection = selectRouterOutletState(router.getState());
   const listeners = new Set<(next: RouterOutletSelection<TRouteId, TModule, TData>) => void>();
@@ -107,19 +106,23 @@ function equalRouterOutletState(
   );
 }
 
-type RouterRenderContext = {
-  state: AppViewState;
-};
-
-function isRenderableModule<TContext, TData>(
-  module: unknown,
-): module is RenderableModule<TContext, TData> {
+function isRenderableModule<TData>(module: unknown): module is RenderableModule<TData> {
   return (
     typeof module === "object" &&
     module !== null &&
     "render" in module &&
     typeof module.render === "function"
   );
+}
+
+function measureRoutedRender<T>(routeId: string, render: () => T): T {
+  const startedAt = globalThis.performance?.now() ?? 0;
+  const result = render();
+  const durationMs = Math.round((globalThis.performance?.now() ?? startedAt) - startedAt);
+  if (durationMs >= 16) {
+    console.debug("[openclaw] routed render", { routeId, durationMs });
+  }
+  return result;
 }
 
 function renderPending() {
@@ -157,15 +160,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   `;
 }
 
-export function renderRouterOutlet<
-  TRouteId extends string,
-  TLoadContext,
-  TModule,
-  TContext,
-  TData = unknown,
->(
+export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
-  context: TContext,
   selection: RouterOutletSelection<TRouteId, TModule, TData>,
   options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
@@ -194,7 +190,7 @@ export function renderRouterOutlet<
         : nothing;
   }
   const routeModule = renderedMatch.module;
-  if (!isRenderableModule<TContext, TData>(routeModule)) {
+  if (!isRenderableModule<TData>(routeModule)) {
     return renderedMatch.error
       ? renderError<TRouteId, TLoadContext, TModule, TData>(
           router,
@@ -204,11 +200,8 @@ export function renderRouterOutlet<
         )
       : null;
   }
-  const renderPage = () => routeModule.render(context, renderedMatch.data);
-  const renderedPage = () => {
-    const renderContext = context as RouterRenderContext;
-    return measureControlUiRender(renderContext.state, routeId, { routeId }, renderPage);
-  };
+  const renderedPage = () =>
+    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
   return renderedMatch.error
     ? renderError<TRouteId, TLoadContext, TModule, TData>(
         router,
@@ -222,8 +215,8 @@ export function renderRouterOutlet<
 
 class RouterOutletDirective extends AsyncDirective {
   private snapshot?: RouterOutletSnapshotStore;
-  private context: unknown;
-  private renderApp?: (selection: RouterOutletSelection, context: unknown) => unknown;
+  private router?: Router<string, unknown, unknown, unknown>;
+  private retryContext: unknown;
   private unsubscribe?: () => void;
   private boundaryOptions?: RouterOutletBoundaryOptions;
   private notFoundScheduled = false;
@@ -234,15 +227,15 @@ class RouterOutletDirective extends AsyncDirective {
 
   override render(
     snapshot: unknown,
-    context: unknown,
+    router: unknown,
+    retryContext: unknown,
     boundaryOptions: RouterOutletBoundaryOptions,
-    renderApp: (selection: RouterOutletSelection, context: unknown) => unknown,
   ) {
     const routeSnapshot = snapshot as RouterOutletSnapshotStore;
     this.updateSubscription(routeSnapshot);
-    this.context = context;
+    this.router = router as Router<string, unknown, unknown, unknown>;
+    this.retryContext = retryContext;
     this.boundaryOptions = boundaryOptions;
-    this.renderApp = renderApp;
     return this.renderSelection(routeSnapshot.get());
   }
 
@@ -252,6 +245,8 @@ class RouterOutletDirective extends AsyncDirective {
     this.clearPendingTimer();
     this.pendingSelection = undefined;
     this.boundaryOptions = undefined;
+    this.router = undefined;
+    this.retryContext = undefined;
     this.notFoundScheduled = false;
   }
 
@@ -268,7 +263,7 @@ class RouterOutletDirective extends AsyncDirective {
     this.unsubscribe?.();
     this.snapshot = snapshot;
     this.unsubscribe = snapshot.subscribe((selection) => {
-      if (this.isConnected && this.renderApp) {
+      if (this.isConnected) {
         this.setValue(this.renderSelection(selection));
       }
     });
@@ -289,11 +284,12 @@ class RouterOutletDirective extends AsyncDirective {
       this.showPending = false;
       this.pendingTimer = globalThis.setTimeout(() => {
         this.pendingTimer = undefined;
-        if (this.pendingSelection?.pending?.id !== this.pendingMatchId) {
+        const pendingSelection = this.pendingSelection;
+        if (!pendingSelection || pendingSelection.pending?.id !== this.pendingMatchId) {
           return;
         }
         this.showPending = true;
-        this.setValue(this.renderSelection(this.pendingSelection));
+        this.setValue(this.renderSelection(pendingSelection));
       }, PENDING_UI_DELAY_MS);
     }
     if (selection.status === "notFound") {
@@ -307,7 +303,17 @@ class RouterOutletDirective extends AsyncDirective {
     } else {
       this.notFoundScheduled = false;
     }
-    return this.renderApp?.({ ...selection, showPending: this.showPending }, this.context);
+    const router = this.router;
+    if (!router) {
+      return nothing;
+    }
+    return renderRouterOutlet(
+      router,
+      { ...selection, showPending: this.showPending },
+      {
+        retryContext: this.retryContext,
+      },
+    );
   }
 
   private clearPendingTimer() {
@@ -322,14 +328,43 @@ const routerOutletDirective = directive(RouterOutletDirective);
 
 export function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
   snapshot: RouterOutletSnapshotStore<TRouteId, TModule, TData>,
-  context: TContext,
+  router: Router<TRouteId, TContext, TModule, TData>,
   boundaryOptions: RouterOutletBoundaryOptions,
-  render: (
-    selection: RouterOutletSelection<TRouteId, TModule, TData>,
-    context: TContext,
-  ) => unknown,
+  options: RouterOutletOptions<TRouteId, TContext, TData> = {},
 ): unknown {
-  return routerOutletDirective(snapshot, context, boundaryOptions, (selection, value) =>
-    render(selection as RouterOutletSelection<TRouteId, TModule, TData>, value as TContext),
-  );
+  return routerOutletDirective(snapshot, router, options.retryContext, boundaryOptions);
+}
+
+export class OpenClawRouterOutlet<
+  TRouteId extends string = string,
+  TLoadContext = unknown,
+  TModule = unknown,
+  TData = unknown,
+> extends LitElement {
+  @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
+  @property({ attribute: false }) snapshot?: RouterOutletSnapshotStore<TRouteId, TModule, TData>;
+  @property({ attribute: false }) retryContext?: TLoadContext;
+  @property({ attribute: false }) onNotFound?: () => void;
+
+  override createRenderRoot() {
+    return this;
+  }
+
+  override render() {
+    if (!this.router || !this.snapshot) {
+      return nothing;
+    }
+    return routerOutlet(
+      this.snapshot,
+      this.router,
+      { onNotFound: this.onNotFound },
+      {
+        retryContext: this.retryContext,
+      },
+    );
+  }
+}
+
+if (!customElements.get("openclaw-router-outlet")) {
+  customElements.define("openclaw-router-outlet", OpenClawRouterOutlet);
 }

@@ -1,7 +1,7 @@
 // Control UI module implements main behavior.
 import "./styles.css";
-import "./ui/app.ts";
-import { inferControlUiPublicAssetPath } from "./ui/public-assets.ts";
+import "./app/app-host.ts";
+import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
