@@ -38,6 +38,42 @@ describe("embedded agent transcript repair runtime contract", () => {
     });
   });
 
+  it("removes internal completion leaves instead of prepending them to a fresh prompt", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        role: "user",
+        content: [{ type: "text", text: "NO_REPLY stale subagent completion" }],
+        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      },
+    });
+
+    expect(result).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("preserves user-directed inter-session leaves in the repaired prompt", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        role: "user",
+        content: "forwarded user request",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      },
+    });
+
+    expect(result).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt: `${QUEUED_USER_MESSAGE_MARKER}\nforwarded user request\n\nnewest inbound message`,
+    });
+  });
+
   it("does not duplicate an orphan leaf that is already present in the next prompt", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "summary\nolder active-turn message\nnewest inbound message",

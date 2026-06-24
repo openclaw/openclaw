@@ -361,6 +361,42 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
+  it("drops stale internal inter-session leaves instead of shadowing a fresh prompt", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [{ type: "text", text: "NO_REPLY stale subagent completion" }],
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("keeps user-directed inter-session leaves in the repaired prompt", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "forwarded user request",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        } as never,
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "forwarded user request\n\nnewest inbound message",
+    });
+  });
+
   it("does not duplicate orphaned user text already present in the next prompt", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({

@@ -16,6 +16,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -484,6 +485,19 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function shouldDropStaleInternalOrphanedUserPrompt(params: {
+  prompt: string;
+  leafMessage: { provenance?: unknown };
+}): boolean {
+  if (!params.prompt.trim()) {
+    return false;
+  }
+  // Internal completion/announcement handoffs are session state, not queued
+  // direct user text. With a fresh prompt present, prepending them can steer
+  // the run away from the latest user instruction.
+  return shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance);
+}
+
 /**
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt. The leaf is removed whether merged or already
@@ -492,13 +506,21 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (
+    shouldDropStaleInternalOrphanedUserPrompt({
+      prompt: params.prompt,
+      leafMessage: params.leafMessage,
+    })
+  ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 

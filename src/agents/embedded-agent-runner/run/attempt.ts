@@ -4105,7 +4105,7 @@ export async function runEmbeddedAttempt(
               orphanPromptMerge.removeLeaf
                 ? orphanPromptMerge.merged
                   ? "Merged and removed"
-                  : "Removed already-queued"
+                  : "Removed"
                 : "Preserved"
             } orphaned user message` +
             (orphanPromptMerge.removeLeaf
