@@ -2,11 +2,7 @@
 
 ## Unreleased
 
-## 2026.6.9 - 2026-06-23
-
-Adds settings detail panels, refreshes the Android overview controls, and routes exec approvals into the in-app inbox.
-
-Improves chat acknowledgement handling, gateway pairing readiness, microphone foreground-service behavior, and release screenshot reliability.
+Maintenance update for the current OpenClaw Android release.
 
 ## 2026.6.2 - 2026-06-02
 

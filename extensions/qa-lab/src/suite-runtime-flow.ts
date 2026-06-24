@@ -186,7 +186,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     browserSnapshot: qaBrowserSnapshot,
     browserAct: qaBrowserAct,
     webOpenPage: async (webParams: Parameters<typeof qaWebOpenPage>[0]) => {
-      const opened = await qaWebOpenPage(webParams);
+      const opened = await qaWebOpenPage({ ...webParams, repoRoot: params.env.repoRoot });
       params.env.webSessionIds.add(opened.pageId);
       return opened;
     },
