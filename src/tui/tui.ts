@@ -415,6 +415,25 @@ export function isTuiBusyActivityStatus(status: string): boolean {
   return TUI_BUSY_ACTIVITY_STATUSES.has(status);
 }
 
+// Active-run activity statuses owned by a live run. The reconnect streaming
+// watchdog restores "streaming" for a still-active run, and loadHistory()
+// adoption / run completion set these. The post-connect startup loader must
+// NOT overwrite them, otherwise reconnect hides active work behind the
+// "starting up" status until later history/event handling restores it.
+const TUI_ACTIVE_RUN_ACTIVITY_STATUSES = new Set(["streaming", "running", "finishing context"]);
+
+export function isTuiActiveRunActivityStatus(status: string): boolean {
+  return TUI_ACTIVE_RUN_ACTIVITY_STATUSES.has(status);
+}
+
+// Resolve the activity status the post-connect startup path should claim. When
+// an active run already owns the status line (e.g. after reconnect), preserve
+// it; otherwise claim the "starting up" loader so post-connect init does not
+// look frozen.
+export function resolveStartupActivityStatus(currentStatus: string): string {
+  return isTuiActiveRunActivityStatus(currentStatus) ? currentStatus : "starting up";
+}
+
 export function resolveTuiToolsToggleActivityStatus(params: {
   currentStatus: string;
   toolsExpanded: boolean;
@@ -1545,7 +1564,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     // its pre-connect "starting local runtime"/"connecting" value until init
     // finishes. Cleared on both completion and startup failure below so the
     // ready and "startup failed" statuses still render as static text.
-    setActivityStatus("starting up");
+    // Claim the "starting up" loader only when no active run already owns the
+    // status line. On reconnect, reconnectStreamingWatchdog() above may have
+    // restored "streaming" for a still-active run; overwriting it with
+    // "starting up" here would hide that run's work behind the startup loader
+    // until loadHistory()/event handling restores it.
+    setActivityStatus(resolveStartupActivityStatus(activityStatus));
     tui.requestRender();
     void (async () => {
       try {
@@ -1558,12 +1582,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       updateHeader();
       updateAutocompleteProvider();
       const adoptedInFlightRun = await loadHistory();
-      // Only drop the startup "starting up" status to idle when loadHistory did
-      // not adopt an in-flight run. When it did, loadHistory already set the
-      // status to "streaming" for the resumed run; clearing to idle here would
-      // hide that active work and make the UI look frozen — the same symptom
-      // this loader fix targets.
-      if (!adoptedInFlightRun) {
+      // Drop the startup "starting up" status to idle only when no active run
+      // owns the status line. loadHistory() may have adopted an in-flight run
+      // (already set "streaming"); on reconnect the watchdog may have restored
+      // "streaming" for a still-active run that history did not report as
+      // in-flight. In either case leave the active-run status intact so the
+      // resumed run's work stays visible instead of looking frozen.
+      if (!adoptedInFlightRun && !isTuiActiveRunActivityStatus(activityStatus)) {
         setActivityStatus("idle");
       }
       setConnectionStatus(

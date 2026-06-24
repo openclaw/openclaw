@@ -20,6 +20,7 @@ import {
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
+  resolveStartupActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
@@ -196,6 +197,26 @@ describe("isTuiBusyActivityStatus", () => {
     // the TUI must show the busy loader instead of a falsely "ready" idle
     // line. See src/tui/tui.ts client.onConnected.
     expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
+});
+
+describe("resolveStartupActivityStatus", () => {
+  it("claims the startup loader when the status line is idle", () => {
+    expect(resolveStartupActivityStatus("idle")).toBe("starting up");
+  });
+
+  it("claims the startup loader on a fresh (non-active-run) connect", () => {
+    expect(resolveStartupActivityStatus("disconnected")).toBe("starting up");
+    expect(resolveStartupActivityStatus("connecting")).toBe("starting up");
+  });
+
+  it("preserves reconnect-owned streaming instead of hiding it behind the loader", () => {
+    // reconnectStreamingWatchdog() restores "streaming" for a still-active run
+    // before onConnected claims the startup loader; overwriting it would hide
+    // that run's work. See src/tui/tui.ts client.onConnected.
+    expect(resolveStartupActivityStatus("streaming")).toBe("streaming");
+    expect(resolveStartupActivityStatus("running")).toBe("running");
+    expect(resolveStartupActivityStatus("finishing context")).toBe("finishing context");
   });
 });
 
