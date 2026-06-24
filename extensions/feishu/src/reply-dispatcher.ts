@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import type { FeishuConfig } from "./types.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -254,7 +255,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   });
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
-  const renderMode = account.config?.renderMode ?? "auto";
+  const renderMode = account.config?.renderMode ?? (cfg.channels?.feishu as FeishuConfig | undefined)?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
   const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;

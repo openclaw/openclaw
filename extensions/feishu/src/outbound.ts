@@ -23,6 +23,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
+import type { FeishuConfig } from "./types.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -446,7 +447,8 @@ async function sendOutboundText(params: {
   }
 
   const account = resolveFeishuAccount({ cfg, accountId });
-  const renderMode = account.config?.renderMode ?? "auto";
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  const renderMode = account.config?.renderMode ?? feishuCfg?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
     return sendMarkdownCardFeishu({
@@ -611,7 +613,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
-      const renderMode = account.config?.renderMode ?? "auto";
+      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+      const renderMode = account.config?.renderMode ?? feishuCfg?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
       if (useCard) {
         const header = identity
