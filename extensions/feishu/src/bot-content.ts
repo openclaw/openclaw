@@ -277,8 +277,13 @@ export function normalizeMentions(
   }
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Feishu mention keys (@_user_1, @_user_10, ...) are not zero-padded, so a shorter key is a
+  // textual prefix of a longer one. Replace longer keys first so a shorter key (@_user_1) can never
+  // match inside a longer one (@_user_10): the longer key is already substituted by the time the
+  // shorter key's turn comes, which also handles a key immediately followed by ASCII text.
   let result = text;
-  for (const mention of mentions) {
+  const orderedMentions = mentions.toSorted((a, b) => b.key.length - a.key.length);
+  for (const mention of orderedMentions) {
     const mentionId = mention.id.open_id;
     const replacement =
       botStripId && mentionId === botStripId
