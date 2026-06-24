@@ -455,9 +455,15 @@ export async function handleDirectiveOnly(
       }
     }
     if (modelSelection) {
+      // Strip isDefault so user-requested model switches always write an
+      // explicit override.  When the selected model happens to match the
+      // configured default, retaining isDefault would clear overrides and
+      // leave the session pinned to its current (possibly different)
+      // runtime model (#96269).
+      const { isDefault: _, ...selection } = modelSelection;
       const applied = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
-        selection: modelSelection,
+        selection,
         profileOverride,
         markLiveSwitchPending: true,
       });

@@ -180,6 +180,38 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 
+  it("writes default model override when selected without isDefault flag (#96269)", () => {
+    // Regression test for #96269: when a user explicitly selects the
+    // configured default model via /model, the selection must be treated
+    // as an explicit switch (no isDefault flag).  The old behaviour
+    // passed isDefault=true, which cleared overrides and left the
+    // session pinned to the stale runtime model.
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-model-cmd-default",
+      updatedAt: before,
+      providerOverride: "tencent-token-plan",
+      modelOverride: "glm-5.1",
+      contextTokens: 128_000,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "minimax",
+        model: "MiniMax-M3",
+        // No isDefault — mimics directive-handling.impl.ts stripping it
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    // Must write the override so the session actually switches.
+    expect(entry.providerOverride).toBe("minimax");
+    expect(entry.modelOverride).toBe("MiniMax-M3");
+    expect(entry.modelOverrideSource).toBe("user");
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
   it("marks non-default overrides with the provided source", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5a",

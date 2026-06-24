@@ -267,9 +267,12 @@ export async function persistInlineDirectives(params: {
         provider,
       });
       if (modelResolution.modelSelection) {
+        // Strip isDefault — user-requested model switches always write an
+        // explicit override (#96269).
+        const { isDefault: _, ...selection } = modelResolution.modelSelection;
         const appliedModelOverride = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
-          selection: modelResolution.modelSelection,
+          selection,
           profileOverride: modelResolution.profileOverride,
           markLiveSwitchPending: params.markLiveSwitchPending,
         });
