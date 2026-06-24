@@ -520,6 +520,8 @@ export type PinnedDispatcherPolicy =
       pinnedHostname?: PinnedHostnameOverride;
     };
 
+export type TlsConnectOptions = Record<string, unknown>;
+
 function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
   const seen = new Set<string>();
   const ipv4: string[] = [];

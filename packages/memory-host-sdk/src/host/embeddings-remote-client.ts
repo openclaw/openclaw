@@ -11,6 +11,13 @@ import { normalizeOptionalString } from "./string-utils.js";
 /** Provider id used for remote embedding auth and config lookup. */
 export type RemoteEmbeddingProviderId = string;
 
+/**
+ * TLS connect options forwarded to the explicit-proxy dispatcher. Mirrors the
+ * ssrf `PinnedDispatcherPolicy.proxyTls` (`Record<string, unknown>`) sink for this
+ * value; kept local to avoid a cross-package import into repo-root `src/`.
+ */
+export type TlsConnectOptions = Record<string, unknown>;
+
 /** Attribution headers for native OpenAI embedding calls. */
 function resolveOpenClawAttributionHeaders(): Record<string, string> {
   const version = typeof process !== "undefined" ? process.env.OPENCLAW_VERSION?.trim() : undefined;
@@ -42,7 +49,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: {
+    mode: "explicit-proxy";
+    proxyUrl: string;
+    allowPrivateProxy?: boolean;
+    proxyTls?: TlsConnectOptions;
+  };
 }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
@@ -76,8 +88,15 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const proxyConfig = providerConfig?.request?.proxy;
   const dispatcherPolicy =
     proxyConfig?.mode === "explicit-proxy" && proxyConfig.url
-      ? ({ mode: "explicit-proxy" as const, proxyUrl: proxyConfig.url, allowPrivateProxy: true } as const)
+      ? ({
+          mode: "explicit-proxy" as const,
+          proxyUrl: proxyConfig.url,
+          allowPrivateProxy: true,
+          ...(proxyConfig.tls ? { proxyTls: proxyConfig.tls } : {}),
+        } as const)
       : undefined;
 
   return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl), dispatcherPolicy };
 }
+
+export type { TlsConnectOptions } from "./ssrf-policy.js";

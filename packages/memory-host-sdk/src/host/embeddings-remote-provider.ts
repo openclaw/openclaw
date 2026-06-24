@@ -2,6 +2,7 @@
 import {
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
+  type TlsConnectOptions,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
@@ -16,7 +17,12 @@ export type RemoteEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   model: string;
-  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: {
+    mode: "explicit-proxy";
+    proxyUrl: string;
+    allowPrivateProxy?: boolean;
+    proxyTls?: TlsConnectOptions;
+  };
 };
 
 /** Create an EmbeddingProvider backed by a remote embeddings endpoint. */
@@ -64,11 +70,12 @@ export async function resolveRemoteEmbeddingClient(params: {
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy, dispatcherPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: params.provider,
-    options: params.options,
-    defaultBaseUrl: params.defaultBaseUrl,
-  });
+  const { baseUrl, headers, ssrfPolicy, dispatcherPolicy } =
+    await resolveRemoteEmbeddingBearerClient({
+      provider: params.provider,
+      options: params.options,
+      defaultBaseUrl: params.defaultBaseUrl,
+    });
   const model = params.normalizeModel(params.options.model);
   return { baseUrl, headers, ssrfPolicy, model, dispatcherPolicy };
 }
