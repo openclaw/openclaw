@@ -84,7 +84,26 @@ describe("dependency-changes-report", () => {
       "--markdown",
     ]) {
       expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
+  });
+
+  it("rejects duplicate and conflicting dependency report inputs", () => {
+    for (const flag of [
+      "--root",
+      "--base-ref",
+      "--base-lockfile",
+      "--head-lockfile",
+      "--json",
+      "--markdown",
+    ]) {
+      expect(() => parseArgs(["--base-ref", "main", flag, "one", flag, "two"])).toThrow(
+        `${flag} was provided more than once.`,
+      );
+    }
+    expect(() => parseArgs(["--base-ref", "main", "--base-lockfile", "base-lock.yaml"])).toThrow(
+      "Use either --base-ref or --base-lockfile, not both.",
+    );
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {

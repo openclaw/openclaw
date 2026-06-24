@@ -80,10 +80,6 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
-func formatTaggedDocument(frontMatter, body string) string {
-	return fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s", frontmatterTagStart, frontMatter, frontmatterTagEnd, bodyTagStart, body, bodyTagEnd)
-}
-
 func parseTaggedDocument(text string) (string, string, error) {
 	frontStart := strings.Index(text, frontmatterTagStart)
 	if frontStart == -1 {

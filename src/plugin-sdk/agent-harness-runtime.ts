@@ -27,7 +27,10 @@ import { truncateUtf16Safe } from "../utils.js";
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
+export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -42,6 +45,12 @@ export type {
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputOption,
+  AgentHarnessUserInputPromptOptions,
+  AgentHarnessUserInputQuestion,
+} from "../agents/harness/user-input-bridge.js";
 export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -131,6 +140,7 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractToolErrorMessage,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -147,6 +157,13 @@ export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
 export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
+export {
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
+  emptyAgentHarnessUserInputAnswers,
+  formatAgentHarnessUserInputPrompt,
+  normalizeAgentHarnessUserInputAnswer,
+} from "../agents/harness/user-input-bridge.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -325,6 +342,10 @@ export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
+export {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+} from "../agents/harness/agent-end-side-effects.js";
 export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,

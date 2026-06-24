@@ -1,10 +1,7 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
@@ -82,7 +79,6 @@ export {
   drainSessionStoreWriterQueuesForTest,
   getSessionStoreWriterQueueSizeForTest,
 } from "./store-writer-state.js";
-export { withSessionStoreWriterForTest } from "./store-writer.js";
 export {
   loadSessionStore,
   readSessionEntries,
@@ -1038,9 +1034,6 @@ function resolveFreshestProjectedEntry(params: {
       continue;
     }
     keys.add(trimmed);
-    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
-      keys.add(match);
-    }
   }
   for (const key of keys) {
     const entry = params.store[key];
@@ -1052,14 +1045,6 @@ function resolveFreshestProjectedEntry(params: {
     }
   }
   return freshest;
-}
-
-function findSessionStoreKeysIgnoreCase(
-  store: Record<string, SessionEntry>,
-  targetKey: string,
-): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  return Object.keys(store).filter((key) => normalizeLowercaseStringOrEmpty(key) === lowered);
 }
 
 function migrateSessionEntryProjectionTarget(params: {
@@ -1087,11 +1072,6 @@ function migrateSessionEntryProjectionTarget(params: {
     }
     if (trimmed !== params.target.primaryKey) {
       keysToDelete.add(trimmed);
-    }
-    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
-      if (match !== params.target.primaryKey) {
-        keysToDelete.add(match);
-      }
     }
   }
   for (const key of keysToDelete) {

@@ -11,6 +11,7 @@ type CapturedReplyPayload = {
   isError?: boolean;
   mediaUrl?: string;
   mediaUrls?: string[];
+  replyToId?: string | null;
 };
 
 type CapturedDispatchParams = {
@@ -720,6 +721,7 @@ describe("whatsapp inbound dispatch", () => {
       agentId: "main",
       to: "+1000",
       info: { kind: "final" },
+      replyToId: null,
     });
     expectRecordFields(requireRecord(durableParams.payload, "durable payload"), {
       text: "final payload",
@@ -732,6 +734,64 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "incoming",
       combinedBodySessionKey: "agent:main:whatsapp:+15551234567",
     });
+  });
+
+  it.each([
+    {
+      name: "uses resolved final payload reply targets",
+      payload: { text: "final payload", replyToId: "trigger-message" },
+      expectedReplyToId: "trigger-message",
+    },
+    {
+      name: "blocks durable fallback without a final payload reply target",
+      payload: { text: "final payload" },
+      expectedReplyToId: null,
+    },
+  ] satisfies Array<{
+    name: string;
+    payload: CapturedReplyPayload;
+    expectedReplyToId: string | null;
+  }>)("$name while preserving quoted WhatsApp context", async ({ payload, expectedReplyToId }) => {
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["wa-1"],
+        visibleReplySent: true,
+      },
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({
+      context: {
+        Body: "incoming",
+        ReplyToId: "quoted-bot-message",
+        ReplyToBody: "Earlier bot reply",
+        ReplyToSender: "OpenClaw",
+      },
+      deliverReply,
+      msg: makeMsg({
+        event: { id: "trigger-message" },
+      }),
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.(payload, { kind: "final" });
+
+    const durableParams = requireMockArg(
+      deliverInboundReplyWithMessageSendContextMock,
+      0,
+      0,
+      "durable delivery params",
+    );
+    expectRecordFields(durableParams, {
+      replyToId: expectedReplyToId,
+    });
+    expectRecordFields(requireRecord(durableParams.ctxPayload, "durable context"), {
+      ReplyToId: "quoted-bot-message",
+      ReplyToBody: "Earlier bot reply",
+      ReplyToSender: "OpenClaw",
+    });
+    expect(deliverReply).not.toHaveBeenCalled();
   });
 
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {

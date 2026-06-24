@@ -57,6 +57,7 @@ const hoisted = vi.hoisted(() => ({
   markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
   reloadEvents: [] as string[],
+  loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
   resetModelCatalogCache: vi.fn(() => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
@@ -118,6 +119,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: (params: { config: OpenClawConfig }) => {
+    hoisted.reloadEvents.push("load-model-catalog");
+    return hoisted.loadModelCatalog(params);
+  },
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
@@ -198,6 +203,7 @@ afterEach(() => {
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
+  hoisted.loadModelCatalog.mockClear();
   hoisted.resetModelCatalogCache.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
@@ -271,9 +277,11 @@ describe("gateway hot reload model state", () => {
       "reset-model-catalog",
       "clear-provider-auth",
       "refresh-context-window",
+      "load-model-catalog",
       "warm-provider-auth",
     ]);
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+    expect(hoisted.loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 

@@ -10,7 +10,24 @@ default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
 DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
-DEFAULT_SNAPSHOT_DEVICES = ["iPhone 16 Pro Max", "iPad Pro 13-inch (M4)"].freeze
+DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
+  {
+    label: "iPhone",
+    patterns: [
+      /\AiPhone .* Pro Max\z/,
+      /\AiPhone .* Plus\z/,
+      /\AiPhone .*\z/
+    ]
+  },
+  {
+    label: "13-inch iPad",
+    patterns: [
+      /\AiPad Pro 13-inch/,
+      /\AiPad Air 13-inch/,
+      /\AiPad .*13-inch/
+    ]
+  }
+].freeze
 DEFAULT_WATCH_SNAPSHOT_DEVICE = "Apple Watch Ultra 3 (49mm)"
 WATCH_SCREENSHOT_MODE_DEFAULTS_KEY = "openclaw.watch.screenshotMode"
 WATCH_SNAPSHOT_STATUS_BAR_TIME = "09:41"
@@ -77,9 +94,21 @@ end
 
 def snapshot_devices
   raw = ENV["OPENCLAW_SNAPSHOT_DEVICES"].to_s.strip
-  return DEFAULT_SNAPSHOT_DEVICES if raw.empty?
+  return default_snapshot_devices if raw.empty?
 
   raw.split(",").map(&:strip).reject(&:empty?)
+end
+
+def default_snapshot_devices
+  names = available_simulator_devices.map { |device| device["name"].to_s }.reject(&:empty?).uniq
+
+  DEFAULT_SNAPSHOT_DEVICE_FAMILIES.map do |family|
+    match = family.fetch(:patterns).filter_map do |pattern|
+      names.find { |name| name.match?(pattern) }
+    end.first
+    UI.user_error!("No available #{family.fetch(:label)} simulator found for App Store screenshots.") if match.nil?
+    match
+  end
 end
 
 def watch_snapshot_device
@@ -111,6 +140,51 @@ def resolve_simulator_device(name)
 
   UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
   fallback
+end
+
+def install_ready_for_review_edit_state_lookup!
+  require "spaceship"
+
+  app_class = Spaceship::ConnectAPI::App
+  app_class.class_eval do
+    unless method_defined?(:openclaw_get_edit_app_store_version_without_ready_for_review)
+      alias_method :openclaw_get_edit_app_store_version_without_ready_for_review, :get_edit_app_store_version
+    end
+
+    unless method_defined?(:openclaw_fetch_edit_app_info_without_ready_for_review)
+      alias_method :openclaw_fetch_edit_app_info_without_ready_for_review, :fetch_edit_app_info
+    end
+
+    def get_edit_app_store_version(client: nil, platform: nil, includes: Spaceship::ConnectAPI::AppStoreVersion::ESSENTIAL_INCLUDES)
+      version = openclaw_get_edit_app_store_version_without_ready_for_review(client: client, platform: platform, includes: includes)
+      return version if version
+
+      # First public releases can leave the only version in READY_FOR_REVIEW.
+      # Fastlane 2.236.1 excludes that state and then tries to create an illegal
+      # second version; use the existing review-ready version as the edit target.
+      client ||= Spaceship::ConnectAPI
+      platform ||= Spaceship::ConnectAPI::Platform::IOS
+      filter = {
+        appVersionState: Spaceship::ConnectAPI::AppStoreVersion::AppVersionState::READY_FOR_REVIEW,
+        platform: platform
+      }
+
+      get_app_store_versions(client: client, filter: filter, includes: includes)
+        .sort_by { |candidate| Gem::Version.new(candidate.version_string) }
+        .last
+    end
+
+    def fetch_edit_app_info(client: nil, includes: Spaceship::ConnectAPI::AppInfo::ESSENTIAL_INCLUDES)
+      app_info = openclaw_fetch_edit_app_info_without_ready_for_review(client: client, includes: includes)
+      return app_info if app_info
+
+      client ||= Spaceship::ConnectAPI
+      client
+        .get_app_infos(app_id: id, includes: includes)
+        .to_models
+        .find { |candidate| candidate.state == Spaceship::ConnectAPI::AppInfo::State::READY_FOR_REVIEW }
+    end
+  end
 end
 
 def bundle_identifier_for_product(product_path)
@@ -210,6 +284,7 @@ def normalize_watch_screenshot_status_bar(path)
   script = <<~SWIFT
     import AppKit
     import Foundation
+    import ImageIO
 
     let path = CommandLine.arguments[1]
     let timeText = CommandLine.arguments[2]
@@ -221,36 +296,37 @@ def normalize_watch_screenshot_status_bar(path)
       exit(2)
     }
 
-    let width = CGFloat(cgImage.width)
-    let height = CGFloat(cgImage.height)
-    guard let bitmap = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: Int(width),
-      pixelsHigh: Int(height),
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0),
-      let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap)
+    let width = cgImage.width
+    let height = cgImage.height
+    let drawWidth = CGFloat(width)
+    let drawHeight = CGFloat(height)
+    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    guard let bitmapContext = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: width * 4,
+      space: colorSpace,
+      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     else {
       fputs("Failed to create normalized screenshot bitmap at \\(path)\\n", stderr)
       exit(3)
     }
 
-    bitmap.size = NSSize(width: width, height: height)
+    let graphicsContext = NSGraphicsContext(cgContext: bitmapContext, flipped: false)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphicsContext
+    NSColor.black.setFill()
+    NSBezierPath(rect: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight)).fill()
     source.draw(
-      in: NSRect(x: 0, y: 0, width: width, height: height),
-      from: NSRect(x: 0, y: 0, width: width, height: height),
-      operation: .copy,
+      in: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      from: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      operation: .sourceOver,
       fraction: 1.0)
 
     NSColor.black.setFill()
-    NSBezierPath(rect: NSRect(x: width - 146, y: height - 92, width: 124, height: 70)).fill()
+    NSBezierPath(rect: NSRect(x: drawWidth - 146, y: drawHeight - 92, width: 124, height: 70)).fill()
 
     let paragraphStyle = NSMutableParagraphStyle()
     paragraphStyle.alignment = .right
@@ -260,17 +336,26 @@ def normalize_watch_screenshot_status_bar(path)
       .paragraphStyle: paragraphStyle,
     ]
     timeText.draw(
-      in: NSRect(x: width - 134, y: height - 82, width: 102, height: 44),
+      in: NSRect(x: drawWidth - 134, y: drawHeight - 82, width: 102, height: 44),
       withAttributes: attributes)
     NSGraphicsContext.restoreGraphicsState()
 
-    guard let png = bitmap.representation(using: .png, properties: [:])
+    guard let output = bitmapContext.makeImage(),
+          let destination = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL,
+            "public.png" as CFString,
+            1,
+            nil)
     else {
       fputs("Failed to encode normalized screenshot at \\(path)\\n", stderr)
       exit(4)
     }
 
-    try png.write(to: URL(fileURLWithPath: path))
+    CGImageDestinationAddImage(destination, output, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      fputs("Failed to write normalized screenshot at \\(path)\\n", stderr)
+      exit(5)
+    }
   SWIFT
 
   Tempfile.create(["openclaw-watch-status-bar", ".swift"]) do |file|
@@ -495,6 +580,9 @@ def produce_services_for_target(target)
   if target.fetch("capabilities").include?("APP_GROUPS")
     services[:app_group] = "on"
   end
+  if target.fetch("capabilities").include?("APP_ATTEST")
+    services[:app_attest] = "on"
+  end
   services
 end
 
@@ -602,6 +690,15 @@ def validate_match_profile_capabilities!(target)
     unless missing.empty?
       UI.user_error!(
         "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing App Groups #{missing.join(", ")}; actual groups: #{actual_app_groups.empty? ? "missing" : actual_app_groups.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("APP_ATTEST")
+    app_attest_environments = profile_plist_array_values(profile_path, "Entitlements:com.apple.developer.devicecheck.appattest-environment")
+    unless app_attest_environments.include?("production")
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production App Attest entitlement; actual environments: #{app_attest_environments.empty? ? "missing" : app_attest_environments.join(", ")}."
       )
     end
   end
@@ -742,6 +839,11 @@ def prepare_app_store_release!(version:, build_number:)
   release_xcconfig
 end
 
+def validate_app_store_ipa!(ipa_path)
+  script_path = File.join(repo_root, "scripts", "ios-validate-app-store-ipa.sh")
+  sh(shell_join(["bash", script_path, "--ipa", ipa_path]))
+end
+
 def build_app_store_release(context)
   version = context[:version]
   project_path = File.join(ios_root, "OpenClaw.xcodeproj")
@@ -792,6 +894,7 @@ def build_app_store_release(context)
   UI.user_error!("xcodebuild export produced multiple IPAs in #{output_directory}: #{exported_ipas.join(", ")}") if exported_ipas.length > 1
   exported_ipa = exported_ipas.first
   FileUtils.mv(exported_ipa, expected_ipa_path) unless exported_ipa == expected_ipa_path
+  validate_app_store_ipa!(expected_ipa_path)
 
   {
     archive_path: archive_path,
@@ -911,25 +1014,12 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Build + upload an App Store distribution build to App Store Connect"
-  lane :app_store do
-    context = prepare_app_store_context(require_api_key: true)
-    build = build_app_store_release(context)
-
-    upload_to_testflight(
-      api_key: context[:api_key],
-      ipa: build[:ipa_path],
-      skip_waiting_for_build_processing: true,
-      uses_non_exempt_encryption: false
-    )
-
-    UI.success("Uploaded iOS App Store build: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
-  ensure
-    ENV.delete("XCODE_XCCONFIG_FILE")
-  end
-
   desc "Generate screenshots, update App Store version metadata, then upload an App Store build"
   lane :release_upload do
+    unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
+      UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
+    end
+
     release_signing_check!
     preserve_local_signing do
       screenshots
@@ -956,6 +1046,7 @@ platform :ios do
 
   desc "Upload App Store metadata (and optionally screenshots)"
   lane :metadata do
+    install_ready_for_review_edit_state_lookup!
     sync_ios_versioning!
     version_metadata = read_ios_version_metadata
     api_key = app_store_connect_api_key_config

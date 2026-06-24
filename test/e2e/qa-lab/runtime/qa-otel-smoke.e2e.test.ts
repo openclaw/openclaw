@@ -7,8 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "./qa-otel-smoke-runtime.js";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -130,6 +136,34 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
   });
 
+  it.each([
+    ["--collector", ["--collector", "--logs-exporter"]],
+    ["--logs-exporter", ["--logs-exporter", "--collector"]],
+    ["--output-dir", ["--output-dir", "--collector"]],
+    ["--provider-mode", ["--provider-mode", "--collector"]],
+    ["--scenario", ["--scenario", "--collector"]],
+    ["--model", ["--model", "--collector"]],
+    ["--alt-model", ["--alt-model", "--collector"]],
+  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
+    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
+  });
+
+  it("rejects duplicate OTEL smoke CLI options", () => {
+    const duplicateCases = [
+      ["--collector", ["--collector", "local", "--collector", "docker"]],
+      ["--logs-exporter", ["--logs-exporter", "otlp", "--logs-exporter", "stdout"]],
+      ["--output-dir", ["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]],
+      ["--provider-mode", ["--provider-mode", "mock-openai", "--provider-mode", "live-frontier"]],
+      ["--scenario", ["--scenario", "custom-one", "--scenario", "custom-two"]],
+      ["--model", ["--model", "openai/gpt-5.5", "--model", "openai/gpt-5.4"]],
+      ["--alt-model", ["--alt-model", "openai/gpt-5.5", "--alt-model", "openai/gpt-5.4"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => testing.parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("selects the matching scenario for the requested log exporter", () => {
     expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
     expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
@@ -152,6 +186,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
         .scenarioId,
     ).toBe("custom-stdout-smoke");
+  });
+
+  it("uses unique default output dirs", () => {
+    const firstOutputDir = testing.parseArgs([]).outputDir;
+    const secondOutputDir = testing.parseArgs([]).outputDir;
+
+    expect(path.dirname(firstOutputDir)).toBe(path.join(".artifacts", "qa-e2e"));
+    expect(path.basename(firstOutputDir)).toMatch(/^otel-smoke-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(testing.parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("parses body-size limit env values as strict positive integers", () => {
@@ -645,6 +691,16 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
+  it("clamps oversized QA suite child timers before scheduling", async () => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", "setTimeout(() => process.exit(0), 25);"],
+      { stdio: "ignore" },
+    );
+
+    await expect(testing.waitForChild(child, MAX_TIMER_TIMEOUT_MS + 1, 100)).resolves.toBe(0);
+  });
+
   it("uses taskkill for Windows QA suite timeout cleanup", () => {
     const kill = vi.fn();
     const runTaskkill = vi.fn(() => ({ status: 0 }));
@@ -657,7 +713,7 @@ describe("qa-otel-smoke receiver bounds", () => {
       runTaskkill as never,
     );
 
-    expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "1234", "/T", "/F"], {
+    expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "1234", "/T", "/F"], {
       stdio: "ignore",
     });
     expect(kill).not.toHaveBeenCalled();

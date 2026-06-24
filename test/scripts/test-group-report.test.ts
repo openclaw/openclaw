@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -12,6 +12,7 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mjs";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -19,6 +20,7 @@ import {
   resolveReportRunSpecs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+  signalTestGroupReportChild,
   spawnText,
 } from "../../scripts/test-group-report.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -62,6 +64,10 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(25);
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
 }
 
 function waitForChildClose(
@@ -586,6 +592,7 @@ describe("scripts/test-group-report arg parsing", () => {
       expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
         `${flag} requires a value`,
       );
+      expect(() => parseTestGroupReportArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
     for (const flag of [
       "--limit",
@@ -607,9 +614,105 @@ describe("scripts/test-group-report arg parsing", () => {
       "--compare requires a value",
     );
   });
+
+  it("rejects duplicate single-value report controls", () => {
+    for (const [flag, values] of [
+      ["--compare", ["before-a.json", "after-a.json", "before-b.json", "after-b.json"]],
+      ["--group-by", ["area", "folder"]],
+      ["--output", ["first.json", "second.json"]],
+      ["--limit", ["5", "10"]],
+      ["--top-files", ["5", "10"]],
+      ["--max-test-ms", ["100", "200"]],
+      ["--timeout-ms", ["1000", "2000"]],
+      ["--kill-grace-ms", ["100", "200"]],
+      ["--concurrency", ["2", "3"]],
+    ]) {
+      const args = flag === "--compare"
+        ? [flag, values[0], values[1], flag, values[2], values[3]]
+        : [flag, values[0], flag, values[1]];
+      expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
+    }
+    expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
+      "a.ts",
+      "b.ts",
+    ]);
+    expect(parseTestGroupReportArgs(["--report", "a.json", "--report", "b.json"]).reports).toEqual([
+      "a.json",
+      "b.json",
+    ]);
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
+  it("signals Windows child process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalTestGroupReportChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalTestGroupReportChild(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows child process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalTestGroupReportChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;

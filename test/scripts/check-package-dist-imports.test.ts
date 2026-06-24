@@ -46,4 +46,19 @@ describe("check-package-dist-imports", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
   });
+
+  it("rejects missing CommonJS require chunks", () => {
+    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(
+      join(root, "dist", "index.cjs"),
+      'module.exports = require("./chunk.cjs");\n',
+      "utf8",
+    );
+
+    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("dist/index.cjs imports missing dist/chunk.cjs");
+  });
 });

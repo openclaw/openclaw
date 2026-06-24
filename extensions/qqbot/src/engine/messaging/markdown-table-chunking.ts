@@ -433,7 +433,10 @@ function isTableSeparatorLine(line: string): boolean {
     return false;
   }
   const cells = splitTableCells(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+  // GFM delimiter cells need only one or more hyphens (optionally colon-aligned), so accept "-+",
+  // not "-{3,}": a valid 1/2-dash separator (e.g. |--|--|) was not recognized here, leaving the
+  // header pending and silently overwritten by later rows so the table's header and rows vanished.
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
 }
 
 function splitTableCells(line: string): string[] {

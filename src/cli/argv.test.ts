@@ -17,7 +17,6 @@ import {
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
-  shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
 
@@ -740,7 +739,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "agents", "list"], expected: true },
     { argv: ["node", "openclaw", "message", "send"], expected: true },
   ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
-    expect(shouldMigrateState([...argv])).toBe(expected);
+    const commandPath = getCommandPathWithRootOptions([...argv], 2);
+    expect(shouldMigrateStateFromPath(commandPath)).toBe(expected);
   });
 
   it.each([

@@ -14,9 +14,7 @@ import {
   cleanupSessionLifecycleArtifacts,
   createSessionEntryWithTranscript,
   listSessionEntries,
-  loadExactSessionEntry,
   loadSessionEntry,
-  loadTranscriptEvents,
   patchSessionEntry,
   persistSessionResetLifecycle,
   persistSessionRolloverLifecycle,
@@ -207,7 +205,7 @@ describe("session accessor file-backed seam", () => {
     );
   });
 
-  it("keeps exact persisted-key lookup separate from canonical entry reads", async () => {
+  it("resolves canonical entry reads without requiring exact key casing", async () => {
     fs.writeFileSync(
       storePath,
       JSON.stringify({
@@ -225,15 +223,12 @@ describe("session accessor file-backed seam", () => {
       storePath,
     };
 
-    expect(loadSessionEntry(mixedCaseScope)?.sessionId).toBe("session-1");
-    expect(loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
-    expect(loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual({
-      sessionKey: "agent:main:main",
-      entry: expect.objectContaining({
+    expect(loadSessionEntry(mixedCaseScope)).toEqual(
+      expect.objectContaining({
         sessionId: "session-1",
         model: "gpt-5.5",
       }),
-    });
+    );
   });
 
   it("updates existing entries without creating missing sessions", async () => {
@@ -374,7 +369,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -386,7 +381,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: ({ entries, existingEntry, primaryKey }) => {
         expect(primaryKey).toBe("agent:main:main");
@@ -425,7 +420,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -437,7 +432,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: () => ({
         ok: false as const,
@@ -713,7 +708,7 @@ describe("session accessor file-backed seam", () => {
     expect(fs.existsSync(result.previousSessionTranscript.sessionFile ?? "")).toBe(true);
   });
 
-  it("loads and appends transcript events through a session scope", async () => {
+  it("appends transcript events through a session scope", async () => {
     const scope = {
       sessionFile: transcriptPath,
       sessionId: "session-1",
@@ -728,10 +723,6 @@ describe("session accessor file-backed seam", () => {
     await appendTranscriptEvent(scope, { type: "session", sessionId: "session-1" });
     await appendTranscriptEvent(scope, event);
 
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      { type: "session", sessionId: "session-1" },
-      event,
-    ]);
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
   });
 
@@ -894,7 +885,6 @@ describe("session accessor file-backed seam", () => {
 
     await appendTranscriptEvent(scope, event);
 
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
     // Explicit-artifact writes never touch entry metadata: no entry appears.
     expect(listSessionEntries({ storePath })).toEqual([]);
   });
@@ -1357,44 +1347,6 @@ describe("session accessor file-backed seam", () => {
     expect(fs.existsSync(transcriptPath)).toBe(false);
   });
 
-  it("loads transcript events without a session key when the read target is explicit", async () => {
-    const scope = {
-      sessionFile: transcriptPath,
-      sessionId: "session-1",
-    };
-    const event = {
-      payload: { value: "hello" },
-      type: "metadata",
-    };
-
-    await appendTranscriptEvent(
-      {
-        ...scope,
-        sessionKey: "agent:main:main",
-        storePath,
-      },
-      event,
-    );
-
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
-  });
-
-  it("loads transcript events from a generated read target without a session key", async () => {
-    const event = {
-      payload: { value: "hello" },
-      type: "metadata",
-    };
-
-    fs.writeFileSync(path.join(tempDir, "session-1.jsonl"), `${JSON.stringify(event)}\n`, "utf-8");
-
-    await expect(
-      loadTranscriptEvents({
-        sessionId: "session-1",
-        storePath,
-      }),
-    ).resolves.toEqual([event]);
-  });
-
   it("appends messages and publishes updates through a session scope", async () => {
     const scope = {
       agentId: "main",
@@ -1442,24 +1394,19 @@ describe("session accessor file-backed seam", () => {
         idempotencyKey: "assistant-once",
       }),
     });
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({
-        id: appended.messageId,
-        message: expect.objectContaining({
-          content: "hello",
-          idempotencyKey: "assistant-once",
-        }),
-        type: "message",
-      }),
-    ]);
     expect(updates).toEqual([
       {
         agentId: "main",
         message: appended.message,
         messageId: appended.messageId,
+        sessionId: scope.sessionId,
         sessionFile: transcriptPath,
         sessionKey: scope.sessionKey,
+        target: {
+          agentId: "main",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
       },
     ]);
   });
@@ -1520,22 +1467,6 @@ describe("session accessor file-backed seam", () => {
       updatedAt: expect.any(Number),
     });
     expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
-    const events = await loadTranscriptEvents({ ...scope, sessionFile: result.sessionFile });
-    expect(events).toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({
-        id: result.messages[0]?.messageId,
-        message: expect.objectContaining({ role: "user", content: "hello" }),
-        parentId: null,
-        type: "message",
-      }),
-      expect.objectContaining({
-        id: result.messages[1]?.messageId,
-        message: expect.objectContaining({ role: "assistant", content: "hi there" }),
-        parentId: result.messages[0]?.messageId,
-        type: "message",
-      }),
-    ]);
     expect(updates).toEqual([
       {
         lineCount: 3,
@@ -1604,19 +1535,7 @@ describe("session accessor file-backed seam", () => {
       }),
     ]);
     expect(completed).toBe(true);
-    const [turnResult] = await results;
-
-    const events = await loadTranscriptEvents({ ...scope, sessionFile: turnResult.sessionFile });
-    expect(
-      events
-        .filter(
-          (event): event is { message?: { content?: unknown }; type?: unknown } =>
-            typeof event === "object" &&
-            event !== null &&
-            (event as { type?: unknown }).type === "message",
-        )
-        .map((event) => event.message?.content),
-    ).toEqual(["batch reply", "queued prompt"]);
+    await results;
   });
 
   it("rejects expected-session transcript turns after a queued session rebind", async () => {
@@ -1730,13 +1649,6 @@ describe("session accessor file-backed seam", () => {
       expect.objectContaining({ kind: "header" }),
       expect.objectContaining({ kind: "id" }),
     ]);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({
-        message: expect.objectContaining({ content: "owned batch" }),
-        type: "message",
-      }),
-    ]);
   });
 
   it("honors thread fallback paths when resolving transcript scope from the store", async () => {
@@ -1763,7 +1675,6 @@ describe("session accessor file-backed seam", () => {
     expect(fs.realpathSync(loadSessionEntry(scope)?.sessionFile ?? "")).toBe(
       fs.realpathSync(expectedTranscriptPath),
     );
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
   });
 
   it("resolves runtime transcript targets from scope without caller-owned paths", async () => {

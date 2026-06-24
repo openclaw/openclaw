@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -21,6 +21,7 @@ import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<
@@ -41,6 +42,7 @@ export type QaTestFileScenarioRunParams = {
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
+  writeEvidenceFile?: boolean;
 };
 
 export type QaScenarioCommandExecution = {
@@ -79,6 +81,7 @@ type QaTestFileScenarioResult = {
 };
 
 export type QaTestFileScenarioRunResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -186,25 +189,36 @@ function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");
 }
 
-function killQaScenarioWindowsProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
+type QaScenarioTaskkillRunner = typeof spawnSync;
+
+function killQaScenarioWindowsProcessTree(
+  pid: number | undefined,
+  signal: NodeJS.Signals,
+  runTaskkill: QaScenarioTaskkillRunner = spawnSync,
+) {
   if (pid === undefined) {
     return false;
   }
+  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
   const args = ["/pid", String(pid), "/T"];
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  try {
-    const killer = spawn("taskkill", args, {
+  const result = runTaskkill(taskkillPath, args, {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  if (!result.error && result.status === 0) {
+    return true;
+  }
+  if (signal !== "SIGKILL") {
+    const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
     });
-    killer.on("error", () => undefined);
-    killer.unref();
-    return true;
-  } catch {
-    return false;
+    return !forceResult.error && forceResult.status === 0;
   }
+  return false;
 }
 
 function runQaScenarioCommand(
@@ -490,18 +504,25 @@ async function runQaTestFileScenario(params: {
   return {
     ...result,
     ...producerEvidenceResult,
-    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
+    ...statusFromProducerEvidence({
+      allowBlockedEvidence: params.scenario.execution.allowBlockedEvidence === true,
+      producerEvidence: producerEvidenceResult.producerEvidence,
+    }),
   };
 }
 
-function statusFromProducerEvidence(
-  producerEvidence: QaEvidenceSummaryJson | undefined,
-): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+function statusFromProducerEvidence(params: {
+  allowBlockedEvidence: boolean;
+  producerEvidence: QaEvidenceSummaryJson | undefined;
+}): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+  const { allowBlockedEvidence, producerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
     return { status: "pass" };
   }
   const blockingEntry = producerEvidence.entries.find(
-    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+    (entry) =>
+      entry.result.status === "fail" ||
+      (!allowBlockedEvidence && entry.result.status === "blocked"),
   );
   if (blockingEntry) {
     return {
@@ -727,10 +748,13 @@ function buildScenarioArtifactPaths(params: {
 async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
+  writeEvidenceFile?: boolean;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  if (params.writeEvidenceFile ?? true) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  }
   return { evidencePath };
 }
 
@@ -783,11 +807,17 @@ export async function runQaTestFileScenarios(
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+    writeEvidenceFile: params.writeEvidenceFile,
   });
   return {
     ...paths,
+    evidence,
     executionKind: kind,
     outputDir: params.outputDir,
     results,
   };
 }
+
+export const qaTestFileScenarioRunnerTesting = {
+  killQaScenarioWindowsProcessTree,
+};

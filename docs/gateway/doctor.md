@@ -160,7 +160,6 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
-    - Extra workspace dir detection (`~/openclaw`).
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -469,14 +468,14 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and legacy dirs)">
+  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
     Doctor prints a summary of the workspace state for the default agent:
 
     - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
-    - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories exist alongside the current workspace.
     - **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any errors; reports bundle plugin capabilities.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
+    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
