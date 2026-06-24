@@ -370,6 +370,63 @@ describe("tasks commands", () => {
     });
   });
 
+  it("preserves both slug and raw cron-run session keys for a running non-slug job id", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      const old = now - 8 * 24 * 60 * 60_000;
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "Daily Report",
+            name: "Daily Report",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:daily-report",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+        ],
+      });
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      // Main-session cron runs key the job segment slugified ("daily-report"); default-isolated runs
+      // key it raw-lowercased ("daily report"). Both belong to the running job and must survive the
+      // stale sweep; a stale run for a non-running job ("retired-job") must still be pruned.
+      const slugKey = "agent:main:cron:daily-report:run:old-run";
+      const rawKey = "agent:main:cron:daily report:run:old-run";
+      const retiredKey = "agent:main:cron:retired-job:run:old-run";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [slugKey]: { sessionId: "slug-run", updatedAt: old },
+            [rawKey]: { sessionId: "raw-run", updatedAt: old },
+            [retiredKey]: { sessionId: "retired-run", updatedAt: old },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated[slugKey]).toBeDefined();
+      expect(updated[rawKey]).toBeDefined();
+      expect(updated[retiredKey]).toBeUndefined();
+    });
+  });
+
   it("does not build JSON-only diagnostics for text maintenance output", async () => {
     await withTaskCommandStateDir(async () => {
       const diagnosticsSpy = vi.spyOn(
