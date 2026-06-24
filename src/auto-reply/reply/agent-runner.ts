@@ -264,6 +264,7 @@ function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
 function hasSuccessfulSideEffectDelivery(params: {
   blockReplyPipeline: {
     hasBuffered: () => boolean;
+    hasPendingDelivery: () => boolean;
     didStream: () => boolean;
     isAborted: () => boolean;
   } | null;
@@ -351,6 +352,7 @@ function shouldAutoResetRetryStalledDirectSession(params: {
   runOutcome: SuccessfulAgentRunOutcome;
   blockReplyPipeline: {
     hasBuffered: () => boolean;
+    hasPendingDelivery: () => boolean;
     didStream: () => boolean;
     isAborted: () => boolean;
   } | null;
@@ -1857,6 +1859,10 @@ export async function runReplyAgent(params: {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
       return returnWithQueuedFollowupDrain(runOutcome.payload);
+    }
+
+    if (blockReplyPipeline?.hasPendingDelivery() === true && !blockReplyPipeline.isAborted()) {
+      await blockReplyPipeline.flush({ force: true });
     }
 
     if (

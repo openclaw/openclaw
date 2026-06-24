@@ -16,6 +16,7 @@ export type BlockReplyPipeline = {
   flush: (options?: { force?: boolean }) => Promise<void>;
   stop: () => void;
   hasBuffered: () => boolean;
+  hasPendingDelivery: () => boolean;
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
@@ -323,6 +324,7 @@ export function createBlockReplyPipeline(params: {
     flush,
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
+    hasPendingDelivery: () => pendingKeys.size > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
