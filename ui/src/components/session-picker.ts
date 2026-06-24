@@ -66,7 +66,7 @@ export class SessionPicker extends LitElement {
   }
 
   override willUpdate(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("sessionsResult") && !this.appliedQuery) {
+    if (changed.has("sessionsResult") && !this.result && !this.appliedQuery) {
       this.result = this.sessionsResult;
     }
   }
@@ -109,15 +109,15 @@ export class SessionPicker extends LitElement {
   }
 
   private async loadPage(options: { append?: boolean; offset?: number } = {}) {
-    const sessions = this.sessions;
-    if (!sessions || !this.connected) {
+    const sessionService = this.sessions;
+    if (!sessionService || !this.connected) {
       return;
     }
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
     try {
-      const page = await sessions.list({
+      const page = await sessionService.list({
         agentId: this.agentId,
         search: this.appliedQuery,
         offset: options.offset,
@@ -125,19 +125,37 @@ export class SessionPicker extends LitElement {
       if (requestId !== this.requestId) {
         return;
       }
-      this.result =
-        options.append && this.result && page
-          ? {
-              ...page,
-              count: this.result.sessions.length + page.sessions.length,
-              sessions: [
-                ...this.result.sessions,
-                ...page.sessions.filter(
-                  (row) => !this.result?.sessions.some((current) => current.key === row.key),
-                ),
-              ],
-            }
-          : page;
+      if (!page) {
+        return;
+      }
+      if (!options.append || !this.result) {
+        this.result = page;
+        return;
+      }
+      const rowsByKey = new Set(this.result.sessions.map((row) => row.key));
+      const combinedSessions = [
+        ...this.result.sessions,
+        ...page.sessions.filter((row) => !rowsByKey.has(row.key)),
+      ];
+      const totalCount = page.totalCount ?? this.result.totalCount;
+      const hasMore =
+        page.hasMore ??
+        (typeof totalCount === "number" && Number.isFinite(totalCount)
+          ? combinedSessions.length < totalCount
+          : false);
+      this.result = {
+        ...page,
+        count: combinedSessions.length,
+        hasMore,
+        nextOffset:
+          page.nextOffset !== undefined
+            ? page.nextOffset
+            : hasMore
+              ? combinedSessions.length
+              : null,
+        sessions: combinedSessions,
+        totalCount,
+      };
     } catch (error) {
       if (requestId === this.requestId) {
         this.error = String(error);
@@ -168,17 +186,58 @@ export class SessionPicker extends LitElement {
   }
 
   private async loadMore() {
-    const result = this.result;
-    const offset =
-      typeof result?.nextOffset === "number" && Number.isFinite(result.nextOffset)
-        ? Math.max(0, Math.floor(result.nextOffset))
-        : result?.hasMore
-          ? result.sessions.length
-          : null;
-    if (offset === null || this.loading) {
+    if (this.loading) {
       return;
     }
-    await this.loadPage({ append: true, offset });
+    let result = this.result;
+    let offset = this.resolveNextOffset(result);
+    let visibleCount = this.rows().length;
+    const seenOffsets = new Set<number>();
+    while (offset !== null && !seenOffsets.has(offset)) {
+      seenOffsets.add(offset);
+      await this.loadPage({ append: true, offset });
+      result = this.result;
+      const nextVisibleCount = this.rows().length;
+      if (nextVisibleCount > visibleCount) {
+        return;
+      }
+      visibleCount = nextVisibleCount;
+      offset = this.resolveNextOffset(result);
+    }
+  }
+
+  private resolveNextOffset(result: SessionsListResult | null): number | null {
+    if (!result?.hasMore) {
+      return null;
+    }
+    if (typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)) {
+      return Math.max(0, Math.floor(result.nextOffset));
+    }
+    return result.sessions.length;
+  }
+
+  private formatMeta(row: SessionsListResult["sessions"][number]): string {
+    const parts = [
+      normalizeOptionalString(row.surface),
+      [normalizeOptionalString(row.modelProvider), normalizeOptionalString(row.model)]
+        .filter(Boolean)
+        .join("/"),
+    ].filter(Boolean);
+    const updatedAt = formatDateTimeMs(row.updatedAt, undefined, "");
+    if (updatedAt) {
+      parts.push(updatedAt);
+    }
+    return parts.join(" · ");
+  }
+
+  private countLabel(rows: SessionsListResult["sessions"]): string {
+    const loadedCount = this.result?.sessions.length ?? 0;
+    const totalCount = this.result?.totalCount;
+    return loadedCount === rows.length &&
+      typeof totalCount === "number" &&
+      Number.isFinite(totalCount)
+      ? `${rows.length} / ${totalCount}`
+      : String(rows.length);
   }
 
   private rows() {
@@ -206,6 +265,8 @@ export class SessionPicker extends LitElement {
     }
     const rows = this.rows();
     const hasQuery = Boolean(this.query || this.appliedQuery);
+    const searchPending =
+      normalizeOptionalString(this.query) !== normalizeOptionalString(this.appliedQuery);
     const loadMore =
       this.result?.hasMore === true &&
       (typeof this.result.nextOffset === "number"
@@ -238,10 +299,16 @@ export class SessionPicker extends LitElement {
                   void this.applySearch();
                 }
               }}
+              @blur=${() => {
+                if (normalizeOptionalString(this.query)) {
+                  void this.applySearch();
+                }
+              }}
             />
           </label>
           <button
             class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+            data-chat-session-search-submit="true"
             type="button"
             title=${t("common.search")}
             aria-label=${t("common.search")}
@@ -254,6 +321,7 @@ export class SessionPicker extends LitElement {
             ? html`
                 <button
                   class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+                  data-chat-session-search-clear="true"
                   type="button"
                   title=${t("chat.selectors.clearSessionSearch")}
                   aria-label=${t("chat.selectors.clearSessionSearch")}
@@ -280,7 +348,7 @@ export class SessionPicker extends LitElement {
             (row) => {
               const selected = row.key === this.currentSessionKey;
               const label = resolveSessionDisplayName(row.key, row);
-              const meta = formatDateTimeMs(row.updatedAt, undefined, "");
+              const meta = this.formatMeta(row);
               return html`
                 <button
                   class="chat-session-picker__option ${selected
@@ -316,13 +384,14 @@ export class SessionPicker extends LitElement {
           )}
         </div>
         <div class="chat-session-picker__footer">
-          <span class="chat-session-picker__count">${this.result?.totalCount ?? rows.length}</span>
+          <span class="chat-session-picker__count">${this.countLabel(rows)}</span>
           ${loadMore !== false && loadMore !== undefined
             ? html`
                 <button
                   class="btn btn--ghost btn--sm"
+                  data-chat-session-load-more="true"
                   type="button"
-                  ?disabled=${this.loading}
+                  ?disabled=${this.loading || searchPending}
                   @click=${() => void this.loadMore()}
                 >
                   ${t("chat.selectors.loadMoreSessions")}
