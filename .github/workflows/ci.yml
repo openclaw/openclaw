@@ -291,7 +291,6 @@ jobs:
             "automation-cron-hooks-tasks-polling.cron-jobs",
             "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
             "browser-control-ui-and-webchat.browser-ui",
-            "channel-framework.channel-actions-commands-and-approvals",
             "channel-framework.channel-setup",
             "channel-framework.conversation-routing-and-delivery",
             "channel-framework.group-thread-and-ambient-room-behavior",

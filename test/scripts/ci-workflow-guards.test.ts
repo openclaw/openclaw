@@ -818,8 +818,18 @@ describe("ci workflow guards", () => {
     expect(preflightStep.run).toContain('task: "qa-smoke-profile"');
     expect(preflightStep.run).toContain("qa_category: category");
     expect(smokeProfile.categoryIds).toHaveLength(34);
-    for (const categoryId of smokeProfile.categoryIds) {
+    const unsupportedCrablineCategories = [
+      "channel-framework.channel-actions-commands-and-approvals",
+    ];
+    const ciSmokeCategories = smokeProfile.categoryIds.filter(
+      (categoryId) => !unsupportedCrablineCategories.includes(categoryId),
+    );
+    expect(ciSmokeCategories).toHaveLength(33);
+    for (const categoryId of ciSmokeCategories) {
       expect(preflightStep.run).toContain(`"${categoryId}"`);
+    }
+    for (const categoryId of unsupportedCrablineCategories) {
+      expect(preflightStep.run).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
