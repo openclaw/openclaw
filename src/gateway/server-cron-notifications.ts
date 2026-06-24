@@ -14,7 +14,7 @@ import {
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
 import type { CronEvent } from "../cron/service.js";
-import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
+import { resolveCronDeliverySessionKeyFromStore } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -238,7 +238,11 @@ export async function sendGatewayCronFailureAlert(params: {
       channel: params.channel,
       to: params.to,
       accountId: params.accountId,
-      sessionKey: resolveCronDeliverySessionKey(params.job),
+      sessionKey: resolveCronDeliverySessionKeyFromStore({
+        cfg: runtimeConfig,
+        agentId,
+        job: params.job,
+      }),
     },
     message: params.text,
     abortSignal: abortController.signal,
@@ -337,7 +341,6 @@ function dispatchCronFailureDestinationNotifications(params: {
   }
 
   const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
-  const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job: params.job });
 
   if (failureDest) {
@@ -371,6 +374,11 @@ function dispatchCronFailureDestinationNotifications(params: {
 
     if (failureDest.mode === "announce") {
       const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+      const deliverySessionKey = resolveCronDeliverySessionKeyFromStore({
+        cfg: runtimeConfig,
+        agentId,
+        job: params.job,
+      });
       void sendFailureNotificationAnnounce(
         params.deps,
         runtimeConfig,
@@ -397,6 +405,11 @@ function dispatchCronFailureDestinationNotifications(params: {
   }
 
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+  const deliverySessionKey = resolveCronDeliverySessionKeyFromStore({
+    cfg: runtimeConfig,
+    agentId,
+    job: params.job,
+  });
   void sendFailureNotificationAnnounce(
     params.deps,
     runtimeConfig,
