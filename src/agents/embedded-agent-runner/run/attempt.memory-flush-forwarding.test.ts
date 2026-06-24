@@ -96,6 +96,12 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       expect(result.details).toEqual({
         path: MEMORY_RELATIVE_PATH,
         appendOnly: true,
+        memoryFlushAppend: {
+          status: "accepted",
+          appendedLines: 1,
+          appendChars: 16,
+          skippedDuplicateLines: 0,
+        },
       });
       await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
       await expect(

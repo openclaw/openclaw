@@ -438,11 +438,16 @@ Config (`agents.defaults.compaction.memoryFlush`):
 - `enabled` (default: `true`)
 - `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
 - `softThresholdTokens` (default: `4000`)
+- `forceFlushTranscriptBytes` (default: `2mb`; set `0` to disable transcript-size forced flushes)
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
 
 Notes:
 
+- Flush writes to `memory/YYYY-MM-DD.md` are append-only and bounded before mutation. The
+  runtime rejects new daily-memory append payloads that are too large, contain markdown
+  heading/scaffold lines, or exceed the short-line limit, and it skips exact duplicate
+  lines that are already present.
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
 - When `model` is set, the flush turn uses that model without inheriting the

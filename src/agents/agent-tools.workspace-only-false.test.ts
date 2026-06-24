@@ -271,9 +271,138 @@ describe("FS tools with workspaceOnly=false", () => {
       details: {
         path: "memory/2026-03-07.md",
         appendOnly: true,
+        memoryFlushAppend: {
+          status: "accepted",
+          appendedLines: 1,
+          appendChars: 8,
+          skippedDuplicateLines: 0,
+        },
       },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("rejects oversized daily-memory flush append lines before mutation", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-oversized", {
+        path: allowedRelativePath,
+        content: `- ${"x".repeat(520)}`,
+      }),
+    ).rejects.toThrow(/Memory flush append rejected: line too long/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed");
+  });
+
+  it("rejects daily-memory scaffolds before mutation", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-scaffold", {
+        path: allowedRelativePath,
+        content: "# Memory - 2026-03-07\n- compact note",
+      }),
+    ).rejects.toThrow(/markdown headings or daily-memory scaffolds are not allowed/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed");
+  });
+
+  it("skips duplicate-only daily-memory flush appends without mutation", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "- existing durable note");
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    const result = await writeTool.execute("test-call-memory-duplicate", {
+      path: allowedRelativePath,
+      content: "  - existing   durable note  ",
+    });
+
+    expect(result).toStrictEqual({
+      content: [
+        {
+          type: "text",
+          text: "No new memory-flush content appended to memory/2026-03-07.md; all proposed lines were already present.",
+        },
+      ],
+      details: {
+        path: "memory/2026-03-07.md",
+        appendOnly: true,
+        memoryFlushAppend: {
+          status: "skipped_duplicate",
+          skippedDuplicateLines: 1,
+        },
+      },
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe(
+      "- existing durable note",
+    );
+  });
+
+  it("dedupes daily-memory replay lines and appends only new compact lines", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "- existing durable note");
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    const result = await writeTool.execute("test-call-memory-dedupe", {
+      path: allowedRelativePath,
+      content: "- existing durable note\n- new compact note",
+    });
+
+    expect(result).toStrictEqual({
+      content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
+      details: {
+        path: "memory/2026-03-07.md",
+        appendOnly: true,
+        memoryFlushAppend: {
+          status: "accepted",
+          appendedLines: 1,
+          appendChars: 18,
+          skippedDuplicateLines: 1,
+        },
+      },
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe(
+      "- existing durable note\n- new compact note",
+    );
   });
 
   it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {
@@ -299,6 +428,12 @@ describe("FS tools with workspaceOnly=false", () => {
       details: {
         path: "memory/2026-03-08.md",
         appendOnly: true,
+        memoryFlushAppend: {
+          status: "accepted",
+          appendedLines: 1,
+          appendChars: 8,
+          skippedDuplicateLines: 0,
+        },
       },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("new note");
