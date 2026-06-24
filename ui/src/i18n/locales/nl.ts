@@ -1708,8 +1708,8 @@ export const nl: TranslationMap = {
     },
     jobState: {
       status: "Status",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Actief",
+      notRunning: "Niet actief",
       next: "Volgende",
       last: "Laatste",
     },

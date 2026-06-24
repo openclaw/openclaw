@@ -1664,8 +1664,8 @@ export const th: TranslationMap = {
     },
     jobState: {
       status: "สถานะ",
-      running: "Running",
-      notRunning: "Not running",
+      running: "กำลังทำงาน",
+      notRunning: "ไม่ได้ทำงาน",
       next: "ถัดไป",
       last: "ล่าสุด",
     },

@@ -1709,8 +1709,8 @@ export const ja_JP: TranslationMap = {
     },
     jobState: {
       status: "ステータス",
-      running: "Running",
-      notRunning: "Not running",
+      running: "実行中",
+      notRunning: "未実行",
       next: "次回",
       last: "前回",
     },

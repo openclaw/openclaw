@@ -1681,8 +1681,8 @@ export const ar: TranslationMap = {
     },
     jobState: {
       status: "الحالة",
-      running: "Running",
-      notRunning: "Not running",
+      running: "قيد التشغيل",
+      notRunning: "غير قيد التشغيل",
       next: "التالي",
       last: "الأخير",
     },

@@ -1707,8 +1707,8 @@ export const uk: TranslationMap = {
     },
     jobState: {
       status: "Статус",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Запущено",
+      notRunning: "Не запущено",
       next: "Наступний",
       last: "Останній",
     },

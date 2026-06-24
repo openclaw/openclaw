@@ -1659,8 +1659,8 @@ export const zh_CN: TranslationMap = {
     },
     jobState: {
       status: "状态",
-      running: "Running",
-      notRunning: "Not running",
+      running: "运行中",
+      notRunning: "未运行",
       next: "下次",
       last: "上次",
     },

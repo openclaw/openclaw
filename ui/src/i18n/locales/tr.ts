@@ -1709,8 +1709,8 @@ export const tr: TranslationMap = {
     },
     jobState: {
       status: "Durum",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Çalışıyor",
+      notRunning: "Çalışmıyor",
       next: "Sonraki",
       last: "Son",
     },

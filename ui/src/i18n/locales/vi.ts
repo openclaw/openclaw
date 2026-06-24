@@ -1691,8 +1691,8 @@ export const vi: TranslationMap = {
     },
     jobState: {
       status: "Trạng thái",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Đang chạy",
+      notRunning: "Không chạy",
       next: "Tiếp theo",
       last: "Cuối cùng",
     },

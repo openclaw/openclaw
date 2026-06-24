@@ -1700,8 +1700,8 @@ export const id: TranslationMap = {
     },
     jobState: {
       status: "Status",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Berjalan",
+      notRunning: "Tidak berjalan",
       next: "Berikutnya",
       last: "Terakhir",
     },

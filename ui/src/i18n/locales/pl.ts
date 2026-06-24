@@ -1713,8 +1713,8 @@ export const pl: TranslationMap = {
     },
     jobState: {
       status: "Status",
-      running: "Running",
-      notRunning: "Not running",
+      running: "Uruchomiono",
+      notRunning: "Nie uruchomiono",
       next: "Następne",
       last: "Ostatnie",
     },

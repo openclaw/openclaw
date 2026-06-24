@@ -1687,8 +1687,8 @@ export const ko: TranslationMap = {
     },
     jobState: {
       status: "상태",
-      running: "Running",
-      notRunning: "Not running",
+      running: "실행 중",
+      notRunning: "실행 중 아님",
       next: "다음",
       last: "마지막",
     },

@@ -1722,8 +1722,8 @@ export const fr: TranslationMap = {
     },
     jobState: {
       status: "Statut",
-      running: "Running",
-      notRunning: "Not running",
+      running: "En cours d’exécution",
+      notRunning: "Non exécuté",
       next: "Prochaine",
       last: "Dernière",
     },

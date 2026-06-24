@@ -1701,8 +1701,8 @@ export const fa: TranslationMap = {
     },
     jobState: {
       status: "وضعیت",
-      running: "Running",
-      notRunning: "Not running",
+      running: "در حال اجرا",
+      notRunning: "در حال اجرا نیست",
       next: "بعدی",
       last: "آخرین",
     },
