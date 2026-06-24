@@ -245,7 +245,9 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs.readdir(dirPath, { withFileTypes: true, recursive: true }).catch(() => []);
+        const entries = await fs
+          .readdir(dirPath, { withFileTypes: true, recursive: true })
+          .catch(() => []);
         return entries
           .filter(
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",

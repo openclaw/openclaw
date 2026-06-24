@@ -364,7 +364,9 @@ export type RefreshMemoryWikiIndexesResult = {
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs.readdir(dirPath, { withFileTypes: true, recursive: true }).catch(() => []);
+  const entries = await fs
+    .readdir(dirPath, { withFileTypes: true, recursive: true })
+    .catch(() => []);
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
     .map((entry) => {
