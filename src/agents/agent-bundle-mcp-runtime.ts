@@ -23,6 +23,7 @@ import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -43,6 +44,10 @@ type BundleMcpSession = {
   transportType: "stdio" | "sse" | "streamable-http";
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
+  connected: boolean;
+  catalogUseCount: number;
+  sharedAcrossCatalogGenerations: boolean;
+  connectPromise?: Promise<void>;
   detachStderr?: () => void;
 };
 
@@ -59,6 +64,7 @@ const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 
@@ -533,6 +539,26 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+  const ensureSessionConnected = async (
+    session: BundleMcpSession,
+    connectionTimeoutMs: number,
+  ): Promise<void> => {
+    if (session.connected) {
+      return;
+    }
+    session.connectPromise ??= connectWithTimeout(
+      session.client,
+      session.transport,
+      connectionTimeoutMs,
+    )
+      .then(() => {
+        session.connected = true;
+      })
+      .finally(() => {
+        session.connectPromise = undefined;
+      });
+    await session.connectPromise;
+  };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
@@ -581,7 +607,8 @@ export function createSessionMcpRuntime(params: {
           preparedEntries.push({ serverName, rawServer, resolved, safeServerName });
         }
 
-        // Parallelize the async part: connection + tool listing
+        // Bounded fan-out keeps common 4-5 server setups parallel without letting
+        // large configs spawn/connect every MCP transport at once.
         type ServerResult = {
           serverName: string;
           serverEntry: McpServerCatalog | null;
@@ -589,168 +616,186 @@ export function createSessionMcpRuntime(params: {
           diagnostics: McpToolCatalogDiagnostic[];
         };
 
-        const results = await Promise.allSettled(
-          preparedEntries.map(async ({ serverName, rawServer, resolved, safeServerName }) => {
-            failIfDisposed();
+        const tasks = preparedEntries.map(
+          ({ serverName, rawServer, resolved, safeServerName }) =>
+            async (): Promise<ServerResult> => {
+              failIfDisposed();
 
-            let session = sessions.get(serverName);
-            const reusedSession = Boolean(session);
-            let connected = Boolean(session);
-            if (!session) {
-              const client = new Client(
-                {
-                  name: "openclaw-bundle-mcp",
-                  version: "0.0.0",
-                },
-                {
-                  jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
-                  listChanged: {
-                    tools: {
-                      autoRefresh: false,
-                      debounceMs: 0,
-                      onChanged: (error) => {
-                        if (error) {
-                          logWarn(
-                            `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
-                          );
-                        }
-                        catalogInvalidationGeneration += 1;
-                        catalog = null;
-                        catalogInFlight = undefined;
+              let session = sessions.get(serverName);
+              const reusedSession = Boolean(session);
+              if (!session) {
+                const client = new Client(
+                  {
+                    name: "openclaw-bundle-mcp",
+                    version: "0.0.0",
+                  },
+                  {
+                    jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+                    listChanged: {
+                      tools: {
+                        autoRefresh: false,
+                        debounceMs: 0,
+                        onChanged: (error) => {
+                          if (error) {
+                            logWarn(
+                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                            );
+                          }
+                          catalogInvalidationGeneration += 1;
+                          catalog = null;
+                          catalogInFlight = undefined;
+                        },
                       },
                     },
                   },
-                },
-              );
-              session = {
-                serverName,
-                client,
-                transport: resolved.transport,
-                transportType: resolved.transportType,
-                requestTimeoutMs: resolved.requestTimeoutMs,
-                supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-                detachStderr: resolved.detachStderr,
-              };
-              sessions.set(serverName, session);
-            }
-
-            try {
-              failIfDisposed();
-              if (!connected) {
-                await connectWithTimeout(
-                  session.client,
-                  session.transport,
-                  resolved.connectionTimeoutMs,
                 );
-                connected = true;
-              }
-              failIfDisposed();
-              const capabilities = summarizeServerCapabilities(
-                session.client.getServerCapabilities(),
-              );
-              const listedTools = await listAllToolsBestEffort({
-                client: session.client,
-                timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-                suppressUnsupported: Boolean(
-                  !capabilities.tools && (capabilities.resources || capabilities.prompts),
-                ),
-              });
-              failIfDisposed();
-              const selection = getMcpToolSelection(rawServer);
-              const exposedTools = listedTools.filter((tool) =>
-                shouldExposeMcpTool(selection, tool.name.trim()),
-              );
-              const serverEntry: McpServerCatalog = {
-                serverName,
-                safeServerName,
-                launchSummary: resolved.description,
-                toolCount: exposedTools.length,
-                requestTimeoutMs: resolved.requestTimeoutMs,
-                supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-                ...(capabilities.resources ? { resources: capabilities.resources } : {}),
-                ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
-                ...(capabilities.tools
-                  ? {
-                      tools: {
-                        ...capabilities.tools,
-                        ...(exposedTools.length !== listedTools.length
-                          ? { filteredCount: listedTools.length - exposedTools.length }
-                          : {}),
-                      },
-                    }
-                  : {}),
-                ...(selection.include || selection.exclude
-                  ? {
-                      toolFilter: {
-                        ...(selection.include ? { include: [...selection.include] } : {}),
-                        ...(selection.exclude ? { exclude: [...selection.exclude] } : {}),
-                      },
-                    }
-                  : {}),
-              };
-              const toolEntries: McpCatalogTool[] = [];
-              for (const tool of exposedTools) {
-                const toolName = tool.name.trim();
-                if (!toolName) {
-                  continue;
-                }
-                toolEntries.push({
+                session = {
                   serverName,
-                  safeServerName,
-                  toolName,
-                  title: tool.title,
-                  description: sanitizeMcpMetadataText(tool.description),
-                  inputSchema: tool.inputSchema,
-                  fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-                });
+                  client,
+                  transport: resolved.transport,
+                  transportType: resolved.transportType,
+                  requestTimeoutMs: resolved.requestTimeoutMs,
+                  supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+                  connected: false,
+                  catalogUseCount: 0,
+                  sharedAcrossCatalogGenerations: false,
+                  detachStderr: resolved.detachStderr,
+                };
+                sessions.set(serverName, session);
               }
-              return {
-                serverName,
-                serverEntry,
-                toolEntries,
-                diagnostics: [] as McpToolCatalogDiagnostic[],
-              };
-            } catch (error) {
-              const message = redactErrorUrls(error);
-              if (!disposed) {
-                const action = reusedSession ? "refresh" : "start";
-                logWarn(
-                  `bundle-mcp: failed to ${action} server "${serverName}" (${resolved.description}): ${message}`,
+
+              if (reusedSession && session.catalogUseCount > 0) {
+                session.sharedAcrossCatalogGenerations = true;
+              }
+              session.catalogUseCount += 1;
+              try {
+                failIfDisposed();
+                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                failIfDisposed();
+                const capabilities = summarizeServerCapabilities(
+                  session.client.getServerCapabilities(),
                 );
-              }
-              const diags: McpToolCatalogDiagnostic[] = [
-                {
+                const listedTools = await listAllToolsBestEffort({
+                  client: session.client,
+                  timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+                  suppressUnsupported: Boolean(
+                    !capabilities.tools && (capabilities.resources || capabilities.prompts),
+                  ),
+                });
+                failIfDisposed();
+                const selection = getMcpToolSelection(rawServer);
+                const exposedTools = listedTools.filter((tool) =>
+                  shouldExposeMcpTool(selection, tool.name.trim()),
+                );
+                const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
                   launchSummary: resolved.description,
-                  message,
-                },
-              ];
-              if (!reusedSession) {
-                await disposeSession(session);
-                sessions.delete(serverName);
+                  toolCount: exposedTools.length,
+                  requestTimeoutMs: resolved.requestTimeoutMs,
+                  supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+                  ...(capabilities.resources ? { resources: capabilities.resources } : {}),
+                  ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
+                  ...(capabilities.tools
+                    ? {
+                        tools: {
+                          ...capabilities.tools,
+                          ...(exposedTools.length !== listedTools.length
+                            ? { filteredCount: listedTools.length - exposedTools.length }
+                            : {}),
+                        },
+                      }
+                    : {}),
+                  ...(selection.include || selection.exclude
+                    ? {
+                        toolFilter: {
+                          ...(selection.include ? { include: [...selection.include] } : {}),
+                          ...(selection.exclude ? { exclude: [...selection.exclude] } : {}),
+                        },
+                      }
+                    : {}),
+                };
+                const toolEntries: McpCatalogTool[] = [];
+                for (const tool of exposedTools) {
+                  const toolName = tool.name.trim();
+                  if (!toolName) {
+                    continue;
+                  }
+                  toolEntries.push({
+                    serverName,
+                    safeServerName,
+                    toolName,
+                    title: tool.title,
+                    description: sanitizeMcpMetadataText(tool.description),
+                    inputSchema: tool.inputSchema,
+                    fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                  });
+                }
+                return {
+                  serverName,
+                  serverEntry,
+                  toolEntries,
+                  diagnostics: [] as McpToolCatalogDiagnostic[],
+                };
+              } catch (error) {
+                const message = redactErrorUrls(error);
+                if (!disposed) {
+                  const action = reusedSession ? "refresh" : "start";
+                  logWarn(
+                    `bundle-mcp: failed to ${action} server "${serverName}" (${resolved.description}): ${message}`,
+                  );
+                }
+                const diags: McpToolCatalogDiagnostic[] = [
+                  {
+                    serverName,
+                    safeServerName,
+                    launchSummary: resolved.description,
+                    message,
+                  },
+                ];
+                const sharedWithNewerGeneration =
+                  session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
+                if (
+                  !reusedSession &&
+                  !sharedWithNewerGeneration &&
+                  sessions.get(serverName) === session
+                ) {
+                  // Catalog invalidation can overlap generations; an older failed
+                  // generation must not dispose a session a newer one already reused.
+                  await disposeSession(session);
+                  sessions.delete(serverName);
+                }
+                failIfDisposed();
+                return {
+                  serverName,
+                  serverEntry: null,
+                  toolEntries: [],
+                  diagnostics: diags,
+                } as ServerResult;
+              } finally {
+                session.catalogUseCount -= 1;
               }
-              failIfDisposed();
-              return {
-                serverName,
-                serverEntry: null,
-                toolEntries: [],
-                diagnostics: diags,
-              } as ServerResult;
-            }
-          }),
+            },
         );
+        const { results, firstError, hasError } = await runTasksWithConcurrency({
+          tasks,
+          limit: BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY,
+          errorMode: "continue",
+        });
+        if (hasError) {
+          throw firstError;
+        }
 
-        // Merge results from all parallelized servers
         for (const result of results) {
-          if (result.status === "fulfilled" && result.value) {
-            const { serverEntry, toolEntries, diagnostics: serverDiags } = result.value;
-            if (serverEntry) {
-              servers[result.value.serverName] = serverEntry;
-            }
-            tools.push(...toolEntries);
-            diagnostics.push(...serverDiags);
+          if (!result) {
+            continue;
           }
+          const { serverEntry, toolEntries, diagnostics: serverDiags } = result;
+          if (serverEntry) {
+            servers[result.serverName] = serverEntry;
+          }
+          tools.push(...toolEntries);
+          diagnostics.push(...serverDiags);
         }
 
         failIfDisposed();

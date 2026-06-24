@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
@@ -26,6 +27,8 @@ vi.mock("./embedded-agent-mcp.js", () => ({
   }),
 }));
 
+const tempDirs: string[] = [];
+
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
 >;
@@ -37,10 +40,12 @@ async function writeListToolsMcpServer(params: {
   filePath: string;
   logPath: string;
   delayMs?: number;
+  initializeDelayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
   tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
   capabilities?: Record<string, unknown>;
+  notifyListChangedOnInitialized?: boolean;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
@@ -53,8 +58,10 @@ import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
+const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const tools = ${JSON.stringify(
       params.tools ?? [
@@ -84,7 +91,7 @@ function handle(message) {
   }
   log("recv " + String(message.method ?? "unknown"));
   if (message.method === "initialize") {
-    send({
+    const response = {
       jsonrpc: "2.0",
       id: message.id,
       result: {
@@ -92,10 +99,19 @@ function handle(message) {
         capabilities,
         serverInfo: { name: "test-list-tools", version: "1.0.0" },
       },
-    });
+    };
+    if (initializeDelayMs > 0) {
+      setTimeout(() => send(response), initializeDelayMs);
+    } else {
+      send(response);
+    }
     return;
   }
   if (message.method === "notifications/initialized") {
+    if (notifyListChangedOnInitialized) {
+      log("notify tools/list_changed");
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    }
     return;
   }
   if (message.method === "tools/list") {
@@ -281,6 +297,7 @@ function makeRuntime(
 }
 
 afterEach(async () => {
+  cleanupTempDirs(tempDirs);
   await cleanupBundleMcpHarness();
 });
 
@@ -2036,16 +2053,11 @@ process.stdin.on("end", () => {
     },
   );
 
-  // FIX #94162: regression test — parallel MCP catalog loading must complete
-  // in approx max(server delays) not sum(server delays).
-  // Under the original sequential for-await loop, this test would take
-  // ~1200ms (200+400+600) and fail the <900ms assertion.
-  // Under the parallel Promise.allSettled fix, it completes in ~600ms.
   it(
     "parallelizes MCP server catalog loading across multiple slow servers",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-parallel-"));
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
       const delays = [200, 400, 600];
       const serverPaths = delays.map((delay, i) => {
         const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
@@ -2084,7 +2096,7 @@ process.stdin.on("end", () => {
       try {
         const sumDelays = delays.reduce((a, b) => a + b, 0);
         const maxDelay = Math.max(...delays);
-        const tolerance = 350; // ms of overhead for process spawn, JSON serialization, etc.
+        const parallelBudgetMs = maxDelay + 500;
 
         const t0 = performance.now();
         const catalog = await runtime.getCatalog();
@@ -2098,15 +2110,224 @@ process.stdin.on("end", () => {
           "slow_tool",
         ]);
 
-        // Wall time must be LESS than sum of all delays (proves parallelism).
-        // Under the original sequential loop this would exceed sumDelays + tolerance.
-        expect(wallTime).toBeLessThan(sumDelays + tolerance);
+        // Sequential listing would have to wait roughly sumDelays before overhead;
+        // parallel listing should stay near the slowest server plus launch overhead.
+        expect(wallTime).toBeLessThan(parallelBudgetMs);
+        expect(parallelBudgetMs).toBeLessThan(sumDelays);
 
-        // Wall time must be at least the max delay (proves we wait for the slowest).
         expect(wallTime).toBeGreaterThanOrEqual(maxDelay * 0.7);
       } finally {
         await runtime.dispose();
-        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    "awaits in-progress MCP session connections after catalog invalidation",
+    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-inflight-connect-");
+      const invalidatingServer = {
+        serverName: "invalidatingServer",
+        serverPath: path.join(tempDir, "invalidating-server.mjs"),
+        logPath: path.join(tempDir, "invalidating-server.log"),
+      };
+      const slowConnectServer = {
+        serverName: "slowConnectServer",
+        serverPath: path.join(tempDir, "slow-connect-server.mjs"),
+        logPath: path.join(tempDir, "slow-connect-server.log"),
+      };
+
+      await writeListToolsMcpServer({
+        filePath: invalidatingServer.serverPath,
+        logPath: invalidatingServer.logPath,
+        capabilities: { tools: { listChanged: true } },
+        notifyListChangedOnInitialized: true,
+      });
+      await writeListToolsMcpServer({
+        filePath: slowConnectServer.serverPath,
+        logPath: slowConnectServer.logPath,
+        initializeDelayMs: 500,
+      });
+
+      testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-inflight-connect-test",
+        sessionKey: "agent:test:session-inflight-connect-test",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: Object.fromEntries(
+              [invalidatingServer, slowConnectServer].map(({ serverName, serverPath }) => [
+                serverName,
+                {
+                  command: process.execPath,
+                  args: [serverPath],
+                  connectionTimeoutMs: 2_000,
+                },
+              ]),
+            ),
+          },
+        },
+      });
+
+      try {
+        const firstCatalog = runtime.getCatalog();
+        await waitForFileText(
+          invalidatingServer.logPath,
+          "notify tools/list_changed",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        const secondCatalog = await runtime.getCatalog();
+        await firstCatalog;
+
+        expect(Object.keys(secondCatalog.servers).toSorted()).toEqual([
+          invalidatingServer.serverName,
+          slowConnectServer.serverName,
+        ]);
+        expect(secondCatalog.diagnostics ?? []).toEqual([]);
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
+
+  it(
+    "does not dispose sessions shared with a newer catalog generation",
+    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-overlap-generation-");
+      const serverPath = path.join(tempDir, "overlap-server.mjs");
+      const logPath = path.join(tempDir, "server.log");
+
+      await writeExecutable(
+        serverPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+let buffer = "";
+let listCount = 0;
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: "overlap-generation", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    log("sent tools/list_changed");
+    return;
+  }
+  if (message.method === "tools/list") {
+    listCount += 1;
+    const currentList = listCount;
+    log("tools/list " + currentList);
+    if (currentList === 1) {
+      setTimeout(() => {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            tools: [{ name: "ok_tool", inputSchema: [] }],
+          },
+        });
+      }, 100);
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-overlap-generation-test",
+        sessionKey: "agent:test:session-overlap-generation-test",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              overlap: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        const firstCatalog = runtime.getCatalog();
+        await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        await waitForFileText(logPath, "tools/list 1", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+
+        const secondCatalog = await runtime.getCatalog();
+        const firstCatalogResult = await firstCatalog;
+
+        expect(firstCatalogResult.diagnostics?.[0]?.serverName).toBe("overlap");
+        expect(secondCatalog.diagnostics ?? []).toEqual([]);
+        expect(secondCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+
+        await expect(runtime.callTool("overlap", "ok_tool", {})).resolves.toMatchObject({
+          content: [{ type: "text", text: "still connected" }],
+          isError: false,
+        });
+      } finally {
+        await runtime.dispose();
       }
     },
   );
