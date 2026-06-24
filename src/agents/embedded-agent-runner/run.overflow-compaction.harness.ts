@@ -118,6 +118,9 @@ export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine)
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
+export const mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded = vi.fn(async () => ({
+  attempted: false,
+}));
 export const mockedSleepWithAbort = vi.fn(
   async (_ms: number, _abortSignal?: AbortSignal) => undefined,
 );
@@ -492,6 +495,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
+  mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded.mockReset();
+  mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded.mockResolvedValue({ attempted: false });
   mockedSleepWithAbort.mockReset();
   mockedSleepWithAbort.mockResolvedValue(undefined);
 }
@@ -739,6 +744,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
+  }));
+
+  vi.doMock("./memory-flush.js", () => ({
+    runEmbeddedPreAttemptMemoryFlushIfNeeded: mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded,
   }));
 
   vi.doMock("./utils.js", () => ({

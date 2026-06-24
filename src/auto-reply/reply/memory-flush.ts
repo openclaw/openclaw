@@ -177,6 +177,57 @@ export function shouldRunPreflightCompaction(params: {
   return Boolean(state && state.totalTokens >= state.threshold);
 }
 
+export function shouldRunPreCompactionMemoryFlush(params: {
+  trigger?: string;
+  attemptedThisRun?: boolean;
+  memoryFlushEnabled?: boolean;
+  memoryFlushWritable?: boolean;
+  entry?: Pick<
+    SessionEntry,
+    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+  >;
+  /**
+   * Optional token count override for pre-compaction flush gating. When provided,
+   * this value is treated as the best available projected context snapshot.
+   */
+  tokenCount?: number;
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+  forceFlushByTranscriptSize?: boolean;
+}): boolean {
+  if (params.trigger === "memory") {
+    return false;
+  }
+  if (params.attemptedThisRun === true) {
+    return false;
+  }
+  if (params.memoryFlushEnabled === false) {
+    return false;
+  }
+  if (params.memoryFlushWritable === false) {
+    return false;
+  }
+  if (!params.entry) {
+    return false;
+  }
+  if (hasAlreadyFlushedForCurrentCompaction(params.entry)) {
+    return false;
+  }
+  if (params.forceFlushByTranscriptSize === true) {
+    return true;
+  }
+  return shouldRunMemoryFlush({
+    entry: params.entry,
+    tokenCount: params.tokenCount,
+    contextWindowTokens: params.contextWindowTokens,
+    reserveTokensFloor: params.reserveTokensFloor,
+    softThresholdTokens: params.softThresholdTokens,
+  });
+}
+
+export const shouldRunEmbeddedPreAttemptMemoryFlush = shouldRunPreCompactionMemoryFlush;
+
 /**
  * Returns true when a memory flush has already been performed for the current
  * compaction cycle. This prevents repeated flush runs within the same cycle —

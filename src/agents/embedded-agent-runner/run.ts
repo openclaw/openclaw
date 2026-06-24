@@ -155,6 +155,7 @@ import {
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { runEmbeddedPreAttemptMemoryFlushIfNeeded } from "./memory-flush.js";
 import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
@@ -1866,6 +1867,7 @@ async function runEmbeddedAgentInternal(
           }
         };
         let authRetryPending = false;
+        let preAttemptMemoryFlushAttempted = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
@@ -2028,6 +2030,38 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          if (!preAttemptMemoryFlushAttempted) {
+            try {
+              const flushResult = await runEmbeddedPreAttemptMemoryFlushIfNeeded({
+                runParams: params,
+                cfg: params.config ?? {},
+                sessionId: activeSessionId,
+                sessionFile: activeSessionFile,
+                sessionKey: resolvedSessionKey,
+                runtimePolicySessionKey: params.sandboxSessionKey ?? params.sessionKey,
+                agentId: workspaceResolution.agentId,
+                agentDir,
+                provider,
+                model: modelId,
+                contextWindowTokens: ctxInfo.tokens,
+                attemptedThisRun: preAttemptMemoryFlushAttempted,
+                verboseLevel: params.verboseLevel,
+              });
+              preAttemptMemoryFlushAttempted =
+                flushResult.attempted || preAttemptMemoryFlushAttempted;
+              if (flushResult.sessionEntry?.sessionId) {
+                activeSessionId = flushResult.sessionEntry.sessionId;
+              }
+              if (flushResult.sessionEntry?.sessionFile) {
+                activeSessionFile = flushResult.sessionEntry.sessionFile;
+              }
+            } catch (memoryFlushErr) {
+              preAttemptMemoryFlushAttempted = true;
+              log.warn(
+                `embedded pre-attempt memory flush failed; continuing without flush: ${String(memoryFlushErr)}`,
+              );
+            }
+          }
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
