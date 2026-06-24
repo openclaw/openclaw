@@ -698,8 +698,8 @@ function createCachedDescriptorPluginTool(params: {
         loadOptions,
         onlyPluginIds: [pluginId],
         retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
-        onRetainRegistry: (registry) => {
-          cachedDescriptorRuntimeRegistries.set(params.descriptor, registry);
+        onRetainRegistry: (retainedRegistry) => {
+          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
         },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);

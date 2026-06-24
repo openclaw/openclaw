@@ -99,7 +99,7 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     return registry;
   }
 
-  installStandaloneRegistry(registry, {
+  installStandaloneRuntimePluginRegistry(registry, {
     loadOptions: params.loadOptions,
     surface,
   });
