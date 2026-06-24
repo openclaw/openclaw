@@ -63,6 +63,15 @@ describe("handleControlUiHttpRequest", () => {
     return end.mock.calls[0]?.length ?? -1;
   }
 
+  function responseHeader(
+    setHeader: ReturnType<typeof makeMockHttpResponse>["setHeader"],
+    name: string,
+  ): unknown {
+    return setHeader.mock.calls.find(
+      ([headerName]) => String(headerName).toLowerCase() === name.toLowerCase(),
+    )?.[1];
+  }
+
   function expectNotFoundResponse(params: {
     handled: boolean;
     res: ReturnType<typeof makeMockHttpResponse>["res"];
@@ -157,7 +166,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, setHeader, end } = makeMockHttpResponse();
     const handled = await handleControlUiAssistantMediaRequest(
       {
         url: params.url,
@@ -172,7 +181,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
     );
-    return { res, end, handled };
+    return { res, setHeader, end, handled };
   }
 
   function createTrustedProxyAuth(): ResolvedGatewayAuth {
@@ -375,6 +384,46 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("serves assistant image media inline with the original filename", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-inline-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, setHeader, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseHeader(setHeader, "Content-Disposition")).toBe(
+          'inline; filename="photo.png"',
+        );
+      },
+    });
+  });
+
+  it("serves assistant document media as an attachment with the original filename", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-attachment-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "report.docx");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-docx"));
+        const { res, setHeader, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseHeader(setHeader, "Content-Disposition")).toBe(
+          'attachment; filename="report.docx"',
+        );
       },
     });
   });

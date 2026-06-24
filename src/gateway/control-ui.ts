@@ -264,6 +264,16 @@ function resolveAssistantMediaRoutePath(basePath?: string): string {
   return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
 }
 
+function escapeContentDispositionFilename(filename: string): string {
+  return filename.replace(/[\r\n]/g, "_").replace(/["\\]/g, "\\$&");
+}
+
+function buildAssistantMediaContentDisposition(filePath: string, mime: string): string {
+  const disposition = mime.startsWith("image/") ? "inline" : "attachment";
+  const filename = path.basename(filePath) || "assistant-media";
+  return `${disposition}; filename="${escapeContentDispositionFilename(filename)}"`;
+}
+
 function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefined {
   const bearer = getBearerToken(req);
   if (bearer) {
@@ -628,11 +638,12 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
-    }
+    const contentType = mime ?? "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      buildAssistantMediaContentDisposition(localPath, contentType),
+    );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
     const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
