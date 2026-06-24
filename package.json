@@ -112,6 +112,7 @@
     "!dist/extensions/line/**",
     "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",
+    "!dist/extensions/manifest/**",
     "!dist/extensions/mattermost/**",
     "!dist/extensions/memory-lancedb/**",
     "!dist/extensions/matrix/**",
