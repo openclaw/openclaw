@@ -4609,7 +4609,7 @@ export async function runEmbeddedAttempt(
 
           if (shouldSkipPrecheck && !skipPromptSubmission) {
             log.info(
-              `[context-overflow-precheck] skipped: context engine "${activeContextEngine.info.id}" owns compaction`,
+              `[context-overflow-precheck] skipped: context engine "${activeContextEngine!.info.id}" owns compaction`,
             );
           }
 
