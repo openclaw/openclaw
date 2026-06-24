@@ -4,8 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type ResolveUsageAuthPluginParams = {
+  context: {
+    resolveOAuthToken(params: { provider: string }): Promise<unknown>;
+  };
+};
+
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
-  async (..._args: unknown[]): Promise<unknown> => null,
+  async (_params: ResolveUsageAuthPluginParams): Promise<unknown> => null,
 );
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
@@ -15,6 +21,7 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn(() => ({
   profiles: {},
 }));
 const resolveAuthProfileOrderMock = vi.fn((_params: unknown): string[] => []);
+const resolveApiKeyForProfileMock = vi.fn(async (_params: unknown) => null);
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
@@ -23,7 +30,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
     ensureAuthProfileStoreWithoutExternalProfilesMock(),
   hasAnyAuthProfileStoreSource: () => hasAnyAuthProfileStoreSourceMock(),
   listProfilesForProvider: () => [],
-  resolveApiKeyForProfile: async () => null,
+  resolveApiKeyForProfile: (params: unknown) => resolveApiKeyForProfileMock(params),
   resolveAuthProfileOrder: (params: unknown) => resolveAuthProfileOrderMock(params),
 }));
 
@@ -111,6 +118,8 @@ describe("resolveProviderAuths plugin boundary", () => {
     });
     resolveAuthProfileOrderMock.mockReset();
     resolveAuthProfileOrderMock.mockReturnValue([]);
+    resolveApiKeyForProfileMock.mockReset();
+    resolveApiKeyForProfileMock.mockResolvedValue(null);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
@@ -253,7 +262,7 @@ describe("resolveProviderAuths plugin boundary", () => {
           skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
-            MINIMAX_CODE_PLAN_KEY: "code-plan-key",
+            MINIMAX_API_KEY: "code-plan-key",
           },
         }),
       ).resolves.toEqual([
@@ -266,6 +275,93 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["minimax"]);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("uses cached OAuth access without refreshing when refresh is disabled", async () => {
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+      profiles: {
+        "google-gemini-cli:default": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "cached-gemini-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-1",
+        },
+      },
+    });
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {
+        "google-gemini-cli:default": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "cached-gemini-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-1",
+        },
+      },
+    });
+    resolveAuthProfileOrderMock.mockImplementation((params: unknown) => {
+      const provider =
+        params && typeof params === "object" && "provider" in params
+          ? (params as { provider?: unknown }).provider
+          : undefined;
+      return provider === "google-gemini-cli" ? ["google-gemini-cli:default"] : [];
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(
+      async (params: ResolveUsageAuthPluginParams) =>
+        params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
+    );
+
+    await expect(
+      resolveProviderAuths({
+        providers: ["google-gemini-cli" as never],
+        skipPluginAuthWithoutCredentialSource: true,
+        allowOAuthRefresh: false,
+      }),
+    ).resolves.toEqual([
+      {
+        provider: "google-gemini-cli",
+        token: "cached-gemini-token",
+        accountId: "account-1",
+      },
+    ]);
+
+    expect(resolveApiKeyForProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("skips expired OAuth profiles without refreshing when refresh is disabled", async () => {
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    const store = {
+      profiles: {
+        "google-gemini-cli:default": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "expired-gemini-token",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store);
+    ensureAuthProfileStoreMock.mockReturnValue(store);
+    resolveAuthProfileOrderMock.mockReturnValue(["google-gemini-cli:default"]);
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(
+      async (params: ResolveUsageAuthPluginParams) =>
+        params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
+    );
+
+    await expect(
+      resolveProviderAuths({
+        providers: ["google-gemini-cli" as never],
+        skipPluginAuthWithoutCredentialSource: true,
+        allowOAuthRefresh: false,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(resolveApiKeyForProfileMock).not.toHaveBeenCalled();
   });
 
   it("does not overlay external auth profiles while checking the skip gate", async () => {

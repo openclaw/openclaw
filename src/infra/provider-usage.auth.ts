@@ -42,6 +42,7 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
   allowAuthProfileStore: boolean;
+  allowOAuthRefresh: boolean;
   store?: AuthStore;
 };
 
@@ -230,6 +231,16 @@ async function resolveOAuthToken(params: {
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
       continue;
     }
+    if (cred.type === "oauth" && !params.state.allowOAuthRefresh) {
+      if (typeof cred.expires === "number" && cred.expires > Date.now() && cred.access) {
+        return {
+          provider: params.provider as UsageProviderId,
+          token: cred.access,
+          accountId: "accountId" in cred ? cred.accountId : undefined,
+        };
+      }
+      continue;
+    }
     try {
       const resolved = await resolveApiKeyForProfile({
         // Reuse the already-resolved config snapshot for token/ref resolution so
@@ -376,6 +387,7 @@ export async function resolveProviderAuths(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   skipPluginAuthWithoutCredentialSource?: boolean;
+  allowOAuthRefresh?: boolean;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
     return params.auth;
@@ -385,6 +397,7 @@ export async function resolveProviderAuths(params: {
     cfg: params.config ?? getRuntimeConfig(),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
+    allowOAuthRefresh: params.allowOAuthRefresh ?? true,
   };
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,

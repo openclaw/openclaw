@@ -44,7 +44,12 @@ type UsageSummaryOptions = {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   skipPluginAuthWithoutCredentialSource?: boolean;
+  allowOAuthRefresh?: boolean;
 };
+
+type ProviderAuthResolutionResult =
+  | { auths: ProviderAuth[]; timedOut: false }
+  | { auths: []; timedOut: true };
 
 async function fetchProviderUsageSnapshot(params: {
   auth: ProviderAuth;
@@ -98,14 +103,28 @@ export async function loadProviderUsageSummary(
     throw new Error("fetch is not available");
   }
 
-  const auths = await resolveProviderAuths({
+  const authPromise = resolveProviderAuths({
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
     config,
     env,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+    allowOAuthRefresh: opts.allowOAuthRefresh,
   });
+  const authResult = await withTimeout<ProviderAuthResolutionResult>(
+    authPromise.then((auths) => ({ auths, timedOut: false })),
+    timeoutMs,
+    { auths: [], timedOut: true as const },
+  );
+  if (authResult.timedOut) {
+    console.warn(
+      `status --usage: provider auth resolution timed out after ${timeoutMs}ms; returning empty providers`,
+    );
+    return { updatedAt: now, providers: [] };
+  }
+
+  const auths = authResult.auths;
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };
   }
