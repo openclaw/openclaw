@@ -33,7 +33,11 @@ function escapeHtmlAttr(text: string): string {
 }
 
 function isTelegramRichLinkHref(href: string): boolean {
-  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
+  // Exclude mailto: — Telegram sendRichMessage validates email entities from
+  // <a href="mailto:..."> tags and rejects the entire message with
+  // RICH_MESSAGE_EMAIL_INVALID when the address is malformed. Dropping the
+  // <a> wrapper keeps the visible email text without risking message delivery.
+  return /^(?:https?:\/\/|tg:\/\/|tel:|#)/i.test(href);
 }
 
 /**

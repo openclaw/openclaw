@@ -275,6 +275,11 @@ function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): vo
 }
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const RICH_MESSAGE_INVALID_RE = /RICH_MESSAGE_\w+_INVALID/i;
+
+function isTelegramRichMessageInvalidError(err: unknown): boolean {
+  return RICH_MESSAGE_INVALID_RE.test(formatErrorMessage(err));
+}
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
@@ -841,10 +846,28 @@ export async function sendMessageTelegram(
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
-    useRichMessages
-      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
-      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+  const sendChunkedText = async (rawText: string, context: string) => {
+    if (!useRichMessages) {
+      return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    }
+    try {
+      return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
+    } catch (err: unknown) {
+      // Rich-message entity validation errors (e.g. RICH_MESSAGE_EMAIL_INVALID,
+      // RICH_MESSAGE_URL_INVALID) reject the entire message. Fall back to plain
+      // text delivery so the user still gets the content instead of a silent drop.
+      if (!isTelegramRichMessageInvalidError(err)) {
+        throw err;
+      }
+      sendLogger.warn(
+        `telegram ${context} rich-message send failed with entity validation error, retrying as plain text: ${formatErrorMessage(err)}`,
+      );
+      return await sendTelegramTextChunks(
+        buildChunkedTextPlan(rawText, `${context}-rich-invalid`),
+        context,
+      );
+    }
+  };
 
   const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
     const textLimit = Math.min(

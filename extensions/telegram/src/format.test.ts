@@ -318,12 +318,28 @@ describe("markdownToTelegramHtml", () => {
       '<a href="tg://user?id=123">user</a>',
     );
     expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
-      '<a href="mailto:user@example.com">support</a>',
+      // mailto: links are dropped because Telegram sendRichMessage validates
+      // email entities from <a href="mailto:..."> and rejects the whole message
+      // with RICH_MESSAGE_EMAIL_INVALID when the address is malformed.
+      // The label text is preserved as plain text instead.
+      "support",
     );
     expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
       '<a href="tel:+123456789">call</a>',
     );
     expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
+  });
+
+  it("does not linkify auto-detected emails in rich HTML to prevent RICH_MESSAGE_EMAIL_INVALID", () => {
+    // Auto-detected emails should remain as plain text because Telegram's
+    // sendRichMessage validates email entities from <a href="mailto:...">
+    // and rejects the whole message with RICH_MESSAGE_EMAIL_INVALID when
+    // the address is malformed.
+    expect(markdownToTelegramRichHtml("Contact: user@example.com for help")).toBe(
+      "Contact: user@example.com for help",
+    );
+    // Explicit mailto: links also drop the <a> wrapper; label text is preserved.
+    expect(markdownToTelegramRichHtml("[email](mailto:admin@company.org)")).toBe("email");
   });
 
   it("preserves Markdown heading levels in rich HTML", () => {

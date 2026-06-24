@@ -1104,6 +1104,41 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
   });
 
+  it("falls back to plain text when sendRichMessage rejects with RICH_MESSAGE_EMAIL_INVALID", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 70, chat: { id: "123" } });
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_EMAIL_INVALID"),
+    );
+
+    await sendMessageTelegram("123", "Status with user@example.com", {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    // Rich attempt should have been made
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    // Fallback to plain text sendMessage
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const plainCall = botApi.sendMessage.mock.calls[0];
+    expect(plainCall?.[0]).toBe("123");
+    expect(plainCall?.[1]).toContain("user@example.com");
+  });
+
+  it("falls back to plain text when sendRichMessage rejects with RICH_MESSAGE_URL_INVALID", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 71, chat: { id: "123" } });
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+
+    await sendMessageTelegram("123", "See [docs](/local/path)", {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
