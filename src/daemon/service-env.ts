@@ -1,4 +1,7 @@
 /** Builds minimal, portable environment blocks for managed daemon services. */
+
+const GATEWAY_DEFAULT_MAX_OLD_SPACE_MB = 8192;
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -474,6 +477,16 @@ export function buildNodeServiceEnvironment(params: {
   };
 }
 
+function resolveServiceNodeOptions(): string {
+  // Generate only the OpenClaw-owned heap flag. Ambient NODE_OPTIONS from
+  // the host process (e.g. --require, --inspect, --expose-gc) must never
+  // leak into managed services — that would re-open a startup preload
+  // boundary the current install path already blocks.
+  // 8192 MB is chosen as a safe default that prevents the common OOM crash
+  // loop with the default Node ~4 GB heap under sustained load (#96203).
+  return `--max-old-space-size=${GATEWAY_DEFAULT_MAX_OLD_SPACE_MB}`;
+}
+
 function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   sharedEnv: SharedServiceEnvironmentFields,
@@ -481,6 +494,7 @@ function buildCommonServiceEnvironment(
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
+    NODE_OPTIONS: resolveServiceNodeOptions(),
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
