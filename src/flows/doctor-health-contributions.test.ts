@@ -1008,8 +1008,12 @@ describe("doctor health contributions", () => {
     );
     const contributionChecks = await resolveDoctorContributionHealthChecks();
 
-    expect(new Set(contributionIds)).toEqual(new Set(coreIds));
-    expect(contributionIds).toHaveLength(coreIds.length);
+    for (const coreId of coreIds) {
+      expect(contributionIds).toContain(coreId);
+    }
+    expect(contributionIds).toContain("core/doctor/sandbox/registry-files");
+    expect(contributionIds).toContain("core/doctor/gateway-services/extra");
+    expect(contributionIds).toContain("core/doctor/config-audit-scrub");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 

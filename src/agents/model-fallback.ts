@@ -9,7 +9,7 @@ import {
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -168,6 +168,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  isFinalFallbackAttempt?: boolean;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -430,7 +431,7 @@ async function runFallbackAttempt<T>(params: {
     });
     if (classifiedError) {
       if (isTerminalAbort(params.abortSignal)) {
-        throw toLintErrorObject(classifiedError, "Non-Error thrown");
+        throw toErrorObject(classifiedError, "Non-Error thrown");
       }
       const preserveResultOnExhaustion =
         classification &&
@@ -669,7 +670,7 @@ function throwFallbackFailureSummary(params: {
   agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
-    throw toLintErrorObject(params.lastError, "Non-Error thrown");
+    throw toErrorObject(params.lastError, "Non-Error thrown");
   }
 
   if (params.attribution?.sessionId) {
@@ -1657,7 +1658,10 @@ async function runWithModelFallbackInternal<T>(
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: {
+        ...runOptions,
+        isFinalFallbackAttempt: i + 1 === candidates.length,
+      },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
       // the shared lane before the next candidate can run.
@@ -1942,17 +1946,3 @@ export async function runWithImageModelFallback<T>(params: {
   });
 }
 export { testing as __testing };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -834,17 +834,6 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
-async function canStealStaleLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await fs
-    .readFile(lockPath, "utf-8")
-    .then((raw) => parseLockOwnerPid(raw))
-    .catch(() => null);
-  if (ownerPid === null) {
-    return true;
-  }
-  return !isProcessLikelyAlive(ownerPid);
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -1313,39 +1302,47 @@ export async function loadShortTermPromotionDreamingStats(params: {
   };
 }
 
-async function shortTermRecallSourceExists(params: {
-  workspaceDir: string;
-  entry: Pick<ShortTermRecallEntry, "path">;
-}): Promise<boolean> {
-  const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) {
-    return false;
-  }
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
-    try {
-      const stat = await fs.stat(sourcePath);
-      if (stat.isFile()) {
-        return true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw err;
+async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(sourcePath);
+    return stat.isFile();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
     }
+    throw err;
   }
-  return false;
 }
 
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const checkSourceFile = (sourcePath: string): Promise<boolean> => {
+    const existing = sourceFileChecks.get(sourcePath);
+    if (existing) {
+      return existing;
+    }
+    const check = shortTermRecallSourceIsFile(sourcePath);
+    sourceFileChecks.set(sourcePath, check);
+    return check;
+  };
   const results = await Promise.all(
-    params.entries.map(async (entry) => ({
-      entry,
-      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
-    })),
+    params.entries.map(async (entry) => {
+      let exists = false;
+      for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
+        if (await checkSourceFile(sourcePath)) {
+          exists = true;
+          break;
+        }
+      }
+      return { entry, exists };
+    }),
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
@@ -2813,7 +2810,6 @@ export async function removeGroundedShortTermCandidates(params: {
 
 export const testing = {
   parseLockOwnerPid,
-  canStealStaleLock,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,

@@ -25,6 +25,39 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.content?.[0]?.text).toBe("hi");
   });
 
+  test("strips role-appropriate Responses text blocks", () => {
+    const user = stripEnvelopeFromMessage({
+      role: "user",
+      content: [{ type: "input_text", text: "hello\n[message_id: abc123]" }],
+    }) as { content?: Array<{ text?: string }> };
+    const assistant = stripEnvelopeFromMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
+        },
+      ],
+    }) as { content?: Array<{ text?: string }> };
+
+    expect(user.content?.[0]?.text).toBe("hello");
+    expect(assistant.content?.[0]?.text).toBe("Assistant body");
+  });
+
+  test("strips internal metadata from assistant input_text blocks", () => {
+    const assistant = stripEnvelopeFromMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "input_text",
+          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
+        },
+      ],
+    }) as { content?: Array<{ text?: string }> };
+
+    expect(assistant.content?.[0]?.text).toBe("Assistant body");
+  });
+
   test("does not strip inline message_id text that is part of a line", () => {
     const input = {
       role: "user",

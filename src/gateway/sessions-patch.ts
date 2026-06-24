@@ -396,7 +396,7 @@ export async function projectSessionsPatchEntry(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeFastMode(raw);
       if (normalized === undefined) {
-        return invalid("invalid fastMode (use true or false)");
+        return invalid('invalid fastMode (use true, false, or "auto")');
       }
       next.fastMode = normalized;
     }
@@ -444,11 +444,7 @@ export async function projectSessionsPatchEntry(params: {
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
-      if (normalized === "off") {
-        delete next.responseUsage;
-      } else {
-        next.responseUsage = normalized;
-      }
+      next.responseUsage = normalized;
     }
   }
 

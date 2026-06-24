@@ -573,13 +573,13 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
         skip_entity_detection: true,
       },
     });
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b><br><b>🛠️ Exec</b>", {
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
       parse_mode: "HTML",
     });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
@@ -587,7 +587,7 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
         skip_entity_detection: true,
       },
     });
@@ -596,10 +596,68 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(
       123,
       17,
-      "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
       { parse_mode: "HTML" },
     );
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("sends marked progress rich previews through HTML text transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec\n• Checking files",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+      { parse_mode: "HTML" },
+    );
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain preview text when rich preview HTML parsing fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling\n\n🛠️ Exec", {});
   });
 
   it("uses rich send and edit for previews when explicitly enabled", async () => {
@@ -630,6 +688,24 @@ describe("createTelegramDraftStream", () => {
       rich_message: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
     });
     expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    stream.update(oauthProfileText);
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: oauthProfileText,
+        skip_entity_detection: true,
+      },
+    });
   });
 
   it("keeps rich preview html out of plain preview gating", async () => {
@@ -843,16 +919,11 @@ describe("createTelegramDraftStream", () => {
 describe("draft stream initial message debounce", () => {
   const createMockApi = () => createMockDraftApi(async () => ({ message_id: 42 }));
 
-  function createDebouncedStream(
-    api: ReturnType<typeof createMockApi>,
-    minInitialChars = 30,
-    minInitialDelayMs?: number,
-  ) {
+  function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
     return createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
       minInitialChars,
-      minInitialDelayMs,
     });
   }
 
@@ -919,36 +990,6 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalled();
-    });
-
-    it("materializes a short first message after the initial delay", async () => {
-      const api = createMockApi();
-      const stream = createDebouncedStream(api, 30, 5000);
-
-      stream.update("Processing");
-      await stream.flush();
-      expect(api.sendMessage).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(5000);
-
-      expectPreviewSend(api, "Processing");
-    });
-
-    it("cancels a delayed first message when clear() removes the draft", async () => {
-      const api = createMockApi();
-      const stream = createDebouncedStream(api, 30, 5000);
-
-      stream.update("Processing");
-      await stream.flush();
-      expect(api.sendMessage).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(1);
-
-      await stream.clear();
-      expect(vi.getTimerCount()).toBe(0);
-
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(api.sendMessage).not.toHaveBeenCalled();
-      expect(api.editMessageText).not.toHaveBeenCalled();
     });
 
     it("works with longer text above threshold", async () => {

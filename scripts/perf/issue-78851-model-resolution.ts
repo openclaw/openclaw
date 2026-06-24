@@ -85,24 +85,24 @@ type Report = {
   cpuProfilePath?: string;
 };
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
+function parseFlagValue(flag: string, args = process.argv.slice(2)): string | undefined {
+  const index = args.indexOf(flag);
   if (index === -1) {
     return undefined;
   }
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) {
     throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
+function hasFlag(flag: string, args = process.argv.slice(2)): boolean {
+  return args.includes(flag);
 }
 
-function parsePositiveInt(flag: string, fallback: number): number {
-  const raw = parseFlagValue(flag);
+function parsePositiveInt(flag: string, fallback: number, args = process.argv.slice(2)): number {
+  const raw = parseFlagValue(flag, args);
   if (!raw) {
     return fallback;
   }
@@ -116,8 +116,8 @@ function parsePositiveInt(flag: string, fallback: number): number {
   return value;
 }
 
-function parseNonNegativeInt(flag: string, fallback: number): number {
-  const raw = parseFlagValue(flag);
+function parseNonNegativeInt(flag: string, fallback: number, args = process.argv.slice(2)): number {
+  const raw = parseFlagValue(flag, args);
   if (!raw) {
     return fallback;
   }
@@ -132,12 +132,21 @@ function parseNonNegativeInt(flag: string, fallback: number): number {
 }
 
 function validateCliArgs(args = process.argv.slice(2)): void {
+  const seenValueFlags = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new CliArgumentError(`${arg} requires a value`);
+      }
       index += 1;
       continue;
     }
@@ -145,21 +154,21 @@ function validateCliArgs(args = process.argv.slice(2)): void {
   }
 }
 
-function parseOptions(): Options {
-  validateCliArgs();
+function parseOptions(args = process.argv.slice(2)): Options {
+  validateCliArgs(args);
   return {
-    agentCount: parsePositiveInt("--agents", 8),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    cpuProfOutput: parseFlagValue("--cpu-prof-output"),
-    json: hasFlag("--json"),
-    keepTemp: hasFlag("--keep-temp"),
-    lookupsPerRun: parsePositiveInt("--lookups", 32),
-    modelsPerProvider: parsePositiveInt("--models-per-provider", 16),
-    output: parseFlagValue("--output"),
-    providers: parsePositiveInt("--providers", 48),
-    runs: parsePositiveInt("--runs", 8),
-    runtimeHooks: hasFlag("--runtime-hooks"),
-    warmup: parseNonNegativeInt("--warmup", 1),
+    agentCount: parsePositiveInt("--agents", 8, args),
+    cpuProfDir: parseFlagValue("--cpu-prof-dir", args),
+    cpuProfOutput: parseFlagValue("--cpu-prof-output", args),
+    json: hasFlag("--json", args),
+    keepTemp: hasFlag("--keep-temp", args),
+    lookupsPerRun: parsePositiveInt("--lookups", 32, args),
+    modelsPerProvider: parsePositiveInt("--models-per-provider", 16, args),
+    output: parseFlagValue("--output", args),
+    providers: parsePositiveInt("--providers", 48, args),
+    runs: parsePositiveInt("--runs", 8, args),
+    runtimeHooks: hasFlag("--runtime-hooks", args),
+    warmup: parseNonNegativeInt("--warmup", 1, args),
   };
 }
 
@@ -468,11 +477,13 @@ function printHuman(report: Report, cpuProfilePath?: string): void {
 }
 
 async function main(): Promise<void> {
-  if (hasFlag("--help") || hasFlag("-h")) {
+  const args = process.argv.slice(2);
+  validateCliArgs(args);
+  if (hasFlag("--help", args) || hasFlag("-h", args)) {
     printUsage();
     return;
   }
-  const options = parseOptions();
+  const options = parseOptions(args);
   const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-issue-78851-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   await mkdir(workspaceDir, { recursive: true });

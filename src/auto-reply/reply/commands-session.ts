@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -39,7 +39,7 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
-  resolveResponseUsageMode,
+  resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
@@ -352,24 +352,40 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  if (rawArgs && !requested) {
+  const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+  if (rawArgs && !requested && !isReset) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|reset|cost" },
     };
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (isReset) {
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      delete targetSessionEntry.responseUsage;
+      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage footer: reset to default." },
+    };
+  }
+
+  const replyChannel = params.command.channel;
   const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
+  const current = resolveEffectiveResponseUsage(
+    currentRaw,
+    params.cfg.messages?.responseUsage,
+    replyChannel,
+  );
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete targetSessionEntry.responseUsage;
-    } else {
-      targetSessionEntry.responseUsage = next;
-    }
+    targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
@@ -411,17 +427,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       agentId: sessionAgentId,
       sessionEntry: targetSessionEntry,
     });
-    const suffix =
-      state.source === "agent"
-        ? " (agent)"
-        : state.source === "config"
-          ? " (config)"
-          : state.source === "default"
-            ? " (default)"
-            : "";
     return {
       shouldContinue: false,
-      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+      reply: {
+        text: formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      },
     };
   }
 
@@ -441,7 +456,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
     };
   }
 
@@ -452,7 +467,12 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
 
   return {
     shouldContinue: false,
-    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+    reply: {
+      text:
+        nextMode === "auto"
+          ? "⚙️ Fast mode set to auto."
+          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+    },
   };
 };
 

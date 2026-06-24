@@ -403,7 +403,7 @@ function parseArgs(argv: string[]): {
     }
     if (arg === "--repo-root") {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--repo-root expects a path");
       }
       repoRoot = value;

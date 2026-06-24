@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "./qa-otel-smoke-runtime.js";
@@ -147,6 +148,22 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
   });
 
+  it("rejects duplicate OTEL smoke CLI options", () => {
+    const duplicateCases = [
+      ["--collector", ["--collector", "local", "--collector", "docker"]],
+      ["--logs-exporter", ["--logs-exporter", "otlp", "--logs-exporter", "stdout"]],
+      ["--output-dir", ["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]],
+      ["--provider-mode", ["--provider-mode", "mock-openai", "--provider-mode", "live-frontier"]],
+      ["--scenario", ["--scenario", "custom-one", "--scenario", "custom-two"]],
+      ["--model", ["--model", "openai/gpt-5.5", "--model", "openai/gpt-5.4"]],
+      ["--alt-model", ["--alt-model", "openai/gpt-5.5", "--alt-model", "openai/gpt-5.4"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => testing.parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("selects the matching scenario for the requested log exporter", () => {
     expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
     expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
@@ -169,6 +186,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
         .scenarioId,
     ).toBe("custom-stdout-smoke");
+  });
+
+  it("uses unique default output dirs", () => {
+    const firstOutputDir = testing.parseArgs([]).outputDir;
+    const secondOutputDir = testing.parseArgs([]).outputDir;
+
+    expect(path.dirname(firstOutputDir)).toBe(path.join(".artifacts", "qa-e2e"));
+    expect(path.basename(firstOutputDir)).toMatch(/^otel-smoke-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(testing.parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("parses body-size limit env values as strict positive integers", () => {
@@ -662,6 +691,16 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
+  it("clamps oversized QA suite child timers before scheduling", async () => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", "setTimeout(() => process.exit(0), 25);"],
+      { stdio: "ignore" },
+    );
+
+    await expect(testing.waitForChild(child, MAX_TIMER_TIMEOUT_MS + 1, 100)).resolves.toBe(0);
+  });
+
   it("uses taskkill for Windows QA suite timeout cleanup", () => {
     const kill = vi.fn();
     const runTaskkill = vi.fn(() => ({ status: 0 }));
@@ -680,6 +719,47 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("moves Docker collector telemetry off the default host port", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+    let writtenConfig = "";
+    const stopDockerContainer = vi.fn(async () => {});
+    const removePath = vi.fn(async () => {});
+    const ports = [4318, 4318, 45679];
+
+    const collector = await testing.startDockerOtelCollector(4317, {
+      mkdtemp: async () => "/tmp/openclaw-otel-collector-test",
+      platform: "linux",
+      randomUUID: () => "00000000-0000-4000-8000-000000000000",
+      reserveLocalPort: async () => ports.shift() ?? 49999,
+      rm: removePath as never,
+      spawn: vi.fn(() => child) as never,
+      stopDockerContainer,
+      waitForLocalPort: async () => {},
+      writeFile: async (_path, config) => {
+        writtenConfig = String(config);
+      },
+    });
+
+    expect(writtenConfig).toContain("endpoint: 127.0.0.1:4318");
+    expect(writtenConfig).toContain("telemetry:");
+    expect(writtenConfig).toContain("address: 127.0.0.1:45679");
+    expect(writtenConfig).not.toContain("address: :8888");
+
+    await collector.close();
+    expect(stopDockerContainer).toHaveBeenCalledWith(
+      "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
+    );
+    expect(removePath).toHaveBeenCalledWith("/tmp/openclaw-otel-collector-test", {
+      force: true,
+      recursive: true,
+    });
+  });
+
   it("cleans Docker collector containers and temp config after readiness failures", async () => {
     const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-"));
     const collectorDir = path.join(tempRoot, "collector");
@@ -690,6 +770,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
     const stopDockerContainer = vi.fn(async () => {});
+    const ports = [4318, 45679];
 
     try {
       await expect(
@@ -699,7 +780,7 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => 4318,
+          reserveLocalPort: async () => ports.shift() ?? 49999,
           spawn: vi.fn(() => child) as never,
           stopDockerContainer,
           waitForLocalPort: async () => {
@@ -726,6 +807,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     };
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
+    const ports = [4318, 45679];
 
     try {
       let thrown: unknown;
@@ -736,7 +818,7 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => 4318,
+          reserveLocalPort: async () => ports.shift() ?? 49999,
           spawn: vi.fn(() => child) as never,
           stopDockerContainer: vi.fn(async () => {}),
           waitForLocalPort: async (_port, _timeout, readFailure) => {

@@ -29,6 +29,7 @@ const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
+const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -119,7 +120,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
         }
       }
     }
-    return runtime || undefined;
+    return runtime === "claude-cli" ? runtime : undefined;
   },
 }));
 
@@ -129,6 +130,11 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
+}));
+
+vi.mock("./harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
+    ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -455,6 +461,7 @@ describe("runBtwSideQuestion", () => {
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
+    ensureSelectedAgentHarnessPluginMock.mockReset();
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
@@ -833,6 +840,55 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Direct fallback answer." });
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads a cold Copilot harness before selecting the /btw provider fallback", async () => {
+    let loaded = false;
+    ensureSelectedAgentHarnessPluginMock.mockImplementation(async () => {
+      if (loaded) {
+        return;
+      }
+      loaded = true;
+      registerAgentHarness({
+        id: "copilot",
+        label: "Copilot test harness",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+      });
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-4o",
+      api: "openai-completions",
+    });
+    mockDoneAnswer("Copilot fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/gpt-4o": { agentRuntime: { id: "copilot" } },
+            },
+          },
+        },
+      } as never,
+      provider: "github-copilot",
+      model: "gpt-4o",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Copilot fallback answer." });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: expect.any(Object),
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {

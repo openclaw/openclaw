@@ -4,6 +4,7 @@ import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalizatio
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -161,13 +162,6 @@ function formatScopes(scopes: string[]): string {
 
 function formatRoles(roles: string[]): string {
   return roles.length > 0 ? roles.join(", ") : "none";
-}
-
-function quoteCliArg(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function formatCliArgs(args: string[]): string {
