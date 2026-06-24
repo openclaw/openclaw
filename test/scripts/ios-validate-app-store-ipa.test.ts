@@ -1,8 +1,17 @@
 // iOS IPA validation tests cover the App Store upload gate without real signing assets.
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
@@ -104,15 +113,77 @@ if (Array.isArray(current)) {
   );
 }
 
-function writeValidFixture(
+function writeFakeUnzip(filePath: string): void {
+  writeExecutable(
+    filePath,
+    `#!/usr/bin/env node
+const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { createRequire } = require("node:module");
+const path = require("node:path");
+const requireFromRepo = createRequire(path.join(process.cwd(), "package.json"));
+const JSZip = requireFromRepo("jszip");
+
+const args = process.argv.slice(2);
+let ipaPath = "";
+let outputDir = "";
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "-d") {
+    outputDir = args[++i] || "";
+  } else if (!arg.startsWith("-")) {
+    ipaPath = arg;
+  }
+}
+if (!ipaPath || !outputDir) process.exit(2);
+
+(async () => {
+  const zip = await JSZip.loadAsync(readFileSync(ipaPath));
+  for (const [entryPath, entry] of Object.entries(zip.files)) {
+    const outputPath = path.join(outputDir, entryPath);
+    if (entry.dir) {
+      mkdirSync(outputPath, { recursive: true });
+      continue;
+    }
+    mkdirSync(path.dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, await entry.async("nodebuffer"));
+  }
+})().catch(() => process.exit(1));
+`,
+  );
+}
+
+async function writeIpaFixture(root: string): Promise<string> {
+  const zip = new JSZip();
+
+  function addTree(dirPath: string, zipPath: string): void {
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      const sourcePath = path.join(dirPath, entry.name);
+      const entryZipPath = `${zipPath}/${entry.name}`;
+      if (entry.isDirectory()) {
+        addTree(sourcePath, entryZipPath);
+      } else if (entry.isFile()) {
+        zip.file(entryZipPath, readFileSync(sourcePath), { date: new Date(0) });
+      }
+    }
+  }
+
+  addTree(path.join(root, "Payload"), "Payload");
+  const ipaPath = path.join(root, "OpenClaw.ipa");
+  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  writeFileSync(ipaPath, buffer);
+  return ipaPath;
+}
+
+async function writeValidFixture(
   root: string,
   options: { pushMode?: string; legacyKey?: boolean } = {},
-): {
+): Promise<{
   ipaPath: string;
   plistBuddy: string;
   codesign: string;
   security: string;
-} {
+  unzip: string;
+}> {
   const binDir = path.join(root, "bin");
   const payloadDir = path.join(root, "Payload");
   const appDir = path.join(payloadDir, "OpenClaw.app");
@@ -172,6 +243,8 @@ function writeValidFixture(
 
   const plistBuddy = path.join(binDir, "plistbuddy");
   writeFakePlistBuddy(plistBuddy);
+  const unzip = path.join(binDir, "unzip");
+  writeFakeUnzip(unzip);
   const codesign = path.join(binDir, "codesign");
   writeExecutable(
     codesign,
@@ -189,9 +262,8 @@ cat "${profilePath}"
 `,
   );
 
-  const ipaPath = path.join(root, "OpenClaw.ipa");
-  execFileSync("zip", ["-qry", ipaPath, "Payload"], { cwd: root });
-  return { ipaPath, plistBuddy, codesign, security };
+  const ipaPath = await writeIpaFixture(root);
+  return { ipaPath, plistBuddy, codesign, security, unzip };
 }
 
 function runValidator(fixture: {
@@ -199,6 +271,7 @@ function runValidator(fixture: {
   plistBuddy: string;
   codesign: string;
   security: string;
+  unzip: string;
 }): { ok: boolean; stdout: string; stderr: string } {
   try {
     const stdout = execFileSync(BASH_BIN, [...bashArgs(SCRIPT), "--ipa", fixture.ipaPath], {
@@ -208,6 +281,7 @@ function runValidator(fixture: {
         IOS_VALIDATE_PLIST_BUDDY_BIN: fixture.plistBuddy,
         IOS_VALIDATE_CODESIGN_BIN: fixture.codesign,
         IOS_VALIDATE_SECURITY_BIN: fixture.security,
+        IOS_VALIDATE_UNZIP_BIN: fixture.unzip,
       },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -228,10 +302,10 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     }
   });
 
-  it("accepts an App Store IPA with appStore mode and production entitlements", () => {
+  it("accepts an App Store IPA with appStore mode and production entitlements", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = writeValidFixture(root);
+    const fixture = await writeValidFixture(root);
 
     const result = runValidator(fixture);
 
@@ -239,10 +313,10 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     expect(result.stdout).toContain("Validated iOS App Store IPA");
   });
 
-  it("rejects an IPA that was exported with a non-App-Store push mode", () => {
+  it("rejects an IPA that was exported with a non-App-Store push mode", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = writeValidFixture(root, { pushMode: "localProduction" });
+    const fixture = await writeValidFixture(root, { pushMode: "localProduction" });
 
     const result = runValidator(fixture);
 
@@ -250,10 +324,10 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     expect(result.stderr).toContain("push mode mismatch");
   });
 
-  it("rejects legacy independently selectable production push keys", () => {
+  it("rejects legacy independently selectable production push keys", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = writeValidFixture(root, { legacyKey: true });
+    const fixture = await writeValidFixture(root, { legacyKey: true });
 
     const result = runValidator(fixture);
 

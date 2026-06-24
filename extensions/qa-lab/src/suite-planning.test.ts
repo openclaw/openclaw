@@ -86,6 +86,22 @@ describe("qa suite planning helpers", () => {
     }
   });
 
+  it("creates unique default suite output dirs inside the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-default-root-"));
+    try {
+      const firstDir = await resolveQaSuiteOutputDir(repoRoot);
+      const secondDir = await resolveQaSuiteOutputDir(repoRoot);
+
+      expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      expect(path.basename(firstDir)).toMatch(/^suite-[a-z0-9]+-[a-f0-9]{8}$/u);
+      expect(secondDir).not.toBe(firstDir);
+      await expect(lstat(firstDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
+      await expect(lstat(secondDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked suite output dirs that escape the repo root", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-root-"));
     const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-outside-"));

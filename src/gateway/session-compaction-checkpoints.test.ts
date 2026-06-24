@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
+  createFileBackedCompactionCheckpointStore,
   forkCompactionCheckpointTranscriptAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
@@ -91,7 +92,10 @@ function checkpointConfig(storePath: string): OpenClawConfig {
 async function writeSessionStore(
   storePath: string,
   sessionKey: string,
-  entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] },
+  entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] } & Record<
+    string,
+    unknown
+  >,
 ): Promise<void> {
   await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf-8");
 }
@@ -627,6 +631,79 @@ describe("session-compaction-checkpoints", () => {
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "checkpoint source",
     ]);
+  });
+
+  test("file-backed checkpoint store restores from the stored transcript boundary", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "checkpoint source",
+      timestamp: Date.now(),
+    });
+    const checkpointLeafId = requireNonEmptyString(
+      session.getLeafId(),
+      "checkpoint leaf id missing",
+    );
+    session.appendMessage({
+      role: "assistant",
+      content: "future turn",
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      timestamp: Date.now(),
+    } as unknown as AssistantMessage);
+
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const storePath = path.join(dir, "sessions.json");
+    await writeSessionStore(storePath, MAIN_SESSION_KEY, {
+      sessionId: "current-session",
+      sessionFile,
+      updatedAt: Date.now() - 1,
+      totalTokens: 200,
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-1",
+          sessionKey: MAIN_SESSION_KEY,
+          sessionId: "stored-session",
+          createdAt: Date.now(),
+          reason: "manual",
+          tokensAfter: 45,
+          preCompaction: { sessionId: "pre-session", leafId: "pre-leaf" },
+          postCompaction: {
+            sessionId: "post-session",
+            sessionFile,
+            leafId: checkpointLeafId,
+          },
+        },
+      ],
+    });
+    const store = createFileBackedCompactionCheckpointStore();
+    const restored = await store.restoreCheckpointSession({
+      storePath,
+      sessionKey: MAIN_SESSION_KEY,
+      checkpointId: "checkpoint-1",
+    });
+
+    if (restored.status !== "created") {
+      throw new Error("expected restored checkpoint transcript");
+    }
+    expect(restored.entry.totalTokens).toBe(45);
+    const restoredSessionFile = requireNonEmptyString(
+      restored.entry.sessionFile,
+      "restored session file missing",
+    );
+    const messages = SessionManager.open(restoredSessionFile, dir).buildSessionContext().messages;
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "checkpoint source",
+    ]);
+    const nextStore = await readSessionStore<{ sessionFile?: string; totalTokens?: number }>(
+      storePath,
+    );
+    expect(nextStore[MAIN_SESSION_KEY]?.sessionFile).toBe(restored.entry.sessionFile);
+    expect(nextStore[MAIN_SESSION_KEY]?.totalTokens).toBe(45);
   });
 
   test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {

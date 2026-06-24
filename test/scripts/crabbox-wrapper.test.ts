@@ -1183,6 +1183,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("/Applications/Xcode-26*.app");
     expect(remoteCommand).toContain('sudo xcode-select -s "$openclaw_developer"');
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("xcodebuild -version");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(
       remoteCommand,
@@ -1204,6 +1206,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("pnpm --version >&2");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expectGroupedShellCommand(remoteCommand, "pnpm mac:package");
   });
 
@@ -1222,7 +1225,333 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i pnpm mac:package");
   });
 
-  it("preflights Swift for raw AWS macOS shell-launched package scripts", () => {
+  it("preserves sanitized env package script commands when JS tooling is needed", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "env",
+        "-i",
+        "bash",
+        "scripts/package-mac-app.sh",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(
+      remoteCommand,
+      "openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+    );
+  });
+
+  it("does not bootstrap JS tooling for env package scripts behind command", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--",
+        "command",
+        "env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        "bash",
+        "scripts/package-mac-app.sh",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
+  });
+
+  it("does not bootstrap JS tooling for nested env package scripts that cannot be shimmed", () => {
+    for (const args of [
+      ["--", "bash", "-lc", "env -i PATH=/usr/bin:/bin bash scripts/package-mac-app.sh"],
+      ["--shell", "--", "bash -lc 'env -i PATH=/usr/bin:/bin bash scripts/package-mac-app.sh'"],
+    ]) {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--target", "macos", ...args],
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+      expect(result.status).toBe(0);
+      expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    }
+  });
+
+  it("does not bootstrap Corepack for nested env pnpm commands that cannot be shimmed", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toBe("bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'");
+  });
+
+  it("preserves sanitized env shell package scripts when JS tooling is needed", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "env -i bash scripts/package-mac-app.sh",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(
+      remoteCommand,
+      "openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+    );
+  });
+
+  it("preserves shell syntax when sanitizing env package scripts", () => {
+    for (const [shellCommand, expectedCommand] of [
+      [
+        "env -i PATH=$PATH bash scripts/package-mac-app.sh > out.log",
+        "openclaw_crabbox_env -i PATH=$PATH bash scripts/package-mac-app.sh > out.log",
+      ],
+      [
+        "env -i bash scripts/package-mac-app.sh >out.log 2>&1",
+        "openclaw_crabbox_env -i bash scripts/package-mac-app.sh >out.log 2>&1",
+      ],
+    ]) {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+      expect(result.status).toBe(0);
+      expect(output.args).toContain("--shell");
+      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+      expect(remoteCommand).toContain("pnpm --version >&2");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+      expect(remoteCommand).not.toContain("'>'");
+      expectGroupedShellCommand(remoteCommand, expectedCommand);
+    }
+  });
+
+  it("preserves trailing shell segments when sanitizing env package scripts", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "env -i bash scripts/package-mac-app.sh && echo done",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(
+      remoteCommand,
+      "openclaw_crabbox_env -i bash scripts/package-mac-app.sh && echo done",
+    );
+  });
+
+  it("preserves prefixed shell segments when sanitizing env package scripts", () => {
+    for (const [shellCommand, expectedCommand] of [
+      [
+        "set -e; env -i bash scripts/package-mac-app.sh",
+        "set -e; openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+      [
+        "time env -i bash scripts/package-mac-app.sh",
+        "time openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+    ]) {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+      expect(result.status).toBe(0);
+      expect(output.args).toContain("--shell");
+      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+      expect(remoteCommand).toContain("pnpm --version >&2");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+      expectGroupedShellCommand(remoteCommand, expectedCommand);
+    }
+  });
+
+  it("preserves grouped shell segments when sanitizing env package scripts", () => {
+    for (const [shellCommand, expectedCommand] of [
+      [
+        "(env -i bash scripts/package-mac-app.sh)",
+        "(openclaw_crabbox_env -i bash scripts/package-mac-app.sh)",
+      ],
+      [
+        "{ env -i bash scripts/package-mac-app.sh; }",
+        "{ openclaw_crabbox_env -i bash scripts/package-mac-app.sh; }",
+      ],
+    ]) {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+      expect(result.status).toBe(0);
+      expect(output.args).toContain("--shell");
+      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+      expect(remoteCommand).toContain("pnpm --version >&2");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+      expectGroupedShellCommand(remoteCommand, expectedCommand);
+    }
+  });
+
+  it("does not rewrite heredoc bodies when sanitizing env package scripts", () => {
+    const shellCommand = [
+      "env -i bash scripts/package-mac-app.sh",
+      "cat <<EOF",
+      "env -i bash scripts/package-mac-app.sh",
+      "EOF",
+    ].join("\n");
+    const expectedCommand = [
+      "openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      "cat <<EOF",
+      "env -i bash scripts/package-mac-app.sh",
+      "EOF",
+    ].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(remoteCommand, expectedCommand);
+    expect(remoteCommand).not.toContain("cat <<EOF\nopenclaw_crabbox_env");
+  });
+
+  it("preserves control-flow shell segments when sanitizing env package scripts", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "if true; then env -i bash scripts/package-mac-app.sh; fi",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(
+      remoteCommand,
+      "if true; then openclaw_crabbox_env -i bash scripts/package-mac-app.sh; fi",
+    );
+  });
+
+  it("preserves assignment prefixes when sanitizing env package scripts", () => {
+    for (const [shellCommand, expectedCommand] of [
+      [
+        "FOO=1 env -i bash scripts/package-mac-app.sh",
+        "FOO=1 openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+      [
+        "FOO= env -i bash scripts/package-mac-app.sh",
+        "FOO= openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+      [
+        "FOO='a b' env -i bash scripts/package-mac-app.sh",
+        "FOO='a b' openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+      [
+        "PATH=/usr/bin:/bin env -i bash scripts/package-mac-app.sh",
+        "PATH=/usr/bin:/bin openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
+      ],
+    ]) {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+      expect(result.status).toBe(0);
+      expect(output.args).toContain("--shell");
+      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+      expect(remoteCommand).toContain("pnpm --version >&2");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+      expect(remoteCommand).toContain('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
+      expectGroupedShellCommand(remoteCommand, expectedCommand);
+    }
+  });
+
+  it("preflights Swift and JS tooling for raw AWS macOS shell-launched package scripts", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/package-mac-app.sh"],
@@ -1232,9 +1561,57 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(remoteCommand, "bash scripts/package-mac-app.sh");
+  });
+
+  it("preflights Swift and JS tooling for raw AWS macOS dist package scripts", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/package-mac-dist.sh"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(remoteCommand, "bash scripts/package-mac-dist.sh");
+  });
+
+  it("preflights Swift and JS tooling for raw AWS macOS restart scripts", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/restart-mac.sh"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expectGroupedShellCommand(remoteCommand, "bash scripts/restart-mac.sh");
+  });
+
+  it("keeps raw AWS macOS build-and-run scripts Swift-only", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "bash", "scripts/build-and-run-mac.sh"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "bash scripts/package-mac-app.sh");
+    expectGroupedShellCommand(remoteCommand, "bash scripts/build-and-run-mac.sh");
   });
 
   it("does not preflight Swift for raw AWS macOS commands that only mention package scripts", () => {
@@ -1417,7 +1794,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("openclaw_crabbox_env");
     expect(remoteCommand).not.toContain("export -f env openclaw_crabbox_env");
     expect(remoteCommand).not.toContain('env() { openclaw_crabbox_env "$@"; };');
-    expect(remoteCommand).toContain("PATH=$PATH:${1#PATH=}");
+    expect(remoteCommand).toContain("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}:${1#PATH=}");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(
       remoteCommand,
@@ -1510,7 +1887,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain(
-      'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=$PATH"); fi;',
+      'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}"); fi;',
     );
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i pnpm --version");
   });
@@ -1860,6 +2237,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
     expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Xcode 26.x");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
 
@@ -3720,6 +4098,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).args).toContain("--reclaim");
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 

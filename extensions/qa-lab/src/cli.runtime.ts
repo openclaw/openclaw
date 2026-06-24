@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
   resolveOpenClawCrablineChannelDriverSelection,
-} from "crabline";
+} from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,6 +17,7 @@ import {
   type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
@@ -407,7 +408,7 @@ async function runQaParityPreflight(params: {
     ".artifacts",
     "qa-e2e",
     "preflight",
-    `suite-${Date.now().toString(36)}`,
+    `suite-${createQaArtifactRunId()}`,
   );
   const result = await runQaSuiteWithInfraRetry(() =>
     runQaFlowSuiteFromRuntime({
@@ -1056,7 +1057,7 @@ export async function runQaParityReportCommand(opts: {
   }
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   if (opts.runtimeAxis === true) {
@@ -1149,7 +1150,7 @@ export async function runQaConfidenceReportCommand(opts: {
   const artifactRoot = path.resolve(repoRoot, opts.artifactRoot ?? ".");
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
   const manifest = await readQaConfidenceManifestFile(manifestPath);
   const reportPayload = await buildQaConfidenceReport({
@@ -1178,7 +1179,7 @@ export async function runQaConfidenceSelfTestCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-self-test-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-self-test-${createQaArtifactRunId()}`);
   const result = await writeQaConfidenceSelfTestArtifacts({ outputDir });
   process.stdout.write(`QA confidence self-test report: ${result.reportPath}\n`);
   process.stdout.write(`QA confidence self-test summary: ${result.summaryPath}\n`);
@@ -1268,7 +1269,7 @@ export async function runQaJsonlReplayCommand(opts: {
   const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
   const result = await runJsonlReplay(
     {

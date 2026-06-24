@@ -50,7 +50,6 @@ import {
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
-  resolveSubagentRunOrphanReason,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -85,6 +84,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
+  resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
   type SubagentSessionStoreCache,
@@ -912,7 +912,6 @@ async function sweepSubagentRuns() {
         if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
           const orphanReason = resolveSubagentRunOrphanReason({
             entry,
-            storeCache,
           });
           if (orphanReason) {
             if (

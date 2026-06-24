@@ -19,7 +19,6 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.1"),
-        .package(url: "https://github.com/gonzalezreal/textual", exact: "0.3.1"),
     ],
     targets: [
         .target(
@@ -45,10 +44,6 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
-                .product(
-                    name: "Textual",
-                    package: "textual",
-                    condition: .when(platforms: [.macOS, .iOS])),
             ],
             path: "Sources/OpenClawChatUI",
             swiftSettings: [

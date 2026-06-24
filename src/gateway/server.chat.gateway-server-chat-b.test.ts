@@ -9,6 +9,7 @@ import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.type
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -1992,7 +1993,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       const sessionId = "sess-claude-cli-backfill";
-      const originalHome = process.env.HOME;
+      const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
       const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
@@ -2030,7 +2031,7 @@ describe("gateway server chat", () => {
         ].join("\n"),
         "utf-8",
       );
-      process.env.HOME = homeDir;
+      setTestEnvValue("HOME", homeDir);
       try {
         await writeSessionStore({
           entries: {
@@ -2058,11 +2059,7 @@ describe("gateway server chat", () => {
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
-        if (originalHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = originalHome;
-        }
+        homeEnvSnapshot.restore();
       }
     });
   });

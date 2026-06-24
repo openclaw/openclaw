@@ -251,9 +251,9 @@ levels:
     label: Stable
     meaning: Recommended path for normal users. Failures are treated as regressions.
     promotion_bar: Release gate, doctor/troubleshooting path, broad docs, and repeated real-world proof.
-  - id: lovable
+  - id: clawesome
     code: M5
-    label: Lovable
+    label: Clawesome
     meaning: Polished, delightful, well-instrumented, and competitive with the best comparable workflow.
     promotion_bar: Stable plus user scorecard pass across representative users.
 surfaces:
