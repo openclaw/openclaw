@@ -116,6 +116,41 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
   });
 
+  it("describes channel chat context and intro with channel wording throughout", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+    });
+    const toolOnlyContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const intro = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      defaultActivation: "always",
+      silentToken: "NO_REPLY",
+    });
+    const combinedPrompt = [context, toolOnlyContext, intro].join(" ");
+
+    expect(combinedPrompt).toContain("You are in a Mattermost channel.");
+    expect(combinedPrompt).toContain("Your text replies are automatically sent to this channel.");
+    expect(combinedPrompt).toContain("this same channel/thread");
+    expect(combinedPrompt).toContain("Be a good channel participant");
+    expect(combinedPrompt).toContain("directly requested channel task");
+    expect(combinedPrompt).toContain("If no visible channel response is needed");
+    expect(combinedPrompt).toContain("Activation: always-on (you receive every channel message).");
+    for (const forbiddenFragment of [
+      "Mattermost group chat",
+      "this group chat",
+      "same group",
+      "group participant",
+      "group response",
+      "group message",
+    ]) {
+      expect(combinedPrompt).not.toContain(forbiddenFragment);
+    }
+  });
+
   it("gates group silent-token instructions on the resolved silent reply policy", () => {
     const allowed = groups.buildGroupChatContext({
       sessionCtx: { Provider: "whatsapp" },
@@ -175,7 +210,7 @@ describe("group runtime loading", () => {
 
     expect(context).toContain("You are in a Mattermost channel.");
     expect(context).toContain("Your text replies are automatically sent to this channel.");
-    expect(context).toContain("do not use the message tool to send to this same destination");
+    expect(context).toContain("do not use the message tool to send to this same channel");
     expect(context).toContain("attachments to this same channel/thread");
     expect(context).not.toContain("group chat");
   });

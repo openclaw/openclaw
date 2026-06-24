@@ -221,8 +221,41 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channel" {
-  return normalizeOptionalLowercaseString(chatType) === "channel" ? "channel" : "group chat";
+function resolveSharedChatPromptLabels(rawChatType?: string | null): {
+  conversation: string;
+  sameReplyTarget: string;
+  sameAttachmentTarget: string;
+  participant: string;
+  requestedTask: string;
+  visibleUpdate: string;
+  visibleResponse: string;
+  destination: string;
+  message: string;
+} {
+  if (normalizeOptionalLowercaseString(rawChatType) === "channel") {
+    return {
+      conversation: "channel",
+      sameReplyTarget: "same channel",
+      sameAttachmentTarget: "same channel/thread",
+      participant: "channel participant",
+      requestedTask: "channel task",
+      visibleUpdate: "channel-visible updates",
+      visibleResponse: "channel response",
+      destination: "this channel",
+      message: "channel message",
+    };
+  }
+  return {
+    conversation: "group chat",
+    sameReplyTarget: "same destination",
+    sameAttachmentTarget: "same group/topic",
+    participant: "group participant",
+    requestedTask: "group-chat task",
+    visibleUpdate: "group-visible updates",
+    visibleResponse: "group response",
+    destination: "the group",
+    message: "group message",
+  };
 }
 
 /**
@@ -240,13 +273,12 @@ export function buildGroupChatContext(params: {
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
+  const labels = resolveSharedChatPromptLabels(params.sessionCtx.ChatType);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
-  const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
-  const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
 
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
+  lines.push(`You are in a ${providerLabel} ${labels.conversation}.`);
   if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
     lines.push(
       `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
@@ -254,15 +286,15 @@ export function buildGroupChatContext(params: {
   }
   if (messageToolOnly) {
     lines.push(
-      `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
+      `Normal final replies are private and are not automatically sent to this ${labels.conversation}. To post visible output here, use the message tool with action=send; the target defaults to this ${labels.conversation}.`,
     );
   } else {
     lines.push(
-      `Your text replies are automatically sent to ${destinationLabel}. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
+      `Your text replies are automatically sent to this ${labels.conversation}. For ordinary text, do not use the message tool to send to this ${labels.sameReplyTarget}; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this ${labels.sameAttachmentTarget}.`,
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    `Be a good ${labels.participant}: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.`,
   );
   const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
   lines.push(
@@ -273,13 +305,13 @@ export function buildGroupChatContext(params: {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
-    "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
+    `When subagent or session-spawn tools are available and a directly requested ${labels.requestedTask} will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise ${labels.visibleUpdate} when they add value.`,
   );
   const canUseSilentReply =
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
+      `If no visible ${labels.visibleResponse} is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${labels.destination}.`,
     );
   }
   if (canUseSilentReply) {
@@ -342,7 +374,7 @@ export function resolveGroupSilentReplyBehavior(params: {
   };
 }
 
-/** Builds the channel-specific group intro injected into the system prompt. */
+/** Builds the channel-specific shared-chat intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -352,9 +384,10 @@ export function buildGroupIntro(params: {
   silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
+  const labels = resolveSharedChatPromptLabels(params.sessionCtx.ChatType);
   const activationLine =
     activation === "always"
-      ? "Activation: always-on (you receive every group message)."
+      ? `Activation: always-on (you receive every ${labels.message}).`
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   return `${activationLine} Address the specific sender noted in the message context.`;
 }

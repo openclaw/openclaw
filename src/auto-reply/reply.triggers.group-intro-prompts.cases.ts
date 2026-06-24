@@ -20,6 +20,8 @@ export function registerGroupIntroPromptCases(): void {
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const telegramGroupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
+    const channelParticipationNote =
+      "Be a good channel participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
@@ -92,14 +94,21 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "mattermost",
         },
         expected: [
-          "You are in a Mattermost channel.",
-          "Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
-          groupParticipationNote,
+          "You are in a Mattermost channel. Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same channel; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+          channelParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
-          "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
+          "Activation: always-on (you receive every channel message). Address the specific sender noted in the message context.",
         ],
-        forbidden: ["Mattermost group chat"],
+        forbidden: [
+          "Mattermost group chat",
+          "this group chat",
+          "same group",
+          "group participant",
+          "group response",
+          "group message",
+        ],
+        defaultActivation: "always",
       },
       {
         name: "whatsapp-always-on",
