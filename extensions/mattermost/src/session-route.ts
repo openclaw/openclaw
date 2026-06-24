@@ -34,12 +34,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     channel: "mattermost",
     accountId: params.accountId,
     peer: {
-      kind: isUser ? "direct" : isGroup ? "group" : "channel",
+      kind: isUser ? "direct" : "channel",
       id: rawId,
     },
     chatType: isUser ? "direct" : isGroup ? "group" : "channel",
-    from: isUser ? `mattermost:${rawId}` : isGroup ? `mattermost:group:${rawId}` : `mattermost:channel:${rawId}`,
-    to: isUser ? `user:${rawId}` : isGroup ? `group:${rawId}` : `channel:${rawId}`,
+    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
+    to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
   return buildThreadAwareOutboundSessionRoute({
     route: baseRoute,
