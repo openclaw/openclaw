@@ -9,15 +9,27 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
   resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
+import type { GatewaySshTunnelConnection } from "../gateway/ssh-transport.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+type StartGatewayRemoteSshTunnelMock = () => Promise<GatewaySshTunnelConnection | null>;
+
 const sshTransportMocks = vi.hoisted(() => ({
-  startGatewayRemoteSshTunnel: vi.fn(async () => ({
-    url: "ws://127.0.0.1:41001",
-    urlSource: "ssh tunnel",
-    tunnel: { stop: vi.fn(async () => undefined) },
-  })),
+  startGatewayRemoteSshTunnel: vi.fn<StartGatewayRemoteSshTunnelMock>(async () => null),
 }));
+
+function mockSshTunnel(
+  stop: () => Promise<void> = vi.fn(async () => undefined),
+): GatewaySshTunnelConnection["tunnel"] {
+  return {
+    parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+    localPort: 41001,
+    remotePort: 18789,
+    pid: 12345,
+    stderr: [],
+    stop,
+  };
+}
 
 vi.mock("../gateway/ssh-transport.js", () => ({
   startGatewayRemoteSshTunnel: sshTransportMocks.startGatewayRemoteSshTunnel,
@@ -132,11 +144,7 @@ describe("resolveGatewayConnection", () => {
     resolveConfigPath.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
     sshTransportMocks.startGatewayRemoteSshTunnel.mockReset();
-    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValue({
-      url: "ws://127.0.0.1:41001",
-      urlSource: "ssh tunnel",
-      tunnel: { stop: vi.fn(async () => undefined) },
-    });
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValue(null);
     resolveStateDir.mockImplementation(
       (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",
     );
@@ -380,6 +388,11 @@ describe("resolveGatewayConnection", () => {
       },
     };
     loadConfig.mockReturnValue(config);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: mockSshTunnel(),
+    });
 
     const result = await resolveGatewayConnection({});
 
@@ -408,7 +421,7 @@ describe("resolveGatewayConnection", () => {
     sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
       url: "ws://127.0.0.1:41001",
       urlSource: "ssh tunnel",
-      tunnel: { stop: stopTunnel },
+      tunnel: mockSshTunnel(stopTunnel),
     });
 
     await expect(resolveGatewayConnection({})).rejects.toThrow();
@@ -651,7 +664,7 @@ describe("GatewayChatClient", () => {
       sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
         url: "ws://127.0.0.1:41001",
         urlSource: "ssh tunnel",
-        tunnel: { stop: stopTunnel },
+        tunnel: mockSshTunnel(stopTunnel),
       });
       const { GatewayChatClient: ThrowingGatewayChatClient } = await import("./gateway-chat.js");
 
