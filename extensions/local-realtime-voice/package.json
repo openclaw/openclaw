@@ -5,6 +5,9 @@
   "description": "OpenClaw local realtime voice and dictation provider",
   "type": "module",
   "main": "./index.js",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

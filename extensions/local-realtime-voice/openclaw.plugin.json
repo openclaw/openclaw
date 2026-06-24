@@ -1,15 +1,15 @@
 {
   "id": "local-realtime-voice",
   "name": "Local Realtime Voice",
-  "description": "Local realtime voice assistant and dictation using Whisper STT, Kokoro TTS, and Ollama chat",
-  "activation": {
-    "onStartup": true
-  },
-  "enabledByDefault": false,
+  "description": "Local realtime voice (Whisper STT + Kokoro TTS) and dictation transcription",
   "contracts": {
     "realtimeVoiceProviders": ["local"],
     "realtimeTranscriptionProviders": ["local"]
   },
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -17,10 +17,6 @@
       "whisperBaseUrl": {
         "type": "string",
         "default": "http://127.0.0.1:8000"
-      },
-      "whisperModel": {
-        "type": "string",
-        "default": ""
       },
       "kokoroBaseUrl": {
         "type": "string",
@@ -37,9 +33,17 @@
       "chatModel": {
         "type": "string"
       },
-      "vadThreshold": {
+      "whisperModel": {
+        "type": "string",
+        "default": ""
+      },
+      "partialIntervalMs": {
         "type": "number",
-        "default": 100
+        "default": 2000
+      },
+      "audioChunkMs": {
+        "type": "number",
+        "default": 50
       },
       "silenceMs": {
         "type": "number",
@@ -49,13 +53,30 @@
         "type": "number",
         "default": 15000
       },
-      "partialIntervalMs": {
+      "vadThreshold": {
         "type": "number",
-        "default": 2000
+        "default": 100
       },
-      "audioChunkMs": {
-        "type": "number",
-        "default": 50
+      "useMainAgent": {
+        "type": "boolean",
+        "default": false,
+        "description": "Route voice turns through the main OpenClaw chat/agent loop instead of local Ollama"
+      },
+      "mainAgentSessionKey": {
+        "type": "string",
+        "default": "main"
+      },
+      "gatewayUrl": {
+        "type": "string",
+        "default": "ws://127.0.0.1:18789"
+      },
+      "voiceInstructions": {
+        "type": "string",
+        "default": "The user is speaking via a realtime voice session. Keep your reply concise and natural. Avoid long outputs unless asked; prefer summaries."
+      },
+      "gatewayToken": {
+        "type": "string",
+        "description": "Static gateway auth token (defaults to value in ~/.openclaw/openclaw.json if omitted)"
       }
     }
   }

@@ -38,19 +38,11 @@ docker run -d --name kokoro \
 
 ### 2. Install the plugin
 
-**Stock extension (if merged):**
-
-```bash
-openclaw plugins install @openclaw/local-realtime-voice
-```
-
-**From npm (Option B):**
-
 ```bash
 openclaw plugins install openclaw-local-realtime-voice
 ```
 
-**From a local path:**
+Or install from a local path:
 
 ```bash
 openclaw plugins install --link /path/to/openclaw-local-realtime-voice
@@ -61,6 +53,12 @@ openclaw plugins install --link /path/to/openclaw-local-realtime-voice
 ```bash
 openclaw config set talk.realtime.provider local
 openclaw config set plugins.entries.voice-call.config.streaming.provider local
+
+# Optional: route voice turns through the main OpenClaw agent loop
+# (so voice can use tools, sub-agents, file writes, etc.)
+openclaw config set talk.realtime.providers.local.useMainAgent true
+openclaw config set talk.realtime.providers.local.mainAgentSessionKey main
+openclaw config set talk.realtime.providers.local.voiceInstructions "The user is speaking via realtime voice. Keep replies short. You can use tools. Briefly summarize results."
 ```
 
 ### 4. Use it
@@ -78,8 +76,13 @@ All values are optional and default to local endpoints.
 | `whisperModel` | `""` | Specific Whisper model; empty uses the server default |
 | `kokoroBaseUrl` | `http://127.0.0.1:8880` | Kokoro TTS endpoint |
 | `kokoroVoice` | `af` | Kokoro voice |
-| `ollamaBaseUrl` | `http://127.0.0.1:11434` | Ollama API endpoint |
-| `chatModel` | primary Ollama model | Model used for assistant replies |
+| `ollamaBaseUrl` | `http://127.0.0.1:11434` | Ollama API endpoint (fallback mode only) |
+| `chatModel` | primary Ollama model | Model used for local fallback replies |
+| `useMainAgent` | `false` | Route voice turns to the main OpenClaw chat/agent loop |
+| `mainAgentSessionKey` | `main` | Session used for main-agent chat when `useMainAgent=true` |
+| `gatewayUrl` | `ws://127.0.0.1:18789` | Gateway WebSocket URL for main-agent mode |
+| `gatewayToken` | read from `~/.openclaw/openclaw.json` | Static auth token for main-agent mode |
+| `voiceInstructions` | see source | Prefix instruction sent with every voice turn in main-agent mode |
 | `vadThreshold` | `100` | Voice activity detection energy threshold |
 | `silenceMs` | `1200` | Silence before a voice turn ends |
 | `maxTurnMs` | `15000` | Maximum voice turn length |

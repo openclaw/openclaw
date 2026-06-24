@@ -2,8 +2,10 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import WebSocket from "ws";
 
 const PREFIX = "[local-realtime]";
 const log = (...args) => console.error(PREFIX, ...args);
@@ -24,6 +26,11 @@ function resolveConfig(rawConfig) {
     vadThreshold: rawConfig?.vadThreshold ?? 100,
     partialIntervalMs: rawConfig?.partialIntervalMs ?? 2000,
     audioChunkMs: rawConfig?.audioChunkMs ?? 50,
+    useMainAgent: rawConfig?.useMainAgent === true,
+    mainAgentSessionKey: rawConfig?.mainAgentSessionKey ?? "main",
+    gatewayUrl: rawConfig?.gatewayUrl ?? "ws://127.0.0.1:18789",
+    gatewayToken: rawConfig?.gatewayToken,
+    voiceInstructions: rawConfig?.voiceInstructions ?? "The user is speaking via a realtime voice session. Keep your reply concise and natural. Avoid long outputs unless asked; prefer summaries.",
   };
 }
 
@@ -37,6 +44,33 @@ function resolveOllamaModel(cfg, config) {
 function resolveOllamaBaseUrl(cfg, config) {
   if (config.ollamaBaseUrl) return config.ollamaBaseUrl;
   return cfg?.models?.providers?.ollama?.baseUrl ?? "http://127.0.0.1:11434";
+}
+
+function resolveGatewayToken(config) {
+  if (config.gatewayToken) return config.gatewayToken;
+  try {
+    const home = os.homedir();
+    const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+    const raw = JSON.parse(readFileSync(cfgPath, "utf8"));
+    return raw?.gateway?.auth?.token ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function extractCompleteSentences(text) {
+  const sentences = [];
+  const re = /([.!?])(\s+|$)/g;
+  let lastEnd = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    const end = match.index + match[0].length;
+    const sentence = text.slice(lastEnd, end).trim();
+    if (sentence) sentences.push(sentence);
+    lastEnd = end;
+  }
+  const remainder = text.slice(lastEnd);
+  return { sentences, remainder };
 }
 
 async function runFfmpeg(inputArgs, outputArgs, inputBuffer) {
@@ -190,6 +224,104 @@ function stripWavHeader(buf) {
   return buf;
 }
 
+// --- Gateway chat client (turn voice into normal chat I/O) ---
+
+class GatewayChatClient {
+  constructor({ url, token, sessionKey }) {
+    this.url = url;
+    this.token = token;
+    this.sessionKey = sessionKey;
+    this.ws = null;
+    this.connectPromise = null;
+    this.runId = null;
+    this.onDelta = null;
+    this.onFinal = null;
+    this.onError = null;
+  }
+
+  async ensureConnected() {
+    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.url);
+      this.ws = ws;
+      let resolved = false;
+      const finish = (fn, arg) => {
+        if (resolved) return;
+        resolved = true;
+        this.connectPromise = null;
+        fn(arg);
+      };
+      ws.on("open", () => {
+        const frame = {
+          type: "req",
+          id: randomUUID(),
+          method: "connect",
+          params: {
+            minProtocol: 4,
+            maxProtocol: 4,
+            client: { id: "gateway-client", version: "2026.6.6", platform: "linux", mode: "backend" },
+            role: "operator",
+            scopes: ["operator.write"],
+            auth: { token: this.token }
+          }
+        };
+        ws.send(JSON.stringify(frame));
+      });
+      ws.on("message", (data) => {
+        try {
+          const frame = JSON.parse(data.toString());
+          if (frame.type === "res" && frame.ok && frame.payload?.type === "hello-ok") {
+            return finish(resolve);
+          }
+          if (frame.type === "res" && !frame.ok) {
+            return finish(reject, new Error(frame.error?.message || "gateway connect failed"));
+          }
+          if (frame.type === "event" && frame.event === "chat") {
+            const p = frame.payload;
+            if (p.runId !== this.runId) return;
+            if (p.state === "delta" && p.deltaText) {
+              this.onDelta?.(p.deltaText, false);
+            } else if (p.state === "final") {
+              this.onFinal?.();
+            } else if (p.state === "error") {
+              this.onError?.(new Error(p.errorMessage || "chat error"));
+            }
+          }
+        } catch (err) {
+          this.onError?.(err);
+        }
+      });
+      ws.on("error", (err) => finish(reject, err));
+      ws.on("close", () => { this.ws = null; });
+    });
+    return this.connectPromise;
+  }
+
+  async sendMessage(message, instruction) {
+    await this.ensureConnected();
+    const runId = randomUUID();
+    this.runId = runId;
+    const fullMessage = instruction ? `${instruction}\n\nUser said: ${message}` : message;
+    this.ws.send(JSON.stringify({
+      type: "req",
+      id: randomUUID(),
+      method: "chat.send",
+      params: {
+        sessionKey: this.sessionKey,
+        message: fullMessage,
+        idempotencyKey: runId,
+        deliver: true
+      }
+    }));
+  }
+
+  close() {
+    this.ws?.close();
+    this.ws = null;
+  }
+}
+
 // --- Realtime transcription session (dictation) ---
 
 class LocalRealtimeTranscriptionSession {
@@ -283,18 +415,30 @@ class LocalRealtimeVoiceBridge {
     this.silenceTimer = null;
     this.turnTimer = null;
     this.isSpeaking = false;
+    this.responseIsSpeaking = false;
     this.speakingCooldownTimer = null;
     this.inCooldown = false;
     this.totalAudioBytesSent = 0;
     this.messages = [{ role: "system", content: config.instructions ?? "You are a helpful voice assistant. Keep replies short and natural. Answer directly; do not say you will check, search, or look something up unless you actually have a tool to do so." }];
     this.chatModel = resolveOllamaModel(config.cfg, this.providerConfig);
     this.ollamaBaseUrl = resolveOllamaBaseUrl(config.cfg, this.providerConfig);
-    log("voice bridge created", this.audioFormat, "model", this.chatModel);
+    this.useMainAgent = this.providerConfig.useMainAgent;
+    this.mainAgentSessionKey = this.providerConfig.mainAgentSessionKey;
+    this.voiceInstructions = this.providerConfig.voiceInstructions;
+    this.gatewayClient = this.useMainAgent
+      ? new GatewayChatClient({
+          url: this.providerConfig.gatewayUrl,
+          token: resolveGatewayToken(this.providerConfig),
+          sessionKey: this.providerConfig.mainAgentSessionKey,
+        })
+      : null;
+    log("voice bridge created", this.audioFormat, "model", this.chatModel, "useMainAgent", this.useMainAgent);
   }
 
   async connect() {
     this.connected = true;
     this.isSpeaking = false;
+    this.responseIsSpeaking = false;
     this.inCooldown = false;
     this.totalAudioBytesSent = 0;
     this.clearTimers();
@@ -305,9 +449,11 @@ class LocalRealtimeVoiceBridge {
   close() {
     this.connected = false;
     this.isSpeaking = false;
+    this.responseIsSpeaking = false;
     this.inCooldown = false;
     this.totalAudioBytesSent = 0;
     this.clearTimers();
+    this.gatewayClient?.close();
     log("voice close");
     this.config.onClose?.("completed");
   }
@@ -328,7 +474,7 @@ class LocalRealtimeVoiceBridge {
     log("voice sendUserMessage", text);
     if (this.responsePending) return;
     this.messages.push({ role: "user", content: text });
-    this.runResponse();
+    this.runResponse(text);
   }
 
   clearTimers() {
@@ -345,6 +491,8 @@ class LocalRealtimeVoiceBridge {
   }
 
   beginCooldown(extraMs = 200) {
+    this.isSpeaking = false;
+    this.responseIsSpeaking = false;
     this.inCooldown = true;
     if (this.speakingCooldownTimer) { clearTimeout(this.speakingCooldownTimer); this.speakingCooldownTimer = null; }
     const bytesPerChannel = this.audioFormat.encoding === "g711_ulaw" ? 1 : 2;
@@ -356,6 +504,111 @@ class LocalRealtimeVoiceBridge {
       this.inCooldown = false;
       this.speakingCooldownTimer = null;
     }, cooldownMs);
+  }
+
+  async speakSentence(text, { markEvent = true } = {}) {
+    if (!text.trim()) return;
+    try {
+      log("voice speak chunk", text);
+      const wav = await kokoroSpeak(text, this.providerConfig);
+      let audio = stripWavHeader(wav);
+      if (this.audioFormat.encoding === "g711_ulaw") {
+        const pcm8k = await runFfmpeg(["-f", "s16le", "-ar", "24000", "-ac", "1"], ["-f", "s16le", "-ar", "8000", "-ac", "1"], audio);
+        audio = encodeMuLaw(pcm8k);
+      }
+      log("voice audio out bytes", audio.length);
+      const bytesPerChannel = this.audioFormat.encoding === "g711_ulaw" ? 1 : 2;
+      const bytesPerMs = (this.audioFormat.sampleRateHz || 24000) * bytesPerChannel / 1000;
+      const chunkBytes = Math.max(2400, Math.round((this.providerConfig.audioChunkMs ?? 50) * bytesPerMs));
+      this.totalAudioBytesSent += audio.length;
+      for (let offset = 0; offset < audio.length; offset += chunkBytes) {
+        this.config.onAudio(audio.slice(offset, offset + chunkBytes));
+      }
+      if (markEvent) {
+        this.config.onEvent?.({ type: "response.audio.delta", direction: "server" });
+      }
+    } catch (e) {
+      log("voice speak chunk error", e);
+      this.config.onError?.(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  async streamResponseFromOllama() {
+    const stream = ollamaChat(this.chatModel, this.messages, this.ollamaBaseUrl);
+    let sentenceBuffer = "";
+    let fullText = "";
+    for await (const chunk of stream) {
+      fullText += chunk.text;
+      sentenceBuffer += chunk.text;
+      this.config.onTranscript?.("assistant", chunk.text, false);
+      const { sentences, remainder } = extractCompleteSentences(sentenceBuffer);
+      sentenceBuffer = remainder;
+      for (const s of sentences) {
+        await this.speakSentence(s);
+      }
+    }
+    if (sentenceBuffer.trim()) {
+      fullText += sentenceBuffer;
+      await this.speakSentence(sentenceBuffer);
+    }
+    return fullText;
+  }
+
+  async streamResponseFromMainAgent(transcript) {
+    let sentenceBuffer = "";
+    let fullText = "";
+    let processing = false;
+    let finalPending = false;
+    let finalResolver;
+    const finalPromise = new Promise((resolve) => { finalResolver = resolve; });
+
+    const flush = async (force) => {
+      const { sentences, remainder } = extractCompleteSentences(sentenceBuffer);
+      sentenceBuffer = remainder;
+      for (const s of sentences) {
+        fullText += s;
+        await this.speakSentence(s);
+      }
+      if (force && remainder.trim()) {
+        fullText += remainder;
+        await this.speakSentence(remainder);
+        sentenceBuffer = "";
+      }
+    };
+
+    const processBuffer = async () => {
+      if (processing) return;
+      processing = true;
+      try {
+        await flush(false);
+      } finally {
+        processing = false;
+        if (finalPending) await flush(true).then(() => finalResolver());
+      }
+    };
+
+    this.gatewayClient.onDelta = (text) => {
+      sentenceBuffer += text;
+      this.config.onTranscript?.("assistant", text, false);
+      processBuffer();
+    };
+    this.gatewayClient.onFinal = () => {
+      finalPending = true;
+      processBuffer();
+    };
+    this.gatewayClient.onError = (err) => {
+      log("gateway chat error", err);
+      finalResolver();
+    };
+
+    await this.gatewayClient.sendMessage(transcript, this.voiceInstructions);
+    await finalPromise;
+    if (sentenceBuffer.trim()) {
+      fullText += sentenceBuffer;
+      await this.speakSentence(sentenceBuffer);
+      sentenceBuffer = "";
+    }
+    return fullText;
   }
 
   sendAudio(audio) {
@@ -440,8 +693,8 @@ class LocalRealtimeVoiceBridge {
         return;
       }
       this.config.onTranscript?.("user", transcript, true);
-      this.messages.push({ role: "user", content: transcript });
-      await this.runResponse();
+      if (!this.useMainAgent) this.messages.push({ role: "user", content: transcript });
+      await this.runResponse(transcript);
     } catch (error) {
       log("voice finishTurn error", error);
       this.responsePending = false;
@@ -449,68 +702,21 @@ class LocalRealtimeVoiceBridge {
     }
   }
 
-  async runResponse() {
+  async runResponse(userTranscript) {
     this.responsePending = true;
+    this.responseIsSpeaking = true;
     try {
       log("voice response start");
       this.config.onEvent?.({ type: "response.created", direction: "server" });
-      let fullText = "";
-      let sentenceBuffer = "";
-      const stream = ollamaChat(this.chatModel, this.messages, this.ollamaBaseUrl);
-
-      const flushSentence = async () => {
-        const text = sentenceBuffer.trim();
-        sentenceBuffer = "";
-        if (!text) return;
-        try {
-          log("voice speak chunk", text);
-          const wav = await kokoroSpeak(text, this.providerConfig);
-          let audio = stripWavHeader(wav);
-          if (this.audioFormat.encoding === "g711_ulaw") {
-            const pcm8k = await runFfmpeg(["-f", "s16le", "-ar", "24000", "-ac", "1"], ["-f", "s16le", "-ar", "8000", "-ac", "1"], audio);
-            audio = encodeMuLaw(pcm8k);
-          }
-          log("voice audio out bytes", audio.length);
-          const bytesPerMs = (this.audioFormat.sampleRateHz || 24000) * 2 / 1000;
-          const chunkBytes = Math.max(2400, Math.round((this.providerConfig.audioChunkMs ?? 50) * bytesPerMs));
-          this.isSpeaking = true;
-          this.totalAudioBytesSent += audio.length;
-          for (let offset = 0; offset < audio.length; offset += chunkBytes) {
-            this.config.onAudio(audio.slice(offset, offset + chunkBytes));
-          }
-          this.isSpeaking = false;
-          this.config.onEvent?.({ type: "response.audio.delta", direction: "server" });
-        } catch (e) {
-          this.isSpeaking = false;
-          log("voice speak chunk error", e);
-          this.config.onError?.(e instanceof Error ? e : new Error(String(e)));
-        }
-      };
-
-      for await (const chunk of stream) {
-        fullText += chunk.text;
-        sentenceBuffer += chunk.text;
-        this.config.onTranscript?.("assistant", chunk.text, false);
-
-        const sentenceRe = /([.!?]+\s+)/g;
-        let match;
-        while ((match = sentenceRe.exec(sentenceBuffer)) !== null) {
-          const splitAt = match.index + match[0].length;
-          const flushText = sentenceBuffer.slice(0, splitAt);
-          const remainder = sentenceBuffer.slice(splitAt);
-          sentenceRe.lastIndex = 0;
-          if (flushText.trim() && remainder.trim().length > 0) {
-            sentenceBuffer = flushText.trim();
-            await flushSentence();
-            sentenceBuffer = remainder;
-          }
-        }
+      let fullText;
+      if (this.useMainAgent && this.gatewayClient) {
+        fullText = await this.streamResponseFromMainAgent(userTranscript);
+      } else {
+        if (userTranscript) this.messages.push({ role: "user", content: userTranscript });
+        fullText = await this.streamResponseFromOllama();
       }
-
-      await flushSentence();
       this.beginCooldown();
-
-      this.messages.push({ role: "assistant", content: fullText });
+      if (!this.useMainAgent) this.messages.push({ role: "assistant", content: fullText });
       this.config.onTranscript?.("assistant", fullText, true);
       this.config.onEvent?.({ type: "response.done", direction: "server" });
       log("voice response done", fullText.slice(0, 80));
@@ -520,6 +726,7 @@ class LocalRealtimeVoiceBridge {
     } finally {
       this.responsePending = false;
       this.totalAudioBytesSent = 0;
+      this.responseIsSpeaking = false;
     }
   }
 
