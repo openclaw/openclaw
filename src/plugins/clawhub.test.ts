@@ -810,8 +810,9 @@ describe("installPluginFromClawHub", () => {
     expect(success.clawhub?.clawpackSize).toBeUndefined();
   });
 
-  it("does not inherit package-level compatibility when version-specific compatibility is absent", async () => {
+  it("does not inherit package-level compatibility when version-specific compatibility is absent for pinned older version", async () => {
     parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.6.8" });
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
       package: {
         name: "demo",
@@ -821,6 +822,7 @@ describe("installPluginFromClawHub", () => {
         isOfficial: true,
         createdAt: 0,
         updatedAt: 0,
+        latestVersion: "2026.6.10",
         compatibility: {
           pluginApiRange: ">=2026.6.10",
           minGatewayVersion: "2026.6.10",
@@ -843,6 +845,43 @@ describe("installPluginFromClawHub", () => {
     });
 
     expectSuccessfulClawHubInstall(result);
+  });
+
+  it("enforces package-level compatibility for unpinned latest install when version response omits compatibility", async () => {
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.8");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.10",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.error).toContain("2026.6.10");
   });
 
   it("installs when ClawHub advertises a wildcard plugin API range", async () => {

@@ -877,11 +877,17 @@ async function resolveCompatiblePackageVersion(params: {
   }
   const artifactVersion = readArtifactResolverVersion(artifactResponse, requestedVersion);
   const resolvedVersion = normalizeOptionalString(artifactVersion.version) ?? requestedVersion;
+  const latestVersion = resolveLatestVersionFromPackage(params.detail);
+  // Only fall back to package-level compatibility when the resolved version is the
+  // package latest. Older pinned versions should not inherit the latest version's
+  // compatibility requirements.
+  const packageCompatibilityFallback =
+    resolvedVersion === latestVersion ? (params.detail.package?.compatibility ?? null) : null;
   if (params.detail.package?.family === "skill") {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: artifactVersion.compatibility ?? null,
+      compatibility: artifactVersion.compatibility ?? packageCompatibilityFallback,
       verification: null,
       clawpack:
         artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
@@ -929,7 +935,7 @@ async function resolveCompatiblePackageVersion(params: {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: versionDetail.version?.compatibility ?? null,
+      compatibility: versionDetail.version?.compatibility ?? packageCompatibilityFallback,
       verification: null,
       clawpack,
     };
@@ -940,7 +946,7 @@ async function resolveCompatiblePackageVersion(params: {
   return {
     ok: true,
     version: resolvedVersion,
-    compatibility: versionDetail.version?.compatibility ?? null,
+    compatibility: versionDetail.version?.compatibility ?? packageCompatibilityFallback,
     verification: verificationState.verification ?? topLevelLegacyVerification,
     clawpack,
   };
