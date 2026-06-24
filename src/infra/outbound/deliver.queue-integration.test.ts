@@ -6,7 +6,7 @@
 // reconcileUnknownQueuedDelivery instead of blind replay.
 import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
@@ -46,7 +46,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       m.loadPendingDeliveries(tmpDir),
     );
     expect(entries).toHaveLength(1);
-    const entry = entries[0]!;
+    const entry = entries[0];
     expect(entry.recoveryState).toBe("unknown_after_send");
     expect(entry.retryCount).toBe(0);
     expect(entry.lastError).toBeUndefined();
@@ -74,10 +74,10 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       m.loadPendingDeliveries(tmpDir),
     );
     expect(entries).toHaveLength(1);
-    const entry = entries[0]!;
+    const entry = entries[0];
     // No send evidence -> failDelivery path: retryCount bumped, recovery_state not advanced.
     expect(entry.retryCount).toBe(1);
     expect(entry.recoveryState).toBe("send_attempt_started");
-    expect(String(entry.lastError ?? "")).toContain("first payload send failed");
+    expect(entry.lastError).toContain("first payload send failed");
   });
 });
