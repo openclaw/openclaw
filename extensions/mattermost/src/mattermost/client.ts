@@ -619,6 +619,24 @@ export async function fetchMattermostUserTeams(
   return await client.request<MattermostTeam[]>(`/users/${userId}/teams`);
 }
 
+export async function openMattermostInteractiveDialog(
+  client: MattermostClient,
+  params: {
+    triggerId: string;
+    url: string;
+    dialog: Record<string, unknown>;
+  },
+): Promise<void> {
+  await client.request<void>("/actions/dialogs/open", {
+    method: "POST",
+    body: JSON.stringify({
+      trigger_id: params.triggerId,
+      url: params.url,
+      dialog: params.dialog,
+    }),
+  });
+}
+
 export async function updateMattermostPost(
   client: MattermostClient,
   postId: string,

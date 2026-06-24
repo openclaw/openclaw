@@ -50,10 +50,17 @@ import {
 } from "./interactions.js";
 import {
   buildMattermostAllowedModelRefs,
+  buildMattermostModelPickerDialog,
+  buildMattermostModelPickerSelectionCommand,
+  MATTERMOST_MODEL_PICKER_DIALOG_CALLBACK_ID,
   parseMattermostModelPickerContext,
+  parseMattermostModelPickerDialogState,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
+  resolveMattermostModelPickerDialogChannelInfo,
   resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerCurrentRuntime,
+  resolveMattermostModelPickerDialogValues,
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
@@ -637,6 +644,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
+      handleDialogSubmission: handleModelPickerDialogSubmission,
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
@@ -1278,6 +1286,203 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     })();
 
     return {};
+  }
+
+  async function handleModelPickerDialogSubmission(params: {
+    payload: {
+      channel_id: string;
+      team_id?: string;
+      user_id: string;
+      cancelled?: boolean;
+    };
+    userName: string;
+    callbackId: string;
+    state: string;
+    submission: Record<string, unknown>;
+    requestType: "submit" | "refresh";
+  }): Promise<import("./interactions.js").MattermostDialogSubmitResponse | null> {
+    if (params.callbackId !== MATTERMOST_MODEL_PICKER_DIALOG_CALLBACK_ID) {
+      return null;
+    }
+
+    const dialogState = parseMattermostModelPickerDialogState({
+      state: params.state,
+      accountId: account.accountId,
+    });
+    if (!dialogState) {
+      return {
+        error: "This model picker expired. Run /model again.",
+      };
+    }
+    if (dialogState.ownerUserId !== params.payload.user_id) {
+      return {
+        error: "Only the person who opened this picker can use it.",
+      };
+    }
+    if (dialogState.channelId !== params.payload.channel_id) {
+      return {
+        error: "This model picker is no longer valid for this channel.",
+      };
+    }
+    if (
+      dialogState.teamId &&
+      params.payload.team_id &&
+      dialogState.teamId !== params.payload.team_id
+    ) {
+      return {
+        error: "This model picker is no longer valid for this team.",
+      };
+    }
+    if (params.payload.cancelled) {
+      return {};
+    }
+
+    const channelInfo =
+      (await resolveChannelInfo(params.payload.channel_id)) ??
+      resolveMattermostModelPickerDialogChannelInfo(dialogState);
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: "mattermost",
+    });
+    const auth = await authorizeMattermostCommandInvocation({
+      account,
+      cfg,
+      senderId: params.payload.user_id,
+      senderName: params.userName,
+      channelId: params.payload.channel_id,
+      channelInfo,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+      allowTextCommands,
+      hasControlCommand: true,
+    });
+    if (!auth.ok) {
+      return {
+        error:
+          auth.denyReason === "dm-pairing"
+            ? "This bot requires pairing before /model can be used here."
+            : auth.denyReason === "dm-disabled"
+              ? "This bot is not accepting direct messages."
+              : auth.denyReason === "channels-disabled"
+                ? "Model picker actions are disabled in channels."
+                : auth.denyReason === "channel-no-allowlist"
+                  ? "Model picker actions are not configured for this channel."
+                  : auth.denyReason === "unknown-channel"
+                    ? "Temporary error: unable to determine channel type. Please try again."
+                    : "Unauthorized.",
+      };
+    }
+
+    const kind = auth.kind;
+    const chatType = auth.chatType;
+    const teamId = auth.channelInfo.team_id ?? params.payload.team_id ?? undefined;
+    const channelName = auth.channelName || undefined;
+    const channelDisplay = auth.channelDisplay || auth.channelName || params.payload.channel_id;
+    const roomLabel = auth.roomLabel;
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+      teamId,
+      peer: {
+        kind,
+        id: kind === "direct" ? params.payload.user_id : params.payload.channel_id,
+      },
+    });
+    const modelSessionRoute = {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+    };
+    const data = await buildModelsProviderData(cfg, route.agentId);
+    if (data.providers.length === 0) {
+      return {
+        error: "No models available.",
+      };
+    }
+
+    const currentModel = resolveMattermostModelPickerCurrentModel({
+      cfg,
+      route: modelSessionRoute,
+      data,
+    });
+    const currentRuntime = resolveMattermostModelPickerCurrentRuntime({
+      cfg,
+      route: modelSessionRoute,
+    });
+    const values = resolveMattermostModelPickerDialogValues({
+      submission: params.submission,
+      data,
+      currentModel,
+      currentRuntime,
+    });
+
+    if (params.requestType === "refresh") {
+      return {
+        type: "form",
+        form: buildMattermostModelPickerDialog({
+          accountId: account.accountId,
+          ownerUserId: dialogState.ownerUserId,
+          channelId: dialogState.channelId,
+          teamId: dialogState.teamId,
+          callbackUrl,
+          data,
+          currentModel,
+          currentRuntime,
+          preferredProvider: values.provider,
+          selectedModel: values.model,
+          runtimeChoice: values.runtimeChoice,
+          state: params.state,
+        }) as unknown as Record<string, unknown>,
+      };
+    }
+
+    if (!values.model) {
+      return {
+        errors: {
+          model: "Select a model before applying the change.",
+        },
+      };
+    }
+
+    const targetModelRef = `${values.provider}/${values.model}`;
+    if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
+      return {
+        errors: {
+          model: `That model is no longer available: ${targetModelRef}`,
+        },
+      };
+    }
+
+    try {
+      await runModelPickerCommand({
+        commandText: buildMattermostModelPickerSelectionCommand({
+          modelRef: targetModelRef,
+          runtimeChoice: values.runtimeChoice,
+        }),
+        commandAuthorized: auth.commandAuthorized,
+        route,
+        sessionKey: route.sessionKey,
+        parentSessionKey: undefined,
+        channelId: params.payload.channel_id,
+        senderId: params.payload.user_id,
+        senderName: params.userName,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+        teamId,
+        postId: `dialog-${Date.now()}`,
+        messageSid: `dialog:${params.payload.user_id}:${Date.now()}`,
+        effectiveReplyToId: undefined,
+        deliverReplies: true,
+      });
+      return {};
+    } catch (err) {
+      runtime.error?.(`mattermost model picker dialog submit failed: ${String(err)}`);
+      return {
+        error: `Failed to apply ${targetModelRef}. Try /model ${targetModelRef} directly.`,
+      };
+    }
   }
 
   const handlePost = async (

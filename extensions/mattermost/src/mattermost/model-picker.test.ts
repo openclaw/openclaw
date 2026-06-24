@@ -4,13 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
+import { setInteractionSecret } from "./interactions.js";
 import {
+  buildMattermostModelPickerDialog,
+  buildMattermostModelPickerDialogState,
+  buildMattermostModelPickerSelectionCommand,
   buildMattermostAllowedModelRefs,
+  MATTERMOST_MODEL_PICKER_DIALOG_CALLBACK_ID,
+  MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT,
+  parseMattermostModelPickerDialogState,
   parseMattermostModelPickerContext,
   renderMattermostModelSummaryView,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
+  resolveMattermostModelPickerDialogChannelInfo,
   resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerCurrentRuntime,
+  resolveMattermostModelPickerDialogValues,
   resolveMattermostModelPickerEntry,
 } from "./model-picker.js";
 
@@ -28,6 +38,64 @@ const data = {
 };
 
 describe("Mattermost model picker", () => {
+  it("round-trips signed dialog state", () => {
+    setInteractionSecret("acct", "bot-token");
+    const state = buildMattermostModelPickerDialogState({
+      ownerUserId: "user-1",
+      channelId: "chan-1",
+      teamId: "team-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "secret-planning",
+        display_name: "Secret Planning",
+        team_id: "team-1",
+      },
+      accountId: "acct",
+    });
+
+    expect(
+      parseMattermostModelPickerDialogState({
+        state,
+        accountId: "acct",
+      }),
+    ).toEqual({
+      v: 1,
+      ownerUserId: "user-1",
+      channelId: "chan-1",
+      teamId: "team-1",
+      channelSnapshot: {
+        type: "O",
+        name: "secret-planning",
+        displayName: "Secret Planning",
+      },
+    });
+  });
+
+  it("rejects tampered dialog state", () => {
+    setInteractionSecret("acct", "bot-token");
+    const state = buildMattermostModelPickerDialogState({
+      ownerUserId: "user-1",
+      channelId: "chan-1",
+      accountId: "acct",
+    });
+    const decoded = JSON.parse(Buffer.from(state, "base64url").toString("utf8")) as {
+      ownerUserId: string;
+      channelId: string;
+      _token: string;
+      v: number;
+    };
+    decoded.channelId = "chan-2";
+    const tampered = Buffer.from(JSON.stringify(decoded), "utf8").toString("base64url");
+
+    expect(
+      parseMattermostModelPickerDialogState({
+        state: tampered,
+        accountId: "acct",
+      }),
+    ).toBeNull();
+  });
+
   it("resolves bare /model and /models entry points", () => {
     expect(resolveMattermostModelPickerEntry("/model")).toEqual({ kind: "summary" });
     expect(resolveMattermostModelPickerEntry("/models")).toEqual({ kind: "providers" });
@@ -213,5 +281,139 @@ describe("Mattermost model picker", () => {
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  it("resolves the current runtime from session overrides and config", () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-runtime-"));
+    try {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(testDir, "{agentId}.json"),
+        },
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "pi",
+            },
+          },
+          list: [
+            {
+              id: "support",
+              agentRuntime: {
+                id: "claude-cli",
+              },
+            },
+          ],
+        },
+      };
+
+      expect(
+        resolveMattermostModelPickerCurrentRuntime({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: "agent:support:main",
+          },
+        }),
+      ).toBe("claude-cli");
+
+      fs.writeFileSync(
+        path.join(testDir, "support.json"),
+        JSON.stringify({
+          "agent:support:main": {
+            agentRuntimeOverride: "codex",
+          },
+        }),
+      );
+
+      expect(
+        resolveMattermostModelPickerCurrentRuntime({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: "agent:support:main",
+          },
+        }),
+      ).toBe("codex");
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a dialog-backed picker with provider, model, and runtime fields", () => {
+    setInteractionSecret("acct", "bot-token");
+    const dialog = buildMattermostModelPickerDialog({
+      accountId: "acct",
+      ownerUserId: "user-1",
+      channelId: "chan-1",
+      teamId: "team-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "D",
+        name: "user-1__user-2",
+        display_name: "DM",
+        team_id: "team-1",
+      },
+      callbackUrl: "https://gateway.example.com/mattermost/interactions/acct",
+      data,
+      currentModel: "openai/gpt-5",
+      currentRuntime: "claude-cli",
+    });
+
+    expect(dialog.callback_id).toBe(MATTERMOST_MODEL_PICKER_DIALOG_CALLBACK_ID);
+    expect(dialog.source_url).toBe("https://gateway.example.com/mattermost/interactions/acct");
+    expect(dialog.introduction_text).toContain("Current: openai/gpt-5");
+    expect(dialog.introduction_text).toContain("Runtime: claude-cli");
+    expect(dialog.elements.map((field) => field.name)).toEqual(["provider", "model", "runtime"]);
+    expect(dialog.elements[0]?.refresh).toBe(true);
+    expect(dialog.elements[2]?.default).toBe(MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT);
+    const dialogState = parseMattermostModelPickerDialogState({
+      state: dialog.state,
+      accountId: "acct",
+    });
+    expect(dialogState).toBeTruthy();
+    expect(resolveMattermostModelPickerDialogChannelInfo(dialogState!)).toEqual({
+      id: "chan-1",
+      type: "D",
+      name: "user-1__user-2",
+      display_name: "DM",
+      team_id: "team-1",
+    });
+  });
+
+  it("normalizes dialog submission values and preserves keep-current runtime", () => {
+    const values = resolveMattermostModelPickerDialogValues({
+      submission: {
+        provider: "OpenAI",
+        model: "gpt-5",
+        runtime: MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT,
+        selected_field: "provider",
+      },
+      data,
+      currentModel: "openai/gpt-5",
+      currentRuntime: "claude-cli",
+    });
+
+    expect(values).toEqual({
+      provider: "openai",
+      model: "gpt-5",
+      runtimeChoice: MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT,
+      selectedField: "provider",
+    });
+  });
+
+  it("builds /model commands that only add runtime flags when needed", () => {
+    expect(
+      buildMattermostModelPickerSelectionCommand({
+        modelRef: "openai/gpt-5",
+        runtimeChoice: MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT,
+      }),
+    ).toBe("/model openai/gpt-5");
+    expect(
+      buildMattermostModelPickerSelectionCommand({
+        modelRef: "openai/gpt-5",
+        runtimeChoice: "codex",
+      }),
+    ).toBe("/model openai/gpt-5 --runtime codex");
   });
 });

@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 import {
   createMattermostClient,
+  openMattermostInteractiveDialog,
   createMattermostPost,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
@@ -395,6 +396,42 @@ describe("createMattermostPost", () => {
 
     const body = parseRequestJson(calls[0].init);
     expect(body.props).toBeUndefined();
+  });
+});
+
+describe("openMattermostInteractiveDialog", () => {
+  it("posts the trigger id, callback url, and dialog to the Mattermost API", async () => {
+    const { client, calls } = createTestClient({ body: {} });
+
+    await openMattermostInteractiveDialog(client, {
+      triggerId: "trigger-1",
+      url: "https://gateway.example.com/mattermost/interactions/acct",
+      dialog: {
+        callback_id: "oc_model_picker",
+        title: "Model Picker",
+        elements: [],
+      },
+    });
+
+    const firstCall = calls[0];
+    if (!firstCall) {
+      throw new Error("expected Mattermost dialog open request");
+    }
+    expect(firstCall.url).toContain("/actions/dialogs/open");
+    if (!firstCall.init) {
+      throw new Error("expected Mattermost dialog open request init");
+    }
+    expect(firstCall.init.method).toBe("POST");
+    const body = parseRequestJson(firstCall.init);
+    expect(body).toEqual({
+      trigger_id: "trigger-1",
+      url: "https://gateway.example.com/mattermost/interactions/acct",
+      dialog: {
+        callback_id: "oc_model_picker",
+        title: "Model Picker",
+        elements: [],
+      },
+    });
   });
 });
 

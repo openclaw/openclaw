@@ -36,12 +36,31 @@ type MattermostInteractionPayload = {
   context?: Record<string, unknown>;
 };
 
+type MattermostDialogSubmissionPayload = {
+  user_id: string;
+  user_name?: string;
+  channel_id: string;
+  team_id?: string;
+  callback_id?: string;
+  state?: string;
+  submission?: Record<string, unknown>;
+  cancelled?: boolean;
+  type?: string;
+};
+
 export type MattermostInteractionResponse = {
   update?: {
     message: string;
     props?: Record<string, unknown>;
   };
   ephemeral_text?: string;
+};
+
+export type MattermostDialogSubmitResponse = {
+  error?: string;
+  errors?: Record<string, string>;
+  type?: string;
+  form?: Record<string, unknown>;
 };
 
 type MattermostInteractionAuthorizationResult =
@@ -384,6 +403,14 @@ export function createMattermostInteractionHandler(params: {
     context: Record<string, unknown>;
     post: MattermostPost;
   }) => Promise<MattermostInteractionResponse | null>;
+  handleDialogSubmission?: (opts: {
+    payload: MattermostDialogSubmissionPayload;
+    userName: string;
+    callbackId: string;
+    state: string;
+    submission: Record<string, unknown>;
+    requestType: "submit" | "refresh";
+  }) => Promise<MattermostDialogSubmitResponse | null>;
   authorizeButtonClick?: (opts: {
     payload: MattermostInteractionPayload;
     post: MattermostPost;
@@ -447,6 +474,48 @@ export function createMattermostInteractionHandler(params: {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid request body" }));
       return;
+    }
+
+    const dialogPayload = payload as MattermostDialogSubmissionPayload;
+    const callbackId = normalizeOptionalString(dialogPayload.callback_id);
+    if (callbackId) {
+      if (!params.handleDialogSubmission) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Dialog submissions are not enabled" }));
+        return;
+      }
+      const state = normalizeOptionalString(dialogPayload.state) ?? "";
+      const submission =
+        dialogPayload.submission && typeof dialogPayload.submission === "object"
+          ? dialogPayload.submission
+          : {};
+      try {
+        const response = await params.handleDialogSubmission({
+          payload: dialogPayload,
+          userName: dialogPayload.user_name ?? dialogPayload.user_id,
+          callbackId,
+          state,
+          submission,
+          requestType: dialogPayload.type === "refresh" ? "refresh" : "submit",
+        });
+        if (response === null) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Unknown dialog callback" }));
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(response));
+        return;
+      } catch (err) {
+        log?.(`mattermost interaction: dialog handler failed: ${String(err)}`);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Dialog handler failed" }));
+        return;
+      }
     }
 
     const context = payload.context;

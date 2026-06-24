@@ -578,6 +578,30 @@ describe("createMattermostInteractionHandler", () => {
     };
   }
 
+  function createDialogSubmissionBody(params: {
+    callbackId?: string;
+    channelId?: string;
+    teamId?: string;
+    userId?: string;
+    userName?: string;
+    state?: string;
+    submission?: Record<string, unknown>;
+    type?: string;
+    cancelled?: boolean;
+  }) {
+    return {
+      user_id: params.userId ?? "user-1",
+      ...(params.userName ? { user_name: params.userName } : {}),
+      channel_id: params.channelId ?? "chan-1",
+      team_id: params.teamId ?? "team-1",
+      callback_id: params.callbackId ?? "oc_model_picker",
+      state: params.state ?? "signed-state",
+      submission: params.submission ?? { provider: "openai", model: "gpt-5" },
+      ...(params.type ? { type: params.type } : {}),
+      ...(params.cancelled !== undefined ? { cancelled: params.cancelled } : {}),
+    };
+  }
+
   async function runHandler(
     handler: ReturnType<typeof createMattermostInteractionHandler>,
     params: {
@@ -931,5 +955,58 @@ describe("createMattermostInteractionHandler", () => {
       post: originalPost,
     });
     expect(dispatchButtonClick).not.toHaveBeenCalled();
+  });
+
+  it("routes dialog submissions to the custom dialog handler without button validation", async () => {
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handleDialogSubmission = vi.fn().mockResolvedValue({
+      type: "form",
+      form: {
+        callback_id: "oc_model_picker",
+        title: "Model Picker",
+        elements: [],
+      },
+    });
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return { ok: true };
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      handleDialogSubmission,
+    });
+
+    const res = await runHandler(handler, {
+      body: createDialogSubmissionBody({
+        userName: "alice",
+        type: "refresh",
+        submission: {
+          provider: "openai",
+          selected_field: "provider",
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(
+      JSON.stringify({
+        type: "form",
+        form: {
+          callback_id: "oc_model_picker",
+          title: "Model Picker",
+          elements: [],
+        },
+      }),
+    );
+    expect(requestLog).toEqual([]);
+    expect(handleDialogSubmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callbackId: "oc_model_picker",
+        requestType: "refresh",
+        state: "signed-state",
+        userName: "alice",
+      }),
+    );
   });
 });

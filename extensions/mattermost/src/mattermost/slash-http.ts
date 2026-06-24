@@ -17,14 +17,18 @@ import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
+  openMattermostInteractiveDialog,
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
+import { resolveInteractionCallbackUrl } from "./interactions.js";
 import {
+  buildMattermostModelPickerDialog,
   renderMattermostModelSummaryView,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerCurrentRuntime,
   resolveMattermostModelPickerEntry,
 } from "./model-picker.js";
 import {
@@ -80,6 +84,8 @@ const COMMAND_VALIDATION_LOOKUP_BURST = 20;
 const COMMAND_VALIDATION_LOOKUP_REFILL_MS = 500;
 const COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS = 5_000;
 const COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS = 2_000;
+const MATTERMOST_ENTITY_ID_REGEX = /^[A-Za-z0-9]{26}$/;
+const MATTERMOST_GROUP_DM_NAME_REGEX = /^[a-f0-9]{40}$/;
 type CommandLookupInflightEntry = {
   accountId: string;
   promise: Promise<MattermostCommandResponse | null>;
@@ -124,6 +130,142 @@ function sendJsonResponse(
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+function isMattermostEntityId(value: string): boolean {
+  return MATTERMOST_ENTITY_ID_REGEX.test(value);
+}
+
+function inferSlashPayloadChannelInfo(params: {
+  channelId: string;
+  channelName?: string;
+  teamId?: string;
+}): MattermostChannel | null {
+  const channelId = params.channelId.trim();
+  if (!channelId) {
+    return null;
+  }
+
+  const channelName = params.channelName?.trim();
+  if (!channelName) {
+    return null;
+  }
+
+  const teamId = params.teamId?.trim();
+  const base: MattermostChannel = {
+    id: channelId,
+    name: channelName,
+    display_name: channelName,
+    ...(teamId ? { team_id: teamId } : {}),
+  };
+
+  if (MATTERMOST_GROUP_DM_NAME_REGEX.test(channelName)) {
+    return {
+      ...base,
+      type: "G",
+    };
+  }
+
+  const dmUserIds = channelName.split("__");
+  if (dmUserIds.length === 2 && dmUserIds.every(isMattermostEntityId)) {
+    return {
+      ...base,
+      type: "D",
+    };
+  }
+
+  return {
+    ...base,
+    type: "O",
+  };
+}
+
+async function tryOpenMattermostModelPickerDialog(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  client: ReturnType<typeof createMattermostClient>;
+  commandText: string;
+  senderId: string;
+  channelId: string;
+  teamId: string;
+  triggerId?: string;
+  channelInfo: MattermostChannel | null;
+  kind: "direct" | "group" | "channel";
+  log?: (msg: string) => void;
+}): Promise<{ handled: boolean; response?: MattermostSlashCommandResponse }> {
+  const pickerEntry = resolveMattermostModelPickerEntry(params.commandText);
+  const triggerId = params.triggerId?.trim();
+  if (!pickerEntry || !triggerId) {
+    return { handled: false };
+  }
+
+  try {
+    const core = getMattermostRuntime();
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "mattermost",
+      accountId: params.account.accountId,
+      teamId: params.teamId,
+      peer: {
+        kind: params.kind,
+        id: params.kind === "direct" ? params.senderId : params.channelId,
+      },
+    });
+    const data = await buildModelsProviderData(params.cfg, route.agentId);
+    if (data.providers.length === 0) {
+      return {
+        handled: true,
+        response: {
+          response_type: "ephemeral",
+          text: "No models available.",
+        },
+      };
+    }
+
+    const currentModel = resolveMattermostModelPickerCurrentModel({
+      cfg: params.cfg,
+      route,
+      data,
+    });
+    const currentRuntime = resolveMattermostModelPickerCurrentRuntime({
+      cfg: params.cfg,
+      route,
+    });
+    const callbackUrl = resolveInteractionCallbackUrl(params.account.accountId, {
+      gateway: params.cfg.gateway,
+      interactions: params.account.config.interactions,
+    });
+    const preferredProvider = pickerEntry.kind === "models" ? pickerEntry.provider : undefined;
+
+    await openMattermostInteractiveDialog(params.client, {
+      triggerId,
+      url: callbackUrl,
+      dialog: buildMattermostModelPickerDialog({
+        accountId: params.account.accountId,
+        ownerUserId: params.senderId,
+        channelId: params.channelId,
+        teamId: params.teamId,
+        channelInfo: params.channelInfo,
+        callbackUrl,
+        data,
+        currentModel,
+        currentRuntime,
+        ...(preferredProvider ? { preferredProvider } : {}),
+      }),
+    });
+
+    return {
+      handled: true,
+      response: {
+        text: "",
+      },
+    };
+  } catch (err) {
+    params.log?.(
+      `mattermost: failed to open model picker dialog, falling back to message picker: ${sanitizeCommandLookupError(err)}`,
+    );
+    return { handled: false };
+  }
 }
 
 function findRegisteredCommandForPayload(params: {
@@ -470,11 +612,24 @@ async function authorizeSlashInvocation(params: {
   client: ReturnType<typeof createMattermostClient>;
   commandText: string;
   channelId: string;
+  channelName?: string;
+  teamId?: string;
   senderId: string;
   senderName: string;
   log?: (msg: string) => void;
 }): Promise<SlashInvocationAuth> {
-  const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
+  const {
+    account,
+    cfg,
+    client,
+    commandText,
+    channelId,
+    channelName,
+    teamId,
+    senderId,
+    senderName,
+    log,
+  } = params;
   const core = getMattermostRuntime();
 
   // Resolve channel info so we can enforce DM vs group/channel policies.
@@ -485,6 +640,19 @@ async function authorizeSlashInvocation(params: {
     log?.(
       `mattermost: slash channel lookup failed for ${sanitizeMattermostLogValue(channelId)}: ${sanitizeCommandLookupError(err)}`,
     );
+  }
+
+  if (!channelInfo) {
+    channelInfo = inferSlashPayloadChannelInfo({
+      channelId,
+      channelName,
+      teamId,
+    });
+    if (channelInfo) {
+      log?.(
+        `mattermost: inferred slash channel kind ${sanitizeMattermostLogValue(channelInfo.type ?? "O")} from payload for ${sanitizeMattermostLogValue(channelId)}`,
+      );
+    }
   }
 
   if (!channelInfo) {
@@ -672,6 +840,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       client,
       commandText,
       channelId,
+      channelName: payload.channel_name,
+      teamId: payload.team_id,
       senderId,
       senderName,
       log,
@@ -689,6 +859,24 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     log?.(
       `mattermost: slash command /${sanitizeMattermostLogValue(trigger)} from ${sanitizeMattermostLogValue(senderName)} in ${sanitizeMattermostLogValue(channelId)}`,
     );
+
+    const immediatePickerResult = await tryOpenMattermostModelPickerDialog({
+      account,
+      cfg,
+      client,
+      commandText,
+      senderId,
+      channelId,
+      teamId: payload.team_id,
+      triggerId: payload.trigger_id,
+      channelInfo: auth.channelInfo,
+      kind: auth.kind,
+      log,
+    });
+    if (immediatePickerResult.handled) {
+      sendJsonResponse(res, 200, immediatePickerResult.response ?? { text: "" });
+      return;
+    }
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendJsonResponse(res, 200, {
