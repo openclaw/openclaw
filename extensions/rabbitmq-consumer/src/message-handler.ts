@@ -44,6 +44,41 @@ const rabbitMqMessageSchema = z.object({
 });
 
 /**
+ * Warmup message: a best-effort, history-less request sent when the user opens
+ * the chat, so the per-user agent (session, prompts, model connection, provider
+ * context cache) is spun up before the first real message. Carries no `id`.
+ */
+const warmupMessageSchema = z.object({
+  type: z.literal("warmup"),
+  user_id: z.union([z.string(), z.number()]).optional(),
+  session_id: z.string().optional(),
+});
+
+export type WarmupMessage = { userId: string; sessionId: string };
+
+/**
+ * Detect and parse a warmup message. Returns null for anything that isn't a
+ * `{ type: "warmup" }` envelope, so ordinary chat messages fall through to
+ * parseMessage. Must be checked BEFORE parseMessage (warmup has no `id`).
+ */
+export function parseWarmup(rawBody: Buffer): WarmupMessage | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString("utf-8"));
+  } catch {
+    return null;
+  }
+  const result = warmupMessageSchema.safeParse(parsed);
+  if (!result.success) {
+    return null;
+  }
+  return {
+    userId: result.data.user_id != null ? String(result.data.user_id) : "",
+    sessionId: result.data.session_id ?? "",
+  };
+}
+
+/**
  * Parse and validate a raw RabbitMQ message buffer into a ChatMessage.
  * Supports both old (nested `body`) and new (flat) message formats.
  */

@@ -261,6 +261,40 @@ async function createReportTaskAndRespond(args: {
  * each LLM text delta is forwarded to the frontend in near-real-time via
  * Mercure SSE, creating a typewriter effect.
  */
+/**
+ * Best-effort pre-warm of a user's chat agent, triggered when the frontend
+ * opens the chat. Pays the cold-start cost up front — agent session spawn,
+ * injected-prompt loading, model connection, and provider context-cache priming
+ * for the shared system-prompt prefix — so the user's FIRST real message returns
+ * far faster. Runs in a dedicated warmup session so it never pollutes the user's
+ * real conversation history, and never pushes anything to Mercure. All failures
+ * are swallowed: a warmup must never affect the user-visible flow.
+ */
+export async function warmupAgent(
+  userId: string,
+  runtime: PluginRuntime,
+  logger: PluginLogger,
+): Promise<void> {
+  if (!userId) {
+    return;
+  }
+  try {
+    const agentId = `rabbitmq-${userId}`;
+    const sessionKey = `agent:${agentId}:rabbitmq-warmup:${userId}`;
+    logger.info(`[CHAT_PIPELINE] Warmup starting for agentId=${agentId}`);
+    const runResult = await runtime.subagent.run({
+      sessionKey,
+      // Trivial turn: just enough to load the agent + prime the model/cache.
+      message: "[warmup] 仅回复 OK，无需调用任何工具。",
+      deliver: false,
+    });
+    await runtime.subagent.waitForRun({ runId: runResult.runId, timeoutMs: 60_000 });
+    logger.info(`[CHAT_PIPELINE] Warmup completed for agentId=${agentId}`);
+  } catch (err) {
+    logger.warn(`[CHAT_PIPELINE] Warmup failed (non-fatal): ${String(err)}`);
+  }
+}
+
 export async function processChatMessage(
   chatMsg: ChatMessage,
   historyManager: HistoryManager,
@@ -452,6 +486,29 @@ export async function processChatMessage(
     // queries etc.) it produces no assistant deltas, so without these pushes
     // the frontend sees nothing for the whole tool phase. Only the tool NAME
     // is mapped to a generic status line — args (SQL, paths) never leak.
+    // Immediate feedback: light up the frontend "工作过程" timeline the instant
+    // processing starts, so the user sees activity through the cold-start + model
+    // first-token wait instead of a blank "思考中…". This first step is ended as
+    // soon as real output begins (a tool step, or the first assistant delta).
+    const INIT_STEP_ID = "init";
+    let initStepEnded = false;
+    const INIT_STEP_LABEL = "正在理解您的问题";
+    void mercure.pushStep(
+      mercureTopic,
+      { phase: "start", stepId: INIT_STEP_ID, index: 0, label: INIT_STEP_LABEL, category: "default", status: "running" },
+      chatMsg.historyId,
+    );
+    void mercure.pushProgress(mercureTopic, `${INIT_STEP_LABEL}…`, chatMsg.historyId);
+    const endInitStep = () => {
+      if (initStepEnded) return;
+      initStepEnded = true;
+      void mercure.pushStep(
+        mercureTopic,
+        { phase: "end", stepId: INIT_STEP_ID, index: 0, label: INIT_STEP_LABEL, category: "default", status: "completed" },
+        chatMsg.historyId,
+      );
+    };
+
     const narrator = new ToolActivityNarrator({
       push: (message) => {
         void mercure.pushProgress(mercureTopic, message, chatMsg.historyId);
@@ -459,6 +516,7 @@ export async function processChatMessage(
       // Structured timeline steps (start/end) for the frontend's "工作过程"
       // panel. Sanitized label/category only — the narrator never reads args.
       onStep: (step) => {
+        endInitStep();
         void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
       },
     });
@@ -480,6 +538,7 @@ export async function processChatMessage(
       }
       const delta = extractAssistantDelta(evt.data);
       if (delta) {
+        endInitStep();
         streamPusherCtx.streamPusher!.appendDelta(delta);
       }
     });
@@ -490,11 +549,9 @@ export async function processChatMessage(
         `[CHAT_PIPELINE] Running subagent for agentId=${agentId}, sessionKey=${sessionKey}`,
       );
 
-      // Early ack: reassure the frontend we are processing so it does not time
-      // out waiting for the first token (cold-start + model latency can be long).
-      // Fire-and-forget: a `text` chunk, not a `done` signal, so it just prefixes
-      // the streamed reply and never blocks the pipeline.
-      void mercure.pushText(mercureTopic, "正在处理，请稍候…", chatMsg.historyId);
+      // Early ack is now the init step + progress pushed above (a `step`, not a
+      // `text` chunk) so the "工作过程" panel lights up immediately without
+      // prefixing throwaway text into the reply bubble.
 
       // When the caller opts out of memory (use_memory:false), instruct the agent
       // to skip long-term recall for this turn. Memory tools (memory_search /

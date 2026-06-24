@@ -256,10 +256,15 @@ describe("processChatMessage", () => {
       return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
     });
 
+    // Progress now includes an immediate "理解问题" ack pushed at run start,
+    // followed by the sanitized tool-activity line. Assert the tool line is
+    // present and correctly tagged rather than pinning the exact count.
     const progressEvents = payloads.filter((p) => p.type === "progress");
-    expect(progressEvents).toHaveLength(1);
-    expect(progressEvents[0].historyId).toBe(1);
-    expect(progressEvents[0].content).toBe("正在查询分析数据（第 1 步）…");
+    const toolProgress = progressEvents.find(
+      (p) => p.content === "正在查询分析数据（第 1 步）…",
+    );
+    expect(toolProgress).toBeDefined();
+    expect(toolProgress?.historyId).toBe(1);
     for (const evt of payloads) {
       expect(JSON.stringify(evt)).not.toContain("SECRET");
       expect(JSON.stringify(evt)).not.toContain("SELECT");

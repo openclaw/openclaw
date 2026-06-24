@@ -1,9 +1,9 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
-import { processChatMessage } from "./src/chat-pipeline.js";
+import { processChatMessage, warmupAgent } from "./src/chat-pipeline.js";
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
-import { parseMessage } from "./src/message-handler.js";
+import { parseMessage, parseWarmup } from "./src/message-handler.js";
 import { RabbitMqClient } from "./src/rabbitmq-client.js";
 import { ReportTaskPublisher } from "./src/report-task-publisher.js";
 import { ReportTemplateLookup } from "./src/report-template-lookup.js";
@@ -127,6 +127,15 @@ export default definePluginEntry({
         );
 
         const client = new RabbitMqClient(pluginConfig.rabbitmq, ctx.logger, async (msg) => {
+          // Warmup envelopes carry no history id and must be handled before
+          // parseMessage (which would reject them). Best-effort, fire silently.
+          const warmup = parseWarmup(msg.content);
+          if (warmup) {
+            ctx.logger.info(`[RABBITMQ_CONSUMER] Warmup request: userId=${warmup.userId}`);
+            await warmupAgent(warmup.userId, api.runtime, ctx.logger);
+            return;
+          }
+
           const chatMsg = parseMessage(msg.content);
           if (!chatMsg) {
             ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
