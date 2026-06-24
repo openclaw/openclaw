@@ -22,6 +22,7 @@ describe("maskApiKey", () => {
   it("strips control characters before masking diagnostic output", () => {
     expect(maskApiKey("abcd\nefghijklmnop")).toBe("ab...op");
     expect(maskApiKey("abcd\u0000efghijklmnop")).toBe("ab...op");
+    expect(maskApiKey("abcd\u007f\u0085efghijklmnop")).toBe("ab...op");
     expect(maskApiKey("\u0000\n")).toBe("missing");
   });
 });
