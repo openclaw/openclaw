@@ -637,4 +637,25 @@ describe("gateway config mutation guard coverage", () => {
       },
     );
   });
+
+  it("allows bootstrapMaxChars edits via config.patch", () => {
+    expectAllowed(
+      { agents: { defaults: { bootstrapMaxChars: 20000 } } },
+      { agents: { defaults: { bootstrapMaxChars: 50000 } } },
+    );
+  });
+
+  it("allows bootstrapTotalMaxChars edits via config.patch", () => {
+    expectAllowed(
+      { agents: { defaults: { bootstrapTotalMaxChars: 60000 } } },
+      { agents: { defaults: { bootstrapTotalMaxChars: 150000 } } },
+    );
+  });
+
+  it("allows bootstrapMaxChars edits via config.apply", () => {
+    expectAllowedApply(
+      { agents: { defaults: { bootstrapMaxChars: 20000 } } },
+      { agents: { defaults: { bootstrapMaxChars: 50000 } } },
+    );
+  });
 });

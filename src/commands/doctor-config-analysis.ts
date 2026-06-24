@@ -72,6 +72,7 @@ function isUpdateInProgress(): boolean {
 const ROOT_STRIP_PROTECTED_KEYS = new Set(["defaultModel"]);
 const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
   plugins: new Set(["installs"]),
+  "agents.defaults": new Set(["bootstrapMaxChars", "bootstrapTotalMaxChars"]),
 };
 
 /**
@@ -106,7 +107,9 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     }
     const record = target as Record<string, unknown>;
     const parentKey =
-      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
+      issuePath.length > 0
+        ? issuePath.map((p) => (typeof p === "number" ? `[${p}]` : p)).join(".")
+        : undefined;
     const protectedSet =
       issuePath.length === 0
         ? ROOT_STRIP_PROTECTED_KEYS

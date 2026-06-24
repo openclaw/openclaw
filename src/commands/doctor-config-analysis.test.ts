@@ -146,6 +146,28 @@ describe("doctor config analysis helpers", () => {
         "matrix",
       ]);
     });
+
+    it("never strips agents.defaults.bootstrapMaxChars even when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        agents: { defaults: { bootstrapMaxChars: 50000, badKey: true } },
+      } as never);
+      expect(result.removed).toContain("agents.defaults.badKey");
+      expect(result.removed).not.toContain("agents.defaults.bootstrapMaxChars");
+      const defaults = result.config.agents?.defaults;
+      expect(defaults).toBeDefined();
+      expect(defaults?.bootstrapMaxChars).toBe(50000);
+    });
+
+    it("never strips agents.defaults.bootstrapTotalMaxChars even when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        agents: { defaults: { bootstrapTotalMaxChars: 150000, badKey: true } },
+      } as never);
+      expect(result.removed).toContain("agents.defaults.badKey");
+      expect(result.removed).not.toContain("agents.defaults.bootstrapTotalMaxChars");
+      const defaults = result.config.agents?.defaults;
+      expect(defaults).toBeDefined();
+      expect(defaults?.bootstrapTotalMaxChars).toBe(150000);
+    });
   });
 });
 

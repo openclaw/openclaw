@@ -57,6 +57,8 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
+  "agents.defaults.bootstrapMaxChars",
+  "agents.defaults.bootstrapTotalMaxChars",
   "agents.list[].id",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
