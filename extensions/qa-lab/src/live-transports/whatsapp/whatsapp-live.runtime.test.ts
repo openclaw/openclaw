@@ -276,7 +276,7 @@ describe("WhatsApp QA live runtime", () => {
       await fs.mkdir(debugDir);
       const emptyDebugView = await testing.buildPublishedWhatsAppQaRunView({
         cleanupIssues: [
-          "WhatsApp QA failed before scenario completion: private setup failure details",
+          "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
         ],
         gatewayDebugDirPath: debugDir,
         preservedGatewayDebugArtifacts: true,
@@ -287,19 +287,47 @@ describe("WhatsApp QA live runtime", () => {
             title: "WhatsApp DM canary",
             standardId: "canary",
             status: "fail",
-            details: "private setup failure details",
+            details:
+              "WhatsApp QA failed during driver session start: private setup failure details for +15550000002",
           },
         ],
       });
 
       expect(emptyDebugView.gatewayDebugDirPath).toBeUndefined();
       expect(emptyDebugView.cleanupIssues).toEqual([
-        "WhatsApp QA failed before scenario completion: " +
+        "WhatsApp QA failed during driver session start: " +
           "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
       ]);
       expect(emptyDebugView.scenarioResults[0]?.details).toBe(
-        "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+        "WhatsApp QA failed during driver session start",
       );
+
+      const poolExhaustedView = await testing.buildPublishedWhatsAppQaRunView({
+        cleanupIssues: [
+          'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms. private broker detail +15550000002',
+        ],
+        gatewayDebugDirPath: debugDir,
+        preservedGatewayDebugArtifacts: false,
+        redactMetadata: true,
+        scenarioResults: [
+          {
+            id: "whatsapp-canary",
+            title: "WhatsApp DM canary",
+            standardId: "canary",
+            status: "fail",
+            details:
+              'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms. private broker detail +15550000002',
+          },
+        ],
+      });
+
+      expect(poolExhaustedView.cleanupIssues).toEqual([
+        'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms.',
+      ]);
+      expect(poolExhaustedView.scenarioResults[0]?.details).toBe(
+        'WhatsApp QA failed during credential lease acquisition: Convex credential pool exhausted for kind "whatsapp" after 1800000ms.',
+      );
+      expect(JSON.stringify(poolExhaustedView)).not.toContain("+15550000002");
 
       await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
       await expect(
@@ -400,6 +428,7 @@ describe("WhatsApp QA live runtime", () => {
       "top-level-reply-shape",
       "restart-resume",
       "help-command",
+      "quote-reply",
       "reaction-observation",
       "allowlist-block",
     ]);
@@ -603,6 +632,8 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-top-level-reply-shape",
       "whatsapp-restart-resume",
       "whatsapp-help-command",
+      "whatsapp-reply-to-message",
+      "whatsapp-group-reply-to-message",
       "whatsapp-status-reactions",
       "whatsapp-group-allowlist-block",
     ];
@@ -628,6 +659,8 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-whoami-command",
       "whatsapp-context-command",
       "whatsapp-tool-only-usage-footer",
+      "whatsapp-reply-to-message",
+      "whatsapp-group-reply-to-message",
       "whatsapp-reply-context-isolation",
       "whatsapp-inbound-image-caption",
       "whatsapp-audio-preflight",
@@ -647,6 +680,68 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-status-reactions",
       "whatsapp-group-allowlist-block",
     ]);
+  });
+
+  it("defines quote-reply scenarios for DM and group replies", () => {
+    const scenarios = testing.findScenarios([
+      "whatsapp-reply-to-message",
+      "whatsapp-group-reply-to-message",
+    ]);
+    const runs = scenarios.map((scenario) => {
+      const run = scenario.buildRun();
+      if (run.kind === "approval" || !run.verify) {
+        throw new Error(`${scenario.id} unexpectedly built a non-message run`);
+      }
+      return { scenario, run };
+    });
+
+    expect(
+      runs.map(({ scenario, run }) => ({
+        id: scenario.id,
+        requiresGroupJid: scenario.requiresGroupJid,
+        standardId: scenario.standardId,
+        target: run.target,
+      })),
+    ).toEqual([
+      {
+        id: "whatsapp-reply-to-message",
+        requiresGroupJid: undefined,
+        standardId: "quote-reply",
+        target: "dm",
+      },
+      {
+        id: "whatsapp-group-reply-to-message",
+        requiresGroupJid: true,
+        standardId: "quote-reply",
+        target: "group",
+      },
+    ]);
+    expect(runs[0]?.run.input).not.toContain("openclawqa");
+    expect(runs[1]?.run.input).toMatch(/^openclawqa\b/u);
+
+    for (const { run } of runs) {
+      expect(() =>
+        run.verify?.(
+          {
+            kind: "text",
+            observedAt: "2026-06-05T01:00:01.000Z",
+            quoted: { messageId: "trigger-message-id" },
+            text: "reply",
+          },
+          { sent: { messageId: "trigger-message-id" } } as never,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        run.verify?.(
+          {
+            kind: "text",
+            observedAt: "2026-06-05T01:00:01.000Z",
+            text: "reply",
+          },
+          { sent: { messageId: "trigger-message-id" } } as never,
+        ),
+      ).toThrow("expected reply quote trigger-message-id, got <missing>");
+    }
   });
 
   it("seeds the structured-message location check through text context", () => {

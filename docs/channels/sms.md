@@ -24,6 +24,7 @@ OpenClaw can receive and send SMS through a Twilio phone number or Messaging Ser
 
 You need:
 
+- The official SMS plugin installed with `openclaw plugins install @openclaw/sms`.
 - A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
 - The Twilio Account SID and Auth Token.
 - A public HTTPS URL that reaches your OpenClaw Gateway.
@@ -34,6 +35,11 @@ Use one Twilio number for both SMS and Voice Call if the number has both capabil
 ## Quick Setup
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/sms
+    ```
+  </Step>
   <Step title="Create or choose a Twilio sender">
     In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
 

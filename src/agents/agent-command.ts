@@ -891,6 +891,7 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
 
@@ -1099,7 +1100,7 @@ async function agentCommandInternal(
               sessionFile: internalSessionFile,
             }
           : sessionEntry;
-        sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
+        const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           transcriptBody,
           finalText: finalTextRaw,
@@ -1113,6 +1114,7 @@ async function agentCommandInternal(
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
         });
+        sessionEntry = transcriptResult.sessionEntry;
         if (internalSessionFile) {
           sessionEntry = prepared.sessionEntry;
         }
@@ -1426,6 +1428,11 @@ async function agentCommandInternal(
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+            directUserIds: [
+              sessionEntry?.origin?.nativeDirectUserId,
+              sessionEntry?.origin?.from,
+              sessionEntry?.origin?.to,
+            ],
           })
         : null;
     const normalizedChannelOverride = channelModelOverride
@@ -1803,6 +1810,7 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
+    const fastModeStartedAtMs = Date.now();
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1893,6 +1901,14 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+            const fastModeState = resolveFastModeState({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: sessionAgentId,
+              sessionEntry,
+            });
+            const fastMode = opts.fastMode ?? fastModeState.mode;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1909,13 +1925,13 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
-              fastMode: resolveFastModeState({
-                cfg,
-                provider: providerOverride,
-                model: modelOverride,
-                agentId: sessionAgentId,
-                sessionEntry,
-              }).enabled,
+              fastMode,
+              fastModeStartedAtMs,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
@@ -2166,7 +2182,10 @@ async function agentCommandInternal(
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
-      if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+      if (
+        !sessionReboundDuringRun &&
+        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+      ) {
         let persistedCliTurnTranscript = false;
         try {
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
@@ -2180,7 +2199,7 @@ async function agentCommandInternal(
                 sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
-          sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+          const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
@@ -2195,10 +2214,12 @@ async function agentCommandInternal(
             config: cfg,
             embeddedAssistantGapFill,
           });
+          sessionEntry = transcriptResult.sessionEntry;
+          sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
           if (suppressVisibleSessionEffects) {
             sessionEntry = prepared.sessionEntry;
           }
-          persistedCliTurnTranscript = true;
+          persistedCliTurnTranscript = transcriptResult.kind === "persisted";
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -2240,6 +2261,7 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -2316,7 +2338,8 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !isSubagentSessionKey(sessionKey) &&
-        !suppressVisibleSessionEffects
+        !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun
       ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
@@ -2348,7 +2371,12 @@ async function agentCommandInternal(
       throw error;
     }
   } finally {
-    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+    if (
+      !sessionReboundDuringRun &&
+      trackedRestartRecoveryDeliveryContext &&
+      sessionStore &&
+      sessionKey
+    ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {

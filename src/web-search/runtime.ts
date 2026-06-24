@@ -27,7 +27,7 @@ import {
   providerRequiresCredential,
   readWebProviderEnvValue,
   resolveWebProviderConfig,
-} from "../web/provider-runtime-shared.js";
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,

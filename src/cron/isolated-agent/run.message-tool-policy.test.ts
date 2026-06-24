@@ -15,6 +15,7 @@ import {
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
+  queueCronMessageToolDeliveryAwarenessMock,
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -251,13 +252,17 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   async function expectCronFallbackSkippedForMessageToolDelivery(options: {
     sentTargets: Array<Record<string, unknown>>;
     job?: Parameters<typeof makeAnnounceMessageToolJob>[0];
+    cfg?: Record<string, unknown>;
   }) {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
     runEmbeddedAgentMock.mockResolvedValue(makeMessageToolRunResult(options.sentTargets));
+    const params = makeParams();
+    const cfg = options.cfg ?? params.cfg;
 
     const result = await runCronIsolatedAgentTurn({
-      ...makeParams(),
+      ...params,
+      cfg,
       job: makeAnnounceMessageToolJob(options.job),
     });
 
@@ -284,6 +289,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       fallbackUsed: false,
       delivered: true,
     });
+    return { cfg, result };
   }
 
   beforeEach(() => {
@@ -819,6 +825,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.prompt).toContain("Message delivery destination metadata");
   });
 
+  it("drops the auto-applied default toolsAllow cap for CLI-backed runs instead of failing", async () => {
+    // A CLI backend cannot enforce a runtime toolsAllow, so the auto-applied
+    // creator-surface cap (#91499, flagged toolsAllowIsDefault) is dropped at
+    // run time rather than handed to the CLI runner — which would otherwise
+    // reject the run. An explicit user restriction (no flag) is still
+    // propagated; see the "restricted toolsAllow" case above.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        {
+          kind: "agentTurn",
+          message: "send a message",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      ),
+    });
+
+    const cliRun = expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {},
+      "CLI run params",
+    );
+    expect(cliRun.toolsAllow).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -1176,8 +1217,20 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
-    await expectCronFallbackSkippedForMessageToolDelivery({
+    const { cfg } = await expectCronFallbackSkippedForMessageToolDelivery({
+      cfg: { session: { dmScope: "agent" } },
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
+    });
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
+    const awarenessParams = queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0];
+    expect(awarenessParams?.cfg).not.toBe(cfg);
+    expect(awarenessParams).toMatchObject({
+      job: { id: "message-tool-policy" },
+      resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
+      sourceDeliveryOutcome: {
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+      },
     });
   });
 
@@ -1209,6 +1262,51 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
       fallbackUsed: true,
       delivered: true,
+    });
+  });
+
+  it("queues awareness for explicit message-tool sends even when they do not satisfy the delivery target", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([
+        {
+          tool: "message",
+          provider: "openclaw-weixin",
+          to: "user-123",
+          text: "386502",
+        },
+      ]),
+    );
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "message-tool-off-plan-awareness",
+        name: "Message Tool Off Plan Awareness",
+      }),
+    });
+
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
+    expect(queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { id: "message-tool-off-plan-awareness" },
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            verifiedTarget: false,
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "user-123",
+              text: "386502",
+            },
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
     });
   });
 

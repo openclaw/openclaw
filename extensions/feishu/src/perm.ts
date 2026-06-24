@@ -145,6 +145,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              requiredTool: { family: "perm", label: "Perm" },
             });
             switch (p.action) {
               case "list":

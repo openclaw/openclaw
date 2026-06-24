@@ -9,7 +9,10 @@ import {
   type AcpSessionLineageMeta,
 } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 
@@ -50,6 +53,7 @@ export type GatewaySessionPresentationRow = Pick<
   | "updatedAt"
   | "thinkingLevel"
   | "fastMode"
+  | "effectiveFastMode"
   | "modelProvider"
   | "model"
   | "thinkingLevels"
@@ -160,6 +164,7 @@ export function buildSessionPresentation(params: {
     ...BASE_THINKING_LEVELS,
   ];
   const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
+  const currentFastMode = normalizeFastMode(row.effectiveFastMode ?? row.fastMode) ?? false;
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
   }
@@ -187,8 +192,8 @@ export function buildSessionPresentation(params: {
       id: ACP_FAST_MODE_CONFIG_ID,
       name: "Fast mode",
       description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
-      currentValue: row.fastMode ? "on" : "off",
-      values: ["off", "on"],
+      currentValue: currentFastMode === "auto" ? "auto" : currentFastMode ? "on" : "off",
+      values: ["off", "auto", "on"],
     }),
     buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
@@ -216,9 +221,9 @@ export function buildSessionPresentation(params: {
       id: ACP_RESPONSE_USAGE_CONFIG_ID,
       name: "Usage detail",
       description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: normalizeOptionalString(row.responseUsage) || "off",
-      values: ["off", "tokens", "full"],
+        "Controls how much usage information OpenClaw attaches to responses for the session. 'inherit' follows the configured default; 'off' explicitly disables it for this session.",
+      currentValue: normalizeOptionalString(row.responseUsage) || "inherit",
+      values: ["inherit", "off", "tokens", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,

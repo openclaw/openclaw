@@ -52,6 +52,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
     expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
     expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+    expect(respawnPlan.detachForProcessTree).toBe(true);
   });
 
   it.each(["tui", "terminal", "chat"] as const)(
@@ -70,8 +71,23 @@ describe("buildCliRespawnPlan", () => {
       expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
       expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
       expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+      expect(respawnPlan.detachForProcessTree).toBe(false);
     },
   );
+
+  it("keeps bare-root startup respawns attached to the terminal", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw"],
+      env: {},
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
+    expect(respawnPlan.detachForProcessTree).toBe(false);
+  });
 
   it("does not respawn interactive commands for warning suppression only", () => {
     expect(
@@ -135,6 +151,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
     expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
     expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+    expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
   it("normalizes duplicated Windows node.exe argv before respawning", () => {
@@ -208,6 +225,7 @@ describe("buildCliRespawnPlan", () => {
       "/usr/local/bin/openclaw",
       "status",
     ]);
+    expect(respawnPlan.detachForProcessTree).toBe(true);
   });
 });
 
@@ -224,6 +242,7 @@ describe("runCliRespawnPlan", () => {
         command: "/usr/bin/node",
         argv: ["/repo/openclaw/dist/entry.js", "status"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+        detachForProcessTree: true,
       },
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -239,6 +258,8 @@ describe("runCliRespawnPlan", () => {
       {
         stdio: "inherit",
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+        detached:
+          process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(
@@ -269,6 +290,7 @@ describe("runCliRespawnPlan", () => {
           command: "/usr/bin/node",
           argv: ["/repo/openclaw/dist/entry.js", "tui"],
           env: {},
+          detachForProcessTree: false,
         },
         {
           spawn: spawn as unknown as typeof import("node:child_process").spawn,

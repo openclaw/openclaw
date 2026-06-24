@@ -2,6 +2,13 @@
 
 set -euo pipefail
 
+# This wrapper parses GitHub CLI JSON. Caller shells may force ANSI color globally.
+export NO_COLOR=1
+export CLICOLOR=0
+export CLICOLOR_FORCE=0
+export FORCE_COLOR=0
+unset COLORTERM
+
 # If invoked from a linked worktree copy of this script, re-exec the canonical
 # script from the repository root so behavior stays consistent across worktrees.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -13,6 +20,9 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
     exec "$canonical_self" "$@"
   fi
 fi
+
+# shellcheck disable=SC1091
+source "$script_parent_dir/lib/plain-gh.sh"
 
 usage() {
   cat <<USAGE
@@ -41,16 +51,25 @@ USAGE
 require_cmds() {
   local missing=()
   local cmd
-  for cmd in git gh jq rg pnpm node; do
+  for cmd in git jq rg pnpm node; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
   done
+  if ! OPENCLAW_GH_BIN="$(resolve_plain_gh_bin)"; then
+    missing+=("gh")
+  else
+    export OPENCLAW_GH_BIN
+  fi
 
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing required command(s): ${missing[*]}"
     exit 1
   fi
+}
+
+gh() {
+  gh_plain "$@"
 }
 
 # shellcheck disable=SC1091

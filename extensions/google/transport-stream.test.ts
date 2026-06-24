@@ -547,6 +547,62 @@ describe("google transport stream", () => {
     ]);
   });
 
+  it("keeps duplicate tool-call ids distinct while retaining the first signature", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "first",
+                      args: { value: 1 },
+                    },
+                    thoughtSignature: "first_signature",
+                  },
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "second",
+                      args: { value: 2 },
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(buildGeminiModel(), {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never),
+    );
+    const result = await stream.result();
+    const toolCalls = result.content.filter((block) => block.type === "toolCall");
+
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "first",
+      arguments: { value: 1 },
+      thoughtSignature: "first_signature",
+    });
+    expect(toolCalls[1]).toMatchObject({
+      name: "second",
+      arguments: { value: 2 },
+      thoughtSignature: "first_signature",
+    });
+    expect(toolCalls[1]?.id).not.toBe("call_1");
+  });
+
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([

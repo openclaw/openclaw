@@ -17,6 +17,10 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - This skill should be sufficient to drive the normal release flow end-to-end.
 - Use the private maintainer release docs for credentials, recovery steps, and mac signing/notary specifics, and use `docs/reference/RELEASING.md` for public policy.
 - Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
+- Do not edit the root `README.md` as release prep, release closeout, or a
+  substitute for release notes. Package-root README validation is a hard
+  packaging gate, but a release only changes README content when an actual
+  user-facing documentation contract changed.
 - Normal release work happens on a branch cut from `main`, not directly on
   `main`. Use `release/YYYY.M.PATCH` for the branch name.
 - If the operator asks for a release without saying stable/full, default to
@@ -76,6 +80,44 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   or clawgrit reports. Report regressions explicitly. A major regression is a
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
+- Heal CI before tagging or publishing. The exact candidate SHA must have green
+  `Full Release Validation`, including the root Dockerfile/install-smoke path.
+  Treat a red Docker, package, or release workflow lane as a release-branch
+  defect until the smallest correct fix is landed and proven; do not waive it
+  because npm preflight or another sibling lane passed.
+- Keep the canonical `scripts/pr` runner authoritative for prepare and merge
+  artifacts. A release-gate policy change may use focused candidate tests and
+  exact-SHA hosted CI for proof, but never route `prepare-*` or `merge-*`
+  through PR-controlled scripts or synthesize prepare artifacts to bootstrap
+  the change. If the current canonical gate cannot validate the new policy,
+  stop for explicit maintainer direction rather than weakening that boundary.
+- In maintainer Testbox mode, use `OPENCLAW_TESTBOX=1 scripts/pr prepare-run
+<PR>` only after the exact PR head has passed `CI` and every scheduled
+  hosted gate. For a workflow change, that means `Blacksmith Testbox`,
+  `Blacksmith ARM Testbox`, `Blacksmith Build Artifacts Testbox`, and
+  `Workflow Sanity`; only gates GitHub actually scheduled for that exact head
+  are required. This preserves the canonical prepare artifacts while avoiding
+  a redundant broad local suite. A
+  literal `CHANGELOG.md`-only head gets a clean diff check instead because
+  those workflows intentionally do not dispatch. Documentation and README
+  changes still require CI. If `merge-run` requires a mainline sync, run
+  `OPENCLAW_TESTBOX=1 scripts/pr prepare-sync-head <PR>`, wait for those hosted
+  gates on the newly pushed SHA, then run `prepare-run` again.
+- If an exact PR-head CI run has no active jobs because Blacksmith capacity is
+  stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
+  the PR head branch:
+  `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+  Use it only for an observed provider queue stall, never for failed CI or as a
+  routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
+  pass on that exact SHA; the native hosted-gate verifier rejects generic manual
+  CI runs. If `Blacksmith Build Artifacts Testbox` is the only remaining
+  required gate and it is still queued without a runner, the same completed
+  fallback CI may cover it because its `build-artifacts` job builds, packages,
+  and smoke tests those artifacts. The verifier records that coverage. Never
+  use this coverage when the artifact workflow has started, failed, been
+  cancelled, or been skipped. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr
+prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
@@ -119,6 +161,14 @@ Stable publication is not complete until `main` carries the actual shipped relea
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
    contains the shipped version and changelog before calling the stable release
    done.
+6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
+   `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
+   `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
+   shipped version, changelog, and appcast after stable publication, then binds
+   immutable evidence to the published tag. Do not declare stable complete
+   until it writes the immutable closeout manifest to the GitHub release. The
+   drill must be within 90 days; manual dispatch is only for repair/replay, and
+   private rollback commands remain in the maintainer-only runbook.
 
 ## Handle versions and release files consistently
 
@@ -199,12 +249,20 @@ Stable publication is not complete until `main` carries the actual shipped relea
   section from history, not existing notes. Use the last reachable stable or
   beta release tag as the base, then inspect every commit through the target
   release SHA.
+- Generate `$openclaw-changelog-update`'s full contribution manifest before
+  the editorial rewrite. It is the required source for `### Highlights`,
+  `### Changes`, and `### Fixes`; do not preserve old grouped prose without
+  comparing it to the manifest's PRs, contributors, direct commits, and
+  unlinked commits.
 - The changelog rewrite is not optional for beta reruns: any `beta.N` after a
   rebase or backport must refresh the same stable-base `## YYYY.M.PATCH` section
   before the new version/tag commit.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
+- Keep direct commits in the generated manifest and use them to shape grouped
+  user outcomes, but never dump them into `CHANGELOG.md` or GitHub release
+  bodies. The public complete record is PR-first and exhaustive for PRs.
 - Prefer PR bodies, issue links, review proof, and commit bodies over commit
   subjects alone. If a commit fixed an issue directly, the commit body should
   name the user-visible behavior, affected surface, issue ref, and credited
@@ -220,11 +278,31 @@ Stable publication is not complete until `main` carries the actual shipped relea
   `#issue`, `(#PR)`, `Fixes #...`, and every human `Thanks @...` handle.
   Multiple thanks in one bullet are expected when multiple contributor PRs are
   grouped.
+- Highlights earn their place only when they are a visible capability/workflow
+  unlock, a material reliability or safety repair, a broad user-facing
+  improvement, or a release-defining integration/compatibility change. Keep
+  five to eight user-outcome bullets; omit tests, CI, refactors, docs, and
+  implementation trivia unless their outcome materially affects users.
+- Do not give `docs`, `test`, `refactor`, `ci`, `build`, `chore`, or `style`
+  PRs/direct commits their own Highlights, Changes, or Fixes entry. They remain
+  accounted for in the PR record or manifest, but are not product release
+  content. Treat explicit internal title signals such as `QA`, `lint`, or
+  `testing` the same way even when the PR has no conventional prefix.
+- Use the generated `### Complete contribution record` as PR-first accounting:
+  every merged source PR appears once with author/co-author credit, including
+  PRs identified only by an explicit active-commit `#NNN` reference after a
+  cherry-pick or squash. Keep issues inline as `#NNN` in titles and grouped
+  prose; do not create a linked-issues inventory or a direct-commit listing.
+  When grouped prose names a PR, keep every contributor and linked-reporter
+  credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.PATCH` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- GitHub limits release bodies to 125,000 characters. If a historical
+  `### Release verification` tail would exceed that cap, omit the tail and keep
+  the complete changelog section; do not truncate the contribution record.
 - Before publishing or closing a release, run
   `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
   and beta release tag in the train. Do not publish or leave a page live when

@@ -23,6 +23,7 @@ describe("qa channel transport", () => {
         },
       },
       messages: {
+        visibleReplies: "automatic",
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
           visibleReplies: "automatic",
