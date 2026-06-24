@@ -34,7 +34,7 @@ import {
   setInteractionSecret,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
-import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
+import { isMattermostId, parseMattermostApiStatus, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
   cfg: OpenClawConfig;
@@ -308,18 +308,21 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
       });
       await fetchMattermostChannel(client, params.target.id);
       return params.target.id;
-    } catch {
-      if (params.logger?.debug) {
-        params.logger.debug(
-          `mattermost channel ${params.target.id} not found by id, falling back to name lookup`,
-        );
+    } catch (err) {
+      if (parseMattermostApiStatus(err) === 404) {
+        if (params.logger?.debug) {
+          params.logger.debug(
+            `mattermost channel ${params.target.id} not found by id, falling back to name lookup`,
+          );
+        }
+        return await resolveChannelIdByName({
+          baseUrl: params.baseUrl,
+          token: params.token,
+          name: params.target.id,
+          allowPrivateNetwork: params.allowPrivateNetwork,
+        });
       }
-      return await resolveChannelIdByName({
-        baseUrl: params.baseUrl,
-        token: params.token,
-        name: params.target.id,
-        allowPrivateNetwork: params.allowPrivateNetwork,
-      });
+      throw err;
     }
   }
   if (params.target.kind === "channel-name") {
