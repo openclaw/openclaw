@@ -2269,15 +2269,27 @@ async function runEmbeddedAgentInternal(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
+          const currentAttemptAssistantUsage = normalizeUsage(
+            currentAttemptAssistant?.usage as UsageLike,
+          );
+          const promptCacheLastCallUsage = normalizeUsage(
+            attempt.promptCache?.lastCallUsage as UsageLike,
+          );
           const usableLastAssistantUsage = hasNonzeroUsage(lastAssistantUsage)
             ? lastAssistantUsage
             : undefined;
-          const attemptUsage = attempt.attemptUsage ?? usableLastAssistantUsage;
+          const latestCallUsage =
+            usableLastAssistantUsage ??
+            (hasNonzeroUsage(currentAttemptAssistantUsage)
+              ? currentAttemptAssistantUsage
+              : undefined) ??
+            (hasNonzeroUsage(promptCacheLastCallUsage) ? promptCacheLastCallUsage : undefined);
+          const attemptUsage = attempt.attemptUsage ?? latestCallUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
-          lastRunPromptUsage = usableLastAssistantUsage ?? attemptUsage;
-          lastTurnTotal = usableLastAssistantUsage?.total ?? attemptUsage?.total;
+          lastRunPromptUsage = latestCallUsage;
+          lastTurnTotal = latestCallUsage?.total;
           // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
           // pure helper below so it stays unit-testable; the run loop just
           // feeds it the latest attempt outcome and bails through the
@@ -3502,7 +3514,8 @@ async function runEmbeddedAgentInternal(
           }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage:
+              lastRunPromptUsage ?? (sessionLastAssistant?.usage as UsageLike | undefined),
             lastRunPromptUsage,
             lastTurnTotal,
           });
