@@ -30,6 +30,7 @@ export class SessionPicker extends LitElement {
   @state() private error: string | null = null;
   private requestId = 0;
   private searchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private triggerElement: HTMLElement | null = null;
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (!this.open || event.defaultPrevented || event.key !== "Escape") {
@@ -37,7 +38,7 @@ export class SessionPicker extends LitElement {
     }
     event.preventDefault();
     event.stopPropagation();
-    this.close();
+    this.close({ restoreFocus: true });
   };
 
   private readonly handleDocumentPointerdown = (event: PointerEvent) => {
@@ -62,6 +63,7 @@ export class SessionPicker extends LitElement {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
     this.clearSearchTimer();
+    this.triggerElement = null;
     super.disconnectedCallback();
   }
 
@@ -85,19 +87,38 @@ export class SessionPicker extends LitElement {
     }
   }
 
-  private toggle() {
+  private openFromTrigger(trigger: HTMLElement) {
     if (!this.connected) {
       return;
     }
-    this.open = !this.open;
-    if (this.open && !this.result) {
+    this.triggerElement = trigger;
+    this.open = true;
+    if (!this.result) {
       this.result = this.sessionsResult;
     }
   }
 
-  private close() {
+  private toggle(trigger: HTMLElement) {
+    if (this.open) {
+      this.close({ restoreFocus: true });
+      return;
+    }
+    this.openFromTrigger(trigger);
+  }
+
+  private close(options: { restoreFocus?: boolean } = {}) {
     this.clearSearchTimer();
+    const focusTarget = options.restoreFocus ? this.triggerElement : null;
     this.open = false;
+    this.triggerElement = null;
+    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (focusTarget.isConnected) {
+        focusTarget.focus();
+      }
+    });
   }
 
   private scheduleSearch() {
@@ -361,7 +382,7 @@ export class SessionPicker extends LitElement {
                   title=${label}
                   type="button"
                   @click=${() => {
-                    this.close();
+                    this.close({ restoreFocus: true });
                     if (!selected) {
                       this.onSelectSession?.(row.key);
                     }
@@ -424,11 +445,11 @@ export class SessionPicker extends LitElement {
             aria-expanded=${this.open ? "true" : "false"}
             aria-controls="chat-session-picker-sidebar"
             ?disabled=${!this.connected}
-            @click=${this.toggle}
+            @click=${(event: MouseEvent) => this.toggle(event.currentTarget as HTMLElement)}
             @keydown=${(event: KeyboardEvent) => {
               if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                this.open = true;
+                this.openFromTrigger(event.currentTarget as HTMLElement);
               }
             }}
           >

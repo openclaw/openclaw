@@ -20,7 +20,7 @@ export class AppTopbar extends LitElement {
   @property({ attribute: false }) routeOwnsHeader = false;
   @property({ attribute: false }) headerError: string | null = null;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) onToggleDrawer?: () => void;
+  @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) overviewHref = "";
@@ -46,7 +46,8 @@ export class AppTopbar extends LitElement {
           <button
             type="button"
             class="sidebar-menu-trigger topbar-nav-toggle"
-            @click=${() => this.onToggleDrawer?.()}
+            @click=${(event: MouseEvent) =>
+              this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
             title="${this.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
             aria-label="${this.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
             aria-expanded=${this.navDrawerOpen}

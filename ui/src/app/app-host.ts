@@ -199,6 +199,7 @@ class OpenClawShell extends LitElement {
   };
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
+  private navDrawerTrigger: HTMLElement | null = null;
 
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
@@ -297,6 +298,7 @@ class OpenClawShell extends LitElement {
     this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOut);
     this.removeEventListener("focusin", this.nativeTitleTooltipFocusIn);
     this.removeEventListener("focusout", this.nativeTitleTooltipFocusOut);
+    this.navDrawerTrigger = null;
     clearActiveFloatingTooltips(this);
     super.disconnectedCallback();
   }
@@ -324,8 +326,39 @@ class OpenClawShell extends LitElement {
         });
       }
     }
-    this.navDrawerOpen = false;
+    this.closeNavDrawer({ restoreFocus: true });
   }
+
+  private toggleNavDrawer(trigger: HTMLElement) {
+    if (this.navDrawerOpen) {
+      this.closeNavDrawer({ restoreFocus: true });
+      return;
+    }
+    this.navDrawerTrigger = trigger;
+    this.navDrawerOpen = true;
+  }
+
+  private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
+    const focusTarget = options.restoreFocus ? this.navDrawerTrigger : null;
+    this.navDrawerOpen = false;
+    this.navDrawerTrigger = null;
+    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (focusTarget.isConnected) {
+        focusTarget.focus();
+      }
+    });
+  }
+
+  private readonly handleShellKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
+      return;
+    }
+    event.preventDefault();
+    this.closeNavDrawer({ restoreFocus: true });
+  };
 
   private readonly openPalette = () => {
     this.commandPalette?.openPalette();
@@ -402,13 +435,14 @@ class OpenClawShell extends LitElement {
           : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
           : ""}"
+        @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
         <button
           type="button"
           class="shell-nav-backdrop"
           aria-label="Close navigation"
-          @click=${() => (this.navDrawerOpen = false)}
+          @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         <openclaw-app-topbar
           .routeId=${activeRoute}
@@ -420,7 +454,7 @@ class OpenClawShell extends LitElement {
           .themeMode=${context.theme.mode}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
-          .onToggleDrawer=${() => (this.navDrawerOpen = !this.navDrawerOpen)}
+          .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
           .onNavigate=${(routeId: string) => this.navigate(routeId)}
         ></openclaw-app-topbar>
         <div class="shell-nav">
@@ -439,7 +473,7 @@ class OpenClawShell extends LitElement {
             .themeMode=${context.theme.mode}
             .onToggleCollapsed=${() => {
               if (navDrawerOpen) {
-                this.navDrawerOpen = false;
+                this.closeNavDrawer({ restoreFocus: true });
                 return;
               }
               context.navigation.update({
