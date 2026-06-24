@@ -4514,15 +4514,12 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
-  const plans =
-    stateSchema.changes.length > 0
-      ? []
-      : await collectPluginDoctorStateMigrationPlans({
-          cfg: params.config,
-          env,
-          stateDir,
-          oauthDir,
-        });
+  const plans = await collectPluginDoctorStateMigrationPlans({
+    cfg: params.config,
+    env,
+    stateDir,
+    oauthDir,
+  });
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   for (const plan of plans) {

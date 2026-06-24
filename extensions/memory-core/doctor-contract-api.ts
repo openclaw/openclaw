@@ -162,9 +162,7 @@ function readLegacySidecarCounts(
   options: { copyVectorRows: boolean },
 ): Pick<LegacyMemorySidecarImportResult, "sources" | "chunks" | "cacheEntries" | "vectorEntries"> {
   const vectorEntries = options.copyVectorRows
-    ? hasLegacyVectorTable(db, schema)
-      ? tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
-      : 0
+    ? readLegacyVectorEntriesForCopy(db, schema)
     : readLegacyVectorEntriesWithoutCopy(db, schema);
   return {
     sources: tableRowCount(db, schema, "files"),
@@ -174,6 +172,15 @@ function readLegacySidecarCounts(
       : 0,
     vectorEntries,
   };
+}
+
+function readLegacyVectorEntriesForCopy(db: DatabaseSync, schema: string): number | undefined {
+  if (!tableExists(db, schema, LEGACY_MEMORY_VECTOR_TABLE)) {
+    return 0;
+  }
+  return hasLegacyVectorTable(db, schema)
+    ? tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
+    : undefined;
 }
 
 function readLegacyVectorEntriesWithoutCopy(db: DatabaseSync, schema: string): number | undefined {
@@ -545,7 +552,9 @@ function importLegacyMemorySidecarIndex(params: {
       return {
         imported: true,
         ...counts,
-        vectorEntriesImported: counts.vectorEntries === 0 || params.copyVectorRows,
+        vectorEntriesImported:
+          counts.vectorEntries === 0 ||
+          (params.copyVectorRows && counts.vectorEntries !== undefined),
       };
     } catch (err) {
       params.db.exec("ROLLBACK TO import_legacy_sidecar_memory_index");
@@ -882,8 +891,11 @@ async function migrateLegacyMemorySidecarSource(params: {
     );
     if (!result.vectorEntriesImported) {
       await preserveLegacyMemorySidecarRetryPath(params);
+      const vectorReason = loadedVector.ok
+        ? "legacy vector table could not be validated"
+        : (loadedVector.error ?? "unknown sqlite-vec load error");
       params.warnings.push(
-        `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${formatLegacyVectorRows(result.vectorEntries)} still require sqlite-vec: ${loadedVector.error ?? "unknown sqlite-vec load error"}`,
+        `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${formatLegacyVectorRows(result.vectorEntries)} still require sqlite-vec: ${vectorReason}`,
       );
       return { archiveReady: false };
     }

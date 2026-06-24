@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
@@ -18,11 +19,71 @@ import {
 } from "./kysely-sync.js";
 import {
   autoMigrateLegacyState,
+  autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
+
+const pluginDoctorStateMigrationEntries = vi.hoisted(
+  () =>
+    ({
+      entries: [] as Array<{
+        pluginId: string;
+        migration: {
+          id: string;
+          label: string;
+          detectLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
+          migrateLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) =>
+            | Promise<{ changes: string[]; warnings: string[] }>
+            | {
+                changes: string[];
+                warnings: string[];
+              };
+        };
+      }>,
+    }) satisfies {
+      entries: Array<{
+        pluginId: string;
+        migration: {
+          id: string;
+          label: string;
+          detectLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
+          migrateLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) =>
+            | Promise<{ changes: string[]; warnings: string[] }>
+            | {
+                changes: string[];
+                warnings: string[];
+              };
+        };
+      }>;
+    },
+);
 
 vi.mock("../channels/plugins/bundled.js", () => {
   function fileExists(filePath: string): boolean {
@@ -91,6 +152,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
           : [];
       },
     ]),
+  };
+});
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorStateMigrationEntries: vi.fn(() => pluginDoctorStateMigrationEntries.entries),
   };
 });
 
@@ -328,6 +397,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 
 afterEach(async () => {
   vi.useRealTimers();
+  pluginDoctorStateMigrationEntries.entries = [];
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
@@ -666,6 +736,58 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({ triggers: ["wake"] });
     await expectMissingPath(path.join(settingsDir, "voicewake.json"));
+  });
+
+  it("runs plugin doctor migrations after repairing shared state schema", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`
+        CREATE TABLE agent_databases (
+          agent_id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
+      `);
+    } finally {
+      db.close();
+    }
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-test",
+          label: "Memory Core test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated shared state agent database registry primary key → agent_id,path",
+    );
+    expect(result.changes).toContain("plugin state migrated");
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {

@@ -851,6 +851,34 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("leaves malformed legacy vector sidecars retryable", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    const legacyDb = new DatabaseSync(legacyPath);
+    try {
+      legacyDb.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, vector BLOB)");
+      legacyDb
+        .prepare("INSERT INTO chunks_vec (id, vector) VALUES (?, ?)")
+        .run("chunk-1", vectorToBlob([1, 0, 0]));
+    } finally {
+      legacyDb.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Left Memory Core legacy memory index sidecar in place for agent main because legacy vector rows still require sqlite-vec: legacy vector table could not be validated",
+      ),
+    ]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
   it("keeps legacy vector sidecars retryable when sqlite-vec cannot load", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
