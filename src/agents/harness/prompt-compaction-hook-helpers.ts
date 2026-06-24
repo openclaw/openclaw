@@ -34,6 +34,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   ctx: AgentHarnessHookContext;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   bootstrapContextRunKind?: BootstrapContextRunKind;
+  // Clean direct-user text for the before_prompt_build / before_agent_start
+  // hook events. Harness callers must forward their gated rawBody here so these
+  // runtimes match the embedded runner's hook contract; undefined when the run
+  // does not originate from a channel.
+  rawBody?: string;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
   const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
@@ -61,6 +66,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const promptEvent = {
     prompt: params.prompt,
     messages: params.messages,
+    rawBody: params.rawBody,
   };
 
   // Match the embedded runner's lifecycle order: heartbeat contributions are

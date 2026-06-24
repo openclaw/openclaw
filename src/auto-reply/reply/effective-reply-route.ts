@@ -39,6 +39,27 @@ export function isSystemEventProvider(provider?: string): boolean {
   return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
 }
 
+/**
+ * Gates clean user text to the plugin-hook `rawBody` field (PR #52664). Only
+ * direct external-user channel input qualifies: system-event providers
+ * (heartbeat, cron, exec) reuse system prompt text, and inter-session /
+ * internal-system handoffs carry a "not a direct user instruction" annotation,
+ * so neither may surface as clean `rawBody`. Returns `undefined` (clear) for
+ * those, and the candidate text for direct-user input. Shared by channel
+ * ingress and the `/steer` `/tell` active-run injection path so both apply the
+ * same provenance rule.
+ */
+export function resolveDirectUserRawBody(params: {
+  candidate: string | undefined;
+  provider: string | undefined;
+  inputProvenance: InputProvenance | undefined;
+}): string | undefined {
+  const isDirectExternalUserInput =
+    !isSystemEventProvider(params.provider) &&
+    (params.inputProvenance === undefined || params.inputProvenance.kind === "external_user");
+  return isDirectExternalUserInput ? params.candidate : undefined;
+}
+
 function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
   return (
     inputProvenance?.kind === "inter_session" &&
