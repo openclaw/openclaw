@@ -85,12 +85,22 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     const parts = confirmMatch[1].split("|").map((s) => s.trim());
     if (parts.length >= 3) {
       const [question, yesPart, noPart] = parts;
-      const [yesLabel, yesData] = yesPart.includes(":")
-        ? yesPart.split(":").map((s) => s.trim())
-        : [yesPart, normalizeLowercaseStringOrEmpty(yesPart)];
-      const [noLabel, noData] = noPart.includes(":")
-        ? noPart.split(":").map((s) => s.trim())
-        : [noPart, normalizeLowercaseStringOrEmpty(noPart)];
+      // A confirm segment is `label:data`, but the data may itself be a URL ("Open:https://x?q=1").
+      // Split on the FIRST colon only, and treat a bare URL (or a segment with no colon) as having
+      // no separator. Plain split(":") truncated URL data at the scheme colon (data became "https").
+      const splitLabelData = (part: string): [string, string] => {
+        const lower = normalizeLowercaseStringOrEmpty(part);
+        const isUrl = lower.startsWith("http://") || lower.startsWith("https://");
+        const colonIndex = part.indexOf(":");
+        if (colonIndex === -1 || isUrl) {
+          // A bare URL is its own data and must NOT be lowercased (paths/queries are case-sensitive);
+          // a non-URL no-separator segment keeps the existing lowercased-postback behavior.
+          return [part, isUrl ? part : normalizeLowercaseStringOrEmpty(part)];
+        }
+        return [part.slice(0, colonIndex).trim(), part.slice(colonIndex + 1).trim()];
+      };
+      const [yesLabel, yesData] = splitLabelData(yesPart);
+      const [noLabel, noData] = splitLabelData(noPart);
 
       lineData.templateMessage = {
         type: "confirm",

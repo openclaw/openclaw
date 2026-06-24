@@ -153,6 +153,34 @@ describe("parseLineDirectives", () => {
           },
           expectedText: undefined,
         },
+        {
+          name: "url action data preserved past the scheme colon",
+          text: "[[confirm: Open this? | Open:https://example.com/path?q=1 | Cancel]]",
+          expectedTemplate: {
+            type: "confirm",
+            text: "Open this?",
+            confirmLabel: "Open",
+            confirmData: "https://example.com/path?q=1",
+            cancelLabel: "Cancel",
+            cancelData: "cancel",
+            altText: "Open this?",
+          },
+          expectedText: undefined,
+        },
+        {
+          name: "bare url action data keeps its original case",
+          text: "[[confirm: Open? | https://Example.com/Path?Q=1 | Cancel]]",
+          expectedTemplate: {
+            type: "confirm",
+            text: "Open?",
+            confirmLabel: "https://Example.com/Path?Q=1",
+            confirmData: "https://Example.com/Path?Q=1",
+            cancelLabel: "Cancel",
+            cancelData: "cancel",
+            altText: "Open?",
+          },
+          expectedText: undefined,
+        },
       ] as const;
 
       for (const testCase of cases) {
