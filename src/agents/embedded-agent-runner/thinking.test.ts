@@ -1034,6 +1034,48 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     await expect(response.result()).resolves.toEqual(finalMessage);
     expect(events).toHaveLength(2);
   });
+
+  it("recovers mid-stream error when streamFn returns a Promise-resolved stream", async () => {
+    const recovered = vi.fn();
+    let callCount = 0;
+    const finalMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered answer" }],
+      stopReason: "stop",
+    });
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          if (callCount === 1) {
+            // First call: stream emits a recoverable thinking error before any output
+            stream.push({ type: "error", reason: "error", error: anthropicThinkingError });
+            stream.end();
+          } else {
+            // Retry: success
+            stream.push({ type: "done", reason: "stop", message: finalMessage });
+            stream.end();
+          }
+        });
+        // Wrap the sync stream in a Promise to exercise the Promise branch
+        return Promise.resolve(stream);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    const response = (await wrapped(
+      {} as never,
+      { messages: [] } as never,
+      {} as never,
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const event of response) {
+      void event;
+    }
+
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
