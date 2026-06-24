@@ -880,6 +880,19 @@ describe("createTypingSignaler", () => {
     }
   });
 
+  it("starts typing on execution activity for active reply modes", async () => {
+    for (const mode of ["instant", "message", "thinking"] as const) {
+      const typing = createMockTypingController();
+      const signaler = createTypingSignaler({ typing, mode, isHeartbeat: false });
+
+      await signaler.signalExecutionActivity?.();
+
+      expect(typing.startTypingLoop, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(typing.refreshTypingTtl, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(typing.startTypingOnText, `mode=${mode}`).not.toHaveBeenCalled();
+    }
+  });
+
   it("suppresses typing when disabled", async () => {
     const disabledCases = [
       { mode: "instant" as const, isHeartbeat: true },
@@ -892,6 +905,7 @@ describe("createTypingSignaler", () => {
       await signaler.signalRunStart();
       await signaler.signalTextDelta("hi");
       await signaler.signalReasoningDelta();
+      await signaler.signalExecutionActivity?.();
 
       expect(typing.startTypingLoop, `mode=${params.mode}`).not.toHaveBeenCalled();
       expect(typing.startTypingOnText, `mode=${params.mode}`).not.toHaveBeenCalled();

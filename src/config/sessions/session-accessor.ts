@@ -143,6 +143,8 @@ export type LogicalSessionAccessScope = {
   sessionKey: string;
 };
 
+type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;
+
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */
   agentId: string;
@@ -917,9 +919,7 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
-export function listSessionEntries(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): SessionEntrySummary[] {
+export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
     return Object.entries(
       loadSessionStore(resolveAccessStorePath({ ...scope, sessionKey: "" }), {

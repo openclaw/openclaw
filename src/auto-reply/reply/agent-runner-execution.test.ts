@@ -327,6 +327,31 @@ type FallbackRunnerParams = {
 type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionPhase?: (info: {
+    phase:
+      | "runner_entered"
+      | "workspace"
+      | "runtime_plugins"
+      | "before_agent_reply"
+      | "model_resolution"
+      | "auth"
+      | "context_engine"
+      | "attempt_dispatch"
+      | "context_assembled"
+      | "turn_accepted"
+      | "process_spawned"
+      | "tool_execution_started"
+      | "assistant_output_started"
+      | "model_call_started";
+    provider?: string;
+    model?: string;
+    backend?: string;
+    source?: string;
+    tool?: string;
+    toolCallId?: string;
+    itemId?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -361,6 +386,7 @@ function createMockTypingSignaler(): TypingSignaler {
     signalTextDelta: vi.fn(async () => {}),
     signalReasoningDelta: vi.fn(async () => {}),
     signalToolStart: vi.fn(async () => {}),
+    signalExecutionActivity: vi.fn(async () => {}),
   };
 }
 
@@ -515,6 +541,7 @@ function createMinimalRunAgentTurnParams(overrides?: {
   opts?: GetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
+  typingSignals?: TypingSignaler;
 }) {
   return {
     commandBody: "fix it",
@@ -527,7 +554,7 @@ function createMinimalRunAgentTurnParams(overrides?: {
       } as unknown as TemplateContext),
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
-    typingSignals: createMockTypingSignaler(),
+    typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
     blockReplyPipeline: null,
     blockStreamingEnabled: false,
     resolvedBlockStreamingBreak: "message_end" as const,
@@ -1324,6 +1351,73 @@ describe("runAgentTurnWithFallback", () => {
       messageTo: "user:U1",
       agentAccountId: "work",
       chatType: "direct",
+    });
+  });
+
+  it("signals typing from embedded harness execution phases before assistant text", async () => {
+    const typingSignals = createMockTypingSignaler();
+    const onAgentRunStart = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "openai",
+        model: "gpt-5.4",
+        firstModelCallStarted: true,
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onAgentRunStart,
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
+    expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
+    expect(onAgentRunStart).toHaveBeenCalledOnce();
+  });
+
+  it("forwards CLI harness execution phases into typing signals", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({
+        phase: "process_spawned",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        backend: "codex",
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const typingSignals = createMockTypingSignaler();
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        typingSignals,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      provider: "codex-cli",
+      model: "gpt-5.4",
     });
   });
 

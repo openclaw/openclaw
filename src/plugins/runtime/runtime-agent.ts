@@ -35,6 +35,7 @@ type RuntimeSessionStoreReadParams = {
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
+  readConsistency?: "latest";
   storePath?: string;
 };
 
@@ -95,6 +96,7 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }

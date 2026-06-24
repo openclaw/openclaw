@@ -69,15 +69,14 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
-import { clipTelegramProgressText } from "./truncate.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
+  getSessionEntry,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
+  type SessionEntry,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
@@ -144,6 +143,7 @@ import {
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
+import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
@@ -244,33 +244,37 @@ export type TelegramDispatchResult =
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
-type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
 type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
-type FreshTelegramSessionStoreLoader = ((agentId: string) => {
+type FreshTelegramSessionEntryLoader = ((
+  agentId: string,
+  sessionKey: string,
+) => {
   storePath: string;
-  store: TelegramSessionStore;
+  entry?: SessionEntry;
 }) & {
   clear: () => void;
 };
 
-function createFreshTelegramSessionStoreLoader(params: {
+function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
   telegramDeps: TelegramBotDeps;
-}): FreshTelegramSessionStoreLoader {
-  const storesByPath = new Map<string, TelegramSessionStore>();
-  const load = ((agentId: string) => {
+}): FreshTelegramSessionEntryLoader {
+  const entriesByPathAndKey = new Map<string, SessionEntry | undefined>();
+  const load = ((agentId: string, sessionKey: string) => {
     const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
-    const cachedStore = storesByPath.get(storePath);
-    if (cachedStore) {
-      return { storePath, store: cachedStore };
+    const cacheKey = `${storePath}\0${sessionKey}`;
+    if (entriesByPathAndKey.has(cacheKey)) {
+      return { storePath, entry: entriesByPathAndKey.get(cacheKey) };
     }
-    const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-      skipCache: true,
+    const entry = (params.telegramDeps.getSessionEntry ?? getSessionEntry)({
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
     });
-    storesByPath.set(storePath, store);
-    return { storePath, store };
-  }) as FreshTelegramSessionStoreLoader;
-  load.clear = () => storesByPath.clear();
+    entriesByPathAndKey.set(cacheKey, entry);
+    return { storePath, entry };
+  }) as FreshTelegramSessionEntryLoader;
+  load.clear = () => entriesByPathAndKey.clear();
   return load;
 }
 
@@ -278,7 +282,7 @@ function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId } = params;
   const configDefault = resolveTelegramConfigReasoningDefault(cfg, agentId);
@@ -286,8 +290,7 @@ function resolveTelegramReasoningLevel(params: {
     return configDefault;
   }
   try {
-    const { store } = params.loadFreshSessionStore(agentId);
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const { entry } = params.loadFreshSessionEntry(agentId, sessionKey);
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
       return level;
@@ -318,11 +321,10 @@ function resolveTelegramMirroredTranscriptText(
 
 function resolveTelegramScopedTranscriptSession(params: {
   agentId: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
   sessionKey: string;
 }): TelegramScopedTranscriptSession | undefined {
-  const { store, storePath } = params.loadFreshSessionStore(params.agentId);
-  const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+  const { entry, storePath } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
   const sessionId = entry?.sessionId?.trim();
   return sessionId ? { sessionId, storePath } : undefined;
 }
@@ -330,7 +332,7 @@ function resolveTelegramScopedTranscriptSession(params: {
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   idempotencyKey: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
   route: TelegramMessageContext["route"];
   sessionKey: string;
   payload: TelegramTranscriptMirrorPayload;
@@ -341,7 +343,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   }
   const session = resolveTelegramScopedTranscriptSession({
     agentId: params.route.agentId,
-    loadFreshSessionStore: params.loadFreshSessionStore,
+    loadFreshSessionEntry: params.loadFreshSessionEntry,
     sessionKey: params.sessionKey,
   });
   if (!session) {
@@ -756,7 +758,7 @@ export const dispatchTelegramMessage = async ({
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const {
     ctxPayload,
     msg,
@@ -892,7 +894,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
-    loadFreshSessionStore,
+    loadFreshSessionEntry,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
@@ -1459,8 +1461,7 @@ export const dispatchTelegramMessage = async ({
       return undefined;
     }
     try {
-      const { store, storePath } = loadFreshSessionStore(route.agentId);
-      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const { entry: sessionEntry, storePath } = loadFreshSessionEntry(route.agentId, sessionKey);
       if (!sessionEntry?.sessionId) {
         return undefined;
       }
@@ -1508,7 +1509,7 @@ export const dispatchTelegramMessage = async ({
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
             idempotencyKey,
-            loadFreshSessionStore,
+            loadFreshSessionEntry,
             route,
             sessionKey,
             payload,
@@ -1866,10 +1867,9 @@ export const dispatchTelegramMessage = async ({
 
     if (isDmTopic) {
       try {
-        const { store } = loadFreshSessionStore(route.agentId);
         const sessionKeyLocal = ctxPayload.SessionKey;
         if (sessionKeyLocal) {
-          const entry = resolveSessionStoreEntry({ store, sessionKey: sessionKeyLocal }).existing;
+          const { entry } = loadFreshSessionEntry(route.agentId, sessionKeyLocal);
           isFirstTurnInSession = !entry?.systemSent;
         } else {
           logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
@@ -1878,7 +1878,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
       }
     }
-    loadFreshSessionStore.clear();
+    loadFreshSessionEntry.clear();
 
     if (statusReactionController && !isRoomEvent) {
       void statusReactionController.setThinking();

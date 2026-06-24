@@ -7,7 +7,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
@@ -39,8 +38,6 @@ type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };
-
-type MattermostModelPickerSessionEntry = ReturnType<typeof getSessionEntry>;
 
 function splitModelRef(modelRef?: string | null): { provider: string; model: string } | null {
   const trimmed = normalizeOptionalString(modelRef);
@@ -78,24 +75,6 @@ function normalizePage(value: number | undefined): number {
     return 1;
   }
   return Math.max(1, Math.floor(value as number));
-}
-
-function resolveMattermostModelPickerParentSessionKey(params: {
-  sessionEntry: MattermostModelPickerSessionEntry;
-  sessionKey: string;
-}): string | undefined {
-  // Preserve inherited model overrides without exposing whole-store reads to the UI path.
-  const persistedParent =
-    typeof params.sessionEntry?.parentSessionKey === "string"
-      ? params.sessionEntry.parentSessionKey.trim()
-      : "";
-  if (persistedParent && persistedParent !== params.sessionKey) {
-    return persistedParent;
-  }
-  const parsed = parseThreadSessionSuffix(params.sessionKey);
-  return parsed.threadId && parsed.baseSessionKey && parsed.baseSessionKey !== params.sessionKey
-    ? parsed.baseSessionKey
-    : undefined;
 }
 
 function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE) {
@@ -258,38 +237,28 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  skipCache?: boolean;
+  readConsistency?: "latest";
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const readOptions = {
-      storePath,
-      ...(params.skipCache ? { readConsistency: "latest" as const } : {}),
-    };
     const sessionEntry = getSessionEntry({
-      ...readOptions,
+      storePath,
       sessionKey: params.route.sessionKey,
+      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
     });
-    const parentSessionKey = resolveMattermostModelPickerParentSessionKey({
-      sessionEntry,
-      sessionKey: params.route.sessionKey,
-    });
-    const parentEntry = parentSessionKey
-      ? getSessionEntry({
-          ...readOptions,
-          sessionKey: parentSessionKey,
-        })
-      : undefined;
     const override = resolveStoredModelOverride({
       sessionEntry,
-      ...(parentEntry && parentSessionKey
-        ? { sessionStore: { [parentSessionKey]: parentEntry } }
-        : {}),
+      loadSessionEntry: (sessionKey) =>
+        getSessionEntry({
+          storePath,
+          sessionKey,
+          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+        }),
       sessionKey: params.route.sessionKey,
-      parentSessionKey,
+      parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
