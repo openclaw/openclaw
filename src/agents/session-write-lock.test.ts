@@ -675,11 +675,10 @@ describe("acquireSessionWriteLock", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-reclaim-"));
     const sessionFile = path.join(root, "session.jsonl");
     const lockPath = `${sessionFile}.lock`;
-    writeFileSync(sessionFile, "", "utf8");
+    await fs.writeFile(sessionFile, "", "utf8");
     try {
       // Spawn a process that holds the lock, then write the lock file with its PID.
       // The process just sleeps — simulating a live OpenClaw process that is alive but wedged.
-      const { spawn } = await import("node:child_process");
       const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
         stdio: "ignore",
       });
@@ -688,7 +687,7 @@ describe("acquireSessionWriteLock", () => {
       }
       // Live OpenClaw owner, within staleMs but past its own recorded maxHoldMs: a stuck
       // holder whose in-process watchdog can never fire must still be reclaimable.
-      writeFileSync(
+      await fs.writeFile(
         lockPath,
         JSON.stringify({
           pid: owner.pid,
@@ -706,7 +705,7 @@ describe("acquireSessionWriteLock", () => {
           timeoutMs: 500,
           staleMs: 600_000,
         });
-        const payload = JSON.parse(readFileSync(lockPath, "utf8"));
+        const payload = JSON.parse(await fs.readFile(lockPath, "utf8")) as { createdAt: string };
         // The lock was reclaimed: createdAt is now recent (the old 30s-old value is gone).
         const ageMs = Date.now() - new Date(payload.createdAt).getTime();
         expect(ageMs).toBeLessThan(5_000);
@@ -715,7 +714,7 @@ describe("acquireSessionWriteLock", () => {
         owner.kill("SIGTERM");
       }
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
@@ -725,16 +724,15 @@ describe("acquireSessionWriteLock", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-live-"));
     const sessionFile = path.join(root, "session.jsonl");
     const lockPath = `${sessionFile}.lock`;
-    writeFileSync(sessionFile, "", "utf8");
+    await fs.writeFile(sessionFile, "", "utf8");
     try {
       // Spawn a child as the lock owner so isPidAlive + isOpenClawSessionOwnerArgv succeed.
-      const { spawn } = await import("node:child_process");
       const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
         stdio: "ignore",
       });
       if (!owner.pid) throw new Error("missing pid");
       // Lock is past staleMs (30s > 20s) but within its own maxHoldMs (100000 >> 30s).
-      writeFileSync(
+      await fs.writeFile(
         lockPath,
         JSON.stringify({
           pid: owner.pid,
@@ -752,7 +750,7 @@ describe("acquireSessionWriteLock", () => {
         owner.kill("SIGTERM");
       }
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
