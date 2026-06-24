@@ -1961,6 +1961,11 @@ export type OpenClawPackageCompat = {
   pluginApi?: string;
 };
 
+export type OpenClawPackageBuild = {
+  /** Exact OpenClaw release this plugin artifact was built and published with. */
+  openclawVersion?: string;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1973,6 +1978,7 @@ export type OpenClawPackageManifest = {
   };
   channel?: PluginPackageChannel;
   compat?: OpenClawPackageCompat;
+  build?: OpenClawPackageBuild;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
 };

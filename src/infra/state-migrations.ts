@@ -3895,19 +3895,27 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     config: params.cfg,
     env: params.env,
   })) {
-    const detected = await entry.migration.detectLegacyState({
-      config: params.cfg,
-      env: params.env,
-      stateDir: params.stateDir,
-      oauthDir: params.oauthDir,
-      context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
-    });
-    if (detected?.preview.length) {
-      plans.push({
-        pluginId: entry.pluginId,
-        migration: entry.migration,
-        preview: detected.preview,
+    // Detection runs plugin-shipped code: a version-skewed install can throw at call
+    // time, and one broken plugin must not abort migration detection for the rest.
+    // The migrate phase below degrades the same way; manifest-registry's build-version
+    // diagnostic owns the user-facing warning.
+    try {
+      const detected = await entry.migration.detectLegacyState({
+        config: params.cfg,
+        env: params.env,
+        stateDir: params.stateDir,
+        oauthDir: params.oauthDir,
+        context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
       });
+      if (detected?.preview.length) {
+        plans.push({
+          pluginId: entry.pluginId,
+          migration: entry.migration,
+          preview: detected.preview,
+        });
+      }
+    } catch {
+      continue;
     }
   }
   return plans;

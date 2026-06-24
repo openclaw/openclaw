@@ -13,6 +13,7 @@ import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { checkPluginBuildVersionSkew } from "./build-version-skew.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
@@ -1063,6 +1064,20 @@ export function loadPluginManifestRegistry(
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
         });
         continue;
+      }
+      const buildVersionSkew = checkPluginBuildVersionSkew({
+        currentVersion: currentHostVersion,
+        buildOpenclawVersion: candidate.packageManifest?.build?.openclawVersion,
+      });
+      if (buildVersionSkew) {
+        // Warn-only: the plugin still loads, but a skewed build can reference SDK surface
+        // this host does not export, which the loader surfaces as call-time TypeErrors.
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin was built for OpenClaw ${buildVersionSkew.buildVersion}, but this host is ${buildVersionSkew.currentVersion}; its SDK imports may not match. Run \`openclaw plugins update ${manifest.id}\` to install a matching build.`,
+        });
       }
     }
 

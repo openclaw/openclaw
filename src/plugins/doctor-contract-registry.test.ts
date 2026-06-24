@@ -215,6 +215,33 @@ describe("doctor-contract-registry module loader", () => {
     ]);
   });
 
+  it("skips compatibility hooks that throw without aborting other plugin migrations", () => {
+    const throwingRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(throwingRoot, "doctor-contract-api.cjs"),
+      "module.exports = { normalizeCompatibilityConfig: () => { throw new TypeError('stale sdk import'); } };\n",
+      "utf-8",
+    );
+    const healthyRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(healthyRoot, "doctor-contract-api.cjs"),
+      "module.exports = { normalizeCompatibilityConfig: ({ cfg }) => ({ config: { ...cfg, repaired: true }, changes: ['healthy change'] }) };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "broken-plugin", rootDir: throwingRoot },
+        { id: "healthy-plugin", rootDir: healthyRoot },
+      ],
+      diagnostics: [],
+    });
+
+    const result = applyPluginDoctorCompatibilityMigrations({} as never, { env: {} });
+
+    expect(result.changes).toEqual(["healthy change"]);
+    expect((result.config as { repaired?: boolean }).repaired).toBe(true);
+  });
+
   it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
     const anthropicRoot = makeTempDir();
     const googleRoot = makeTempDir();

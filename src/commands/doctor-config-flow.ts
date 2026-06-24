@@ -276,6 +276,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate,
       { env: process.env },
     )) {
+      // Warning-only mutations carry adapter failures (e.g. version-skewed plugins).
+      if (staleCleanup.warnings?.length) {
+        emitDoctorNotes({ note, warningNotes: staleCleanup.warnings });
+      }
       if (staleCleanup.changes.length === 0) {
         continue;
       }

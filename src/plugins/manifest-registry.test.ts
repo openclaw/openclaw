@@ -296,6 +296,34 @@ function loadRegistryForPluginApiCase(params: {
   });
 }
 
+function loadRegistryForBuildVersionCase(params: {
+  rootDir: string;
+  buildOpenclawVersion: string;
+  env: NodeJS.ProcessEnv;
+  origin?: "bundled" | "global";
+  idHint?: string;
+}) {
+  return loadPluginManifestRegistry({
+    env: params.env,
+    candidates: [
+      createPluginCandidate({
+        idHint: params.idHint ?? "synology-chat",
+        rootDir: params.rootDir,
+        packageDir: params.rootDir,
+        origin: params.origin ?? "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+          },
+          build: {
+            openclawVersion: params.buildOpenclawVersion,
+          },
+        },
+      }),
+    ],
+  });
+}
+
 function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
   return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
 }
@@ -2482,6 +2510,55 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins.map((plugin) => plugin.id)).toContain("codex");
     expectNoRegistryDiagnosticContains(registry, "requires plugin API");
+  });
+
+  it("warns without skipping load when a prerelease-built plugin runs on the train's stable host", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForBuildVersionCase({
+      rootDir: dir,
+      buildOpenclawVersion: "2026.6.5-beta.5",
+      env: { OPENCLAW_VERSION: "2026.6.5" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["synology-chat"]);
+    expectRegistryDiagnosticContains(
+      registry,
+      "plugin was built for OpenClaw 2026.6.5-beta.5, but this host is 2026.6.5",
+    );
+    expectRegistryDiagnosticContains(registry, "openclaw plugins update synology-chat");
+    expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
+  });
+
+  it("stays quiet for older stable plugin builds on a newer host", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForBuildVersionCase({
+      rootDir: dir,
+      buildOpenclawVersion: "2026.6.4",
+      env: { OPENCLAW_VERSION: "2026.6.5" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["synology-chat"]);
+    expectNoRegistryDiagnosticContains(registry, "was built for OpenClaw");
+  });
+
+  it("does not build-version-gate bundled source plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForBuildVersionCase({
+      rootDir: dir,
+      buildOpenclawVersion: "2026.6.5-beta.5",
+      env: { OPENCLAW_VERSION: "2026.6.5" } as NodeJS.ProcessEnv,
+      origin: "bundled",
+      idHint: "codex",
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toContain("codex");
+    expectNoRegistryDiagnosticContains(registry, "was built for OpenClaw");
   });
 
   it.each([
