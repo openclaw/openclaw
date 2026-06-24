@@ -668,12 +668,12 @@ describe("acquireSessionWriteLock", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
-  it("acquireSessionWriteLock bounds maxHoldMs by timeoutMs plus grace", async () => {
-    // When no explicit maxHoldMs is provided, the effective hold limit must be
-    // bounded by timeoutMs + graceMs so a holder cannot starve other acquirers
-    // past their acquire timeout.  Previously the default maxHoldMs (300 s)
-    // was used even when the acquire timeout was only 60 s, causing
-    // SessionWriteLockTimeoutError for concurrent sessions.
+  it("acquireSessionWriteLock bounds maxHoldMs by timeoutMs", async () => {
+    // When no explicit maxHoldMs is provided, the effective hold limit must
+    // equal timeoutMs so a holder cannot block other acquirers past their
+    // acquire timeout.  Previously the default maxHoldMs (300 s) was used
+    // even when the acquire timeout was only 60 s, causing
+    // SessionWriteLockTimeoutError for concurrent operations.
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-hold-"));
     const sessionFile = path.join(root, "session.jsonl");
     await fs.writeFile(sessionFile, "", "utf8");
@@ -683,13 +683,12 @@ describe("acquireSessionWriteLock", () => {
         timeoutMs: 60_000,
       });
       try {
-        // The bound must equal timeoutMs + DEFAULT_TIMEOUT_GRACE_MS (120 s),
-        // NOT the old default maxHoldMs (300 s).
+        // maxHoldMs must equal timeoutMs (60 s), not the old 300 s default.
         const payload = await import("node:fs/promises").then((m) =>
           m.readFile(`${sessionFile}.lock`, "utf8"),
         );
         const parsed = JSON.parse(payload) as { maxHoldMs?: number };
-        expect(parsed.maxHoldMs).toBe(60_000 + 120_000);
+        expect(parsed.maxHoldMs).toBe(60_000);
         expect(parsed.maxHoldMs).toBeLessThan(300_000);
       } finally {
         await lock.release();

@@ -895,18 +895,20 @@ export async function acquireSessionWriteLock(params: {
     allowInfinity: true,
   });
   const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
-  // Bound maxHoldMs by the acquire timeout + grace so a holder cannot block
-  // other acquirers past their timeout.  Without this, a plugin hook that
-  // runs a long operation (e.g. active-memory sub-agent) while holding the
-  // session write lock would hold it for the full default maxHoldMs (5 min)
-  // even though other acquirers time out after 60 s, producing
-  // SessionWriteLockTimeoutError for every other session that shares the lock.
-  // Note: pass minMs=0 because resolveSessionLockMaxHoldFromTimeout defaults
-  // minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s), which would make
-  // the cap a no-op for the common case of a 60 s acquire timeout.
+  // Bound maxHoldMs by the acquire timeout so a holder cannot block other
+  // acquirers past their timeout.  Without this, a plugin hook that runs a
+  // long operation (e.g. active-memory sub-agent) while a session lock
+  // controller holds the write lock would hold it for the full default
+  // maxHoldMs (5 min) even though other acquirers time out after 60 s,
+  // producing SessionWriteLockTimeoutError for every other operation that
+  // shares the lock (e.g. mirrorCodexAppServerTranscript).
+  // Note: pass minMs=0 and graceMs=0 because resolveSessionLockMaxHoldFromTimeout
+  // defaults minMs to DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS (300 s), which
+  // would make the cap a no-op for the common case of a 60 s acquire timeout.
   const maxHoldFromTimeout = resolveSessionLockMaxHoldFromTimeout({
     timeoutMs,
     minMs: 0,
+    graceMs: 0,
   });
   const maxHoldMs = Math.min(
     resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs),
