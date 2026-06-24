@@ -938,7 +938,9 @@ function classifyFailoverReasonFromCode(
   if (provider) {
     const key = `${normalizeOptionalLowercaseString(provider)}:${normalized}`;
     const mapped = PROVIDER_CODE_REASON_MAP[key];
-    if (mapped) return mapped;
+    if (mapped) {
+      return mapped;
+    }
   }
   return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
 }
