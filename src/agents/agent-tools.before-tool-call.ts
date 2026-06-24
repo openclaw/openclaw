@@ -655,21 +655,12 @@ function buildPluginApprovalFailureReason(params: {
   if (!turnSourceChannel?.trim()) {
     return params.fallbackReason;
   }
-  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
+  const nativeExecSurface = resolveApprovalInitiatingSurfaceState({
     channel: turnSourceChannel,
     accountId: params.ctx?.turnSourceAccountId,
     cfg: params.ctx?.config,
-    approvalKind: "plugin",
+    approvalKind: "exec",
   });
-  const nativeExecSurface =
-    initiatingSurface.kind === "disabled"
-      ? initiatingSurface
-      : resolveApprovalInitiatingSurfaceState({
-          channel: turnSourceChannel,
-          accountId: params.ctx?.turnSourceAccountId,
-          cfg: params.ctx?.config,
-          approvalKind: "exec",
-        });
   if (nativeExecSurface.kind !== "disabled") {
     return params.fallbackReason;
   }
