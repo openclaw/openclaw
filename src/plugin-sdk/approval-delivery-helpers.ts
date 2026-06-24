@@ -79,8 +79,6 @@ type ApproverRestrictedNativeApprovalParams = {
   nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
   /** Optional setup description helper shown when exec approvals are unavailable. */
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
-  /** Optional setup description helper shown when plugin approvals are unavailable. */
-  describePluginApprovalSetup?: ChannelApprovalCapability["describePluginApprovalSetup"];
 };
 
 /** Build the canonical approval capability for channels that restrict approvals to configured approvers. */
@@ -153,7 +151,6 @@ function buildApproverRestrictedNativeApprovalCapability(
     }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
     getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
-    describePluginApprovalSetup: params.describePluginApprovalSetup,
     delivery: {
       hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
         params.listAccountIds(cfg).some((accountId) => {
@@ -236,8 +233,6 @@ export function createChannelApprovalCapability(params: {
   resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   /** Optional setup copy for unavailable exec approval paths. */
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
-  /** Optional setup copy for unavailable plugin approval paths. */
-  describePluginApprovalSetup?: ChannelApprovalCapability["describePluginApprovalSetup"];
   /** Delivery fallback and DM-route helpers. */
   delivery?: ChannelApprovalCapability["delivery"];
   /** Native runtime hooks for channel-specific approval delivery. */
@@ -263,7 +258,6 @@ export function createChannelApprovalCapability(params: {
     getExecInitiatingSurfaceState: params.getExecInitiatingSurfaceState,
     resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
-    describePluginApprovalSetup: params.describePluginApprovalSetup,
     delivery: surfaces.delivery,
     nativeRuntime: surfaces.nativeRuntime,
     render: surfaces.render,
@@ -284,7 +278,6 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   render: ChannelApprovalCapability["render"];
   native: ChannelApprovalCapability["native"];
   describeExecApprovalSetup: ChannelApprovalCapability["describeExecApprovalSetup"];
-  describePluginApprovalSetup: ChannelApprovalCapability["describePluginApprovalSetup"];
 } {
   return {
     auth: {
@@ -298,7 +291,6 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
     render: capability.render,
     native: capability.native,
     describeExecApprovalSetup: capability.describeExecApprovalSetup,
-    describePluginApprovalSetup: capability.describePluginApprovalSetup,
   };
 }
 

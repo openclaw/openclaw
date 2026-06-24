@@ -36,7 +36,6 @@ export function resolveChannelApprovalAdapter(
   }
   return {
     describeExecApprovalSetup: capability.describeExecApprovalSetup,
-    describePluginApprovalSetup: capability.describePluginApprovalSetup,
     delivery: capability.delivery,
     nativeRuntime: capability.nativeRuntime,
     render: capability.render,
