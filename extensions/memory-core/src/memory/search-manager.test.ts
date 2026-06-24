@@ -139,6 +139,7 @@ import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
+  releaseMemorySearchResourcesForAgent,
 } from "./search-manager.js";
 const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
@@ -1052,6 +1053,19 @@ describe("getMemorySearchManager caching", () => {
     });
     expect(nextMain.manager).not.toBe(mainManager);
     expect(nextOther.manager).toBe(otherManager);
+  });
+
+  it("preserves the shared qmd manager when releasing scoped active-memory resources", async () => {
+    const cfg = createQmdCfg("main");
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    const firstManager = requireManager(first);
+
+    await releaseMemorySearchResourcesForAgent({ cfg, agentId: "main" });
+
+    expect(mockPrimary.close).not.toHaveBeenCalled();
+    const second = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(second.manager).toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
   it("closes the requested agent builtin index manager on scoped teardown", async () => {

@@ -69,6 +69,7 @@ function createMemoryRuntimeFixture() {
   return {
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+    releaseMemorySearchResourcesForAgent: vi.fn(async () => {}),
     closeMemorySearchManager: vi.fn(async () => {}),
   };
 }
@@ -351,6 +352,22 @@ describe("memory runtime auto-enable loading", () => {
   it("delegates scoped cleanup to the loaded memory runtime without reloading plugins", async () => {
     const runtime = createMemoryRuntimeFixture();
     const cfg = { plugins: {} };
+    getMemoryRuntimeMock.mockReturnValue(runtime);
+
+    await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });
+
+    expect(runtime.releaseMemorySearchResourcesForAgent).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
+    expect(runtime.closeMemorySearchManager).not.toHaveBeenCalled();
+    expectNoMemoryRuntimeBootstrap();
+  });
+
+  it("falls back to scoped close when the memory runtime has no resource-release hook", async () => {
+    const runtime = createMemoryRuntimeFixture();
+    const cfg = { plugins: {} };
+    delete (runtime as Partial<typeof runtime>).releaseMemorySearchResourcesForAgent;
     getMemoryRuntimeMock.mockReturnValue(runtime);
 
     await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });

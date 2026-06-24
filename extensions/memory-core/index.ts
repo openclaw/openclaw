@@ -170,6 +170,10 @@ const memoryRuntime: MemoryPluginRuntime = {
     const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
     await runtime.closeAllMemorySearchManagers?.();
   },
+  async releaseMemorySearchResourcesForAgent(params) {
+    const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
+    await runtime.releaseMemorySearchResourcesForAgent?.(params);
+  },
   async closeMemorySearchManager(params) {
     const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
     await runtime.closeMemorySearchManager?.(params);

@@ -424,6 +424,20 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
   }
 }
 
+export async function releaseMemorySearchResourcesForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  if (managerRuntimePromise === null) {
+    return;
+  }
+  const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
+  await closeMemoryIndexManagersForAgent({
+    cfg: params.cfg,
+    agentId: normalizeAgentId(params.agentId),
+  });
+}
+
 export async function closeMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -445,8 +459,7 @@ export async function closeMemorySearchManager(params: {
     }
   }
   if (managerRuntimePromise !== null) {
-    const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
-    await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
+    await releaseMemorySearchResourcesForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
   }
 }
 

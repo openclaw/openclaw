@@ -108,6 +108,10 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  releaseMemorySearchResourcesForAgent?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+  }): Promise<void>;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

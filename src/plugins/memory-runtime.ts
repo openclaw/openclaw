@@ -86,5 +86,10 @@ export async function closeActiveMemorySearchManager(params: {
   agentId: string;
 }): Promise<void> {
   const runtime = getMemoryRuntime();
+  const releaseResources = runtime?.releaseMemorySearchResourcesForAgent;
+  if (releaseResources) {
+    await releaseResources(params);
+    return;
+  }
   await runtime?.closeMemorySearchManager?.(params);
 }
