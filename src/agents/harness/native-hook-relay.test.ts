@@ -27,6 +27,7 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -3229,5 +3230,27 @@ describe("native hook relay command builder", () => {
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
+  });
+
+  it("wraps relay commands in a user systemd scope when a runtime is available", async () => {
+    const binDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-systemd-run-"));
+    const systemdRunPath = path.join(binDir, "systemd-run");
+    writeFileSync(systemdRunPath, "", { mode: 0o755 });
+    vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    vi.stubEnv("OPENCLAW_SYSTEMD_RUN_PATH", systemdRunPath);
+
+    expect(
+      buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "permission_request",
+        executable: "openclaw",
+      }),
+    ).toBe(
+      `${systemdRunPath} --user --scope --quiet -p CPUQuota=25% -p MemoryMax=512M -p TasksMax=32 -- openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 5000`,
+    );
+
+    rmSync(binDir, { force: true, recursive: true });
   });
 });
