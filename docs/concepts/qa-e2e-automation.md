@@ -178,10 +178,21 @@ QA Lab, so package Docker release lanes do not run `qa` commands. Use
 `pnpm qa:observability:smoke` from a built source checkout when changing
 diagnostics instrumentation.
 
-For a transport-real Matrix smoke lane, run:
+For a transport-real Matrix smoke lane that does not require model-provider
+credentials, run the fast profile with the deterministic mock OpenAI provider:
 
 ```bash
-pnpm openclaw qa matrix --profile fast --fail-fast
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+```
+
+For the live-frontier provider lane, supply OpenAI-compatible credentials
+explicitly:
+
+```bash
+OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
 ```
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
@@ -201,9 +212,10 @@ environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`.
-Scheduled and default manual runs execute the fast Matrix profile with live
-frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into the five profile shards.
+Scheduled and default manual runs execute the fast Matrix profile with
+QA-provided live-frontier credentials, `--fast`, and
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans
+out into the five profile shards.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 

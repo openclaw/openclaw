@@ -1239,6 +1239,33 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await deliverWith({
+      replies: [{ text: oauthProfileText }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      html: oauthProfileText,
+      skip_entity_detection: true,
+    });
+  });
+
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

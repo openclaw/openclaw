@@ -1014,6 +1014,27 @@ describe("qa mock openai server", () => {
     expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
   });
 
+  it("uses unique ids for repeated identical tool calls", async () => {
+    const server = await startMockServer();
+    const body = {
+      stream: false,
+      model: "gpt-5.5",
+      input: [makeUserInput("Read QA_KICKOFF_TASK.md, then answer with exactly QA-READ-OK.")],
+    };
+
+    const first = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(server, body);
+    const second = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(
+      server,
+      body,
+    );
+
+    const firstCallId = first.output?.[0]?.call_id;
+    const secondCallId = second.output?.[0]?.call_id;
+    expect(firstCallId).toMatch(/^call_mock_read_/);
+    expect(secondCallId).toMatch(/^call_mock_read_/);
+    expect(firstCallId).not.toBe(secondCallId);
+  });
+
   it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

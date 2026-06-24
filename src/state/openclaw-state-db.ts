@@ -712,6 +712,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
   ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
   ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
+  ensureColumn(db, "cron_jobs", "payload_tools_allow_is_default INTEGER");
   ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
   ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
   ensureColumn(db, "cron_jobs", "delivery_to TEXT");

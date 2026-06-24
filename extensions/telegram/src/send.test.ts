@@ -956,6 +956,31 @@ describe("sendMessageTelegram", () => {
     expect(richMessage?.html).toContain("<table>");
   });
 
+  it("skips rich entity detection for provider-prefixed email text", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await sendMessageTelegram("123", oauthProfileText, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      html: oauthProfileText,
+      skip_entity_detection: true,
+    });
+    expect(richMessage?.html).not.toContain("mailto:");
+  });
+
   it.each([
     {
       name: "list",

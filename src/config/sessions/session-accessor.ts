@@ -98,7 +98,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -464,6 +464,81 @@ export type RestartRecoveryLifecycleUpdate<T> = {
   result: T;
   /** Exact rows to replace inside the storage transaction. */
   replacements?: Iterable<RestartRecoveryLifecycleReplacement>;
+};
+
+/** File-backed checkpoint transcript fork produced by the checkpoint storage boundary. */
+export type SessionCompactionCheckpointForkedTranscript = {
+  sessionFile: string;
+  sessionId: string;
+  totalTokens?: number;
+};
+
+/** Result of resolving and copying checkpoint transcript content for branch/restore. */
+export type SessionCompactionCheckpointTranscriptForkResult =
+  | { status: "created"; transcript: SessionCompactionCheckpointForkedTranscript }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+/** Result of applying a checkpoint branch or restore mutation to session storage. */
+export type SessionCompactionCheckpointMutationResult =
+  | {
+      status: "created";
+      key: string;
+      checkpoint: SessionCompactionCheckpoint;
+      entry: SessionEntry;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-checkpoint" }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+export type SessionCompactionCheckpointEntryBuildContext = {
+  /** Checkpoint row selected from the current persisted session entry. */
+  checkpoint: SessionCompactionCheckpoint;
+  /** Persisted entry that owns the selected checkpoint. */
+  currentEntry: SessionEntry;
+  /** Forked transcript identity created from the stored checkpoint boundary. */
+  forkedTranscript: SessionCompactionCheckpointForkedTranscript;
+};
+
+export type SessionCompactionCheckpointTranscriptForker = (
+  checkpoint: SessionCompactionCheckpoint,
+) => Promise<SessionCompactionCheckpointTranscriptForkResult>;
+
+export type SessionCompactionCheckpointEntryBuilder = (
+  context: SessionCompactionCheckpointEntryBuildContext,
+) => Promise<SessionEntry> | SessionEntry;
+
+export type BranchSessionFromCompactionCheckpointParams = {
+  /** Checkpoint id stored on the source session entry. */
+  checkpointId: string;
+  /** Builds the branched session entry from the forked transcript. */
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  /** Copies transcript content through the stored checkpoint boundary. */
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  /** Persisted key for the new checkpoint branch. */
+  nextKey: string;
+  /** Canonical key used as the branch parent. */
+  sourceKey: string;
+  /** Actual persisted key to read when a legacy alias still owns the row. */
+  sourceStoreKey?: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+};
+
+export type RestoreSessionFromCompactionCheckpointParams = {
+  /** Checkpoint id stored on the current session entry. */
+  checkpointId: string;
+  /** Builds the restored session entry from the forked transcript. */
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  /** Copies transcript content through the stored checkpoint boundary. */
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  /** Canonical key to replace with the restored checkpoint state. */
+  sessionKey: string;
+  /** Actual persisted key to read when a legacy alias still owns the row. */
+  sessionStoreKey?: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
 };
 
 export type SessionEntryCreateWithTranscriptContext = {
@@ -1162,6 +1237,103 @@ function applySessionAbortCutoff(
 ): void {
   entry.abortCutoffMessageSid = cutoff?.messageSid;
   entry.abortCutoffTimestamp = cutoff?.timestamp;
+}
+
+function findSessionCompactionCheckpoint(params: {
+  checkpointId: string;
+  entry: SessionEntry;
+}): SessionCompactionCheckpoint | undefined {
+  const checkpointId = params.checkpointId.trim();
+  if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
+    return undefined;
+  }
+  return [...params.entry.compactionCheckpoints]
+    .toSorted((a, b) => b.createdAt - a.createdAt)
+    .find((checkpoint) => checkpoint.checkpointId === checkpointId);
+}
+
+type ApplySessionCompactionCheckpointMutationParams = {
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  checkpointId: string;
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  readKey: string;
+  storePath: string;
+  writeKey: string;
+};
+
+async function applySessionCompactionCheckpointMutation(
+  params: ApplySessionCompactionCheckpointMutationParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await updateSessionStore(
+    params.storePath,
+    async (store) => {
+      const currentEntry = store[params.readKey];
+      if (!currentEntry?.sessionId) {
+        return { status: "missing-session" };
+      }
+      const checkpoint = findSessionCompactionCheckpoint({
+        entry: currentEntry,
+        checkpointId: params.checkpointId,
+      });
+      if (!checkpoint) {
+        return { status: "missing-checkpoint" };
+      }
+      const forkedSession = await params.forkTranscriptFromCheckpoint(checkpoint);
+      if (forkedSession.status !== "created") {
+        return forkedSession;
+      }
+
+      const nextEntry = await params.buildEntry({
+        checkpoint,
+        currentEntry,
+        forkedTranscript: forkedSession.transcript,
+      });
+      store[params.writeKey] = nextEntry;
+      return {
+        status: "created",
+        key: params.writeKey,
+        checkpoint,
+        entry: nextEntry,
+      };
+    },
+    { skipSaveWhenResult: (result) => result.status !== "created" },
+  );
+}
+
+/**
+ * Forks checkpoint transcript content and persists a new branch entry in one
+ * storage-sized mutation. SQLite adapters implement the transcript row copy
+ * and `session_entries.entry_json` insert inside the same write transaction.
+ */
+export async function branchSessionFromCompactionCheckpoint(
+  params: BranchSessionFromCompactionCheckpointParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await applySessionCompactionCheckpointMutation({
+    buildEntry: params.buildEntry,
+    checkpointId: params.checkpointId,
+    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
+    readKey: params.sourceStoreKey ?? params.sourceKey,
+    storePath: params.storePath,
+    writeKey: params.nextKey,
+  });
+}
+
+/**
+ * Forks checkpoint transcript content and replaces the current entry in one
+ * storage-sized mutation. SQLite adapters implement the transcript row copy
+ * and `session_entries.entry_json` update inside the same write transaction.
+ */
+export async function restoreSessionFromCompactionCheckpoint(
+  params: RestoreSessionFromCompactionCheckpointParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await applySessionCompactionCheckpointMutation({
+    buildEntry: params.buildEntry,
+    checkpointId: params.checkpointId,
+    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
+    readKey: params.sessionStoreKey ?? params.sessionKey,
+    storePath: params.storePath,
+    writeKey: params.sessionKey,
+  });
 }
 
 /**

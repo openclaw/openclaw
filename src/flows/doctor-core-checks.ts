@@ -369,15 +369,26 @@ const legacyStateCheck: HealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
-    return detected.preview.map(
-      (line): HealthFinding => ({
-        checkId: "core/doctor/legacy-state",
-        severity: "warning",
-        message: line.replace(/^- /, ""),
-        path: detected.stateDir,
-        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
-      }),
-    );
+    return [
+      ...detected.preview.map(
+        (line): HealthFinding => ({
+          checkId: "core/doctor/legacy-state",
+          severity: "warning",
+          message: line.replace(/^- /, ""),
+          path: detected.stateDir,
+          fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+        }),
+      ),
+      ...detected.warnings.map(
+        (warning): HealthFinding => ({
+          checkId: "core/doctor/legacy-state",
+          severity: "warning",
+          message: warning,
+          path: detected.stateDir,
+          fixHint: "Resolve the warning, then rerun `openclaw doctor --fix`.",
+        }),
+      ),
+    ];
   },
 };
 
