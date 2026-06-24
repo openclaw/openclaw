@@ -3,7 +3,12 @@ import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  ResultSchema,
+  ToolSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
@@ -14,6 +19,7 @@ import type {
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Compile } from "typebox/compile";
+import * as z from "zod/v4";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -48,6 +54,11 @@ type BundleMcpSession = {
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
+type ListedToolsPage = {
+  tools: ListedTool[];
+  nextCursor?: string;
+  diagnostics: string[];
+};
 type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
@@ -61,6 +72,11 @@ const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
+
+const LenientListToolsResultSchema = ResultSchema.extend({
+  nextCursor: z.string().optional(),
+  tools: z.array(z.unknown()),
+});
 
 type McpToolSelection = {
   include?: readonly string[];
@@ -215,16 +231,120 @@ function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
 }
 
-async function listAllTools(client: Client, timeoutMs: number) {
+function describeZodIssues(error: { issues?: unknown }): string {
+  if (!Array.isArray(error.issues)) {
+    return "schema validation failed";
+  }
+  const messages = error.issues
+    .map((issue) => {
+      if (!issue || typeof issue !== "object") {
+        return "";
+      }
+      const record = issue as { path?: unknown; message?: unknown };
+      const path =
+        Array.isArray(record.path) && record.path.length > 0 ? record.path.join(".") : "tool";
+      const message = typeof record.message === "string" ? record.message : "invalid value";
+      return `${path}: ${message}`;
+    })
+    .filter(Boolean);
+  return messages.length > 0 ? messages.join(", ") : "schema validation failed";
+}
+
+function describeListedToolName(value: unknown, index: number): string {
+  if (isMcpConfigRecord(value) && typeof value.name === "string") {
+    const name = value.name.trim();
+    if (name) {
+      return `"${name}"`;
+    }
+  }
+  return `at index ${index}`;
+}
+
+function cacheListedToolMetadata(
+  client: Client,
+  tools: ListedTool[],
+): {
+  tools: ListedTool[];
+  diagnostics: string[];
+} {
+  const cacheToolMetadata = (
+    client as unknown as {
+      cacheToolMetadata?: (tools: ListedTool[]) => void;
+    }
+  ).cacheToolMetadata;
+  if (typeof cacheToolMetadata !== "function") {
+    return { tools, diagnostics: [] };
+  }
+  try {
+    cacheToolMetadata.call(client, tools);
+    return { tools, diagnostics: [] };
+  } catch (error) {
+    const cacheableTools: ListedTool[] = [];
+    const diagnostics: string[] = [];
+    for (const [index, tool] of tools.entries()) {
+      try {
+        cacheToolMetadata.call(client, [tool]);
+        cacheableTools.push(tool);
+      } catch (toolError) {
+        diagnostics.push(
+          `tools/list skipped tool ${describeListedToolName(tool, index)} because metadata cache failed: ${redactErrorUrls(toolError)}`,
+        );
+      }
+    }
+    if (cacheableTools.length > 0) {
+      // The SDK cache method clears then rebuilds; call it once with the
+      // surviving tool set so call-time output/task behavior stays intact.
+      cacheToolMetadata.call(client, cacheableTools);
+    }
+    if (diagnostics.length === 0) {
+      diagnostics.push(`tools/list metadata cache failed: ${redactErrorUrls(error)}`);
+    }
+    return { tools: cacheableTools, diagnostics };
+  }
+}
+
+function parseListedToolsPage(page: { tools: unknown[]; nextCursor?: string }): ListedToolsPage {
   const tools: ListedTool[] = [];
+  const diagnostics: string[] = [];
+  for (const [index, value] of page.tools.entries()) {
+    const parsed = ToolSchema.safeParse(value);
+    if (!parsed.success) {
+      diagnostics.push(
+        `tools/list skipped invalid tool ${describeListedToolName(value, index)}: ${describeZodIssues(parsed.error)}`,
+      );
+      continue;
+    }
+    tools.push(parsed.data as ListedTool);
+  }
+  return {
+    tools,
+    diagnostics,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
+}
+
+async function listToolsPage(client: Client, cursor: string | undefined, timeoutMs: number) {
+  const params = cursor ? { cursor } : undefined;
+  const page = await client.request(
+    { method: "tools/list", ...(params ? { params } : {}) },
+    LenientListToolsResultSchema,
+    { timeout: timeoutMs },
+  );
+  return parseListedToolsPage(page);
+}
+
+async function listAllTools(client: Client, timeoutMs: number): Promise<ListedToolsPage> {
+  const tools: ListedTool[] = [];
+  const diagnostics: string[] = [];
   let cursor: string | undefined;
   do {
-    const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs });
+    const page = await listToolsPage(client, cursor, timeoutMs);
     tools.push(...page.tools);
+    diagnostics.push(...page.diagnostics);
     cursor = page.nextCursor;
   } while (cursor);
-  return tools;
+  const cached = cacheListedToolMetadata(client, tools);
+  return { tools: cached.tools, diagnostics: [...diagnostics, ...cached.diagnostics] };
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
@@ -239,12 +359,12 @@ async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
   suppressUnsupported: boolean;
-}): Promise<ListedTool[]> {
+}): Promise<ListedToolsPage> {
   try {
     return await listAllTools(params.client, params.timeoutMs);
   } catch (error) {
     if (params.suppressUnsupported && isMcpMethodNotFoundError(error)) {
-      return [];
+      return { tools: [], diagnostics: [] };
     }
     throw error;
   }
@@ -627,13 +747,22 @@ export function createSessionMcpRuntime(params: {
             const capabilities = summarizeServerCapabilities(
               session.client.getServerCapabilities(),
             );
-            const listedTools = await listAllToolsBestEffort({
+            const listed = await listAllToolsBestEffort({
               client: session.client,
               timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
               suppressUnsupported: Boolean(
                 !capabilities.tools && (capabilities.resources || capabilities.prompts),
               ),
             });
+            for (const message of listed.diagnostics) {
+              diagnostics.push({
+                serverName,
+                safeServerName,
+                launchSummary: resolved.description,
+                message,
+              });
+            }
+            const listedTools = listed.tools;
             failIfDisposed();
             const selection = getMcpToolSelection(rawServer);
             const exposedTools = listedTools.filter((tool) =>

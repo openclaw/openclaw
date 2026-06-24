@@ -39,7 +39,20 @@ async function writeListToolsMcpServer(params: {
   delayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
-  tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+    outputSchema?: unknown;
+  }>;
+  toolPages?: Array<
+    Array<{
+      name: string;
+      description?: string;
+      inputSchema?: unknown;
+      outputSchema?: unknown;
+    }>
+  >;
   capabilities?: Record<string, unknown>;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
@@ -65,6 +78,7 @@ const tools = ${JSON.stringify(
         },
       ],
     )};
+const toolPages = ${JSON.stringify(params.toolPages ?? null)};
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
@@ -113,13 +127,17 @@ function handle(message) {
       keepAlive = setInterval(() => {}, 1000);
       return;
     }
-    log("delay tools/list " + delayMs);
+    const pageIndex = toolPages ? Number(message.params?.cursor ?? 0) : 0;
+    const pageTools = toolPages ? (toolPages[pageIndex] ?? []) : tools;
+    const nextCursor = toolPages && pageIndex + 1 < toolPages.length ? String(pageIndex + 1) : undefined;
+    log("delay tools/list " + delayMs + " page " + pageIndex);
     pendingTimer = setTimeout(() => {
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools,
+          tools: pageTools,
+          ...(nextCursor ? { nextCursor } : {}),
         },
       });
     }, delayMs);
@@ -786,11 +804,178 @@ describe("session MCP runtime", () => {
     try {
       const catalog = await runtime.getCatalog();
 
-      expect(catalog.servers).toEqual({});
+      expect(catalog.servers.fuzzplugin?.toolCount).toBe(0);
       expect(catalog.tools).toEqual([]);
       expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
+      expect(catalog.diagnostics?.[0]?.message).toContain("slow_tool");
       expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
       expect(catalog.diagnostics?.[0]?.message).toContain("object");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips invalid tools/list entries while keeping healthy siblings", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-mixed-schema-"));
+    const serverPath = path.join(tempDir, "mixed-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "bad_array_schema",
+          inputSchema: { type: "array", items: { type: "number" } },
+        },
+        {
+          name: "healthy_tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-mixed-schema",
+      sessionKey: "agent:test:session-mixed-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            fuzzplugin: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+      expect(catalog.servers.fuzzplugin?.toolCount).toBe(1);
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
+      expect(catalog.diagnostics?.[0]?.message).toContain("bad_array_schema");
+      expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips tools whose output schema metadata cannot be cached", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-output-schema-"));
+    const serverPath = path.join(tempDir, "output-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "bad_output_schema",
+          inputSchema: { type: "object", properties: {} },
+          outputSchema: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            dependencies: { mode: 123 },
+          },
+        },
+        {
+          name: "healthy_tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-output-schema",
+      sessionKey: "agent:test:session-output-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            fuzzplugin: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+      expect(catalog.servers.fuzzplugin?.toolCount).toBe(1);
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
+      expect(catalog.diagnostics?.[0]?.message).toContain("bad_output_schema");
+      expect(catalog.diagnostics?.[0]?.message).toContain("metadata cache failed");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds metadata cache for surviving tools after paginated quarantine", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-paged-schema-"));
+    const serverPath = path.join(tempDir, "paged-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      toolPages: [
+        [
+          {
+            name: "requires_output",
+            inputSchema: { type: "object", properties: {} },
+            outputSchema: {
+              type: "object",
+              properties: { ok: { type: "boolean" } },
+              required: ["ok"],
+            },
+          },
+        ],
+        [
+          {
+            name: "bad_output_schema",
+            inputSchema: { type: "object", properties: {} },
+            outputSchema: {
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              type: "object",
+              dependencies: { mode: 123 },
+            },
+          },
+        ],
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-paged-schema",
+      sessionKey: "agent:test:session-paged-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            fuzzplugin: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["requires_output"]);
+      expect(catalog.diagnostics?.[0]?.message).toContain("bad_output_schema");
+      await expect(runtime.callTool("fuzzplugin", "requires_output", {})).rejects.toThrow(
+        "has an output schema",
+      );
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -931,7 +1116,17 @@ function handle(message) {
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+          tools: [
+            {
+              name: "ok_tool",
+              inputSchema: { type: "object", properties: {} },
+              outputSchema: {
+                type: "object",
+                properties: { ok: { type: "boolean" } },
+                required: ["ok"],
+              },
+            },
+          ],
         },
       });
       setTimeout(() => {
