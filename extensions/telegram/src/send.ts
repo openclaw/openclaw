@@ -483,6 +483,11 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function isTelegramRichMessageEntityError(err: unknown): boolean {
+  const message = formatErrorMessage(err);
+  return /RICH_MESSAGE_[A-Z_]+_INVALID/i.test(message) || /rich_message.*invalid/i.test(message);
+}
+
 async function withTelegramHtmlParseFallback<T>(params: {
   label: string;
   verbose?: boolean;
@@ -498,6 +503,29 @@ async function withTelegramHtmlParseFallback<T>(params: {
     if (params.verbose) {
       sendLogger.warn(
         `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+    }
+    return await params.requestPlain(`${params.label}-plain`);
+  }
+}
+
+async function withTelegramRichMessageFallback<T>(params: {
+  label: string;
+  verbose?: boolean;
+  requestRich: (label: string) => Promise<T>;
+  requestPlain: (label: string) => Promise<T>;
+}): Promise<T> {
+  try {
+    return await params.requestRich(params.label);
+  } catch (err) {
+    if (!isTelegramRichMessageEntityError(err)) {
+      throw err;
+    }
+    if (params.verbose) {
+      sendLogger.warn(
+        `telegram ${params.label} failed with rich-message entity error, retrying as plain text: ${formatErrorMessage(
           err,
         )}`,
       );
@@ -878,19 +906,31 @@ export async function sendMessageTelegram(
         continue;
       }
       const acceptedParams = buildRichTextParams(index === chunks.length - 1);
-      const result = await requestWithChatNotFound(
-        () =>
-          richRawApi.sendRichMessage({
-            chat_id: chatId,
-            rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
-              skipEntityDetection: account.config.linkPreview === false,
-              tableMode,
-            }),
-            ...acceptedParams,
-            ...(opts.silent === true ? { disable_notification: true } : {}),
-          }),
-        "richMessage",
-      );
+      const result = await withTelegramRichMessageFallback({
+        label: "richMessage",
+        verbose: opts.verbose,
+        requestRich: (label) =>
+          requestWithChatNotFound(
+            () =>
+              richRawApi.sendRichMessage({
+                chat_id: chatId,
+                rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
+                  skipEntityDetection: account.config.linkPreview === false,
+                  tableMode,
+                }),
+                ...acceptedParams,
+                ...(opts.silent === true ? { disable_notification: true } : {}),
+              }),
+            label,
+          ),
+        requestPlain: async () => {
+          const { result: plainResult } = await sendTelegramTextChunk(
+            { plainText: chunk.plainText },
+            acceptedParams,
+          );
+          return plainResult;
+        },
+      });
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
       await recordOutboundMessageForPromptContext({
