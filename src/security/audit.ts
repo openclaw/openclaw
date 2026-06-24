@@ -21,6 +21,7 @@ import {
   materializeGatewayAuthSecretRefs,
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
@@ -34,7 +35,6 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
@@ -155,6 +155,7 @@ let gatewayProbeDepsPromise:
       resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
       resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
       probeGateway: typeof import("../gateway/probe.js").probeGateway;
+      startGatewayRemoteSshTunnel: typeof import("../gateway/ssh-transport.js").startGatewayRemoteSshTunnel;
     }>
   | undefined;
 
@@ -199,11 +200,13 @@ async function loadGatewayProbeDeps() {
     import("../gateway/call.js"),
     import("../gateway/probe-auth.js"),
     import("../gateway/probe.js"),
-  ]).then(([callModule, probeAuthModule, probeModule]) => ({
+    import("../gateway/ssh-transport.js"),
+  ]).then(([callModule, probeAuthModule, probeModule, sshTransportModule]) => ({
     buildGatewayConnectionDetails: callModule.buildGatewayConnectionDetails,
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
     resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
+    startGatewayRemoteSshTunnel: sshTransportModule.startGatewayRemoteSshTunnel,
   }));
   return await gatewayProbeDepsPromise;
 }
@@ -1178,10 +1181,22 @@ async function maybeProbeGateway(params: {
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
 }> {
-  const { buildGatewayConnectionDetails, resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } =
-    await loadGatewayProbeDeps();
-  const connection = buildGatewayConnectionDetails({ config: params.cfg });
-  const url = connection.url;
+  const {
+    buildGatewayConnectionDetails,
+    resolveGatewayProbeAuthSafe,
+    resolveGatewayProbeTarget,
+    startGatewayRemoteSshTunnel,
+  } = await loadGatewayProbeDeps();
+  const connection = buildGatewayConnectionDetails({
+    config: params.cfg,
+    allowConfiguredSshTransport: true,
+  });
+  const ssh = await startGatewayRemoteSshTunnel({
+    config: params.cfg,
+    url: connection.url,
+    urlSource: connection.urlSource,
+  });
+  const url = ssh?.url ?? connection.url;
   const probeTarget = resolveGatewayProbeTarget(params.cfg);
 
   const authResolution = resolveGatewayProbeAuthSafe({
@@ -1190,36 +1205,40 @@ async function maybeProbeGateway(params: {
     mode: probeTarget.mode,
     explicitAuth: params.explicitAuth,
   });
-  const res = await params
-    .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
-    .catch((err: unknown) => ({
-      ok: false,
-      url,
-      connectLatencyMs: null,
-      error: String(err),
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    }));
-
-  if (authResolution.warning && !res.ok) {
-    res.error = res.error ? `${res.error}; ${authResolution.warning}` : authResolution.warning;
-  }
-
-  return {
-    deep: {
-      gateway: {
-        attempted: true,
+  try {
+    const res = await params
+      .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
+      .catch((err: unknown) => ({
+        ok: false,
         url,
-        ok: res.ok,
-        error: res.ok ? null : res.error,
-        close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+        connectLatencyMs: null,
+        error: String(err),
+        close: null,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }));
+
+    if (authResolution.warning && !res.ok) {
+      res.error = res.error ? `${res.error}; ${authResolution.warning}` : authResolution.warning;
+    }
+
+    return {
+      deep: {
+        gateway: {
+          attempted: true,
+          url,
+          ok: res.ok,
+          error: res.ok ? null : res.error,
+          close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+        },
       },
-    },
-    authWarning: authResolution.warning,
-  };
+      authWarning: authResolution.warning,
+    };
+  } finally {
+    await ssh?.tunnel.stop().catch(() => undefined);
+  }
 }
 
 async function createAuditExecutionContext(

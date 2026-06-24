@@ -2586,6 +2586,33 @@ describe("capability cli", () => {
     expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
   });
 
+  it("allows configured SSH Gateway details before gateway TTS conversion", async () => {
+    const gatewayConnection = await import("../gateway/connection-details.js");
+    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockImplementationOnce(
+      ((options: { allowConfiguredSshTransport?: boolean }) => {
+        if (options.allowConfiguredSshTransport !== true) {
+          throw new Error("missing configured SSH allowance");
+        }
+        return {
+          url: "ws://203.0.113.10:18789",
+          urlSource: "config gateway.remote.url",
+          message: "Gateway target: ws://203.0.113.10:18789",
+        };
+      }) as typeof gatewayConnection.buildGatewayConnectionDetailsWithResolvers,
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--gateway", "--text", "hello", "--json"],
+    });
+
+    expect(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      allowConfiguredSshTransport: true,
+    });
+    expect(firstGatewayCall()?.method).toBe("tts.convert");
+  });
+
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
     const gatewayConnection = await import("../gateway/connection-details.js");
     vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({

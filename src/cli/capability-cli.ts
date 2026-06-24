@@ -1403,6 +1403,7 @@ async function runTtsConvert(params: {
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
       config: getRuntimeConfig(),
+      allowConfiguredSshTransport: true,
     });
     const result: {
       audioPath?: string;

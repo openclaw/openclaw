@@ -1303,6 +1303,29 @@ describe("devices cli local fallback", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("does not replace gateway pairing errors while checking configured SSH remotes for local fallback", async () => {
+    rejectGatewayForLocalFallback();
+    buildGatewayConnectionDetails.mockImplementationOnce(((
+      options: { allowConfiguredSshTransport?: boolean } | undefined,
+    ) => {
+      if (options?.allowConfiguredSshTransport !== true) {
+        throw new Error("missing configured SSH allowance");
+      }
+      return {
+        url: "ws://203.0.113.10:18789",
+        urlSource: "config gateway.remote.url",
+        message: "Gateway target: ws://203.0.113.10:18789",
+      };
+    }) as typeof buildGatewayConnectionDetails);
+
+    await expect(runDevicesCommand(["list"])).rejects.toThrow("pairing required");
+
+    expect(buildGatewayConnectionDetails).toHaveBeenCalledWith({
+      allowConfiguredSshTransport: true,
+    });
+    expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+
   it("does not use local fallback when an explicit --url is provided", async () => {
     rejectGatewayForLocalFallback();
 

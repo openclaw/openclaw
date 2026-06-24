@@ -76,7 +76,9 @@ type CrestodianOverviewDependencies = {
   buildGatewayConnectionDetails?: (input: {
     config: OpenClawConfig;
     configPath: string;
+    allowConfiguredSshTransport?: boolean;
   }) => GatewayConnectionDetails;
+  startGatewayRemoteSshTunnel?: typeof import("../gateway/ssh-transport.js").startGatewayRemoteSshTunnel;
   probeLocalCommand?: typeof probeLocalCommand;
   probeGatewayUrl?: typeof probeGatewayUrl;
   resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
@@ -156,31 +158,56 @@ export async function loadCrestodianOverview(
   let gatewayUrl = `ws://127.0.0.1:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
+  let stopGatewaySshTunnel: (() => Promise<void>) | undefined;
   try {
     const buildGatewayConnectionDetails =
       deps.buildGatewayConnectionDetails ??
       (await import("../gateway/call.js")).buildGatewayConnectionDetails;
-    const details = buildGatewayConnectionDetails({ config: cfg, configPath });
+    const details = buildGatewayConnectionDetails({
+      config: cfg,
+      configPath,
+      allowConfiguredSshTransport: true,
+    });
     gatewayUrl = details.url;
     gatewaySource = details.urlSource;
     gatewayError = details.remoteFallbackNote;
+    const startGatewayRemoteSshTunnel =
+      deps.startGatewayRemoteSshTunnel ??
+      (await import("../gateway/ssh-transport.js")).startGatewayRemoteSshTunnel;
+    const ssh = await startGatewayRemoteSshTunnel({
+      config: cfg,
+      url: details.url,
+      urlSource: details.urlSource,
+    });
+    gatewayUrl = ssh?.url ?? details.url;
+    gatewaySource = ssh?.urlSource ?? details.urlSource;
+    stopGatewaySshTunnel = ssh?.tunnel.stop.bind(ssh.tunnel);
   } catch (err) {
     gatewayError = err instanceof Error ? err.message : String(err);
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [codex, claude, gateway, references] = await Promise.all([
-    // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
-    commandProbe("codex"),
-    commandProbe("claude"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
-    resolveFastTestReferences(env) ??
-      resolveReferences({
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-        moduleUrl: import.meta.url,
-      }),
-  ]);
+  const probeResolvedGatewayUrl = deps.probeGatewayUrl ?? probeGatewayUrl;
+  let codex: LocalCommandProbe;
+  let claude: LocalCommandProbe;
+  let gateway: Awaited<ReturnType<typeof probeGatewayUrl>>;
+  let references: OpenClawReferencePaths;
+  try {
+    [codex, claude, gateway, references] = await Promise.all([
+      // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
+      commandProbe("codex"),
+      commandProbe("claude"),
+      probeResolvedGatewayUrl(gatewayUrl),
+      resolveFastTestReferences(env) ??
+        resolveReferences({
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+          moduleUrl: import.meta.url,
+        }),
+    ]);
+  } finally {
+    await stopGatewaySshTunnel?.().catch(() => undefined);
+  }
   return {
     config: {
       path: configPath,

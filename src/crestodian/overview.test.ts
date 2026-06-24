@@ -1,5 +1,5 @@
 // Crestodian overview tests cover summary output for rescue diagnostics.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
   formatCrestodianOverview,
@@ -8,6 +8,84 @@ import {
 } from "./overview.js";
 
 describe("loadCrestodianOverview", () => {
+  it("probes configured SSH remote Gateways through a managed loopback tunnel", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://203.0.113.10:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    };
+    const snapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: runtimeConfig,
+      sourceConfig: runtimeConfig,
+      resolved: runtimeConfig,
+      valid: true,
+      runtimeConfig,
+      config: runtimeConfig,
+      hash: "test-hash",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+    const stopTunnel = vi.fn(async () => undefined);
+    const buildGatewayConnectionDetails = vi.fn(
+      (input: {
+        config: OpenClawConfig;
+        configPath: string;
+        allowConfiguredSshTransport?: boolean;
+      }) => {
+        if (input.allowConfiguredSshTransport !== true) {
+          throw new Error("missing configured SSH allowance");
+        }
+        return {
+          url: "ws://203.0.113.10:18789",
+          urlSource: "config gateway.remote.url",
+        };
+      },
+    );
+    const startGatewayRemoteSshTunnel = vi.fn(async () => ({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: { stop: stopTunnel },
+    }));
+    const probeGatewayUrl = vi.fn(async (url: string) => ({ reachable: true, url }));
+
+    const overview = await loadCrestodianOverview({
+      env: { OPENCLAW_TEST_FAST: "1" },
+      deps: {
+        readConfigFileSnapshot: async () => snapshot,
+        buildGatewayConnectionDetails,
+        startGatewayRemoteSshTunnel,
+        probeGatewayUrl,
+        probeLocalCommand: async (command) => ({ command, found: false }),
+      },
+    });
+
+    expect(buildGatewayConnectionDetails).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      configPath: "/tmp/openclaw.json",
+      allowConfiguredSshTransport: true,
+    });
+    expect(startGatewayRemoteSshTunnel).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      url: "ws://203.0.113.10:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    expect(probeGatewayUrl).toHaveBeenCalledWith("ws://127.0.0.1:41001");
+    expect(stopTunnel).toHaveBeenCalledTimes(1);
+    expect(overview.gateway).toMatchObject({
+      url: "ws://127.0.0.1:41001",
+      source: "ssh tunnel",
+      reachable: true,
+    });
+  });
+
   it("summarizes config, agents, model, tools, and gateway", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {

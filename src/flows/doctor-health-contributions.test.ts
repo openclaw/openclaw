@@ -878,6 +878,38 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("allows configured SSH Gateway details while collecting auth profile diagnostics", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    mocks.buildGatewayConnectionDetails.mockImplementationOnce(((options: {
+      allowConfiguredSshTransport?: boolean;
+    }) => {
+      if (options.allowConfiguredSshTransport !== true) {
+        throw new Error("missing configured SSH allowance");
+      }
+      return { message: "Gateway target: ws://203.0.113.10:18789" };
+    }) as typeof mocks.buildGatewayConnectionDetails);
+    const ctx = {
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://203.0.113.10:18789",
+            sshTarget: "user@gateway.example",
+          },
+        },
+      },
+      prompter: buildDoctorPrompter(false),
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.buildGatewayConnectionDetails).toHaveBeenCalledWith({
+      config: ctx.cfg,
+      allowConfiguredSshTransport: true,
+    });
+  });
+
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {

@@ -168,7 +168,7 @@ function resolveLocalPairingFallback(
     // switch to local pairing files in that case.
     return null;
   }
-  const connection = buildGatewayConnectionDetails();
+  const connection = buildGatewayConnectionDetails({ allowConfiguredSshTransport: true });
   if (connection.urlSource !== "local loopback") {
     return null;
   }

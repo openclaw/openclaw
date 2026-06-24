@@ -27,6 +27,10 @@ import {
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import {
+  startGatewayRemoteSshTunnel,
+  type GatewaySshTunnelConnection,
+} from "../gateway/ssh-transport.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
@@ -59,6 +63,7 @@ type ResolvedGatewayConnection = {
   password?: string;
   preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi: boolean;
+  sshTunnel?: GatewaySshTunnelConnection["tunnel"];
 };
 
 function throwGatewayAuthResolutionError(reason: string): never {
@@ -189,6 +194,7 @@ export class GatewayChatClient implements TuiBackend {
 
   stop() {
     this.client.stop();
+    void this.connection.sshTunnel?.stop().catch(() => undefined);
   }
 
   async subscribeSessionEvents() {
@@ -302,10 +308,19 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url = buildGatewayConnectionDetails({
+  const connectionDetails = buildGatewayConnectionDetails({
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
-  }).url;
+    allowConfiguredSshTransport: true,
+  });
+  const ssh = urlOverride
+    ? null
+    : await startGatewayRemoteSshTunnel({
+        config,
+        url: connectionDetails.url,
+        urlSource: connectionDetails.urlSource,
+      });
+  const url = ssh?.url ?? connectionDetails.url;
   const allowInsecureLocalOperatorUi = (() => {
     if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
       return false;
@@ -323,6 +338,7 @@ export async function resolveGatewayConnection(
       token: explicitAuth.token,
       password: explicitAuth.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+      sshTunnel: ssh?.tunnel,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -342,6 +358,7 @@ export async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+      sshTunnel: ssh?.tunnel,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -358,6 +375,7 @@ export async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+      sshTunnel: ssh?.tunnel,
       allowInsecureLocalOperatorUi,
     };
   }

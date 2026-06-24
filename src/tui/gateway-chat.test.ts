@@ -11,6 +11,18 @@ import {
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+const sshTransportMocks = vi.hoisted(() => ({
+  startGatewayRemoteSshTunnel: vi.fn(async () => ({
+    url: "ws://127.0.0.1:41001",
+    urlSource: "ssh tunnel",
+    tunnel: { stop: vi.fn(async () => undefined) },
+  })),
+}));
+
+vi.mock("../gateway/ssh-transport.js", () => ({
+  startGatewayRemoteSshTunnel: sshTransportMocks.startGatewayRemoteSshTunnel,
+}));
+
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
@@ -119,6 +131,12 @@ describe("resolveGatewayConnection", () => {
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockReset();
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValue({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: { stop: vi.fn(async () => undefined) },
+    });
     resolveStateDir.mockImplementation(
       (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",
     );
@@ -348,6 +366,31 @@ describe("resolveGatewayConnection", () => {
       const result = await resolveGatewayConnection({});
       expect(result.password).toBe(gatewayPassword);
     });
+  });
+
+  it("starts the configured SSH tunnel before returning a remote TUI Gateway URL", async () => {
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+
+    const result = await resolveGatewayConnection({});
+
+    expect(sshTransportMocks.startGatewayRemoteSshTunnel).toHaveBeenCalledWith({
+      config,
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    expect(result.url).toBe("ws://127.0.0.1:41001");
+    expect(result.token).toBe("remote-token");
+    expect(result.allowInsecureLocalOperatorUi).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(

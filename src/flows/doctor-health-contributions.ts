@@ -312,7 +312,10 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
   });
   noteLegacyCodexProviderOverride(ctx.cfg);
-  ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
+  ctx.gatewayDetails = buildGatewayConnectionDetails({
+    config: ctx.cfg,
+    allowConfiguredSshTransport: true,
+  });
   if (ctx.gatewayDetails.remoteFallbackNote) {
     note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");
   }
