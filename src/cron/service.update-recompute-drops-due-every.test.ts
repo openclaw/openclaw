@@ -73,6 +73,52 @@ describe("update() must not drop a due every-job's pending run", () => {
     cron.stop();
   });
 
+  it("re-anchors an every-job to the edit time when the interval actually changes", async () => {
+    const store = await makeStorePath();
+    const base = Date.parse("2025-12-13T00:00:00.000Z");
+
+    const finished = createFinishedBarrier();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      onEvent: finished.onEvent,
+    });
+
+    await cron.start();
+
+    const job = await cron.add({
+      name: "every 10s",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 10_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "tick" },
+    });
+    const jobId = job.id;
+    expect(job.schedule).toMatchObject({ kind: "every", anchorMs: base });
+
+    // User edits the interval from 10s to 1h. The control UI omits the internal
+    // anchorMs, so the new cadence must start from the edit time rather than
+    // keeping the old phase; nextRunAtMs is one new interval from now.
+    const editTime = base + 3_000;
+    vi.setSystemTime(new Date(editTime));
+    await cron.update(jobId, { schedule: { kind: "every", everyMs: 3_600_000 } });
+
+    const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
+    expect(current.schedule).toMatchObject({
+      kind: "every",
+      everyMs: 3_600_000,
+      anchorMs: editTime,
+    });
+    expect(current.state.nextRunAtMs).toBe(editTime + 3_600_000);
+
+    cron.stop();
+  });
+
   it("preserves a due cron-job nextRunAtMs on an idempotent schedule re-save", async () => {
     const store = await makeStorePath();
     vi.setSystemTime(new Date("2025-12-13T08:59:00.000Z"));

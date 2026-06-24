@@ -525,12 +525,15 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
-        // Inherit the previous cadence anchor when an `every` re-save omits it
-        // (UIs resubmit the schedule without the internal anchorMs). Without
-        // this the edit re-phases the job to now, shifting every future fire
-        // time and skipping an already-due slot.
+        // Inherit the previous cadence anchor only for an unchanged-interval
+        // re-save (UIs resubmit the schedule without the internal anchorMs).
+        // Without this an idempotent edit re-phases the job to now, shifting
+        // every future fire time and skipping an already-due slot. A genuine
+        // interval change still anchors to the edit time so the new cadence
+        // starts now, matching the prior update semantics.
         const previousAnchorMs =
           job.schedule.kind === "every" &&
+          job.schedule.everyMs === nextJob.schedule.everyMs &&
           typeof job.schedule.anchorMs === "number" &&
           Number.isFinite(job.schedule.anchorMs)
             ? job.schedule.anchorMs
