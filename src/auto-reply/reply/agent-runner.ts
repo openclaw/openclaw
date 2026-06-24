@@ -68,6 +68,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
+  type AgentRunLoopResult,
   runAgentTurnWithFallback,
 } from "./agent-runner-execution.js";
 import {
@@ -261,7 +262,11 @@ function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
 }
 
 function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: {
+    hasBuffered: () => boolean;
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -279,19 +284,114 @@ function hasSuccessfulSideEffectDelivery(params: {
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: {
+    hasBuffered: () => boolean;
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
+    (params.blockReplyPipeline?.hasBuffered() && !params.blockReplyPipeline.isAborted()) ||
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
   );
+}
+
+type SuccessfulAgentRunOutcome = Extract<AgentRunLoopResult, { kind: "success" }>;
+
+function hasCompactionHistory(entry: SessionEntry | undefined): boolean {
+  return (
+    (typeof entry?.compactionCount === "number" && entry.compactionCount > 0) ||
+    (Array.isArray(entry?.compactionCheckpoints) && entry.compactionCheckpoints.length > 0)
+  );
+}
+
+function isDirectChatSession(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionCtx: TemplateContext;
+}): boolean {
+  return (
+    params.sessionEntry?.chatType === "direct" ||
+    params.sessionCtx.ChatType === "direct" ||
+    params.sessionKey?.includes(":direct:") === true
+  );
+}
+
+function hasNonErrorVisibleReplyPayload(payloads: ReplyPayload[] | undefined): boolean {
+  return (payloads ?? []).some((payload) => {
+    if (payload.isError === true || payload.isReasoning === true) {
+      return false;
+    }
+    return (
+      (typeof payload.text === "string" && payload.text.trim().length > 0) ||
+      (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) ||
+      (Array.isArray(payload.mediaUrls) &&
+        payload.mediaUrls.some((url) => url.trim().length > 0)) ||
+      payload.presentation !== undefined ||
+      payload.interactive !== undefined
+    );
+  });
+}
+
+function shouldAutoResetRetryStalledDirectSession(params: {
+  isHeartbeat: boolean;
+  sessionKey?: string;
+  storePath?: string;
+  activeSessionStore?: Record<string, SessionEntry>;
+  activeSessionEntry?: SessionEntry;
+  sessionCtx: TemplateContext;
+  runOutcome: SuccessfulAgentRunOutcome;
+  blockReplyPipeline: {
+    hasBuffered: () => boolean;
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
+  pendingToolTasks: Set<Promise<void>>;
+}): boolean {
+  const runResult = params.runOutcome.runResult;
+  if (
+    params.isHeartbeat ||
+    !params.sessionKey ||
+    !params.storePath ||
+    !params.activeSessionStore ||
+    !isDirectChatSession({
+      sessionKey: params.sessionKey,
+      sessionEntry: params.activeSessionEntry,
+      sessionCtx: params.sessionCtx,
+    }) ||
+    !hasCompactionHistory(params.activeSessionEntry)
+  ) {
+    return false;
+  }
+  if (
+    runResult.meta?.aborted !== true ||
+    runResult.meta?.error !== undefined ||
+    runResult.meta?.livenessState !== "blocked" ||
+    params.runOutcome.fallbackExhausted === true ||
+    params.runOutcome.fallbackAttempts.length > 0 ||
+    params.pendingToolTasks.size > 0 ||
+    hasNonErrorVisibleReplyPayload(runResult.payloads)
+  ) {
+    return false;
+  }
+  return !hasSuccessfulSideEffectDelivery({
+    blockReplyPipeline: params.blockReplyPipeline,
+    directlySentBlockKeys: params.runOutcome.directlySentBlockKeys,
+    messagingToolSentTexts: runResult.messagingToolSentTexts,
+    messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+    messagingToolSentTargets: runResult.messagingToolSentTargets,
+    didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+    successfulCronAdds: runResult.successfulCronAdds,
+    didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+  });
 }
 
 function resolveConfiguredFallbackModel(params: {
@@ -1720,7 +1820,7 @@ export async function runReplyAgent(params: {
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
     await persistRestartRecoveryDeliveryContext();
-    const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
+    const runAgentTurn = () =>
       runAgentTurnWithFallback({
         commandBody,
         transcriptCommandBody,
@@ -1749,14 +1849,92 @@ export async function runReplyAgent(params: {
         toolProgressDetail,
         replyMediaContext,
         isRestartRecoveryArmed,
-      }),
-    );
+      });
+    let runOutcome = await traceAgentPhase("reply.run_agent_turn", runAgentTurn);
 
     if (runOutcome.kind === "final") {
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
       return returnWithQueuedFollowupDrain(runOutcome.payload);
+    }
+
+    if (
+      shouldAutoResetRetryStalledDirectSession({
+        isHeartbeat,
+        sessionKey,
+        storePath,
+        activeSessionStore,
+        activeSessionEntry,
+        sessionCtx,
+        runOutcome,
+        blockReplyPipeline,
+        pendingToolTasks,
+      })
+    ) {
+      const previousSessionId = followupRun.run.sessionId;
+      const retryLifecycleRunId = runOutcome.runId;
+      const compactionCount = activeSessionEntry?.compactionCount;
+      emitAgentEvent({
+        runId: retryLifecycleRunId,
+        sessionKey,
+        sessionId: previousSessionId,
+        stream: "lifecycle",
+        data: {
+          phase: "auto_session_reset_retry",
+          outcome: "attempting",
+          reason: "stalled_direct_session_abort",
+          compactionCount,
+        },
+      });
+      const didReset = await resetSession({
+        failureLabel: "stalled direct session abort",
+        buildLogMessage: (nextSessionId) =>
+          `Stalled direct session aborted without visible output. Resetting hot session ${sessionKey} ${previousSessionId} -> ${nextSessionId} and retrying once.`,
+      });
+      if (didReset) {
+        replyOperation.updateSessionId(followupRun.run.sessionId);
+        runOutcome = await traceAgentPhase(
+          "reply.run_agent_turn_after_session_reset",
+          runAgentTurn,
+        );
+        emitAgentEvent({
+          runId: runOutcome.kind === "success" ? runOutcome.runId : retryLifecycleRunId,
+          sessionKey,
+          sessionId: followupRun.run.sessionId,
+          stream: "lifecycle",
+          data: {
+            phase: "auto_session_reset_retry",
+            outcome: "completed",
+            reason: "stalled_direct_session_abort",
+            previousSessionId,
+            sessionId: followupRun.run.sessionId,
+            compactionCount,
+          },
+        });
+        if (runOutcome.kind === "final") {
+          if (!replyOperation.result) {
+            replyOperation.fail(
+              "run_failed",
+              new Error("reply operation exited with final payload"),
+            );
+          }
+          return returnWithQueuedFollowupDrain(runOutcome.payload);
+        }
+      } else {
+        emitAgentEvent({
+          runId: retryLifecycleRunId,
+          sessionKey,
+          sessionId: previousSessionId,
+          stream: "lifecycle",
+          data: {
+            phase: "auto_session_reset_retry",
+            outcome: "skipped",
+            reason: "reset_unavailable",
+            compactionCount,
+          },
+        });
+      }
     }
 
     const {
