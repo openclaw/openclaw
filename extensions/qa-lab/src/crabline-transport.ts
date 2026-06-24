@@ -33,6 +33,7 @@ const RECORDER_SYNC_INTERVAL_MS = 50;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
+  rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
 
 async function waitForCrablineReady(params: {
@@ -193,6 +194,9 @@ function createCrablineState(params: {
       });
       return message;
     },
+    rememberProviderTarget(providerTargetKey, qaTarget) {
+      targetByProviderTarget.set(providerTargetKey, qaTarget);
+    },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
     async searchMessages(input: QaBusSearchMessagesInput) {
@@ -247,8 +251,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       channel: this.#adapter.channel,
     });
 
-  buildAgentDelivery = ({ target }: { target: string }) =>
-    this.#adapter.createAgentDelivery({ target });
+  buildAgentDelivery = ({ target }: { target: string }) => {
+    const delivery = this.#adapter.createAgentDelivery({ target });
+    this.#state.rememberProviderTarget(delivery.to ?? delivery.replyTo, target);
+    return delivery;
+  };
 
   handleAction = async (_params: {
     action: QaTransportActionName;

@@ -475,6 +475,7 @@ class FallbackMemoryManager implements MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      signal?: AbortSignal;
     },
   ) {
     this.ensureOpen();
@@ -482,6 +483,11 @@ class FallbackMemoryManager implements MemorySearchManager {
       try {
         return await this.deps.primary.search(query, opts);
       } catch (err) {
+        // Caller cancellation is request-scoped, not a QMD health failure.
+        // Keep the shared manager active for concurrent and later searches.
+        if (opts?.signal?.aborted) {
+          throw err;
+        }
         this.primaryFailed = true;
         this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
