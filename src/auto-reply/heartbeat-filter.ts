@@ -453,6 +453,10 @@ function extractHeartbeatResponseToolSummary(message: {
     if (readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME) {
       const args = parseToolCallArguments(readToolCallArguments(block));
       if (args) {
+        // Exclude visible/notify:true tool calls from summary extraction
+        if (args.notify === true || args.notify === "true") {
+          return undefined;
+        }
         const summary = readString(args.summary) ?? "";
         const notificationText = readString(args.notificationText) ?? "";
         const reason = readString(args.reason) ?? "";
@@ -480,6 +484,42 @@ function extractHeartbeatResponseToolSummary(message: {
   }
 
   return undefined;
+}
+
+function isCompletedSilentHeartbeatResponseToolCall(
+  messages: HeartbeatTranscriptMessage[],
+  index: number,
+  endIndex: number,
+): boolean {
+  const msg = messages[index];
+  const silentCalls = [
+    ...collectMessageToolCalls(msg),
+    ...collectToolCallBlocks(msg.content),
+  ].filter(
+    (call) =>
+      readToolCallName(call) === HEARTBEAT_RESPONSE_TOOL_NAME &&
+      !isVisibleHeartbeatResponseToolCall(call),
+  );
+
+  if (silentCalls.length === 0) {
+    return false;
+  }
+
+  const callIds = new Set(silentCalls.flatMap((call) => collectToolCallIds(call)));
+  for (let rIdx = index + 1; rIdx < endIndex; rIdx++) {
+    const result = messages[rIdx];
+    if (hasSuccessfulToolResultMessage(result)) {
+      if (callIds.size === 0) {
+        return true;
+      }
+      for (const resultId of collectSuccessfulToolResultCallIds(result)) {
+        if (callIds.has(resultId)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /** Remove heartbeat-only prompt, ack, and silent tool artifacts from a transcript. */
@@ -512,46 +552,59 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
 
     if (resolvedMode === "keep-result") {
       let lastAssistantMessage: T | undefined;
+      let lastAssistantIndex = -1;
       for (let j = next - 1; j > i; j--) {
         if (messages[j].role === "assistant") {
           lastAssistantMessage = messages[j];
+          lastAssistantIndex = j;
           break;
         }
       }
 
-      if (lastAssistantMessage) {
-        let cleanTrimmed = extractHeartbeatResponseToolSummary(lastAssistantMessage);
-        if (!cleanTrimmed) {
-          const { text } = resolveMessageText(lastAssistantMessage.content);
-          const { text: cleanText } = stripHeartbeatToken(text, {
-            mode: "message",
-            maxAckChars: ackMaxChars,
-          });
-          cleanTrimmed = cleanText.trim();
-        }
+      if (lastAssistantMessage && lastAssistantIndex !== -1) {
+        const isCompletedTextAck = isHeartbeatOkResponse(lastAssistantMessage, ackMaxChars);
+        const isCompletedSilentTool = isCompletedSilentHeartbeatResponseToolCall(
+          messages,
+          lastAssistantIndex,
+          next,
+        );
 
-        if (cleanTrimmed) {
-          const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
-          const msgObj = lastAssistantMessage as unknown as Record<string, unknown>;
-          const {
-            tool_calls: _tc,
-            function_call: _fc,
-            reasoning_content: _rc,
-            reasoning: _r,
-            diagnostics: _d,
-            ...rest
-          } = msgObj;
+        if (isCompletedTextAck || isCompletedSilentTool) {
+          let cleanTrimmed: string | undefined;
+          if (isCompletedSilentTool) {
+            cleanTrimmed = extractHeartbeatResponseToolSummary(lastAssistantMessage);
+          } else if (isCompletedTextAck) {
+            const { text } = resolveMessageText(lastAssistantMessage.content);
+            const { text: cleanText } = stripHeartbeatToken(text, {
+              mode: "message",
+              maxAckChars: ackMaxChars,
+            });
+            cleanTrimmed = cleanText.trim();
+          }
 
-          result.push({
-            ...rest,
-            content:
-              typeof lastAssistantMessage.content === "string"
-                ? summaryContent
-                : Array.isArray(lastAssistantMessage.content)
-                  ? [{ type: "text", text: summaryContent }]
-                  : summaryContent,
-            ...(msgObj.stopReason !== undefined ? { stopReason: "stop" } : {}),
-          } as T);
+          if (cleanTrimmed) {
+            const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
+            const msgObj = lastAssistantMessage as unknown as Record<string, unknown>;
+            const {
+              tool_calls: _tc,
+              function_call: _fc,
+              reasoning_content: _rc,
+              reasoning: _r,
+              diagnostics: _d,
+              ...rest
+            } = msgObj;
+
+            result.push({
+              ...rest,
+              content:
+                typeof lastAssistantMessage.content === "string"
+                  ? summaryContent
+                  : Array.isArray(lastAssistantMessage.content)
+                    ? [{ type: "text", text: summaryContent }]
+                    : summaryContent,
+              ...(msgObj.stopReason !== undefined ? { stopReason: "stop" } : {}),
+            } as T);
+          }
         }
       }
     }

@@ -1077,6 +1077,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             },
           ],
         },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          content: "Success",
+        },
       ];
       expect(
         filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
@@ -1130,6 +1135,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
           api: "openai-responses",
           stopReason: "toolUse",
         },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          content: "Success",
+        },
       ];
       expect(
         filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
@@ -1170,6 +1180,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             },
           ],
         },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          content: "Success",
+        },
         { role: "user", content: "Hi" },
       ];
       expect(
@@ -1178,6 +1193,168 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         { role: "user", content: "Hello" },
         { role: "user", content: "Hi" },
       ]);
+    });
+
+    it("strips pending or failed notify:true heartbeat response tool calls in keep-result mode", () => {
+      // Case 1: Pending notify:true (no toolResult)
+      const pendingMessages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: true,
+                summary: "Should not be summarized",
+              },
+            },
+          ],
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(
+          pendingMessages,
+          undefined,
+          HEARTBEAT_PROMPT,
+          "keep-result",
+        ),
+      ).toEqual([]);
+
+      // Case 2: Failed notify:true (toolResult has error)
+      const failedMessages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: true,
+                summary: "Should not be summarized",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          isError: true,
+          content: "Failed to execute heartbeat response",
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(
+          failedMessages,
+          undefined,
+          HEARTBEAT_PROMPT,
+          "keep-result",
+        ),
+      ).toEqual([]);
+    });
+
+    it("keeps completed notify:true heartbeat response tool calls in full", () => {
+      const completedMessages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: true,
+                summary: "Visible summary",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          content: "Success",
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(
+          completedMessages,
+          undefined,
+          HEARTBEAT_PROMPT,
+          "keep-result",
+        ),
+      ).toEqual(completedMessages);
+    });
+
+    it("strips pending or failed silent heartbeat response tool calls in keep-result mode", () => {
+      // Case 1: Pending silent heartbeat (no toolResult)
+      const pendingMessages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "Pending silent summary",
+              },
+            },
+          ],
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(
+          pendingMessages,
+          undefined,
+          HEARTBEAT_PROMPT,
+          "keep-result",
+        ),
+      ).toEqual([]);
+
+      // Case 2: Failed silent heartbeat (toolResult has error)
+      const failedMessages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "Failed silent summary",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_heartbeat",
+          isError: true,
+          content: "Error executing heartbeat",
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(
+          failedMessages,
+          undefined,
+          HEARTBEAT_PROMPT,
+          "keep-result",
+        ),
+      ).toEqual([]);
     });
   });
 });
