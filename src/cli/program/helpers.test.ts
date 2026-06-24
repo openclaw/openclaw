@@ -243,6 +243,47 @@ describe("hoistParentOptionsBeforeSubcommand", () => {
     ]);
   });
 
+  it("does not hoist a bare value option with no following value", () => {
+    const { browser, tabs } = buildBrowserTree();
+    const argv = ["node", "openclaw", "browser", "tabs", "--browser-profile"];
+    expect(
+      hoistParentOptionsBeforeSubcommand({
+        argv,
+        parentCommand: browser,
+        subcommandName: "tabs",
+        subcommandCommand: tabs,
+      }),
+    ).toEqual(argv);
+  });
+
+  it("does not hoist a value option followed by another flag", () => {
+    // The bare `--browser-profile` (no following value) is left in place so the
+    // missing-value error is preserved; the trailing `--json` is a valid parent
+    // boolean option and is still hoisted before the subcommand.
+    const { browser, tabs } = buildBrowserTree();
+    expect(
+      hoistParentOptionsBeforeSubcommand({
+        argv: ["node", "openclaw", "browser", "tabs", "--browser-profile", "--json"],
+        parentCommand: browser,
+        subcommandName: "tabs",
+        subcommandCommand: tabs,
+      }),
+    ).toEqual(["node", "openclaw", "browser", "--json", "tabs", "--browser-profile"]);
+  });
+
+  it("does not hoist an empty --flag= form", () => {
+    const { browser, tabs } = buildBrowserTree();
+    const argv = ["node", "openclaw", "browser", "tabs", "--browser-profile="];
+    expect(
+      hoistParentOptionsBeforeSubcommand({
+        argv,
+        parentCommand: browser,
+        subcommandName: "tabs",
+        subcommandCommand: tabs,
+      }),
+    ).toEqual(argv);
+  });
+
   it("returns argv unchanged when the parent command is the root", () => {
     const root = new Command().name("openclaw").option("--json", "", false);
     root.command("status");

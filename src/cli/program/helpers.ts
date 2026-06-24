@@ -169,7 +169,12 @@ function consumeHoistableOption(
   if (equalsIndex !== -1) {
     return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
   }
-  return isHoistableValueToken(args[index + 1]) ? 2 : 1;
+  // A parent value option without a real following value (bare flag at the
+  // end, or followed by another flag) must NOT be hoisted alone: hoisting the
+  // bare flag before the subcommand would let Commander consume the next token
+  // (e.g. the subcommand name) as the option value on reparse, swallowing the
+  // missing-argument error. Leave it in place so Commander reports the error.
+  return isHoistableValueToken(args[index + 1]) ? 2 : 0;
 }
 
 /**

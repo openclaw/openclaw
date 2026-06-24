@@ -209,6 +209,43 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
   });
 
+  it("preserves the missing-value error for a bare --browser-profile after the subcommand (#55563 regression 1)", async () => {
+    // A bare parent value option with no following value must not be hoisted
+    // alone: hoisting `--browser-profile` before `tabs` would let Commander
+    // consume `tabs` as the profile value. Leaving it in place preserves the
+    // missing-value/unknown-option error and the tabs action never runs.
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+
+    registerBrowserCli(program, ["node", "openclaw", "browser", "tabs", "--browser-profile"]);
+
+    await expect(
+      program.parseAsync(["browser", "tabs", "--browser-profile"], { from: "user" }),
+    ).rejects.toThrow();
+    expect(manageMocks.tabsAction).not.toHaveBeenCalled();
+  });
+
+  it("preserves the missing-value error when --browser-profile is followed by another flag (#55563 regression 1)", async () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "--json",
+    ]);
+
+    await expect(
+      program.parseAsync(["browser", "tabs", "--browser-profile", "--json"], { from: "user" }),
+    ).rejects.toThrow();
+    expect(manageMocks.tabsAction).not.toHaveBeenCalled();
+  });
+
   it("skips browser option values when selecting the lazy command group", async () => {
     const program = new Command();
     program.name("openclaw");
