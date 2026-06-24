@@ -193,7 +193,10 @@ function isStableProviderErrorType(value: string): boolean {
   ) {
     return false;
   }
-  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+  // Accept SCREAMING_SNAKE_CASE (e.g. PROVIDER_QUOTA_EXCEEDED) and
+  // lowercase_snake_case (e.g. upstream_error) provider error types.
+  // The exclude list above handles types that are too generic (api_error, etc.).
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value) || /^[a-z][a-z0-9_:-]*$/.test(value);
 }
 
 function readDirectErrorType(err: unknown): string | undefined {

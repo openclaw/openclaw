@@ -917,6 +917,36 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
+/**
+ * Classify failover reason from provider error type strings.
+ *
+ * Provider APIs use `type` / `errorType` fields to categorize errors. Some
+ * types are transient upstream failures that should trigger model fallback
+ * rather than ending the turn immediately. For example:
+ * - "upstream_error": the provider's upstream backend failed (OpenAI-compatible)
+ * - "server_error": the provider itself had an internal error (Anthropic-compatible)
+ * - "api_error": a generic API error that may be transient depending on context
+ *
+ * Non-transient types (auth errors, context overflow, etc.) return null and
+ * fall through to message-based classification.
+ */
+function classifyFailoverReasonFromErrorType(
+  errorType: string | undefined,
+): FailoverClassification | null {
+  const normalized = errorType?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "upstream_error":
+      return toReasonClassification("timeout");
+    case "server_error":
+      return toReasonClassification("server_error");
+    default:
+      return null;
+  }
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1149,6 +1179,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     isHtmlErrorResponse(signal.message, inferredStatus)
   ) {
     return toReasonClassification("timeout");
+  }
+  // Classify known transient provider error types (e.g. "upstream_error") that
+  // indicate a server-side / upstream transient failure. These should trigger
+  // model fallback when fallback models are configured, rather than ending the
+  // turn immediately with a generic failure.
+  const errorTypeClassification = classifyFailoverReasonFromErrorType(signal.errorType);
+  if (errorTypeClassification) {
+    return errorTypeClassification;
   }
   const hasStructuredProviderSignal = Boolean(
     signal.provider &&
@@ -1628,7 +1666,7 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 // Non-transient api_error payloads (context overflow, validation/schema errors)
 // must NOT be classified as timeout.
 const API_ERROR_TRANSIENT_SIGNALS_RE =
-  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream.error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {

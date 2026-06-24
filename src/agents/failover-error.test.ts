@@ -1407,3 +1407,63 @@ describe("isSignalTimeoutReason", () => {
     expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });
+
+describe("upstream_error type triggers fallback", () => {
+  // GitHub: openclaw/openclaw#95519 — provider returns error with type "upstream_error"
+  // but OpenClaw does not classify it as fallbackable, ending the turn immediately
+  // instead of trying the next configured fallback model.
+  it("classifies upstream_error errorType as timeout (fallbackable)", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "upstream_error",
+        message: "Upstream request failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+  });
+
+  it("classifies server_error errorType as server_error (fallbackable)", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "server_error",
+        message: "Internal server error",
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
+  it("resolves upstream_error via resolveFailoverReasonFromError with nested payload", () => {
+    // Matches the real provider payload shape from #95519:
+    // {"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "demo-provider",
+        type: "error",
+        error: {
+          type: "upstream_error",
+          message: "Upstream request failed",
+        },
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not classify unknown errorType as fallbackable", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "some_unknown_type",
+        message: "Something went wrong",
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies upstream_error via JSON api_error transient signals (regex)", () => {
+    // Verify the regex also matches the underscore variant in api_error payloads
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: '{"type":"api_error","message":"upstream_error: backend unavailable"}',
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+  });
+});
