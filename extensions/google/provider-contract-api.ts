@@ -28,10 +28,18 @@ export function createGoogleProvider(): ProviderPlugin {
     ],
     classifyFailoverReason(ctx) {
       const code = ctx.code?.trim().toUpperCase();
-      if (!code) return null;
-      if (code === "UNAVAILABLE") return "overloaded";
-      if (code === "DEADLINE_EXCEEDED") return "timeout";
-      if (code === "INTERNAL") return "server_error";
+      if (!code) {
+        return null;
+      }
+      if (code === "UNAVAILABLE") {
+        return "overloaded";
+      }
+      if (code === "DEADLINE_EXCEEDED") {
+        return "timeout";
+      }
+      if (code === "INTERNAL") {
+        return "server_error";
+      }
       return null;
     },
   };
@@ -52,10 +60,18 @@ export function createGoogleVertexProvider(): ProviderPlugin {
     auth: [],
     classifyFailoverReason(ctx) {
       const code = ctx.code?.trim().toUpperCase();
-      if (!code) return null;
-      if (code === "UNAVAILABLE") return "overloaded";
-      if (code === "DEADLINE_EXCEEDED") return "timeout";
-      if (code === "INTERNAL") return "server_error";
+      if (!code) {
+        return null;
+      }
+      if (code === "UNAVAILABLE") {
+        return "overloaded";
+      }
+      if (code === "DEADLINE_EXCEEDED") {
+        return "timeout";
+      }
+      if (code === "INTERNAL") {
+        return "server_error";
+      }
       return null;
     },
   };
@@ -92,10 +108,18 @@ export function createGoogleGeminiCliProvider(): ProviderPlugin {
     },
     classifyFailoverReason(ctx) {
       const code = ctx.code?.trim().toUpperCase();
-      if (!code) return null;
-      if (code === "UNAVAILABLE") return "overloaded";
-      if (code === "DEADLINE_EXCEEDED") return "timeout";
-      if (code === "INTERNAL") return "server_error";
+      if (!code) {
+        return null;
+      }
+      if (code === "UNAVAILABLE") {
+        return "overloaded";
+      }
+      if (code === "DEADLINE_EXCEEDED") {
+        return "timeout";
+      }
+      if (code === "INTERNAL") {
+        return "server_error";
+      }
       return null;
     },
   };

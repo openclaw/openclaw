@@ -891,16 +891,11 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
-function classifyFailoverReasonFromCode(params: {
-  raw: string | undefined;
-  provider?: string;
-}): FailoverReason | null {
-  const { raw, provider } = params;
+function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
     return null;
   }
-  const providerId = normalizeOptionalLowercaseString(provider);
   switch (normalized) {
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
@@ -1185,10 +1180,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : mergeMessageAndDetailClassification(messageClassification, detailClassification);
-  const codeReason = classifyFailoverReasonFromCode({
-    raw: signal.code,
-    provider: signal.provider,
-  });
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }

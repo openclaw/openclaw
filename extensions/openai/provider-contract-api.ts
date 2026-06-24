@@ -66,9 +66,15 @@ export function createOpenAIProvider(): ProviderPlugin {
     ],
     classifyFailoverReason(ctx) {
       const code = ctx.code?.trim().toUpperCase();
-      if (!code) return null;
-      if (code === "SERVER_ERROR") return "server_error";
-      if (code === "INSUFFICIENT_QUOTA") return "billing";
+      if (!code) {
+        return null;
+      }
+      if (code === "SERVER_ERROR") {
+        return "server_error";
+      }
+      if (code === "INSUFFICIENT_QUOTA") {
+        return "billing";
+      }
       return null;
     },
   };
