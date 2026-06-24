@@ -270,7 +270,19 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
   return undefined;
 }
 
-const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([
+  499,
+  500,
+  502,
+  503,
+  504,
+  521,
+  522,
+  523,
+  524,
+  529,
+  530,
+]);
 
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 
@@ -599,7 +611,7 @@ function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   }
   if (
     typeof status === "number" &&
-    [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)
+    [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529, 530].includes(status)
   ) {
     return true;
   }
@@ -861,7 +873,7 @@ function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("timeout");
   }
-  if (status === 500 || status === 502 || status === 504) {
+  if (status === 500 || status === 502 || status === 504 || status === 530) {
     if (messageReason === "server_error") {
       return messageClassification;
     }

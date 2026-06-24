@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  classifyFailoverSignal,
+  classifyProviderRuntimeFailureKind,
+  formatAssistantErrorText,
+  isLikelyContextOverflowError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -105,5 +110,23 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("HTTP 530 failover classification", () => {
+  it("classifies structured HTTP 530 responses as timeout for model fallback", () => {
+    expect(classifyFailoverSignal({ status: 530 })).toEqual({
+      kind: "reason",
+      reason: "timeout",
+    });
+  });
+
+  it("classifies HTTP 530 provider runtime failures as timeout", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        status: 530,
+        message: "The AI service is temporarily unavailable (HTTP 530). Please try again in a moment.",
+      }),
+    ).toBe("timeout");
   });
 });
