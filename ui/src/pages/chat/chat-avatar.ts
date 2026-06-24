@@ -1,12 +1,21 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import { normalizeBasePath } from "../../app-routes.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
+import {
+  DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/session-key.ts";
+import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,
@@ -125,4 +134,199 @@ export function renderChatAvatar(
 function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
+}
+
+export type ChatAvatarHost = {
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null } | null;
+  basePath: string;
+  chatAvatarReason?: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarUrl: string | null;
+  connected: boolean;
+  hello: GatewayHelloOk | null;
+  password?: string | null;
+  sessionKey: string;
+  settings?: { token?: string | null } | null;
+};
+
+const chatAvatarRequestVersions = new WeakMap<object, number>();
+const chatAvatarObjectUrls = new WeakMap<object, string>();
+
+function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | undefined {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
+}
+
+export function resolveAgentIdForSession(host: ChatAvatarHost): string | null {
+  const parsed = parseAgentSessionKey(host.sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  if (isUiGlobalSessionKey(host.sessionKey)) {
+    return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
+  }
+  return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
+}
+
+function beginChatAvatarRequest(host: ChatAvatarHost): number {
+  const key = host as object;
+  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
+  chatAvatarRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyChatAvatarResult(
+  host: ChatAvatarHost,
+  version: number,
+  sessionKey: string,
+  agentId: string | null,
+): boolean {
+  return (
+    chatAvatarRequestVersions.get(host as object) === version &&
+    host.sessionKey === sessionKey &&
+    resolveAgentIdForSession(host) === agentId
+  );
+}
+
+function buildAvatarMetaUrl(basePath: string, agentId: string): string {
+  const base = normalizeBasePath(basePath);
+  const encoded = encodeURIComponent(agentId);
+  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
+}
+
+function clearChatAvatarUrl(host: ChatAvatarHost) {
+  const key = host as object;
+  const previousBlobUrl = chatAvatarObjectUrls.get(key);
+  if (previousBlobUrl) {
+    URL.revokeObjectURL(previousBlobUrl);
+    chatAvatarObjectUrls.delete(key);
+  }
+  host.chatAvatarUrl = null;
+}
+
+function clearChatAvatarState(host: ChatAvatarHost) {
+  clearChatAvatarUrl(host);
+  host.chatAvatarSource = null;
+  host.chatAvatarStatus = null;
+  host.chatAvatarReason = null;
+}
+
+function setChatAvatarUrl(host: ChatAvatarHost, nextUrl: string | null) {
+  const key = host as object;
+  const previousBlobUrl = chatAvatarObjectUrls.get(key);
+  if (previousBlobUrl && previousBlobUrl !== nextUrl) {
+    URL.revokeObjectURL(previousBlobUrl);
+    chatAvatarObjectUrls.delete(key);
+  }
+  if (nextUrl?.startsWith("blob:")) {
+    chatAvatarObjectUrls.set(key, nextUrl);
+  }
+  host.chatAvatarUrl = nextUrl;
+}
+
+function setChatAvatarMeta(
+  host: ChatAvatarHost,
+  data: {
+    avatarSource?: unknown;
+    avatarStatus?: unknown;
+    avatarReason?: unknown;
+  },
+) {
+  const status =
+    data.avatarStatus === "none" ||
+    data.avatarStatus === "local" ||
+    data.avatarStatus === "remote" ||
+    data.avatarStatus === "data"
+      ? data.avatarStatus
+      : null;
+  host.chatAvatarSource =
+    typeof data.avatarSource === "string" && data.avatarSource.trim()
+      ? data.avatarSource.trim()
+      : null;
+  host.chatAvatarStatus = status;
+  host.chatAvatarReason =
+    typeof data.avatarReason === "string" && data.avatarReason.trim()
+      ? data.avatarReason.trim()
+      : null;
+}
+
+function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
+  return authHeader ? { Authorization: authHeader } : undefined;
+}
+
+function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
+  return avatarUrl.startsWith("/");
+}
+
+export async function refreshChatAvatar(host: ChatAvatarHost) {
+  if (!host.connected) {
+    clearChatAvatarState(host);
+    return;
+  }
+  const sessionKey = host.sessionKey;
+  const requestVersion = beginChatAvatarRequest(host);
+  const agentId = resolveAgentIdForSession(host);
+  if (!agentId) {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      clearChatAvatarState(host);
+    }
+    return;
+  }
+  clearChatAvatarState(host);
+  const authHeader = resolveControlUiAuthHeader(host);
+  const headers = buildControlUiAuthHeaders(authHeader);
+  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  try {
+    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      return;
+    }
+    if (!res.ok) {
+      clearChatAvatarState(host);
+      return;
+    }
+    const data = (await res.json()) as {
+      avatarUrl?: unknown;
+      avatarSource?: unknown;
+      avatarStatus?: unknown;
+      avatarReason?: unknown;
+    };
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      return;
+    }
+    setChatAvatarMeta(host, data);
+    const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+    if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
+      clearChatAvatarUrl(host);
+      return;
+    }
+    if (!isLocalControlUiAvatarUrl(avatarUrl)) {
+      setChatAvatarUrl(host, avatarUrl);
+      return;
+    }
+    const avatarRes = await fetch(avatarUrl, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+    });
+    if (!avatarRes.ok) {
+      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+        clearChatAvatarUrl(host);
+      }
+      return;
+    }
+    const blobUrl = URL.createObjectURL(await avatarRes.blob());
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    setChatAvatarUrl(host, blobUrl);
+  } catch {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      clearChatAvatarState(host);
+    }
+  }
 }

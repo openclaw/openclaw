@@ -1,3 +1,8 @@
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -5,18 +10,12 @@ import type {
   ModelCatalogEntry,
 } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { normalizeBasePath } from "../../app-routes.ts";
-import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
-  DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
-  resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -29,38 +28,22 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import {
-  applyRemoteSlashCommandsResult,
-  parseSlashCommand,
-  refreshSlashCommands,
-} from "../../ui/chat/slash-commands.ts";
+import { parseSlashCommand } from "../../ui/chat/slash-commands.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";
-import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
 } from "../../ui/control-ui-performance.ts";
-import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../ui/gateway.ts";
-import {
-  applyChatHistorySessionInfo,
-  loadSessions,
-  type LoadSessionsOverrides,
-  type SessionsState,
-} from "../sessions/data.ts";
-import { setLastActiveSessionKey } from "./last-active-session.ts";
+import { applyChatHistorySessionInfo, loadSessions, type SessionsState } from "../sessions/data.ts";
 import {
   cloneChatAttachmentsMetadata,
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   persistStoredChatComposerQueue,
@@ -95,6 +78,14 @@ import { setLastActiveSessionKey } from "./last-active-session.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
+import {
+  createChatSessionsLoadOverrides,
+  scopedAgentIdForSession,
+  scopedAgentListParamsForRefreshTarget,
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "./session-scope.ts";
 import type { ChatSideResult } from "./side-result.ts";
 import type {
   ChatAttachment,
@@ -130,6 +121,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsLoading: boolean;
   sessionsError?: string | null;
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
@@ -151,13 +143,14 @@ export type ChatHost = ChatInputHistoryState & {
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
-  agents?: Array<{ id: string }>;
+  agents?: AgentsListResult["agents"];
 };
 
-type ChatMetadataApplyResult = {
-  commands: boolean;
-  models: boolean;
-};
+export type ChatStartupMetadataHandler = (params: {
+  client: GatewayBrowserClient;
+  agentId: string | null | undefined;
+  metadata: ChatMetadataResult | undefined;
+}) => void | Promise<void>;
 
 function setChatError(host: ChatHost, error: string | null) {
   host.lastError = error;
@@ -204,44 +197,6 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-type SessionDefaultsSnapshot = {
-  defaultAgentId?: string;
-  mainKey?: string;
-};
-
-// Chat pickers need recency-free session rows so older channel chats remain selectable.
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
-export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
-
-export function createChatSessionsLoadOverrides(
-  _state: { sessionsShowArchived?: boolean },
-  options: { offset?: number; append?: boolean; search?: string | null } = {},
-): LoadSessionsOverrides {
-  const overrides: LoadSessionsOverrides = {
-    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    limit: CHAT_SESSIONS_REFRESH_LIMIT,
-    includeGlobal: true,
-    includeUnknown: true,
-    configuredAgentsOnly: true,
-    showArchived: false,
-    preserveSessionsViewResult: true,
-  };
-  const search = normalizeOptionalString(options.search ?? undefined);
-  if (search) {
-    overrides.search = search;
-  }
-  const offset =
-    typeof options.offset === "number" && Number.isFinite(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
-      : 0;
-  if (offset > 0) {
-    overrides.offset = offset;
-  }
-  if (options.append === true) {
-    overrides.append = true;
-  }
-  return overrides;
-}
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -313,80 +268,6 @@ function confirmChatResetCommand(text: string) {
 
 function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
-}
-
-function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefined {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
-}
-
-function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
-  return isUiGlobalSessionKey(sessionKey)
-    ? resolveUiKnownSelectedGlobalAgentId(host)
-    : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
-}
-
-function visibleSessionMatches(
-  host: ChatHost,
-  sessionKey: string,
-  agentId: string | undefined,
-): boolean {
-  if (host.sessionKey !== sessionKey) {
-    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
-    if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
-      return false;
-    }
-    const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
-    return expectedAgentId
-      ? hostAliasAgentId === normalizeAgentId(expectedAgentId)
-      : hostAliasAgentId === normalizeAgentId("main");
-  }
-  if (!isUiGlobalSessionKey(sessionKey)) {
-    return true;
-  }
-  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
-  const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
-  return expectedAgentId
-    ? selectedAgentId === normalizeAgentId(expectedAgentId)
-    : selectedAgentId === undefined;
-}
-
-export function scopedAgentParamsForSession(
-  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
-  sessionKey: string,
-) {
-  const agentId = isUiGlobalSessionKey(sessionKey)
-    ? resolveUiKnownSelectedGlobalAgentId(host)
-    : resolveUiGlobalAliasAgentId(host, sessionKey);
-  return agentId ? { agentId } : {};
-}
-
-export function scopedAgentListParamsForSession(
-  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
-  sessionKey: string,
-) {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
-  const agentId =
-    parsed?.agentId ??
-    (normalizedSessionKey === "global"
-      ? resolveUiKnownSelectedGlobalAgentId(host)
-      : normalizedSessionKey === "unknown"
-        ? undefined
-        : resolveUiDefaultAgentId(host));
-  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
-}
-
-export function scopedAgentListParamsForRefreshTarget(
-  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
-  target: ChatSessionRefreshTarget,
-) {
-  const agentId =
-    normalizeOptionalString(target.agentId) ??
-    scopedAgentListParamsForSession(host, target.sessionKey).agentId;
-  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
@@ -2140,7 +2021,12 @@ function injectCommandResult(host: ChatHost, content: string) {
 
 export async function refreshChat(
   host: ChatHost,
-  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean; startup?: boolean },
+  opts?: {
+    scheduleScroll?: boolean;
+    awaitHistory?: boolean;
+    startup?: boolean;
+    onStartupMetadata?: ChatStartupMetadataHandler;
+  },
 ) {
   const refreshedSessionKey = host.sessionKey;
   const refreshedClient = host.client;
@@ -2166,22 +2052,23 @@ export async function refreshChat(
     }
   });
   const startupMetadataRefresh =
-    opts?.startup === true
+    opts?.startup === true && opts.onStartupMetadata && refreshedClient
       ? historyLoad.then((history) => {
-          if (!history?.metadata || !refreshedClient) {
-            return { commands: false, models: false };
-          }
           if (
             host.client !== refreshedClient ||
             !host.connected ||
             host.sessionKey !== refreshedSessionKey ||
             resolveAgentIdForSession(host) !== refreshedAgentId
           ) {
-            return { commands: false, models: false };
+            return;
           }
-          return applyChatMetadataResult(host, refreshedClient, refreshedAgentId, history.metadata);
+          return opts.onStartupMetadata?.({
+            client: refreshedClient,
+            agentId: refreshedAgentId,
+            metadata: history?.metadata,
+          });
         })
-      : Promise.resolve({ commands: false, models: false });
+      : Promise.resolve();
   flushChatQueueAfterIdleSessionReconciliation(
     host,
     refreshedSessionKey,
@@ -2192,23 +2079,6 @@ export async function refreshChat(
   const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
     requestUpdate,
   );
-  scheduleChatMetadataRefresh(() => {
-    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
-      return;
-    }
-    void startupMetadataRefresh
-      .catch(() => ({ commands: false, models: false }))
-      .then((metadataApplied) => {
-        const metadataRefresh =
-          opts?.startup === true && (metadataApplied.commands || metadataApplied.models)
-            ? metadataApplied.models
-              ? Promise.allSettled([])
-              : Promise.allSettled([refreshChatModels(host)])
-            : Promise.allSettled([refreshChatMetadata(host)]);
-        return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
-      })
-      .finally(requestUpdate);
-  });
   void historyRefresh;
   void secondaryRefresh;
   if (opts?.awaitHistory === true) {
@@ -2218,274 +2088,4 @@ export async function refreshChat(
   await Promise.resolve();
 }
 
-function scheduleChatMetadataRefresh(callback: () => void) {
-  const requestIdleCallback =
-    typeof globalThis.requestIdleCallback === "function" ? globalThis.requestIdleCallback : null;
-  if (requestIdleCallback) {
-    requestIdleCallback(callback, { timeout: 750 });
-    return;
-  }
-  globalThis.setTimeout(callback, 50);
-}
-
-async function refreshChatModels(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
-  }
-}
-
-export async function refreshChatCommands(host: ChatHost) {
-  await refreshSlashCommands({
-    client: host.client,
-    agentId: resolveAgentIdForSession(host),
-  });
-}
-
-function applyChatMetadataResult(
-  host: ChatHost,
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-  result: ChatMetadataResult,
-): ChatMetadataApplyResult {
-  const models = applyModelCatalogResult(result.models);
-  if (models) {
-    host.chatModelCatalog = models;
-  }
-  const commandsApplied = applyRemoteSlashCommandsResult({
-    client,
-    agentId,
-    result,
-  });
-  return { commands: commandsApplied, models: Boolean(models) };
-}
-
-async function refreshChatMetadata(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  const client = host.client;
-  const sessionKey = host.sessionKey;
-  const agentId = resolveAgentIdForSession(host);
-  const metadataAdvertised = isGatewayMethodAdvertised(
-    host as unknown as ChatState,
-    "chat.metadata",
-  );
-  if (metadataAdvertised === false) {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-    return;
-  }
-
-  host.chatModelsLoading = true;
-  try {
-    const result = await client.request<ChatMetadataResult>(
-      "chat.metadata",
-      agentId ? { agentId } : {},
-    );
-    if (
-      host.client !== client ||
-      !host.connected ||
-      host.sessionKey !== sessionKey ||
-      resolveAgentIdForSession(host) !== agentId
-    ) {
-      return;
-    }
-    const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
-    if (!metadataApplied.models || !metadataApplied.commands) {
-      await Promise.allSettled([
-        ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
-      ]);
-    }
-  } catch {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-  } finally {
-    if (host.client === client) {
-      host.chatModelsLoading = false;
-    }
-  }
-}
-
 export const flushChatQueueForEvent = flushChatQueue;
-const chatAvatarRequestVersions = new WeakMap<object, number>();
-
-const chatAvatarObjectUrls = new WeakMap<object, string>();
-
-function beginChatAvatarRequest(host: ChatHost): number {
-  const key = host as object;
-  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
-  chatAvatarRequestVersions.set(key, nextVersion);
-  return nextVersion;
-}
-
-function shouldApplyChatAvatarResult(
-  host: ChatHost,
-  version: number,
-  sessionKey: string,
-  agentId: string | null,
-): boolean {
-  return (
-    chatAvatarRequestVersions.get(host as object) === version &&
-    host.sessionKey === sessionKey &&
-    resolveAgentIdForSession(host) === agentId
-  );
-}
-
-function resolveAgentIdForSession(host: ChatHost): string | null {
-  const parsed = parseAgentSessionKey(host.sessionKey);
-  if (parsed?.agentId) {
-    return parsed.agentId;
-  }
-  if (isUiGlobalSessionKey(host.sessionKey)) {
-    return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
-  }
-  return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
-}
-
-function buildAvatarMetaUrl(basePath: string, agentId: string): string {
-  const base = normalizeBasePath(basePath);
-  const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
-}
-
-function clearChatAvatarUrl(host: ChatHost) {
-  const key = host as object;
-  const previousBlobUrl = chatAvatarObjectUrls.get(key);
-  if (previousBlobUrl) {
-    URL.revokeObjectURL(previousBlobUrl);
-    chatAvatarObjectUrls.delete(key);
-  }
-  host.chatAvatarUrl = null;
-}
-
-function clearChatAvatarState(host: ChatHost) {
-  clearChatAvatarUrl(host);
-  host.chatAvatarSource = null;
-  host.chatAvatarStatus = null;
-  host.chatAvatarReason = null;
-}
-
-function setChatAvatarUrl(host: ChatHost, nextUrl: string | null) {
-  const key = host as object;
-  const previousBlobUrl = chatAvatarObjectUrls.get(key);
-  if (previousBlobUrl && previousBlobUrl !== nextUrl) {
-    URL.revokeObjectURL(previousBlobUrl);
-    chatAvatarObjectUrls.delete(key);
-  }
-  if (nextUrl?.startsWith("blob:")) {
-    chatAvatarObjectUrls.set(key, nextUrl);
-  }
-  host.chatAvatarUrl = nextUrl;
-}
-
-function setChatAvatarMeta(
-  host: ChatHost,
-  data: {
-    avatarSource?: unknown;
-    avatarStatus?: unknown;
-    avatarReason?: unknown;
-  },
-) {
-  const status =
-    data.avatarStatus === "none" ||
-    data.avatarStatus === "local" ||
-    data.avatarStatus === "remote" ||
-    data.avatarStatus === "data"
-      ? data.avatarStatus
-      : null;
-  host.chatAvatarSource =
-    typeof data.avatarSource === "string" && data.avatarSource.trim()
-      ? data.avatarSource.trim()
-      : null;
-  host.chatAvatarStatus = status;
-  host.chatAvatarReason =
-    typeof data.avatarReason === "string" && data.avatarReason.trim()
-      ? data.avatarReason.trim()
-      : null;
-}
-
-function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
-  return authHeader ? { Authorization: authHeader } : undefined;
-}
-
-function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
-  return avatarUrl.startsWith("/");
-}
-
-export async function refreshChatAvatar(host: ChatHost) {
-  if (!host.connected) {
-    clearChatAvatarState(host);
-    return;
-  }
-  const sessionKey = host.sessionKey;
-  const requestVersion = beginChatAvatarRequest(host);
-  const agentId = resolveAgentIdForSession(host);
-  if (!agentId) {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      clearChatAvatarState(host);
-    }
-    return;
-  }
-  clearChatAvatarState(host);
-  const authHeader = resolveControlUiAuthHeader(host);
-  const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
-  try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      return;
-    }
-    if (!res.ok) {
-      clearChatAvatarState(host);
-      return;
-    }
-    const data = (await res.json()) as {
-      avatarUrl?: unknown;
-      avatarSource?: unknown;
-      avatarStatus?: unknown;
-      avatarReason?: unknown;
-    };
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      return;
-    }
-    setChatAvatarMeta(host, data);
-    const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-    if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
-      clearChatAvatarUrl(host);
-      return;
-    }
-    if (!isLocalControlUiAvatarUrl(avatarUrl)) {
-      setChatAvatarUrl(host, avatarUrl);
-      return;
-    }
-    const avatarRes = await fetch(avatarUrl, {
-      method: "GET",
-      ...(headers ? { headers } : {}),
-    });
-    if (!avatarRes.ok) {
-      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-        clearChatAvatarUrl(host);
-      }
-      return;
-    }
-    const blobUrl = URL.createObjectURL(await avatarRes.blob());
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      URL.revokeObjectURL(blobUrl);
-      return;
-    }
-    setChatAvatarUrl(host, blobUrl);
-  } catch {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      clearChatAvatarState(host);
-    }
-  }
-}

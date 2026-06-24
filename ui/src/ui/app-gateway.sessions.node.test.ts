@@ -51,6 +51,33 @@ vi.mock("../pages/chat/data.ts", () => ({
   recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,
   refreshChatAvatar: vi.fn(),
 }));
+vi.mock("../pages/chat/session-scope.ts", () => ({
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
+  scopedAgentParamsForSession: (host: { assistantAgentId?: string | null }, sessionKey: string) =>
+    sessionKey === "global" && host.assistantAgentId ? { agentId: host.assistantAgentId } : {},
+  scopedAgentListParamsForSession: (
+    host: { assistantAgentId?: string | null },
+    sessionKey: string,
+  ) => {
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
+  scopedAgentListParamsForRefreshTarget: (
+    _host: { assistantAgentId?: string | null },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
+}));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
 }));

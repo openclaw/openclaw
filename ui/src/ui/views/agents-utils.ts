@@ -13,6 +13,7 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../../api/types.ts";
+import { DEFAULT_ASSISTANT_AVATAR } from "../../lib/assistant-identity.ts";
 import {
   isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
@@ -22,7 +23,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
 import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
 import { controlUiPublicAssetPath } from "../public-assets.ts";
 

@@ -6,10 +6,10 @@ import { t } from "../../i18n/index.ts";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
+import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
@@ -22,6 +22,7 @@ import type {
   ToolCard,
 } from "./chat-types.ts";
 export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
+import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
@@ -39,7 +40,6 @@ import {
   renderToolPreview,
   resolveCollapsedToolDetail,
 } from "../../pages/chat/tool-cards.ts";
-import { renderCopyAsMarkdownButton } from "../../ui/chat/copy-as-markdown.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { formatCompactTokenCount } from "./token-format.ts";
 

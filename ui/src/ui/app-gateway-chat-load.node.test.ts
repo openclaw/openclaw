@@ -44,6 +44,7 @@ function createDeferred() {
 vi.mock("../app-routes.ts", () => ({
   appRouter: { revalidate: appRouterRevalidateMock },
   getVisibleRouteId: () => currentRoute.id,
+  normalizeBasePath: (value: string) => value.replace(/\/+$/, ""),
   routeLoadContext: (host: unknown) => host,
 }));
 
@@ -121,6 +122,32 @@ vi.mock("../pages/chat/data.ts", () => ({
   retryReconnectableQueuedChatSends: vi.fn(async () => undefined),
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("../pages/chat/chat-avatar.ts", () => ({
+  refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("../pages/chat/session-scope.ts", () => ({
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
+  scopedAgentListParamsForSession: (_host: unknown, sessionKey: string) => {
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
+  scopedAgentListParamsForRefreshTarget: (
+    _host: unknown,
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
+  scopedAgentParamsForSession: (_host: unknown, sessionKey: string) => {
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
 }));
 
 vi.mock("../pages/chat/scroll.ts", () => ({

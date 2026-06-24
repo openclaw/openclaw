@@ -32,7 +32,7 @@ import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../../pages/chat/data.ts";
+} from "../../pages/chat/session-scope.ts";
 import { loadSessions, patchSession } from "../../pages/sessions/data.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";

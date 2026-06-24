@@ -1,6 +1,6 @@
-import type { ModelCatalogEntry } from "../../api/types.ts";
 // Control UI controller manages models gateway state.
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
 

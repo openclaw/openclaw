@@ -26,24 +26,20 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../lib/session-key.ts";
 import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
+import { refreshChatAvatar } from "../pages/chat/chat-avatar.ts";
 import {
   loadChatComposerSnapshot,
   restoreChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
 import {
   clearPendingQueueItemsForRun,
-  createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
   recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChat,
-  refreshChatAvatar,
-  scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
-  scopedAgentListParamsForSession,
-  scopedAgentParamsForSession,
 } from "../pages/chat/data.ts";
 import { shouldReloadHistoryForFinalEvent } from "../pages/chat/event-reload.ts";
 import {
@@ -55,6 +51,12 @@ import {
 import { setLastActiveSessionKey } from "../pages/chat/last-active-session.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
+import {
+  createChatSessionsLoadOverrides,
+  scopedAgentListParamsForRefreshTarget,
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+} from "../pages/chat/session-scope.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatQueueItem, ChatSessionRefreshTarget } from "../pages/chat/types.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";

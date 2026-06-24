@@ -4,9 +4,9 @@ import type {
   CommandsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { IconName } from "../../components/icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 

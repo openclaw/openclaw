@@ -1,3 +1,4 @@
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   ArtifactDownloadResult,
   SessionWorkspaceGetResult,
@@ -5,14 +6,13 @@ import type {
 } from "../../api/types.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { scopedAgentParamsForSession } from "./data.ts";
+import { scopedAgentParamsForSession, type ChatAgentScopeHost } from "./session-scope.ts";
 import type { ChatProps } from "./view.ts";
 
 type SessionWorkspaceProps = NonNullable<ChatProps["sessionWorkspace"]>;
 
-type WorkspaceState = {
+export type SessionWorkspaceState = {
   activeId: string | null;
   agentId: string;
   browserPath: string;
@@ -27,11 +27,6 @@ type WorkspaceState = {
   sessionKey: string;
 };
 
-const workspaceStates = new WeakMap<AppViewState, WorkspaceState>();
-const openRequests = new WeakMap<
-  AppViewState,
-  { agentId: string; id: number; itemId: string; sessionKey: string }
->();
 type OpenRequest = {
   agentId: string;
   id: number;
@@ -39,7 +34,22 @@ type OpenRequest = {
   sessionKey: string;
 };
 
-function workspaceAgentId(state: AppViewState): string {
+export type SessionWorkspaceOpenRequest = OpenRequest;
+
+export type SessionWorkspaceHost = {
+  sessionKey: string;
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  hello: GatewayHelloOk | null;
+  assistantAgentId?: string | null;
+  agentsList?: ChatAgentScopeHost["agentsList"];
+  sessionWorkspaceState?: SessionWorkspaceState;
+  sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
+  requestUpdate?: () => void;
+  handleOpenSidebar: (content: SidebarContent) => void;
+};
+
+function workspaceAgentId(state: SessionWorkspaceHost): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -55,14 +65,14 @@ function workspaceAgentId(state: AppViewState): string {
     : (activeAgentId ?? scopedAgentId ?? fallback);
 }
 
-function getWorkspaceState(state: AppViewState): WorkspaceState {
+function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   const sessionKey = state.sessionKey;
   const agentId = workspaceAgentId(state);
-  const current = workspaceStates.get(state);
+  const current = state.sessionWorkspaceState;
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
   }
-  const next: WorkspaceState = {
+  const next: SessionWorkspaceState = {
     activeId: null,
     agentId,
     browserPath: "",
@@ -76,15 +86,15 @@ function getWorkspaceState(state: AppViewState): WorkspaceState {
     requestId: 0,
     sessionKey,
   };
-  workspaceStates.set(state, next);
+  state.sessionWorkspaceState = next;
   return next;
 }
 
-function currentWorkspaceState(state: AppViewState): WorkspaceState {
+function currentWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   return getWorkspaceState(state);
 }
 
-function requestUpdate(state: AppViewState) {
+function requestUpdate(state: SessionWorkspaceHost) {
   state.requestUpdate?.();
 }
 
@@ -144,7 +154,11 @@ function artifactSidebarContent(params: {
   return { kind: "markdown", content, rawText: content };
 }
 
-function loadWorkspace(state: AppViewState, workspace: WorkspaceState, force = false) {
+function loadWorkspace(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+  force = false,
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -222,28 +236,28 @@ function loadWorkspace(state: AppViewState, workspace: WorkspaceState, force = f
 }
 
 function beginOpenRequest(
-  state: AppViewState,
-  workspace: WorkspaceState,
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
   itemId: string,
 ): OpenRequest {
   workspace.activeId = itemId;
-  const previous = openRequests.get(state);
+  const previous = state.sessionWorkspaceOpenRequest;
   const request: OpenRequest = {
     agentId: workspace.agentId,
     id: (previous?.id ?? 0) + 1,
     itemId,
     sessionKey: state.sessionKey,
   };
-  openRequests.set(state, request);
+  state.sessionWorkspaceOpenRequest = request;
   return request;
 }
 
 function isCurrentOpenRequest(
-  state: AppViewState,
-  workspace: WorkspaceState,
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
   request: OpenRequest,
 ): boolean {
-  const currentRequest = openRequests.get(state);
+  const currentRequest = state.sessionWorkspaceOpenRequest;
   const current = currentWorkspaceState(state);
   return (
     currentRequest?.id === request.id &&
@@ -256,8 +270,8 @@ function isCurrentOpenRequest(
 }
 
 function openWorkspaceItem<T>(
-  state: AppViewState,
-  workspace: WorkspaceState,
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
   itemId: string,
   load: (request: OpenRequest) => Promise<T | null | undefined>,
   render: (result: T) => SidebarContent | null,
@@ -292,7 +306,7 @@ function openWorkspaceItem<T>(
   })();
 }
 
-function openFile(state: AppViewState, workspace: WorkspaceState, path: string) {
+function openFile(state: SessionWorkspaceHost, workspace: SessionWorkspaceState, path: string) {
   openWorkspaceItem(
     state,
     workspace,
@@ -317,7 +331,11 @@ function openFile(state: AppViewState, workspace: WorkspaceState, path: string) 
   );
 }
 
-function openArtifact(state: AppViewState, workspace: WorkspaceState, artifactId: string) {
+function openArtifact(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+  artifactId: string,
+) {
   openWorkspaceItem(
     state,
     workspace,
@@ -342,7 +360,7 @@ function openArtifact(state: AppViewState, workspace: WorkspaceState, artifactId
   );
 }
 
-export function createSessionWorkspaceProps(state: AppViewState): SessionWorkspaceProps {
+export function createSessionWorkspaceProps(state: SessionWorkspaceHost): SessionWorkspaceProps {
   const workspace = getWorkspaceState(state);
   if (
     !workspace.collapsed &&

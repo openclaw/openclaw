@@ -6,8 +6,7 @@ import {
   navigationIconForRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
-import type { SettingsHost } from "../app/app-host.ts";
+import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../app/settings.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
@@ -25,12 +24,12 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../lib/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { refreshChat } from "../pages/chat/data.ts";
 import {
   createChatSessionsLoadOverrides,
-  refreshChat,
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
-} from "../pages/chat/data.ts";
+} from "../pages/chat/session-scope.ts";
 import {
   resetChatStateForSessionSwitch,
   switchChatSession,
@@ -190,11 +189,7 @@ export function renderRouteNavItem(
     }
     const start = () => {
       routePreloadTimers.delete(target);
-      void (
-        opts?.preloadRoute ??
-        ((nextRouteId: RouteId) =>
-          appRouter.preloadRoute(nextRouteId, routeLoadContext(state as unknown as SettingsHost)))
-      )(routeId).catch(() => undefined);
+      void opts?.preloadRoute?.(routeId).catch(() => undefined);
     };
     if (immediate) {
       start();
@@ -770,7 +765,10 @@ export function dismissChatError(state: AppViewState) {
   state.chatError = null;
 }
 
-export type CreateChatSessionIntent = { source: "user" };
+export type CreateChatSessionIntent = {
+  source: "user";
+  onSessionCreated?: (sessionKey: string) => void;
+};
 
 export async function createChatSession(
   state: AppViewState,
@@ -833,9 +831,12 @@ export async function createChatSession(
 
   const preservedDraft = state.chatMessage;
   const preservedAttachments = state.chatAttachments;
-  switchChatSession(state, nextSessionKey);
+  switchChatSession(state, nextSessionKey, {
+    syncUrl: intent?.onSessionCreated === undefined,
+  });
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
+  intent?.onSessionCreated?.(nextSessionKey);
   return true;
 }
 

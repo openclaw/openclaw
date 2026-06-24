@@ -7,6 +7,7 @@ import {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
 } from "../../../../src/shared/fast-mode.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -29,7 +30,6 @@ import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,

@@ -12,10 +12,10 @@ import type {
 import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
-import { copyToClipboard } from "../../ui/chat/clipboard.ts";
 import { decodeCodeBlockCopyPayload } from "../../ui/chat/code-block-copy-payload.ts";
 import { exportChatMarkdown } from "./export.ts";
 import {

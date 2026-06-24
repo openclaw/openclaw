@@ -4,25 +4,34 @@ import type { AppViewState } from "../../ui/app-view-state.ts";
 import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
 import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";
 import { loadSessions, syncSelectedSessionMessageSubscription } from "../sessions/data.ts";
+import { refreshChatAvatar } from "./chat-avatar.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./composer-persistence.ts";
 // Chat session switching state transitions shared by chat UI and feature handoffs.
-import {
-  createChatSessionsLoadOverrides,
-  flushChatQueueAfterIdleSessionReconciliation,
-  refreshChatAvatar,
-  scopedAgentListParamsForSession,
-} from "./data.ts";
+import { flushChatQueueAfterIdleSessionReconciliation } from "./data.ts";
 import { loadChatHistory, type ChatState } from "./gateway.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  createChatSessionsLoadOverrides,
+  scopedAgentListParamsForSession,
+} from "./session-scope.ts";
 import type { ChatQueueItem } from "./types.ts";
 
-type SessionSwitchHost = AppViewState & {
-  chatStreamStartedAt: number | null;
-  chatSideResultTerminalRuns: Set<string>;
-  resetChatInputHistoryNavigation(): void;
-  resetToolStream(): void;
-  resetChatScroll(): void;
+type SessionSwitchHost = AppViewState &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    chatStreamStartedAt: number | null;
+    chatSideResultTerminalRuns: Set<string>;
+    requestUpdate?: () => void;
+    resetChatInputHistoryNavigation(): void;
+    resetToolStream(): void;
+    resetChatScroll(): void;
+  };
+
+type SessionSwitchOptions = {
+  awaitInitialLoad?: boolean;
+  syncUrl?: boolean;
+  requestUpdate?: boolean;
 };
 
 function syncSessionUrl(sessionKey: string, replace: boolean): void {
@@ -135,7 +144,7 @@ async function refreshSessionOptions(state: AppViewState) {
 function switchChatSessionInternal(
   state: AppViewState,
   nextSessionKey: string,
-  opts?: { awaitInitialLoad?: boolean },
+  opts?: SessionSwitchOptions,
 ): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
   const previousSessionsResult = state.sessionsResult;
@@ -154,11 +163,24 @@ function switchChatSessionInternal(
     client: state.client,
     agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
   });
-  syncSessionUrl(nextSessionKey, true);
+  if (opts?.syncUrl !== false) {
+    syncSessionUrl(nextSessionKey, true);
+  }
   const subscriptionSync = syncSelectedSessionMessageSubscription(
     state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
   const historyLoad = loadChatHistory(state as unknown as ChatState);
+  if (opts?.requestUpdate !== false) {
+    state.requestUpdate?.();
+  }
+  const scheduleHistoryScroll = () => {
+    if (state.sessionKey !== nextSessionKey) {
+      return;
+    }
+    state.requestUpdate?.();
+    scheduleChatScroll(state as unknown as SessionSwitchHost, true);
+  };
+  void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
   const sessionsRefresh = refreshSessionOptions(state);
   flushChatQueueAfterIdleSessionReconciliation(
     state as unknown as Parameters<typeof flushChatQueueAfterIdleSessionReconciliation>[0],
@@ -177,8 +199,12 @@ function switchChatSessionInternal(
   return undefined;
 }
 
-export function switchChatSession(state: AppViewState, nextSessionKey: string): void {
-  void switchChatSessionInternal(state, nextSessionKey);
+export function switchChatSession(
+  state: AppViewState,
+  nextSessionKey: string,
+  opts?: Pick<SessionSwitchOptions, "requestUpdate" | "syncUrl">,
+): void {
+  void switchChatSessionInternal(state, nextSessionKey, opts);
 }
 
 export function switchChatSessionAndWait(
