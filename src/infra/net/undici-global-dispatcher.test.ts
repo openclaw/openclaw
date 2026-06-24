@@ -143,6 +143,7 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+  matchesNoProxy: vi.fn(() => false),
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
   resolveEnvHttpProxyUrl: vi.fn(() => undefined),
 }));
@@ -160,6 +161,7 @@ vi.mock("../wsl.js", () => ({
 import { isWSL2Sync } from "../wsl.js";
 import {
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
 } from "./proxy-env.js";
@@ -812,10 +814,21 @@ describe("forceResetGlobalDispatcher", () => {
   });
 
   it("restores a direct Agent when clearing a proxy dispatcher installed by OpenClaw", () => {
+    // Set up with proxy configured
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    ensureGlobalUndiciEnvProxyDispatcher();
-    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.example:8080",
+    });
+    setCurrentDispatcher(new EnvHttpProxyAgent());
 
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    // Should be wrapped EnvHttpProxyAgent, not a plain Agent
+    expect(next.constructor?.name).not.toBe("Agent");
+
+    // Now clear the proxy env
     vi.clearAllMocks();
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
 
@@ -823,8 +836,10 @@ describe("forceResetGlobalDispatcher", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
-    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+    const cleared = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    // Agent is mocked as AgentLocal in test environment
+    expect(cleared).toBeInstanceOf(Agent);
+    expect(cleared.options).toEqual({
       allowH2: false,
     });
   });

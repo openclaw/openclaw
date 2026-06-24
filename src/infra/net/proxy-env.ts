@@ -36,8 +36,6 @@ export type EnvHttpProxyAgentProxyOptions = {
   httpProxy?: string;
   /** Proxy URL used for HTTPS requests. */
   httpsProxy?: string;
-  /** Overrides the value of the NO_PROXY environment variable */
-  noProxy?: string;
 };
 
 /**
@@ -84,9 +82,10 @@ function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
  * HTTP/HTTPS proxy overrides. Keep this helper separate from the
  * HTTP(S)-only URL helpers so SSRF trusted-env proxy gates do not widen.
  *
- * Includes NO_PROXY to ensure undici uses our enhanced matching logic that
- * supports leading-dot subdomain patterns (e.g., `.myqcloud.com`) which the
- * default undici implementation does not handle correctly.
+ * Note: NO_PROXY is intentionally NOT passed to EnvHttpProxyAgent because
+ * undici's internal parser does not support OpenClaw's enhanced matching
+ * features (CIDR blocks, octet wildcards, etc.). Instead, proxy bypass
+ * decisions are made at the dispatcher level using matchesNoProxy().
  */
 export function resolveEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
@@ -94,13 +93,14 @@ export function resolveEnvHttpProxyAgentOptions(
   const allProxy = resolveEnvAllProxyUrl(env);
   const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
   const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
-  const noProxy = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
   const options: EnvHttpProxyAgentProxyOptions = {
     ...(httpProxy ? { httpProxy } : {}),
     ...(httpsProxy ? { httpsProxy } : {}),
-    ...(noProxy ? { noProxy } : {}),
   };
-  return options.httpProxy || options.httpsProxy || options.noProxy ? options : undefined;
+  // Only return options if a proxy URL is configured. This prevents
+  // installing EnvHttpProxyAgent when only NO_PROXY is set without
+  // any proxy, which would change existing network behavior.
+  return options.httpProxy || options.httpsProxy ? options : undefined;
 }
 
 /** Return whether explicit EnvHttpProxyAgent options can be built from the environment. */
