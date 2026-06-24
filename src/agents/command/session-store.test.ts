@@ -125,6 +125,23 @@ vi.mock("../../config/sessions.js", async () => {
       entry.model = runtime.model;
       return true;
     },
+    clearAutomaticRestartRecoveryState: (entry: SessionEntry) => {
+      if (
+        entry.abortedLastRun !== true &&
+        entry.restartRecoveryAttempts === undefined &&
+        entry.restartRecoveryQuarantinedAt === undefined &&
+        entry.restartRecoveryQuarantineReason === undefined &&
+        entry.subagentRecovery === undefined
+      ) {
+        return false;
+      }
+      entry.abortedLastRun = false;
+      entry.restartRecoveryAttempts = undefined;
+      entry.restartRecoveryQuarantinedAt = undefined;
+      entry.restartRecoveryQuarantineReason = undefined;
+      entry.subagentRecovery = undefined;
+      return true;
+    },
     updateSessionStore: sessionStoreMocks.updateSessionStore,
     loadSessionStore: (storePath: string) => {
       try {
@@ -1619,6 +1636,64 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("clears automatic recovery state after a successful normal run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-recovery-state";
+      const sessionId = "test-clear-recovery-state-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          abortedLastRun: true,
+          restartRecoveryAttempts: 4,
+          restartRecoveryQuarantinedAt: 2,
+          restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 3,
+            wedgedAt: 4,
+            wedgedReason: "automatic_attempt_budget_exceeded",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: false,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.abortedLastRun).toBe(false);
+      expect(sessionStore[sessionKey]?.restartRecoveryAttempts).toBeUndefined();
+      expect(sessionStore[sessionKey]?.restartRecoveryQuarantinedAt).toBeUndefined();
+      expect(sessionStore[sessionKey]?.restartRecoveryQuarantineReason).toBeUndefined();
+      expect(sessionStore[sessionKey]?.subagentRecovery).toBeUndefined();
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.abortedLastRun).toBe(false);
+      expect(persisted?.restartRecoveryAttempts).toBeUndefined();
+      expect(persisted?.restartRecoveryQuarantinedAt).toBeUndefined();
+      expect(persisted?.restartRecoveryQuarantineReason).toBeUndefined();
+      expect(persisted?.subagentRecovery).toBeUndefined();
     });
   });
 

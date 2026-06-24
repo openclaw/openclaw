@@ -70,6 +70,7 @@ import {
 } from "./store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 import {
+  clearAutomaticRestartRecoveryState,
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type SessionEntry,
@@ -1871,6 +1872,7 @@ export async function recordSessionMetaFromInbound(params: {
   ctx: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
   createIfMissing?: boolean;
+  clearAutomaticRecoveryState?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
@@ -1913,6 +1915,9 @@ export async function recordSessionMetaFromInbound(params: {
         // idle reset evaluation relies on updatedAt from actual session turns.
         mergeSessionEntryPreserveActivity(existing, patch)
       : mergeSessionEntry(existing, patch);
+    if (params.clearAutomaticRecoveryState ?? true) {
+      clearAutomaticRestartRecoveryState(next);
+    }
     return await persistResolvedSessionEntry({
       storePath,
       store,
@@ -2010,6 +2015,7 @@ export async function updateLastRoute(params: {
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
+    clearAutomaticRestartRecoveryState(next);
     return await persistResolvedSessionEntry({
       storePath,
       store,

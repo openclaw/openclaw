@@ -20,6 +20,8 @@ export type InputProvenance = {
   sourceTool?: string;
 };
 
+export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 export const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
@@ -77,6 +79,15 @@ export function applyInputProvenanceToUserMessage(
 
 export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
+}
+
+export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  return (
+    provenance?.kind === "internal_system" &&
+    normalizeOptionalString(provenance.sourceTool)?.toLowerCase() ===
+      MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
+  );
 }
 
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(

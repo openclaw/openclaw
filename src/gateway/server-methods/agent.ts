@@ -57,6 +57,7 @@ import {
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
+  buildAutomaticRestartRecoveryClearPatch,
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   mergeSessionEntry,
@@ -107,6 +108,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import {
   annotateInterSessionPromptText,
+  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   type InputProvenance,
@@ -1934,6 +1936,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         const isSystemGatewayRun =
           request.bootstrapContextRunKind === "cron" ||
           request.bootstrapContextRunKind === "heartbeat";
+        const isRestartRecoveryResumeRun =
+          canUseInternalRuntimeHandoff &&
+          isMainSessionRestartRecoveryInputProvenance(inputProvenance);
         const requestedSessionMatchesEntry = Boolean(
           requestedSessionId && entry?.sessionId?.trim() === requestedSessionId,
         );
@@ -1975,7 +1980,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         let rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction = visibleRequest;
+        const touchInteraction = visibleRequest && !isRestartRecoveryResumeRun;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -2149,6 +2154,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             freshRecoverTerminalSession &&
             !freshSessionRotatedSinceLoad &&
             patchSessionId === freshEntry?.sessionId;
+          const automaticRecoveryClearPatch =
+            touchInteraction && !shouldClearRotatedState
+              ? buildAutomaticRestartRecoveryClearPatch(freshEntry)
+              : {};
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
@@ -2177,6 +2186,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             space: nextGroup.groupSpace,
             ...(pluginOwnerId ? { pluginOwnerId } : {}),
+            ...automaticRecoveryClearPatch,
             ...(shouldClearRotatedState || shouldClearTerminalState
               ? {
                   status: undefined,

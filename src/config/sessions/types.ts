@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -261,6 +258,12 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
+  /** Consecutive restart-recovery attempts for the current interrupted main-session turn. */
+  restartRecoveryAttempts?: number;
+  /** Timestamp (ms) when automatic main-session restart recovery was quarantined. */
+  restartRecoveryQuarantinedAt?: number;
+  /** Human-readable reason automatic main-session restart recovery was quarantined. */
+  restartRecoveryQuarantineReason?: string;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
@@ -421,6 +424,45 @@ export type SessionEntry = {
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
+
+type AutomaticRestartRecoveryStateFields = Pick<
+  SessionEntry,
+  | "abortedLastRun"
+  | "restartRecoveryAttempts"
+  | "restartRecoveryQuarantinedAt"
+  | "restartRecoveryQuarantineReason"
+  | "subagentRecovery"
+>;
+
+export function buildAutomaticRestartRecoveryClearPatch(
+  entry?: Partial<AutomaticRestartRecoveryStateFields> | null,
+): Partial<SessionEntry> {
+  if (
+    entry?.abortedLastRun !== true &&
+    entry?.restartRecoveryAttempts === undefined &&
+    entry?.restartRecoveryQuarantinedAt === undefined &&
+    entry?.restartRecoveryQuarantineReason === undefined &&
+    entry?.subagentRecovery === undefined
+  ) {
+    return {};
+  }
+  return {
+    abortedLastRun: false,
+    restartRecoveryAttempts: undefined,
+    restartRecoveryQuarantinedAt: undefined,
+    restartRecoveryQuarantineReason: undefined,
+    subagentRecovery: undefined,
+  };
+}
+
+export function clearAutomaticRestartRecoveryState(entry: SessionEntry): boolean {
+  const patch = buildAutomaticRestartRecoveryClearPatch(entry);
+  if (Object.keys(patch).length === 0) {
+    return false;
+  }
+  Object.assign(entry, patch);
+  return true;
+}
 
 export function isTerminalSessionStatus(
   status: unknown,

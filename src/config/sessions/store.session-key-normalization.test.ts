@@ -212,6 +212,129 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
 
+  it("clears automatic recovery state when recording inbound metadata", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "recovered-session",
+            updatedAt: 1,
+            abortedLastRun: true,
+            restartRecoveryAttempts: 4,
+            restartRecoveryQuarantinedAt: 2,
+            restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+            subagentRecovery: {
+              automaticAttempts: 2,
+              lastAttemptAt: 3,
+              wedgedAt: 4,
+              wedgedReason: "automatic_attempt_budget_exceeded",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: MIXED_CASE_KEY,
+      ctx: createInboundContext(),
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.abortedLastRun).toBe(false);
+    expect(store[CANONICAL_KEY]?.restartRecoveryAttempts).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantinedAt).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantineReason).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.subagentRecovery).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("preserves automatic recovery state when inbound metadata clear is disabled", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "outbound-session",
+            updatedAt: 1,
+            abortedLastRun: true,
+            restartRecoveryAttempts: 2,
+            restartRecoveryQuarantinedAt: 3,
+            restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: MIXED_CASE_KEY,
+      ctx: createInboundContext(),
+      clearAutomaticRecoveryState: false,
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.abortedLastRun).toBe(true);
+    expect(store[CANONICAL_KEY]?.restartRecoveryAttempts).toBe(2);
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantinedAt).toBe(3);
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantineReason).toBe(
+      "exceeded_restart_retry_budget",
+    );
+    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("clears automatic recovery state when updating the last route", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "route-session",
+            updatedAt: 1,
+            abortedLastRun: true,
+            restartRecoveryAttempts: 4,
+            restartRecoveryQuarantinedAt: 2,
+            restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+            subagentRecovery: {
+              automaticAttempts: 2,
+              lastAttemptAt: 3,
+              wedgedAt: 4,
+              wedgedReason: "automatic_attempt_budget_exceeded",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      channel: "webchat",
+      to: "webchat:user-1",
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.abortedLastRun).toBe(false);
+    expect(store[CANONICAL_KEY]?.restartRecoveryAttempts).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantinedAt).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.restartRecoveryQuarantineReason).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.subagentRecovery).toBeUndefined();
+    expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
+  });
+
   it("records Signal group metadata under the mixed-case opaque group id", async () => {
     await recordSessionMetaFromInbound({
       storePath,
