@@ -202,7 +202,9 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const html = await response.text();
+      const { text: html } = await readResponseText(response, {
+        maxBytes: 2 * 1024 * 1024,
+      });
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
