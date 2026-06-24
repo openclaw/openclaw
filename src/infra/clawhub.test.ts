@@ -197,6 +197,16 @@ describe("clawhub helpers", () => {
     expect(satisfiesGatewayMinimum("unknown", "2026.3.0")).toBe(false);
   });
 
+  it("honors OpenClaw release channels in min gateway checks", () => {
+    // A prerelease gateway must not satisfy a stable (or newer prerelease) floor.
+    expect(satisfiesGatewayMinimum("2026.5.3-beta.1", "2026.5.3")).toBe(false);
+    expect(satisfiesGatewayMinimum("2026.5.3-beta.1", "2026.5.3-beta.3")).toBe(false);
+    expect(satisfiesGatewayMinimum("2026.5.3-beta.3", "2026.5.3-beta.1")).toBe(true);
+    // A stable correction release ships after its base and must satisfy the base floor.
+    expect(satisfiesGatewayMinimum("2026.5.3-1", "2026.5.3")).toBe(true);
+    expect(satisfiesGatewayMinimum("2026.5.3", "2026.5.3-1")).toBe(false);
+  });
+
   it("normalizes raw ClawHub SHA-256 hashes into integrity strings", () => {
     const hex = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
     const integrity = "sha256-A5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc+4E=";

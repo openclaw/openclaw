@@ -14,9 +14,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
-import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
+import { compareSemverStrings } from "./update-check.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
@@ -1442,6 +1442,12 @@ export function satisfiesPluginApiRange(
   return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
+// Pulls a semver token out of a possibly-prefixed version string (e.g. "OpenClaw 2026.3.22"),
+// keeping any -channel/-correction suffix so the comparison stays release-channel aware.
+function extractVersionToken(value: string): string | null {
+  return value.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0] ?? null;
+}
+
 /** Checks whether the current gateway version satisfies a package minimum gateway version. */
 export function satisfiesGatewayMinimum(
   currentVersion: string,
@@ -1450,10 +1456,14 @@ export function satisfiesGatewayMinimum(
   if (!minGatewayVersion) {
     return true;
   }
-  const current = parseSemver(currentVersion);
-  const minimum = parseSemver(minGatewayVersion);
+  const current = extractVersionToken(currentVersion);
+  const minimum = extractVersionToken(minGatewayVersion);
   if (!current || !minimum) {
     return false;
   }
-  return isAtLeast(current, minimum);
+  // Use the OpenClaw release-channel-aware comparator: a prerelease gateway (e.g. 2026.5.3-beta.1)
+  // must NOT satisfy a stable floor, while a stable correction release (2026.5.3-1) must. The old
+  // parseSemver/isAtLeast dropped the suffix, so betas wrongly passed stable minimums.
+  const comparison = compareSemverStrings(current, minimum);
+  return comparison !== null && comparison >= 0;
 }
