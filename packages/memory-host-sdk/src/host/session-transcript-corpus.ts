@@ -58,10 +58,6 @@ function isDreamingNarrativeSessionKeyLike(value: unknown): boolean {
   return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
 }
 
-function hasCronRunSessionKey(value: unknown): boolean {
-  return typeof value === "string" && isCronRunSessionKey(value);
-}
-
 function normalizeComparablePath(pathname: string): string {
   const resolved = path.resolve(pathname);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -163,6 +159,7 @@ function resolveSessionStoreTranscriptCorpusPath(
 function classifySessionEntry(
   sessionKey: string,
   entry: SessionEntry,
+  cronGeneratedSessionKeys: ReadonlySet<string>,
 ): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
@@ -171,8 +168,63 @@ function classifySessionEntry(
     generatedByDreamingNarrative:
       isDreamingNarrativeSessionStoreKey(sessionKey) ||
       isDreamingNarrativeSessionKeyLike(entry.spawnedBy),
-    generatedByCronRun: isCronRunSessionKey(sessionKey) || hasCronRunSessionKey(entry.spawnedBy),
+    generatedByCronRun: cronGeneratedSessionKeys.has(sessionKey),
   };
+}
+
+function readParentSessionKeys(entry: SessionEntry | undefined): string[] {
+  const keys = new Set<string>();
+  for (const value of [entry?.parentSessionKey, entry?.spawnedBy]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+  return [...keys];
+}
+
+function collectCronGeneratedSessionKeys(
+  summaries: readonly SessionEntrySummary[],
+): ReadonlySet<string> {
+  const entriesByKey = new Map(summaries.map((summary) => [summary.sessionKey, summary.entry]));
+  const cronGeneratedKeys = new Set<string>();
+  const cache = new Map<string, boolean>();
+  const resolving = new Set<string>();
+
+  const isCronGenerated = (sessionKey: string, entry: SessionEntry | undefined): boolean => {
+    if (isCronRunSessionKey(sessionKey)) {
+      cache.set(sessionKey, true);
+      cronGeneratedKeys.add(sessionKey);
+      return true;
+    }
+    const cached = cache.get(sessionKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (resolving.has(sessionKey)) {
+      return false;
+    }
+
+    resolving.add(sessionKey);
+    const generated = readParentSessionKeys(entry).some(
+      (parentKey) =>
+        isCronRunSessionKey(parentKey) || isCronGenerated(parentKey, entriesByKey.get(parentKey)),
+    );
+    resolving.delete(sessionKey);
+    cache.set(sessionKey, generated);
+    if (generated) {
+      cronGeneratedKeys.add(sessionKey);
+    }
+    return generated;
+  };
+
+  for (const summary of summaries) {
+    isCronGenerated(summary.sessionKey, summary.entry);
+  }
+  return cronGeneratedKeys;
 }
 
 function isRegularSessionTranscriptFile(absPath: string): boolean {
@@ -187,6 +239,7 @@ function toSessionStoreCorpusEntry(
   agentId: string,
   sessionsDir: string,
   summary: SessionEntrySummary,
+  cronGeneratedSessionKeys: ReadonlySet<string>,
 ): SessionTranscriptCorpusEntry | null {
   const sessionFile = resolveSessionStoreTranscriptCorpusPath(agentId, sessionsDir, summary.entry);
   if (!sessionFile || !isUsageCountedSessionTranscriptFileName(path.basename(sessionFile))) {
@@ -200,7 +253,11 @@ function toSessionStoreCorpusEntry(
     return null;
   }
   const sessionKey = summary.sessionKey.trim();
-  const classification = classifySessionEntry(summary.sessionKey, summary.entry);
+  const classification = classifySessionEntry(
+    summary.sessionKey,
+    summary.entry,
+    cronGeneratedSessionKeys,
+  );
   return {
     agentId,
     artifactKind: "active-session",
@@ -299,11 +356,13 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   const activeEntryOwnersByPath = new Map<string, string>();
   const artifactDirsByPath = new Map<string, string>();
   rememberArtifactDir(artifactDirsByPath, sessionsDir);
-  for (const summary of listSessionEntries({
+  const sessionEntries = listSessionEntries({
     agentId: normalizedAgentId,
     hydrateSkillPromptRefs: false,
     storePath,
-  })) {
+  });
+  const cronGeneratedSessionKeys = collectCronGeneratedSessionKeys(sessionEntries);
+  for (const summary of sessionEntries) {
     const sessionKey = isSharedFixedStore
       ? summary.sessionKey
       : canonicalizeMainSessionAlias({
@@ -316,7 +375,12 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       sessionKey,
       ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
     });
-    const entry = toSessionStoreCorpusEntry(ownerAgentId, sessionsDir, summary);
+    const entry = toSessionStoreCorpusEntry(
+      ownerAgentId,
+      sessionsDir,
+      summary,
+      cronGeneratedSessionKeys,
+    );
     if (!entry) {
       continue;
     }

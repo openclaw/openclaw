@@ -91,6 +91,10 @@ export type ResolvedSessionTranscriptIdentity = {
 type SessionTranscriptStoreEntry = {
   sessionFile?: unknown;
   sessionId?: unknown;
+  /** Explicit parent session key for current child-session linkage. */
+  parentSessionKey?: unknown;
+  /** Parent session key that spawned this session, for cron-parentage chain walks. */
+  spawnedBy?: unknown;
 };
 
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
@@ -246,6 +250,20 @@ function resolveSessionStoreTranscriptResolvedPath(
   return null;
 }
 
+function readParentSessionKeys(entry: SessionTranscriptStoreEntry | undefined): string[] {
+  const keys = new Set<string>();
+  for (const value of [entry?.parentSessionKey, entry?.spawnedBy]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+  return [...keys];
+}
+
 function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
   const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
   const sessionsIndex = parts.length - 1;
@@ -279,6 +297,38 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const store = readSessionTranscriptClassificationStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
+
+  // Walk persisted parent links to determine if a session is cron-descended.
+  // Handles transitive parentage: a subagent spawned by another subagent
+  // that was spawned by a cron run inherits the cron classification.
+  const cronCache = new Map<string, boolean>();
+  const resolvingCronKeys = new Set<string>();
+  function isCronSession(sessionKey: string, entry: SessionTranscriptStoreEntry): boolean {
+    if (isCronRunSessionKey(sessionKey)) {
+      cronCache.set(sessionKey, true);
+      return true;
+    }
+    const cached = cronCache.get(sessionKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (resolvingCronKeys.has(sessionKey)) {
+      return false;
+    }
+    resolvingCronKeys.add(sessionKey);
+    const result = readParentSessionKeys(entry).some((parentKey) => {
+      // Direct cron parent keys are enough even when the parent row was pruned.
+      if (isCronRunSessionKey(parentKey)) {
+        return true;
+      }
+      const parentEntry = store[parentKey];
+      return parentEntry ? isCronSession(parentKey, parentEntry) : false;
+    });
+    resolvingCronKeys.delete(sessionKey);
+    cronCache.set(sessionKey, result);
+    return result;
+  }
+
   for (const [sessionKey, entry] of Object.entries(store)) {
     const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
     if (!transcriptPath) {
@@ -287,7 +337,7 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
-    if (isCronRunSessionKey(sessionKey)) {
+    if (isCronSession(sessionKey, entry)) {
       cronRunTranscriptPaths.add(transcriptPath);
     }
   }

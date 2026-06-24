@@ -52,6 +52,7 @@ export type { OpenClawConfig } from "../../../../src/config/config.js";
 export { resolveStateDir } from "../../../../src/config/paths.js";
 export {
   isCompactionCheckpointTranscriptFileName,
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,

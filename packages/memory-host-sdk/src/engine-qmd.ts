@@ -20,6 +20,7 @@ export {
   type SessionTranscriptCorpusEntry,
 } from "./host/session-files.js";
 export {
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
