@@ -52,7 +52,14 @@ describe("loadCrestodianOverview", () => {
     const startGatewayRemoteSshTunnel = vi.fn(async () => ({
       url: "ws://127.0.0.1:41001",
       urlSource: "ssh tunnel",
-      tunnel: { stop: stopTunnel },
+      tunnel: {
+        parsedTarget: { host: "gateway.example", port: 22, user: "user" },
+        localPort: 41001,
+        remotePort: 18789,
+        pid: 12345,
+        stderr: [],
+        stop: stopTunnel,
+      },
     }));
     const probeGatewayUrl = vi.fn(async (url: string) => ({ reachable: true, url }));
 
