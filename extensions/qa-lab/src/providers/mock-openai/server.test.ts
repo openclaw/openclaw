@@ -127,6 +127,29 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("retains enough debug requests for long shared QA runs", async () => {
+    const server = await startMockServer();
+
+    for (let index = 0; index < 250; index += 1) {
+      await expectResponsesJson(server, {
+        stream: false,
+        model: "gpt-5.5",
+        input: [makeUserInput(`debug retention request ${index}`)],
+      });
+    }
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    const requestLog = requireArray(await requests.json(), "debug requests");
+    expect(requestLog).toHaveLength(250);
+    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
+      "debug retention request 0",
+    );
+    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
+      "debug retention request 249",
+    );
+  });
+
   it("serves health and streamed responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

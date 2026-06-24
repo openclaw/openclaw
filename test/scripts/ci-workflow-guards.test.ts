@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -37,10 +38,17 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function readAndroidCompileSdk(path: string): number {
-  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+function readTrackedText(relativePath: string): string {
+  if (existsSync(relativePath)) {
+    return readFileSync(relativePath, "utf8");
+  }
+  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+}
+
+function readAndroidCompileSdk(relativePath: string): number {
+  const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
-    throw new Error(`Missing compileSdk in ${path}`);
+    throw new Error(`Missing compileSdk in ${relativePath}`);
   }
   return Number(match[1]);
 }
@@ -378,7 +386,7 @@ describe("ci workflow guards", () => {
   it("bounds platform checkout fetches without GNU timeout", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
@@ -575,6 +583,7 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "ios-build",
       "android",
     ]);
     expect(timingJob.if).toContain("always()");
@@ -727,18 +736,33 @@ describe("ci workflow guards", () => {
     expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
   });
 
-  it("runs maturity scorecard from release checks", () => {
+  it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();
     const job = releaseWorkflow.jobs.maturity_scorecard_release_checks;
     const summaryJob = releaseWorkflow.jobs.summary;
     const verifyStep = summaryJob.steps.find(
       (step) => step.name === "Verify release check results",
     );
+    const inputs = releaseWorkflow.on.workflow_dispatch.inputs;
+    const resolveJob = releaseWorkflow.jobs.resolve_target;
+    const summarizeStep = resolveJob.steps.find((step) => step.name === "Summarize validated ref");
 
     expect(releaseWorkflow.jobs).not.toHaveProperty("qa_profile_release_evidence_release_checks");
+    expect(inputs.run_maturity_scorecard).toMatchObject({
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(resolveJob.outputs.run_maturity_scorecard).toBe(
+      "${{ steps.inputs.outputs.run_maturity_scorecard }}",
+    );
+    expect(summarizeStep.env.RUN_MATURITY_SCORECARD).toBe(
+      "${{ steps.inputs.outputs.run_maturity_scorecard }}",
+    );
+    expect(summarizeStep.run).toContain("- Maturity scorecard docs:");
     expect(job.name).toBe("Render maturity scorecard release docs");
     expect(job.if).toBe(
-      'contains(fromJSON(\'["all","qa"]\'), needs.resolve_target.outputs.rerun_group)',
+      "contains(fromJSON('[\"all\",\"qa\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.run_maturity_scorecard == 'true'",
     );
     expect(job.permissions).toMatchObject({
       actions: "read",
