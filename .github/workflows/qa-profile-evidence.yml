@@ -37,8 +37,8 @@ on:
         type: string
     secrets:
       OPENAI_API_KEY:
-        description: Optional OpenAI API key used by live QA profile scenarios
-        required: false
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name

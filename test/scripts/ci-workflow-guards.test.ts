@@ -663,9 +663,6 @@ describe("ci workflow guards", () => {
     );
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
-    expect(qaEvidenceWorkflow.on.workflow_call.secrets.OPENAI_API_KEY).toMatchObject({
-      required: false,
-    });
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
@@ -798,13 +795,45 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
+    const preflightStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Build CI manifest",
+    );
+    const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
+      profiles: Array<{ id: string; categoryIds: string[] }>;
+    };
+    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
+    if (!smokeProfile) {
+      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
+    }
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    const uploadStep = fastCoreJob.steps.find(
+      (step) => step.name === "Upload QA smoke profile evidence",
+    );
 
+    expect(preflightStep.run).toContain("qaSmokeProfileCategories");
+    expect(preflightStep.run).toContain("checks-fast-qa-smoke-profile-${category}");
+    expect(preflightStep.run).toContain('task: "qa-smoke-profile"');
+    expect(preflightStep.run).toContain("qa_category: category");
+    expect(smokeProfile.categoryIds).toHaveLength(34);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(preflightStep.run).toContain(`"${categoryId}"`);
+    }
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(runStep.run).toContain("qa-smoke-profile)");
+    expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain('--category "$QA_SMOKE_CATEGORY"');
+    expect(runStep.run).toContain("--allow-failures");
+    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).not.toContain("OPENAI_API_KEY");
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-profile'");
+    expect(uploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.qa_category }}/",
+      "if-no-files-found": "warn",
+    });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

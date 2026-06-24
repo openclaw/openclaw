@@ -281,10 +281,52 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
+          const qaSmokeProfileCategories = [
+            "agent-runtime-and-provider-execution.agent-turn-execution",
+            "agent-runtime-and-provider-execution.model-and-runtime-selection",
+            "agent-runtime-and-provider-execution.provider-auth",
+            "agent-runtime-and-provider-execution.streaming-and-progress",
+            "agent-runtime-and-provider-execution.tool-calls-and-response-handling",
+            "agent-runtime-and-provider-execution.tool-execution-controls",
+            "automation-cron-hooks-tasks-polling.cron-jobs",
+            "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
+            "browser-control-ui-and-webchat.browser-ui",
+            "channel-framework.channel-actions-commands-and-approvals",
+            "channel-framework.channel-setup",
+            "channel-framework.conversation-routing-and-delivery",
+            "channel-framework.group-thread-and-ambient-room-behavior",
+            "channel-framework.outbound-delivery-and-reply-pipeline",
+            "channel-framework.status-health-and-operator-controls",
+            "gateway-runtime.gateway-rpc-apis-and-events",
+            "gateway-runtime.websocket-connection",
+            "media-understanding-and-media-generation.media-generation",
+            "media-understanding-and-media-generation.media-understanding",
+            "plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins",
+            "plugin-sdk-and-bundled-plugin-architecture.provider-and-tool-plugins",
+            "plugin-sdk-and-bundled-plugin-architecture.testing-plugins",
+            "security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards",
+            "security-auth-pairing-and-secrets.credential-and-secret-hygiene",
+            "session-memory-and-context-engine.context-engine",
+            "session-memory-and-context-engine.core-prompts-and-context",
+            "session-memory-and-context-engine.cross-client-history-and-session-parity",
+            "session-memory-and-context-engine.diagnostics-maintenance-and-recovery",
+            "session-memory-and-context-engine.memory",
+            "session-memory-and-context-engine.session-routing",
+            "session-memory-and-context-engine.token-management",
+            "telemetry-diagnostics-and-observability.diagnostic-collection",
+            "telemetry-diagnostics-and-observability.health-and-repair",
+            "telemetry-diagnostics-and-observability.telemetry-export",
+          ];
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
+              ...qaSmokeProfileCategories.map((category) => ({
+                check_name: `checks-fast-qa-smoke-profile-${category}`,
+                runtime: "node",
+                task: "qa-smoke-profile",
+                qa_category: category,
+              })),
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -914,6 +956,7 @@ jobs:
         env:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
+          QA_SMOKE_CATEGORY: ${{ matrix.qa_category || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -929,6 +972,22 @@ jobs:
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
+            qa-smoke-profile)
+              output_dir=".artifacts/qa-e2e/smoke-ci-profile-${QA_SMOKE_CATEGORY}"
+              export OPENCLAW_BUILD_PRIVATE_QA=1
+              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
+              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
+              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
+              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
+              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
+              pnpm openclaw qa run \
+                --repo-root . \
+                --qa-profile smoke-ci \
+                --category "$QA_SMOKE_CATEGORY" \
+                --output-dir "$output_dir" \
+                --allow-failures
+              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+              ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
               ;;
@@ -937,6 +996,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload QA smoke profile evidence
+        if: always() && matrix.task == 'qa-smoke-profile'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-smoke-profile-${{ matrix.qa_category }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.qa_category }}/
+          if-no-files-found: warn
+          retention-days: 7
 
   checks-fast-plugin-contracts-shard:
     permissions:
