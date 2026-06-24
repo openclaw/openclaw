@@ -572,6 +572,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     ]);
     sessionMocks.getSessionEntry.mockClear().mockReturnValue(undefined);
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
+    sessionMocks.getSessionEntry.mockImplementation(
+      ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+        sessionMocks.loadSessionStore(storePath)[sessionKey],
+    );
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveSessionTranscriptLegacyFileTarget.mockClear().mockResolvedValue({
       agentId: "main",
@@ -651,7 +655,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       { provider: "anthropic", model: "claude-opus-4-7" },
       "thinking menu call",
     );
-    expect(sessionMocks.loadSessionStore).toHaveBeenCalledWith("/tmp/openclaw-sessions.json");
+    expect(sessionMocks.getSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-sessions.json",
+      sessionKey: "agent:main:main",
+    });
     expectSendMessageCall({
       sendMessage,
       chatId: 100,

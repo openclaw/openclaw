@@ -117,15 +117,18 @@ const qaEvidenceScorecardCountSchema = z
   })
   .strict();
 
+const qaEvidenceScorecardCoverageCountSchema = qaEvidenceScorecardCountSchema.extend({
+  secondaryOnly: z.number().int().nonnegative(),
+});
+
 const qaEvidenceScorecardCategorySchema = z
   .object({
     id: nonEmptyStringSchema,
     surfaceId: nonEmptyStringSchema,
     name: nonEmptyStringSchema,
     status: z.enum(["fulfilled", "partial", "missing"]),
-    features: qaEvidenceScorecardCountSchema.extend({
-      secondaryOnly: z.number().int().nonnegative(),
-    }),
+    features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCoverageCountSchema,
     missingCoverageIds: z.array(nonEmptyStringSchema),
   })
   .strict();
@@ -145,6 +148,7 @@ const qaEvidenceScorecardSchema = z
       .strict(),
     categories: qaEvidenceScorecardCountSchema,
     features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCountSchema,
     categoryReports: z.array(qaEvidenceScorecardCategorySchema),
   })
   .strict();
