@@ -19,6 +19,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { resolveDirectUserRawBody } from "./effective-reply-route.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -143,6 +144,15 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
   const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
     debounceMs: 0,
+    // PR #52664: /steer and /tell carry direct user text, so report it as the
+    // active run's rawBody (gated like channel ingress). The active runner
+    // clears rawBody by default, so without this a direct steer would wrongly
+    // emit `undefined` on before_prompt_build / agent_end.
+    rawBody: resolveDirectUserRawBody({
+      candidate: message,
+      provider: params.ctx.Provider,
+      inputProvenance: params.ctx.InputProvenance ?? params.rootCtx?.InputProvenance,
+    }),
   }).catch((err: unknown): CommandHandlerResult => {
     return continueWithSteerFallback(
       params,

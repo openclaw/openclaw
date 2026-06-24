@@ -58,6 +58,8 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        // PR #52664: direct-user /steer text is reported as the active run's rawBody.
+        rawBody: "keep going",
       },
     );
   });
@@ -81,6 +83,7 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        rawBody: "check the target",
       },
     );
   });
@@ -103,6 +106,26 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        rawBody: "continue from state",
+      },
+    );
+  });
+
+  it("gates rawBody to undefined for /steer from a system-event provider", async () => {
+    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
+
+    const params = buildParams("/steer run due maintenance");
+    params.ctx.Provider = "heartbeat";
+
+    await handleSteerCommand(params, true);
+
+    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
+      "session-active",
+      "run due maintenance",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        rawBody: undefined,
       },
     );
   });

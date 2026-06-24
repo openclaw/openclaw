@@ -411,7 +411,10 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import {
+  resolveQueuedRawBody,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt.queue-message.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -3731,10 +3734,10 @@ export async function runEmbeddedAttempt(
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       // PR #52664: track the latest user-input rawBody for hook events.
-      // The initial value is captured at run start; steered injections
-      // (queueMessage carrying a rawBody key) refresh it so subsequent
-      // before_prompt_build / agent_end hook events reflect the most
-      // recent user message rather than the original turn's text.
+      // The initial value is captured at run start; every queued injection
+      // re-derives it from that turn's options so subsequent
+      // before_prompt_build / agent_end hook events reflect the most recent
+      // message rather than the original turn's text.
       let currentRawBody: string | undefined = params.rawBody;
 
       const queueHandle: EmbeddedAgentQueueHandle & {
@@ -3746,12 +3749,12 @@ export async function runEmbeddedAttempt(
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          // Refresh on key presence, not definedness: a steered turn always
-          // carries a rawBody key, so a gated (undefined) value clears the
-          // previous direct-user rawBody rather than leaving it stale.
-          if (options && "rawBody" in options) {
-            currentRawBody = options.rawBody;
-          }
+          // Clear by default: a queued injection is a new turn, so its rawBody
+          // is whatever the caller gates in. Direct-user steers pass their
+          // clean text; internal injections (sessions_send, Talk active-run
+          // control, subagent active wakes) pass nothing, which clears the
+          // previous direct-user rawBody so it is never reported as theirs.
+          currentRawBody = resolveQueuedRawBody(options);
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
         isStreaming: () => activeSession.isStreaming,

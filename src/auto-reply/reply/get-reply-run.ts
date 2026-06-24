@@ -68,7 +68,11 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
-import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import {
+  isSystemEventProvider,
+  resolveDirectUserRawBody,
+  resolveEffectiveReplyRoute,
+} from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import type {
@@ -681,10 +685,11 @@ export async function runPreparedReply(
   // model-facing "not a direct user instruction" annotation (see
   // input-provenance.ts). Neither may leak to plugins as clean user rawBody, so
   // only external_user (or unmarked direct-channel) input qualifies.
-  const isDirectExternalUserInput =
-    !isSystemEventProvider(ctx.Provider) &&
-    (inputProvenance === undefined || inputProvenance.kind === "external_user");
-  const rawBodyForPluginEvent = isDirectExternalUserInput ? rawBodyCandidate : undefined;
+  const rawBodyForPluginEvent = resolveDirectUserRawBody({
+    candidate: rawBodyCandidate,
+    provider: ctx.Provider,
+    inputProvenance,
+  });
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&

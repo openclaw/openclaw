@@ -460,7 +460,10 @@ When a user steers an already-running turn (`queue.mode=steer` /
 `steer-backlog`), the active run refreshes `rawBody` to the steered
 message's clean text, so subsequent `before_prompt_build` and
 `agent_end` events on that run report the most recent user input rather
-than the turn's original text.
+than the turn's original text. Injections into an active run that are
+not direct end-user input — `sessions_send` relays, `talk` active-run
+control, and subagent active wakes — clear `rawBody` instead, so a prior
+direct-user turn's text is never reported on their hook events.
 
 Treat absence as "use the message content instead", not "the user sent
 an empty message":

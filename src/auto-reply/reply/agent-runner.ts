@@ -1287,12 +1287,12 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
-        // PR #52664: always carry this steered turn's gated rawBody (possibly
-        // undefined) so the active embedded run refreshes currentRawBody to the
-        // new inbound. Presence of the key — not a defined value — drives the
-        // refresh, so a provenance-gated (inter_session / internal_system)
-        // steered message clears the previous direct-user rawBody instead of
-        // leaking it onto later before_prompt_build / agent_end events.
+        // PR #52664: carry this steered turn's gated rawBody (possibly
+        // undefined) so the active embedded run re-derives currentRawBody for
+        // the new inbound. The runner clears by default, so a provenance-gated
+        // (inter_session / internal_system) steered message drops the previous
+        // direct-user rawBody instead of leaking it onto later
+        // before_prompt_build / agent_end events.
         rawBody: followupRun.rawBody,
       },
     );

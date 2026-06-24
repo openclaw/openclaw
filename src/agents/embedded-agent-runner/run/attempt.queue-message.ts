@@ -3,6 +3,7 @@
  */
 import { toErrorObject } from "../../../infra/errors.js";
 import { log } from "../logger.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -230,4 +231,21 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
   );
+}
+
+/**
+ * Resolves the rawBody an active embedded run reports after a queued injection.
+ *
+ * PR #52664: clear by default. A queued injection is a new turn, so its rawBody
+ * is only the value the caller provenance-gates in. Direct-user steers pass
+ * their clean text; internal injections (sessions_send, Talk active-run
+ * control, subagent active wakes) omit it, which clears the previous
+ * direct-user rawBody so it is never reported on their before_prompt_build /
+ * agent_end hook events. Returning `options?.rawBody` keeps that rule in one
+ * place instead of relying on each caller to pass an explicit `undefined`.
+ */
+export function resolveQueuedRawBody(
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+): string | undefined {
+  return options?.rawBody;
 }
