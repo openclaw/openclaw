@@ -251,17 +251,6 @@ jobs:
               ],
             };
           });
-          const { createQaSmokeProfileCategoryShards } = await import(
-            "./scripts/lib/ci-qa-smoke-plan.mjs"
-          ).catch((error) => {
-            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
-              throw error;
-            }
-            return {
-              createQaSmokeProfileCategoryShards: () => [],
-            };
-          });
-
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
@@ -295,7 +284,6 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
-              ...createQaSmokeProfileCategoryShards(),
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -925,7 +913,6 @@ jobs:
         env:
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
-          QA_SMOKE_CATEGORY: ${{ matrix.qa_category || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -933,6 +920,23 @@ jobs:
             bundled-protocol)
               pnpm test:bundled
               pnpm protocol:check
+              output_dir=".artifacts/qa-e2e/smoke-ci-profile"
+              export OPENCLAW_BUILD_PRIVATE_QA=1
+              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
+              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
+              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
+              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
+              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
+              qa_exit_code=0
+              pnpm openclaw qa run \
+                --repo-root . \
+                --qa-profile smoke-ci \
+                --output-dir "$output_dir" || qa_exit_code=$?
+              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+              if [ "$qa_exit_code" -ne 0 ]; then
+                echo "::error title=QA smoke profile failed::smoke-ci exited ${qa_exit_code}; evidence upload will still run"
+                exit "$qa_exit_code"
+              fi
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
@@ -940,21 +944,6 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
-              ;;
-            qa-smoke-profile)
-              output_dir=".artifacts/qa-e2e/smoke-ci-profile-${QA_SMOKE_CATEGORY}"
-              export OPENCLAW_BUILD_PRIVATE_QA=1
-              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
-              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
-              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
-              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
-              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
-              pnpm openclaw qa run \
-                --repo-root . \
-                --qa-profile smoke-ci \
-                --category "$QA_SMOKE_CATEGORY" \
-                --output-dir "$output_dir"
-              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -966,11 +955,11 @@ jobs:
           esac
 
       - name: Upload QA smoke profile evidence
-        if: always() && matrix.task == 'qa-smoke-profile'
+        if: always() && matrix.task == 'bundled-protocol'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: qa-smoke-profile-${{ matrix.qa_category }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.qa_category }}/
+          name: qa-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-profile/
           if-no-files-found: warn
           retention-days: 7
 

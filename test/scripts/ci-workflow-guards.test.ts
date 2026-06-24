@@ -3,11 +3,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  QA_SMOKE_PROFILE_CRABLINE_UNSUPPORTED_CATEGORY_IDS,
-  createQaSmokeProfileCategoryShards,
-  readTaxonomyProfileCategoryIds,
-} from "../../scripts/lib/ci-qa-smoke-plan.mjs";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
@@ -819,42 +814,26 @@ describe("ci workflow guards", () => {
     );
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
-    const taxonomyCategoryIds = readTaxonomyProfileCategoryIds();
-    const smokeShards = createQaSmokeProfileCategoryShards();
-    const smokeShardCategoryIds = smokeShards.map((shard) => shard.qa_category);
 
-    expect(preflightStep.run).toContain("createQaSmokeProfileCategoryShards");
-    expect(preflightStep.run).toContain('await import(\n  "./scripts/lib/ci-qa-smoke-plan.mjs"');
-    expect(preflightStep.run).toContain("createQaSmokeProfileCategoryShards: () => []");
+    expect(preflightStep.run).not.toContain("qa-smoke-profile");
+    expect(preflightStep.run).not.toContain("qa_category");
     expect(smokeProfile.categoryIds).toHaveLength(34);
-    expect(taxonomyCategoryIds).toEqual(smokeProfile.categoryIds);
-    expect(smokeShardCategoryIds).toEqual(
-      smokeProfile.categoryIds.filter(
-        (categoryId) => !QA_SMOKE_PROFILE_CRABLINE_UNSUPPORTED_CATEGORY_IDS.includes(categoryId),
-      ),
-    );
-    expect(smokeShards).toHaveLength(33);
     for (const categoryId of smokeProfile.categoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
-    for (const shard of smokeShards) {
-      expect(shard).toMatchObject({
-        check_name: `checks-fast-qa-smoke-profile-${shard.qa_category}`,
-        runtime: "node",
-        task: "qa-smoke-profile",
-      });
-    }
+    expect(runStep.run).toContain("bundled-protocol)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(runStep.run).toContain("qa-smoke-profile)");
     expect(runStep.run).toContain("--qa-profile smoke-ci");
-    expect(runStep.run).toContain('--category "$QA_SMOKE_CATEGORY"');
+    expect(runStep.run).not.toContain("--category");
     expect(runStep.run).not.toContain("--allow-failures");
+    expect(runStep.run).toContain("qa_exit_code=0");
+    expect(runStep.run).toContain('exit "$qa_exit_code"');
     expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-profile'");
+    expect(uploadStep.if).toBe("always() && matrix.task == 'bundled-protocol'");
     expect(uploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.qa_category }}/",
+      path: ".artifacts/qa-e2e/smoke-ci-profile/",
       "if-no-files-found": "warn",
     });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
