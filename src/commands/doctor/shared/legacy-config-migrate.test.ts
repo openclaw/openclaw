@@ -2463,6 +2463,40 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 
+  it("merges colliding model ref map keys instead of dropping per-key tuning", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4o": { params: { reasoning_effort: "high" }, streaming: false },
+            "openai/gpt-4": { params: { reasoning_effort: "low" }, alias: "legacy-four" },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": {
+        params: { reasoning_effort: "high" },
+        streaming: false,
+        alias: "legacy-four",
+      },
+    });
+    const mergeChanges = res.changes.filter((change) =>
+      change.includes("config.agents.defaults.models key"),
+    );
+    expect(
+      mergeChanges.some(
+        (change) =>
+          change.includes("Merged") &&
+          change.includes('"openai/gpt-4"') &&
+          change.includes('"openai/gpt-5.5"') &&
+          change.includes("conflicting fields") &&
+          change.includes("params.reasoning_effort"),
+      ),
+    ).toBe(true);
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {

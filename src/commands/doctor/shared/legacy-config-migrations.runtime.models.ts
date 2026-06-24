@@ -847,6 +847,38 @@ function rewriteModelRefString(value: string, path: string, changes: string[]): 
   return upgraded;
 }
 
+function mergeModelRefMapEntries(
+  existing: unknown,
+  incoming: unknown,
+): { value: unknown; conflicts: string[] } {
+  const existingRecord = getRecord(existing);
+  const incomingRecord = getRecord(incoming);
+  if (!existingRecord || !incomingRecord) {
+    return { value: existing, conflicts: existingRecord || incomingRecord ? ["value"] : [] };
+  }
+  const merged: Record<string, unknown> = { ...existingRecord };
+  const conflicts: string[] = [];
+  for (const [field, incomingValue] of Object.entries(incomingRecord)) {
+    if (incomingValue === undefined) {
+      continue;
+    }
+    if (!hasOwnDefinedProperty(existingRecord, field)) {
+      merged[field] = incomingValue;
+      continue;
+    }
+    const existingField = getRecord(existingRecord[field]);
+    const incomingField = getRecord(incomingValue);
+    if (existingField && incomingField) {
+      const nested = mergeModelRefMapEntries(existingField, incomingField);
+      merged[field] = nested.value;
+      conflicts.push(...nested.conflicts.map((c) => `${field}.${c}`));
+      continue;
+    }
+    conflicts.push(field);
+  }
+  return { value: merged, conflicts };
+}
+
 function rewriteModelRefMapKeys(
   record: Record<string, unknown>,
   path: string,
@@ -864,6 +896,15 @@ function rewriteModelRefMapKeys(
       changed = true;
     }
     if (nextKey in next && upgradedKey) {
+      const { value, conflicts } = mergeModelRefMapEntries(next[nextKey], child);
+      next[nextKey] = value;
+      if (conflicts.length > 0) {
+        changes.push(
+          `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`,
+        );
+      } else {
+        changes.push(`Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`);
+      }
       continue;
     }
     next[nextKey] = child;
