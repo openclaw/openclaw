@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Memory Core doctor contract migrates shipped workspace dreaming state.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -619,14 +620,21 @@ async function collectLegacyMemorySidecarSources(params: {
 }): Promise<LegacyMemorySidecarSource[]> {
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
+  const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
   try {
     const entries = await fs.readdir(legacyDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isFile() && entry.name.endsWith(".sqlite")) {
-        const rawAgentId = entry.name.slice(0, -".sqlite".length);
+        const stem = entry.name.slice(0, -".sqlite".length);
+        const retryMarker = ".retry-";
+        const retryIndex = stem.indexOf(retryMarker);
+        const rawAgentId = retryIndex === -1 ? stem : stem.slice(0, retryIndex);
         const agentId = normalizeAgentId(rawAgentId);
         if (rawAgentId === agentId) {
           agentIds.add(agentId);
+          if (retryIndex !== -1) {
+            retrySidecars.push({ agentId, legacyPath: path.join(legacyDir, entry.name) });
+          }
         }
       }
     }
@@ -658,6 +666,9 @@ async function collectLegacyMemorySidecarSources(params: {
       );
     }
     await addSource(agentId, path.join(legacyDir, `${agentId}.sqlite`));
+  }
+  for (const retrySidecar of retrySidecars) {
+    await addSource(retrySidecar.agentId, retrySidecar.legacyPath);
   }
   return sources;
 }
@@ -738,18 +749,24 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
       }),
     )
   ).filter((targetPath): targetPath is string => targetPath !== null);
-  if (existingTargets.length > 0) {
-    params.warnings.push(
-      `Left custom Memory Core legacy memory index sidecar retry path at ${params.source.legacyPath} because ${existingTargets[0]} already exists`,
-    );
-    return;
-  }
+  const targetBasePath =
+    existingTargets.length === 0
+      ? retryPath
+      : path.join(
+          params.source.stateDir,
+          "memory",
+          `${params.source.agentId}.retry-${crypto
+            .createHash("sha256")
+            .update(path.resolve(params.source.legacyPath))
+            .digest("hex")
+            .slice(0, 12)}.sqlite`,
+        );
   const existingSources = (
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const sourcePath = `${params.source.legacyPath}${suffix}`;
         return (await fileExists(sourcePath))
-          ? { sourcePath, targetPath: `${retryPath}${suffix}` }
+          ? { sourcePath, targetPath: `${targetBasePath}${suffix}` }
           : null;
       }),
     )
@@ -757,7 +774,7 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   if (existingSources.length === 0) {
     return;
   }
-  await fs.mkdir(path.dirname(retryPath), { recursive: true });
+  await fs.mkdir(path.dirname(targetBasePath), { recursive: true });
   const copied: string[] = [];
   try {
     for (const entry of existingSources) {
@@ -775,7 +792,9 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
     );
     return;
   }
-  params.changes.push(`Copied Memory Core legacy memory index sidecar retry path -> ${retryPath}`);
+  params.changes.push(
+    `Copied Memory Core legacy memory index sidecar retry path -> ${targetBasePath}`,
+  );
 }
 
 async function migrateLegacyMemorySidecarSource(params: {

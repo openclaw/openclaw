@@ -4492,6 +4492,62 @@ async function runPluginDoctorStateMigrationPlans(params: {
   return { changes, warnings };
 }
 
+export async function autoMigrateLegacyPluginDoctorState(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  log?: MigrationLogger;
+}): Promise<{
+  migrated: boolean;
+  skipped: boolean;
+  changes: string[];
+  warnings: string[];
+}> {
+  const env = params.env ?? process.env;
+  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
+  const oauthDir = resolveOAuthDir(env, stateDir);
+  const stateDirResult = await autoMigrateLegacyStateDir({
+    env,
+    homedir: params.homedir,
+    log: params.log,
+  });
+  const stateSchema = repairOpenClawStateDatabaseSchema({
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  const plans =
+    stateSchema.changes.length > 0
+      ? []
+      : await collectPluginDoctorStateMigrationPlans({
+          cfg: params.config,
+          env,
+          stateDir,
+          oauthDir,
+        });
+  const changes = [...stateDirResult.changes, ...stateSchema.changes];
+  const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
+  for (const plan of plans) {
+    try {
+      const result = await plan.migration.migrateLegacyState({
+        config: params.config,
+        env,
+        stateDir,
+        oauthDir,
+        context: createPluginDoctorStateMigrationContext(plan.pluginId, env),
+      });
+      changes.push(...result.changes);
+      warnings.push(...result.warnings);
+    } catch (err) {
+      warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+    }
+  }
+  return {
+    migrated: stateDirResult.migrated || stateSchema.changes.length > 0 || plans.length > 0,
+    skipped: false,
+    changes,
+    warnings,
+  };
+}
+
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

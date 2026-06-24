@@ -827,6 +827,69 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
+  it("copies custom vector sidecars to a discoverable retry path when the canonical retry exists", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
+    const retryPath = path.join(stateDir, "memory", "main.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { text: "custom retry", vector: "custom-vec" });
+    await writeLegacyMemorySidecar(retryPath, { text: "default retry", vector: "default-vec" });
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: legacyPath,
+              vector: {
+                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
+              },
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
+    const retryEntries = await fs.readdir(path.join(stateDir, "memory"));
+    const alternateRetry = retryEntries.find((entry) =>
+      /^main\.retry-[a-f0-9]{12}\.sqlite$/.test(entry),
+    );
+    expect(alternateRetry).toBeDefined();
+    const alternateRetryPath = path.join(stateDir, "memory", alternateRetry ?? "");
+    const repairedConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+    const retryPreview = await legacyMemoryIndexMigration().detectLegacyState(
+      migrationParams(repairedConfig),
+    );
+
+    expect(result.changes).toContain(
+      `Copied Memory Core legacy memory index sidecar retry path -> ${alternateRetryPath}`,
+    );
+    expect(retryPreview?.preview).toEqual(
+      expect.arrayContaining([
+        `- Memory Core legacy memory index: ${retryPath} -> ${path.join(
+          stateDir,
+          "agents",
+          "main",
+          "agent",
+          "openclaw-agent.sqlite",
+        )}`,
+        `- Memory Core legacy memory index: ${alternateRetryPath} -> ${path.join(
+          stateDir,
+          "agents",
+          "main",
+          "agent",
+          "openclaw-agent.sqlite",
+        )}`,
+      ]),
+    );
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(alternateRetryPath)).resolves.toBeUndefined();
+  });
+
   it("leaves the legacy memory sidecar in place when canonical rows conflict", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");

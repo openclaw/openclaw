@@ -197,21 +197,36 @@ export async function runDoctorConfigPreflight(
     (options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations(snapshot)));
   if (stateMigrations && configStateMigrationsAllowed) {
-    const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } = stateMigrations;
+    const {
+      autoMigrateLegacyState,
+      autoMigrateLegacyPluginDoctorState,
+      autoMigrateLegacyTaskStateSidecars,
+    } = stateMigrations;
     if (stateMigrationInput) {
-      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
-      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: stateMigrationInput.cfg });
-      noteStateMigrationResult(cronResult);
-      noteStateMigrationResult(
-        await autoMigrateLegacyState({
+      if (stateMigrationInput.cfg) {
+        const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+        const cronResult = await repairLegacyCronStoreWithoutPrompt({
           cfg: stateMigrationInput.cfg,
-          ...(stateMigrationInput.pluginDoctorConfig
-            ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
-            : {}),
-          env: process.env,
-          recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-        }),
-      );
+        });
+        noteStateMigrationResult(cronResult);
+        noteStateMigrationResult(
+          await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+          }),
+        );
+      } else if (stateMigrationInput.pluginDoctorConfig) {
+        noteStateMigrationResult(
+          await autoMigrateLegacyPluginDoctorState({
+            config: stateMigrationInput.pluginDoctorConfig,
+            env: process.env,
+          }),
+        );
+      }
     } else {
       noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
     }

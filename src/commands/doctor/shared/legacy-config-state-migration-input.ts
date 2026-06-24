@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 export type StateMigrationConfigInput = {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
 };
 
@@ -26,6 +26,11 @@ export function resolveStateMigrationConfigInput(params: {
   const migrated = migrateLegacyConfig(migrationSource);
   if (!migrated.config) {
     return null;
+  }
+  if (migrated.partiallyValid) {
+    return {
+      pluginDoctorConfig: (pluginDoctorConfig ?? migrationSource) as OpenClawConfig,
+    };
   }
   return {
     cfg: migrated.config,

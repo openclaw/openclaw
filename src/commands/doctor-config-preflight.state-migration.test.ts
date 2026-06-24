@@ -7,6 +7,14 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["imported"], warnings: [] })),
 );
+const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
+  vi.fn(async () => ({
+    migrated: true,
+    skipped: false,
+    changes: ["plugin-imported"],
+    warnings: [],
+  })),
+);
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["task-imported"], warnings: [] })),
 );
@@ -30,6 +38,7 @@ const note = vi.hoisted(() => vi.fn());
 vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
+  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
 }));
 
@@ -250,23 +259,13 @@ describe("runDoctorConfigPreflight state migration", () => {
       invalidConfigNote: false,
     });
 
-    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
-            },
-          }),
-          list: [{ id: "main" }],
-        }),
-      }),
-      pluginDoctorConfig: resolvedConfig,
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
+      config: resolvedConfig,
       env: process.env,
-      recoverCorruptTargetStore: undefined,
     });
+    expect(note).toHaveBeenCalledWith("- plugin-imported", "Doctor changes");
   });
 
   it("limits invalid-config preflight to config-independent state migration", async () => {
