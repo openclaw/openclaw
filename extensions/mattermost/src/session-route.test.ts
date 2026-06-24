@@ -1,5 +1,6 @@
 // Mattermost tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
+import { rememberMattermostChannelKind } from "./mattermost/channel-kind-store.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 function expectRoute(route: ReturnType<typeof resolveMattermostOutboundSessionRoute>) {
   if (!route) {
@@ -90,13 +91,14 @@ describe("mattermost session route", () => {
       }),
     ).toBeNull();
   });
-  it("resolves private-channel group target to chatType group [regression]", () => {
+  it("resolves private-channel group target to chatType group when cache is warm [regression]", () => {
+    rememberMattermostChannelKind("grp999", "group");
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       accountId: "acct-1",
       target: "mattermost:channel:grp999",
-      resolvedTarget: { kind: "group", id: "grp999" },
+      resolvedTarget: { kind: "group", to: "channel:grp999", source: "mattermost" },
     });
     const groupRoute = expectRoute(route);
     expect(groupRoute.chatType).toBe("group");
@@ -106,12 +108,13 @@ describe("mattermost session route", () => {
     expect(groupRoute.to).toBe("channel:grp999");
   });
   it("group outbound session uses channel routing but group session peer [regression]", () => {
+    rememberMattermostChannelKind("grp999", "group");
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       accountId: "acct-1",
       target: "mattermost:channel:grp999",
-      resolvedTarget: { kind: "group", id: "grp999" },
+      resolvedTarget: { kind: "group", to: "channel:grp999", source: "mattermost" },
     });
     const groupRoute = expectRoute(route);
     expect(groupRoute.chatType).toBe("group");
@@ -120,5 +123,22 @@ describe("mattermost session route", () => {
     expect(groupRoute.to).toBe("channel:grp999");
     expect(groupRoute.chatType).not.toBe("channel");
     expect(groupRoute.peer.kind).not.toBe("channel");
+  });
+  it("cold-cache: public channel with directory kind group falls back to channel session [regression]", () => {
+    // Do NOT pre-populate cache for pub-cold-123 — simulates a cold/public channel
+    // that the Mattermost directory emits as kind:"group" but the cache hasn't confirmed.
+    // Without the authoritative cache hit, isGroup must be false → chatType:"channel".
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:channel:pub-cold-123",
+      resolvedTarget: { kind: "group", to: "channel:pub-cold-123", source: "mattermost" },
+    });
+    const coldRoute = expectRoute(route);
+    expect(coldRoute.chatType).toBe("channel");
+    expect(coldRoute.peer.kind).toBe("channel");
+    expect(coldRoute.from).toBe("mattermost:channel:pub-cold-123");
+    expect(coldRoute.to).toBe("channel:pub-cold-123");
   });
 });
