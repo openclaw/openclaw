@@ -19,6 +19,7 @@ import {
   currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
+  lastUserMessageIndex,
   materializeVisibleStreamState,
   messageTimestampMs,
   maybeResetToolStream,
@@ -266,6 +267,73 @@ function historyHasSameOrNewerDisplayMessage(
   });
 }
 
+function messageRole(message: unknown): string {
+  return message && typeof message === "object"
+    ? normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role)
+    : "";
+}
+
+function currentHistoryTurnReplacesAssistantMessage(
+  historyMessages: unknown[],
+  message: unknown,
+): boolean {
+  if (messageRole(message) !== "assistant") {
+    return false;
+  }
+  const messageText = extractText(message)?.trim();
+  if (!messageText) {
+    return false;
+  }
+  const startIndex = lastUserMessageIndex(historyMessages) + 1;
+  return historyMessages.slice(startIndex).some((historyMessage) => {
+    if (messageRole(historyMessage) !== "assistant") {
+      return false;
+    }
+    const historyText = extractText(historyMessage)?.trim();
+    return Boolean(
+      historyText && (historyText === messageText || historyText.startsWith(messageText)),
+    );
+  });
+}
+
+function hasOptimisticUserAfterSharedHistoryTail(
+  previousMessages: unknown[],
+  historyMessages: unknown[],
+): boolean {
+  if (previousMessages.length === 0 || historyMessages.length === 0) {
+    return false;
+  }
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
+  let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
+  for (let index = previousMessages.length - 1; index >= 0; index--) {
+    const signature = messageDisplaySignature(previousMessages[index]);
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
+      sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
+      break;
+    }
+  }
+  if (sharedPreviousIndex < 0 || sharedHistoryIndex < historyMessages.length - 1) {
+    return false;
+  }
+  return previousMessages
+    .slice(sharedPreviousIndex + 1)
+    .some(
+      (message) =>
+        messageRole(message) === "user" &&
+        isLocallyOptimisticHistoryMessage(message) &&
+        !shouldHideHistoryMessage(message),
+    );
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
@@ -331,6 +399,10 @@ function collectLateOptimisticTailMessages(
     return [];
   }
   const lateTail: unknown[] = [];
+  const hasOptimisticUserBeforeLateTail = hasOptimisticUserAfterSharedHistoryTail(
+    previousMessages,
+    historyMessages,
+  );
   for (const message of currentMessages.slice(previousMessages.length)) {
     if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
       return [];
@@ -339,7 +411,13 @@ function collectLateOptimisticTailMessages(
     if (!signature) {
       return [];
     }
-    if (historyHasSameOrNewerDisplayMessage(historyMessages, signature, message)) {
+    if (
+      historyHasSameOrNewerDisplayMessage(historyMessages, signature, message) ||
+      (messageRole(message) === "assistant" &&
+        !hasOptimisticUserBeforeLateTail &&
+        !lateTail.some((tailMessage) => messageRole(tailMessage) === "user") &&
+        currentHistoryTurnReplacesAssistantMessage(historyMessages, message))
+    ) {
       continue;
     }
     lateTail.push(message);
@@ -1338,13 +1416,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
-export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) {
-    return null;
-  }
-  if (!acceptChatEventFrame(state, payload)) {
-    return null;
-  }
+function handleChatEventInner(state: ChatState, payload: ChatEventPayload) {
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
@@ -1411,7 +1483,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage, {
+        replacementTexts: typeof state.chatStream === "string" ? [state.chatStream] : [],
+      });
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
@@ -1455,4 +1529,14 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
+}
+
+export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (!payload) {
+    return null;
+  }
+  if (!acceptChatEventFrame(state, payload)) {
+    return null;
+  }
+  return handleChatEventInner(state, payload);
 }
