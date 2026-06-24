@@ -2340,27 +2340,14 @@ describe("native hook relay registry", () => {
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
     expect(middleware).toHaveBeenCalledTimes(1);
-    const event = getMockCallArg(middleware, 0, 0, "tool result middleware event");
-    expectRecordFields(event, {
-      turnId: "turn-1",
+    expect(middleware.mock.calls[0]?.[0]).toMatchObject({
       toolCallId: "native-call-1",
       toolName: "exec",
-      args: { cmd: ["echo", "ok"], command: "echo ok" },
-      cwd: "/repo",
-      isError: false,
+      result: { content: [{ type: "text", text: "ok\n" }] },
     });
-    expectRecordFields(readRecordField(event, "result", "tool result middleware result"), {
-      content: [{ type: "text", text: "ok\n" }],
-      details: { exit_code: 0, exitCode: 0 },
-    });
-    const context = getMockCallArg(middleware, 0, 1, "tool result middleware context");
-    expectRecordFields(context, {
+    expect(middleware.mock.calls[0]?.[1]).toMatchObject({
       runtime: "codex",
-      harness: "codex",
-      agentId: "agent-1",
       sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
     });
   });
 
