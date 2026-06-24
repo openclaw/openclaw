@@ -1,6 +1,6 @@
 // Regression: upstream commit 7d1575b5df (#60310, 2026-04-04) introduced
 // activeJobIds + markCronJobActive/clearCronJobActive but only wired the pair
-// into runDueJob and executeJob. The manual-run path (cron.run() →
+// into the scheduled due-job path. The manual-run path (cron.run() →
 // prepareManualRun + finishPreparedManualRun in src/cron/service/ops.ts) was
 // left without the mark/clear pair, so task-registry.maintenance.ts
 // hasBackingSession (cron branch under isRuntimeAuthoritative()=true)
@@ -27,7 +27,7 @@ import {
   isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
-  resetCronActiveJobsForTests,
+  resetCronActiveJobs,
 } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import {
@@ -90,7 +90,7 @@ async function createManualRunHarness(jobId: string) {
 
 describe("cron activeJobIds — manual-run mark/clear", () => {
   beforeEach(() => {
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
   });
 
   afterEach(() => {
@@ -155,7 +155,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
 
-    resetCronActiveJobsForTests();
+    resetCronActiveJobs();
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
     expect(isCronJobActive("manual-main-cutoff")).toBe(false);

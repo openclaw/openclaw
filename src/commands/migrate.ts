@@ -41,7 +41,7 @@ import {
   resolveInteractiveMigrationPluginSelection,
   resolveInteractiveMigrationSkillSelection,
 } from "./migrate/selection.js";
-import { promptMigrationSelectionValues } from "./migrate/skill-selection-prompt.js";
+import { promptMigrationSkillSelectionValues } from "./migrate/skill-selection-prompt.js";
 import type {
   MigrateApplyOptions,
   MigrateCommonOptions,
@@ -177,7 +177,7 @@ async function promptCodexMigrationSkillSelection(
   if (skillItems.length === 0) {
     return plan;
   }
-  const selected = await promptMigrationSelectionValues({
+  const selected = await promptMigrationSkillSelectionValues({
     message: stylePromptMessage("Select Codex skills to migrate into this agent"),
     options: [
       {
@@ -238,7 +238,7 @@ async function promptCodexMigrationPluginSelection(
   if (pluginItems.length === 0) {
     return plan;
   }
-  const selected = await promptMigrationSelectionValues({
+  const selected = await promptMigrationSkillSelectionValues({
     message: stylePromptMessage("Select native Codex plugins to activate in this agent"),
     options: [
       {

@@ -44,11 +44,6 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
-/** True when current or recent inbound history may contain agent-turn attachments. */
-export function hasPotentialAgentTurnAttachments(ctx: MsgContext): boolean {
-  return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
-}
-
 /** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
@@ -152,15 +147,6 @@ export async function resolveAgentTurnAttachments(params: {
     }
   }
   return { attachments: results, recentHistoryImages: resolvedHistoryImages };
-}
-
-/** Resolves only the attachment payloads for callers that do not need history metadata. */
-export async function resolveAgentAttachments(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  runtime?: AgentTurnAttachmentRuntime;
-}): Promise<AgentTurnAttachment[]> {
-  return (await resolveAgentTurnAttachments(params)).attachments;
 }
 
 /** Converts inline image content into ACP attachment payloads. */

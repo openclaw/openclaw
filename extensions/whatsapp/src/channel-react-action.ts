@@ -244,5 +244,3 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     params.cfg,
   );
 }
-
-export const handleWhatsAppReactAction = handleWhatsAppMessageAction;

@@ -127,6 +127,7 @@ export function resolveCodexNativeExecutionBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   surface: string;
 }): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
@@ -199,12 +200,14 @@ function resolveCodexNativeNodeExecBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   surface: string;
 }): string | undefined {
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   const policy = resolveCodexNativeExecutionPolicy({
     config: params.config,
     sessionKey,
+    agentId: params.agentId,
     readRuntimeSessionEntry: Boolean(sessionKey),
   });
   if (policy.nativeToolSurfaceAllowed) {

@@ -1470,7 +1470,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
     expect(normalized).toContain("oauth (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");

@@ -21,7 +21,7 @@ type AgentSettingsManagerLike = {
 };
 
 /** Resolves the configured reserve-token floor for agent compaction. */
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
+function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
@@ -165,7 +165,7 @@ export function isSilentOverflowProneModel(model: {
  * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
  * the existing baseline.
  */
-export function shouldDisableAgentAutoCompaction(params: {
+function shouldDisableAgentAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;

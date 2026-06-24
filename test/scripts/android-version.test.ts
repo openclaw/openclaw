@@ -1,13 +1,17 @@
 // Android Version tests cover android version script behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canonicalAndroidVersionCode,
+  extractChangelogSection,
   normalizeGatewayVersionToPinnedAndroidVersion,
   normalizePinnedAndroidVersion,
+  renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
   resolveAndroidVersion,
   resolveGatewayVersionForAndroidRelease,
+  syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import {
   installAndroidFixtureCleanup,
@@ -17,6 +21,85 @@ import {
 installAndroidFixtureCleanup();
 
 describe("resolveAndroidVersion", () => {
+  it("rejects missing CLI option values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-version.ts", "--field"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --field.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-version.ts", "--field", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
+  });
+
+  it("prints selected fields from the CLI", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/android-version.ts",
+        "--root",
+        rootDir,
+        "--field",
+        "canonicalVersion",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.6.2\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing Android sync CLI root values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--root", "--check"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --root.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--root", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
+  });
+
   it("parses pinned release versions and Android version codes", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",
@@ -25,6 +108,11 @@ describe("resolveAndroidVersion", () => {
 
     expect(resolveAndroidVersion(rootDir)).toEqual({
       canonicalVersion: "2026.6.2",
+      changelogPath: path.join(rootDir, "apps/android/CHANGELOG.md"),
+      releaseNotesPath: path.join(
+        rootDir,
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      ),
       versionCode: 2026060201,
       versionFilePath: path.join(rootDir, "apps/android/version.json"),
       versionPropertiesPath: path.join(rootDir, "apps/android/Config/Version.properties"),
@@ -132,5 +220,86 @@ describe("renderAndroidVersionProperties", () => {
     expect(renderAndroidVersionProperties(version)).toContain(
       "OPENCLAW_ANDROID_VERSION_CODE=2026060201",
     );
+  });
+});
+
+describe("renderAndroidReleaseNotes", () => {
+  it("extracts exact pinned-version notes before Unreleased notes", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+      changelog: [
+        "# OpenClaw Android Changelog",
+        "",
+        "## Unreleased",
+        "",
+        "Future Android changes.",
+        "",
+        "## 2026.6.2 - 2026-06-02",
+        "",
+        "Pinned Android release notes.",
+        "",
+      ].join("\n"),
+    });
+    const version = resolveAndroidVersion(rootDir);
+
+    expect(
+      renderAndroidReleaseNotes(
+        version,
+        "# OpenClaw Android Changelog\n\n## Unreleased\n\nFuture Android changes.\n\n## 2026.6.2 - 2026-06-02\n\nPinned Android release notes.\n",
+      ),
+    ).toBe("Pinned Android release notes.\n");
+  });
+
+  it("falls back to Unreleased notes while iterating on a release train", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+    });
+    const version = resolveAndroidVersion(rootDir);
+
+    expect(
+      renderAndroidReleaseNotes(
+        version,
+        "# OpenClaw Android Changelog\n\n## Unreleased\n\nPending Android notes.\n",
+      ),
+    ).toBe("Pending Android notes.\n");
+  });
+
+  it("rejects changelogs without exact-version or Unreleased notes", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+    });
+    const version = resolveAndroidVersion(rootDir);
+
+    expect(() =>
+      renderAndroidReleaseNotes(
+        version,
+        "# OpenClaw Android Changelog\n\n## 2026.6.1\n\nOld notes.\n",
+      ),
+    ).toThrow("Unable to find Android changelog notes for 2026.6.2");
+  });
+
+  it("treats empty changelog sections as absent", () => {
+    expect(
+      extractChangelogSection("## Unreleased\n\n\n## 2026.6.2\n\nNotes.\n", "Unreleased"),
+    ).toBeNull();
+  });
+});
+
+describe("syncAndroidVersioning", () => {
+  it("syncs generated Gradle version properties and Fastlane release notes", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+      releaseNotes: "stale notes\n",
+      versionProperties: "stale version\n",
+    });
+
+    expect(syncAndroidVersioning({ mode: "write", rootDir }).updatedPaths).toEqual([
+      path.join(rootDir, "apps/android/Config/Version.properties"),
+      path.join(rootDir, "apps/android/fastlane/metadata/android/en-US/release_notes.txt"),
+    ]);
   });
 });

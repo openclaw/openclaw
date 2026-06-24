@@ -384,6 +384,37 @@ describe("renderApp assistant avatar routing", () => {
     );
   });
 
+  it("shows a retryable Workboard config error after config loading fails", async () => {
+    const request = vi.fn(async () => ({
+      config: {},
+      hash: "hash-reloaded",
+      issues: [],
+      raw: "{}",
+      valid: true,
+    }));
+    const state = createState({
+      tab: "workboard",
+      client: { request } as unknown as AppViewState["client"],
+      configLoading: false,
+      configSnapshot: null,
+      lastError: "config.get failed",
+    });
+    const container = document.createElement("div");
+
+    await vi.waitFor(() => {
+      render(renderApp(state), container);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
+    });
+
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.get", {});
+    });
+  });
+
   it("routes chat errors through the chat view instead of the shared header", () => {
     const container = document.createElement("div");
 
@@ -472,6 +503,29 @@ describe("renderApp assistant avatar routing", () => {
       | undefined;
     expect(tools?.profile).toBe("full");
     expect(tools?.exec?.security).toBe("full");
+  });
+
+  it("passes effective fast mode to Quick Settings", () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            effectiveFastMode: "auto",
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+
+    renderApp(state);
+
+    expect(quickSettingsProps.current?.fastMode).toBe("auto");
   });
 
   it("renders stale cron state containing a job without a payload", () => {

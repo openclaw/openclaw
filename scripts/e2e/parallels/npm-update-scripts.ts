@@ -71,7 +71,12 @@ function posixPrintLogTailFunction(): string {
 }`;
 }
 
-function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
+function posixAssertAgentOkScript(
+  command: string,
+  input: NpmUpdateScriptInput,
+  platform: Extract<Platform, "linux" | "macos">,
+  sessionId: string,
+) {
   return `${posixProviderOnlyPluginIsolationScript({
     fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
     modelId: input.auth.modelId,
@@ -84,7 +89,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --json >"$output_file" 2>&1
+  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
   rc=$?
   set -e
   print_log_tail "$output_file"
@@ -259,7 +264,7 @@ ${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "ma
 "$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
 "$OPENCLAW_BIN" config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript(macosOpenClawCommand, input, "parallels-npm-update-macos")}`;
+${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -403,7 +408,7 @@ ${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("openclaw", input, "parallels-npm-update-linux")}`;
+${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

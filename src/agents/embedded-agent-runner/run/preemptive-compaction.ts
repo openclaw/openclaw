@@ -224,19 +224,6 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
-/**
- * Backward-compatible alias for callers that still name this a pre-prompt estimate.
- *
- * @deprecated Use estimateLlmBoundaryTokenPressure.
- */
-export function estimatePrePromptTokens(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-}): number {
-  return estimateLlmBoundaryTokenPressure(params);
-}
-
 function normalizeLlmBoundaryTokenPressure(
   pressure: LlmBoundaryTokenPressure | undefined,
 ): LlmBoundaryTokenPressure | undefined {
@@ -274,14 +261,14 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   );
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimatePrePromptTokens({
+    estimateLlmBoundaryTokenPressure({
       messages: params.messages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
   let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,

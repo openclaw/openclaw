@@ -679,6 +679,7 @@ export async function runCliTurnCompactionLifecycle(params: {
         sessionKey: params.sessionKey,
         sessionStore: params.sessionStore,
         storePath: params.storePath,
+        expectedSessionId: params.sessionId,
       })) ?? params.sessionEntry
     );
   }
@@ -696,6 +697,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       tokensAfter: nativeCompactionResult?.result?.tokensAfter,
       newSessionId: nativeCompactionResult?.result?.sessionId,
       newSessionFile: nativeCompactionResult?.result?.sessionFile,
+      expectedSessionId: params.sessionId,
     })) ?? params.sessionEntry
   );
 }

@@ -455,8 +455,6 @@ function findInlineModelMatch(params: {
   );
 }
 
-export { buildInlineProviderModels };
-
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,

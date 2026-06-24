@@ -51,6 +51,14 @@ function messageEntry(params: {
   };
 }
 
+function mirroredTarget(sessionFile: string) {
+  return {
+    sessionFile,
+    sessionId: "codex-session",
+    sessionKey: "codex-session",
+  };
+}
+
 describe("readCodexMirroredSessionHistoryMessages", () => {
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
@@ -75,7 +83,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "root prompt" },
       { role: "assistant", content: "active answer" },
     ]);
@@ -93,7 +103,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toEqual([]);
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
   });
 
   it("keeps visible history when continuation rows use a disjoint append cursor", async () => {
@@ -125,7 +137,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
       { role: "assistant", content: "continued answer" },
     ]);
@@ -154,7 +168,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
       { role: "assistant", content: "continued answer" },
     ]);

@@ -59,6 +59,26 @@ describe("parsePluginReleaseArgs", () => {
     );
   });
 
+  it("rejects flags where option values are required", () => {
+    for (const { args, message } of [
+      { args: ["--plugins", "--base-ref"], message: "--plugins requires a value." },
+      {
+        args: ["--selection-mode", "--plugins"],
+        message: "--selection-mode requires a value.",
+      },
+      {
+        args: ["--base-ref", "--head-ref", "main"],
+        message: "--base-ref requires a value.",
+      },
+      {
+        args: ["--head-ref", "--base-ref", "main"],
+        message: "--head-ref requires a value.",
+      },
+    ]) {
+      expect(() => parsePluginReleaseArgs(args)).toThrowError(message);
+    }
+  });
+
   it("requires plugin names for selected explicit publish mode", () => {
     expect(() => parsePluginReleaseArgs(["--selection-mode", "selected"])).toThrowError(
       "`--selection-mode selected` requires `--plugins`.",
@@ -312,7 +332,7 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
 });
 
 describe("collectPublishablePluginPackages", () => {
-  it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+  it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
     const corePackageRuntimePluginIds = new Set(["discord"]);
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       files?: unknown;
@@ -322,6 +342,20 @@ describe("collectPublishablePluginPackages", () => {
       ...collectPublishablePluginPackages(),
       ...collectClawHubPublishablePluginPackages(),
     ];
+    for (const plugin of publishablePlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(join(plugin.packageDir, "package.json"), "utf8"),
+      ) as {
+        openclaw?: {
+          build?: {
+            bundledDist?: unknown;
+          };
+        };
+      };
+      if (packageJson.openclaw?.build?.bundledDist === true) {
+        corePackageRuntimePluginIds.add(plugin.extensionId);
+      }
+    }
     const missingExclusions = Array.from(
       new Set(
         publishablePlugins
