@@ -61,9 +61,24 @@ function chunkToken(token: string, maxChars: number): string[] {
   if (token.length <= maxChars) {
     return [token];
   }
+  // Advance by whole code points so a chunk boundary never lands inside a
+  // surrogate pair (e.g. an emoji). A naive `token.slice(i, i + maxChars)` over
+  // UTF-16 units can cut a pair in half, leaving lone surrogates that render as
+  // replacement glyphs. Behavior is unchanged for pure-ASCII/BMP tokens.
   const chunks: string[] = [];
-  for (let i = 0; i < token.length; i += maxChars) {
-    chunks.push(token.slice(i, i + maxChars));
+  let current = "";
+  let currentLen = 0;
+  for (const codePoint of token) {
+    if (currentLen + codePoint.length > maxChars && current !== "") {
+      chunks.push(current);
+      current = "";
+      currentLen = 0;
+    }
+    current += codePoint;
+    currentLen += codePoint.length;
+  }
+  if (current !== "") {
+    chunks.push(current);
   }
   return chunks;
 }

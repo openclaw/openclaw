@@ -376,6 +376,26 @@ describe("sanitizeRenderableText", () => {
     expectTokenWidthUnderLimit(input);
   });
 
+  it("chunks long emoji runs on code-point boundaries without splitting surrogate pairs", () => {
+    // A single non-whitespace run of 33 UTF-16 units: "a" + 16x U+1F600.
+    // The naive UTF-16 slice cut the 16th emoji in half, leaving a lone high
+    // surrogate at the end of chunk 0 and a lone low surrogate as chunk 1.
+    const input = `a${"\u{1F600}".repeat(16)}`;
+    const sanitized = sanitizeRenderableText(input);
+
+    // No lone surrogate halves survive once whole-emoji pairs are removed.
+    const withoutPairs = sanitized.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "");
+    expect(withoutPairs).not.toMatch(/[\uD800-\uDFFF]/);
+
+    // Every emoji code point is preserved (none turned into a replacement char).
+    expect(Array.from(sanitized).filter((cp) => cp === "\u{1F600}")).toHaveLength(16);
+    expect(sanitized).not.toContain("�");
+
+    // Still wrapped: the long run is broken into space-separated chunks.
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
   it("preserves long CJK prose without inserting display spaces", () => {
     const input =
       "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
