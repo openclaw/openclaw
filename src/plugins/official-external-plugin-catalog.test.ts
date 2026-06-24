@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import {
   type OfficialExternalPluginCatalogEntry,
+  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
   createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore,
   getOfficialExternalPluginCatalogEntry,
   isOfficialExternalPluginCatalogFeed,
@@ -487,7 +488,7 @@ describe("official external plugin catalog", () => {
           entries: [],
         }),
         metadata: {
-          url: "https://register.openclaw.ai/official-external-plugin-catalog.json",
+          url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
           status: 200,
           checksum: "sha256:not-current",
         },
