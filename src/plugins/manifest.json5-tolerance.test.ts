@@ -1,3 +1,4 @@
+// Covers JSON5 tolerance in plugin manifest parsing.
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -153,7 +154,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
   id: "openai",
   activation: {
     onStartup: false,
-    onProviders: ["openai", "", "openai-codex"],
+    onProviders: ["openai", "", "openai"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
@@ -177,7 +178,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
         onStartup: false,
-        onProviders: ["openai", "openai-codex"],
+        onProviders: ["openai", "openai"],
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],

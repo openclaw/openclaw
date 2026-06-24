@@ -1,3 +1,4 @@
+// Tests reply plumbing helpers that connect payloads, routes, and delivery modes.
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -192,6 +193,44 @@ describe("buildThreadingToolContext", () => {
 
     expect(result.currentChannelId).toBe("C1");
     expect(result.currentThreadTs).toBe("123.456");
+  });
+
+  it("lets plugin threading adapters suppress the generic message-id fallback", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "googlechat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "googlechat", label: "Google Chat" }),
+            threading: {
+              buildToolContext: ({ context }) => ({
+                currentChannelId: context.To?.replace(/^googlechat:/, ""),
+                currentMessageId: undefined,
+                currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
+              }),
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const sessionCtx = {
+      Provider: "googlechat",
+      To: "googlechat:spaces/AAA",
+      MessageSidFull: "spaces/AAA/messages/msg-1",
+      ReplyToId: "spaces/AAA/threads/short",
+      ReplyToIdFull: "spaces/AAA/threads/full",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: { channels: { googlechat: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("spaces/AAA");
+    expect(result.currentThreadTs).toBe("spaces/AAA/threads/full");
+    expect(result.currentMessageId).toBeUndefined();
   });
 });
 

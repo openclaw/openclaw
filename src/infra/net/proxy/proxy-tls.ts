@@ -1,7 +1,10 @@
+// Managed proxy TLS helpers resolve and load CA trust only for HTTPS forward
+// proxies that OpenClaw owns or inherited from a parent process.
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
+/** TLS trust material passed to proxy clients for OpenClaw-managed HTTPS proxies. */
 export type ManagedProxyTlsOptions = Readonly<{
   ca?: string;
 }>;
@@ -26,6 +29,7 @@ function isHttpsProxyUrl(value: string | undefined): boolean {
   }
 }
 
+/** Resolves the configured managed proxy CA file, with env/CLI override first. */
 export function resolveManagedProxyCaFile(params: {
   config?: ProxyConfig;
   caFileOverride?: string;
@@ -36,6 +40,7 @@ export function resolveManagedProxyCaFile(params: {
   );
 }
 
+/** Returns a CA file only for HTTPS proxy URLs; HTTP proxies do not need TLS trust. */
 export function resolveManagedProxyCaFileForUrl(params: {
   proxyUrl: string | undefined;
   config?: ProxyConfig;
@@ -50,6 +55,7 @@ export function resolveManagedProxyCaFileForUrl(params: {
   });
 }
 
+/** Loads managed proxy TLS options asynchronously for startup paths. */
 export async function loadManagedProxyTlsOptions(
   caFile: string | undefined,
 ): Promise<ManagedProxyTlsOptions | undefined> {
@@ -65,6 +71,7 @@ export async function loadManagedProxyTlsOptions(
   }
 }
 
+/** Loads managed proxy TLS options synchronously for inherited child-process routing. */
 export function loadManagedProxyTlsOptionsSync(
   caFile: string | undefined,
 ): ManagedProxyTlsOptions | undefined {

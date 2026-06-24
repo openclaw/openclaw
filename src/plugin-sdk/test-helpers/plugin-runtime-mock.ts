@@ -1,3 +1,4 @@
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
 import {
   normalizeInboundTextNewlines,
@@ -58,6 +59,7 @@ function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
     createManaged: vi.fn(),
+    tryCreateManaged: vi.fn(),
     get: vi.fn(),
     list: vi.fn(() => []),
     findLatest: vi.fn(),
@@ -188,6 +190,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       onRecordError: record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
+    await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
     const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -222,6 +225,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           onRecordError: params.record?.onRecordError ?? (() => undefined),
           trackSessionMetaTask: params.record?.trackSessionMetaTask,
         });
+        await params.afterRecord?.();
       } catch (err) {
         try {
           await params.onPreDispatchFailure?.(err);
@@ -764,6 +768,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: vi.fn(() => {
+        throw new Error("openSyncKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      openChannelIngressQueue: vi.fn(() => {
+        throw new Error("openChannelIngressQueue mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
     },
     tasks: {
       runs: {

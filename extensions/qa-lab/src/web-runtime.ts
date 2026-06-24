@@ -1,4 +1,6 @@
+// Qa Lab plugin module implements web runtime behavior.
 import { randomUUID } from "node:crypto";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 type QaWebSession = {
@@ -64,10 +66,7 @@ function appendDiagnostic(diagnostics: QaWebDiagnosticEntry[], entry: QaWebDiagn
 }
 
 function resolveTimeoutMs(timeoutMs: number | undefined, fallbackMs = DEFAULT_WEB_TIMEOUT_MS) {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return fallbackMs;
-  }
-  return Math.max(1, Math.floor(timeoutMs));
+  return resolvePositiveTimerTimeoutMs(timeoutMs, fallbackMs);
 }
 
 function resolveSession(pageId: string): QaWebSession {
@@ -172,14 +171,24 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
 export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): Promise<T> {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  return (await Promise.race([
-    session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
-      expression: params.expression,
-    }),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`web evaluate timed out after ${timeoutMs}ms`)), timeoutMs),
-    ),
-  ])) as T;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return (await Promise.race([
+      session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
+        expression: params.expression,
+      }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`web evaluate timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ])) as T;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<void> {
@@ -197,8 +206,4 @@ export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<vo
     await session.context.close().catch(() => {});
     await session.browser.close().catch(() => {});
   }
-}
-
-export async function closeAllQaWebSessions(): Promise<void> {
-  await closeQaWebSessions();
 }

@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
@@ -40,10 +41,12 @@ type SetupFlowChoice = WizardFlow | "import";
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 type ModelPickerModule = typeof import("../commands/model-picker.js");
+type OnboardConfigModule = typeof import("../commands/onboard-config.js");
 
 let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
+let onboardConfigModulePromise: Promise<OnboardConfigModule> | undefined;
 
 function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
   authChoiceModulePromise ??= import("../commands/auth-choice.js");
@@ -60,14 +63,20 @@ function loadModelPickerModule(): Promise<ModelPickerModule> {
   return modelPickerModulePromise;
 }
 
+function loadOnboardConfigModule(): Promise<OnboardConfigModule> {
+  onboardConfigModulePromise ??= import("../commands/onboard-config.js");
+  return onboardConfigModulePromise;
+}
+
 async function writeWizardConfigFile(
-  config: OpenClawConfig,
+  configInput: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
   } = {},
 ): Promise<OpenClawConfig> {
+  let config = configInput;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     const migrationBaseConfig = opts.migrationBaseConfig;
@@ -214,9 +223,10 @@ async function requireRiskAcknowledgement(params: {
 
 export async function runSetupWizard(
   opts: OnboardOptions,
-  runtime: RuntimeEnv | undefined,
+  runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  let runtime = runtimeInput;
   runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
@@ -236,10 +246,10 @@ export async function runSetupWizard(
   let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
-    opts: { allowConfigSizeDrop?: boolean } = {},
+    optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) =>
     await writeWizardConfigFile(config, {
-      ...opts,
+      ...optsLocal,
       migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
       onPendingPluginInstallMigration: () => {
         pendingPluginInstallMigrationBaseConfig = undefined;
@@ -605,7 +615,7 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
-    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
+    const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
@@ -614,7 +624,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);
@@ -634,7 +644,7 @@ export async function runSetupWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
-    await import("../commands/onboard-config.js");
+    await loadOnboardConfigModule();
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
@@ -718,6 +728,7 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: true,
+      preserveExistingDefaultModel: true,
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
@@ -858,7 +869,7 @@ export async function runSetupWizard(
   });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
-  const { launchedTui } = await finalizeSetupWizard({
+  await finalizeSetupWizard({
     flow: wizardFlow,
     opts,
     baseConfig,
@@ -868,7 +879,4 @@ export async function runSetupWizard(
     prompter,
     runtime,
   });
-  if (launchedTui) {
-    return;
-  }
 }

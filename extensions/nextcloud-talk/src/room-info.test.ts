@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover room info plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,20 +36,25 @@ function requireFirstFetchParams(): {
   return fetchParams as { auditContext?: string; url?: string };
 }
 
+function jsonResponse(payload: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+}
+
 describe("nextcloud talk room info", () => {
   it("resolves direct rooms from the room info endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
-      response: {
-        ok: true,
-        json: async () => ({
-          ocs: {
-            data: {
-              type: 1,
-            },
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: 1,
           },
-        }),
-      },
+        },
+      }),
       release,
     });
 
@@ -73,18 +79,42 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("normalizes signed decimal room type strings through the shared parser", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: "+01",
+          },
+        },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-direct-string",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-direct-string",
+      }),
+    ).resolves.toBe("direct");
+  });
+
   it("does not coerce partial room type strings", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
-      response: {
-        ok: true,
-        json: async () => ({
-          ocs: {
-            data: {
-              type: "1direct",
-            },
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: "1direct",
           },
-        }),
-      },
+        },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -105,16 +135,13 @@ describe("nextcloud talk room info", () => {
 
   it("does not classify negative room types as group rooms", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
-      response: {
-        ok: true,
-        json: async () => ({
-          ocs: {
-            data: {
-              type: -1,
-            },
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: -1,
           },
-        }),
-      },
+        },
+      }),
       release: vi.fn(async () => {}),
     });
 

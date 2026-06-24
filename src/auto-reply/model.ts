@@ -1,7 +1,9 @@
+// `/model` directive parser for auto-reply messages.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { escapeRegExp } from "../utils.js";
 
+/** Extract and remove a `/model` directive, including optional auth profile/runtime hints. */
 export function extractModelDirective(
   body?: string,
   options?: { aliases?: string[] },
@@ -50,6 +52,6 @@ export function extractModelDirective(
     rawModel,
     rawProfile,
     rawRuntime,
-    hasDirective: !!match,
+    hasDirective: Boolean(match),
   };
 }

@@ -1,3 +1,7 @@
+/**
+ * OpenClaw agent-tool definitions for Codex Supervisor endpoint and session
+ * controls.
+ */
 import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import {
@@ -13,6 +17,7 @@ const EmptyParamsSchema = Type.Object({}, { additionalProperties: false });
 const SessionsListParamsSchema = Type.Object(
   {
     include_stored: Type.Optional(Type.Boolean()),
+    max_stored_sessions: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
   },
   { additionalProperties: false },
 );
@@ -47,11 +52,13 @@ const SessionInterruptParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Policy flags controlling transcript reads and write operations. */
 export type CodexSupervisorToolPolicy = {
   allowRawTranscripts: boolean;
   allowWriteControls: boolean;
 };
 
+/** Dependencies needed to build OpenClaw agent tools. */
 export type CodexSupervisorToolOptions = {
   supervisor: CodexSupervisor;
   policy: CodexSupervisorToolPolicy;
@@ -65,6 +72,20 @@ function asRecord(params: unknown): Record<string, unknown> {
 
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
   return params[key] === true;
+}
+
+function readIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${key} must be an integer`);
+  }
+  if (value < 1 || value > 1000) {
+    throw new Error(`${key} must be between 1 and 1000`);
+  }
+  return value;
 }
 
 function readModeParam(params: Record<string, unknown>): CodexSupervisorTurnMode | undefined {
@@ -90,6 +111,10 @@ function requireWriteAccess(policy: CodexSupervisorToolPolicy): void {
   }
 }
 
+/**
+ * Creates the OpenClaw tools that expose Codex endpoint health and session
+ * controls.
+ */
 export function createCodexSupervisorTools({
   supervisor,
   policy,
@@ -122,6 +147,7 @@ export function createCodexSupervisorTools({
         const params = asRecord(rawParams);
         const result = await supervisor.listSessionSnapshot({
           includeStored: readBooleanParam(params, "include_stored"),
+          maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
@@ -135,6 +161,8 @@ export function createCodexSupervisorTools({
       description: "Read one Codex session transcript from app-server.",
       parameters: SessionReadParamsSchema,
       execute: async (_toolCallId, rawParams) => {
+        // Raw transcript access is opt-in because app-server sessions can hold
+        // secrets, private files, and user-authenticated browser context.
         requireRawTranscriptAccess(policy);
         const params = asRecord(rawParams);
         const threadId = readStringParam(params, "thread_id", { required: true });
@@ -156,6 +184,8 @@ export function createCodexSupervisorTools({
         "Send text to a Codex session. Idle sessions start a turn; active sessions are steered.",
       parameters: SessionSendParamsSchema,
       execute: async (_toolCallId, rawParams) => {
+        // Session write controls can steer or interrupt a human-visible Codex
+        // turn, so they remain behind an explicit plugin policy gate.
         requireWriteAccess(policy);
         const params = asRecord(rawParams);
         const result = await supervisor.sendToSession({

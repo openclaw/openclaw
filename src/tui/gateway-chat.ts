@@ -1,3 +1,4 @@
+// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -36,6 +37,8 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionMutationResult,
+  TuiChatSendResult,
 } from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
@@ -93,7 +96,13 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 export type GatewaySessionList = TuiSessionList;
@@ -182,14 +191,19 @@ export class GatewayChatClient implements TuiBackend {
     this.client.stop();
   }
 
+  async subscribeSessionEvents() {
+    return await this.client.request("sessions.subscribe", {});
+  }
+
   async waitForReady() {
     await this.readyPromise;
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     const runId = opts.runId ?? randomUUID();
-    await this.client.request("chat.send", {
+    const response = await this.client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
       sessionKey: opts.sessionKey,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
@@ -197,22 +211,26 @@ export class GatewayChatClient implements TuiBackend {
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
     });
-    return { runId };
+    const acceptedRunId = nonEmptyString(response?.runId) ?? runId;
+    const status = nonEmptyString(response?.status);
+    return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
   }
 
-  async abortChat(opts: { sessionKey: string; runId: string }) {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
     return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
       sessionKey: opts.sessionKey,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       runId: opts.runId,
     });
   }
 
-  async loadHistory(opts: { sessionKey: string; limit?: number }) {
+  async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const startedAt = Date.now();
     for (;;) {
       try {
         return await this.client.request("chat.history", {
           sessionKey: opts.sessionKey,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
           limit: opts.limit,
         });
       } catch (err) {
@@ -239,9 +257,14 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string, reason?: "new" | "reset") {
-    return await this.client.request("sessions.reset", {
+  async resetSession(
+    key: string,
+    reason?: "new" | "reset",
+    opts?: { agentId?: string },
+  ): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.reset", {
       key,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       ...(reason ? { reason } : {}),
     });
   }

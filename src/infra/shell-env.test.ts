@@ -1,7 +1,10 @@
+// Covers shell environment fallback loading.
 import fs from "node:fs";
 import os from "node:os";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearShellEnvAppliedKeys,
   getShellEnvAppliedKeys,
   getShellPathFromLoginShell,
   loadShellEnvFallback,
@@ -155,6 +158,32 @@ describe("shell env fallback", () => {
         OPENCLAW_SHELL_ENV_TIMEOUT_MS: "42abc",
       }),
     ).toBe(15000);
+    expect(
+      resolveShellEnvFallbackTimeoutMs({
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("caps oversized fallback exec timeouts before probing the login shell", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    let receivedTimeout: number | undefined;
+    const exec = vi.fn((_shell: string, _args: string[], options: { timeout?: number }) => {
+      receivedTimeout = options.timeout;
+      return Buffer.from("OPENAI_API_KEY=from-shell\0");
+    });
+
+    const res = loadShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(receivedTimeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("skips when already has all expected keys", () => {
@@ -366,6 +395,22 @@ describe("shell env fallback", () => {
       error: "boom",
     });
     expect(getShellEnvAppliedKeys()).toStrictEqual([]);
+  });
+
+  it("clears only discarded shell-applied keys", () => {
+    loadShellEnvFallback({
+      enabled: true,
+      env: {},
+      expectedKeys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+      exec: (() =>
+        Buffer.from(
+          "OPENAI_API_KEY=openai-shell\0ANTHROPIC_API_KEY=anthropic-shell\0",
+        )) as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+    });
+
+    clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);
+
+    expect(getShellEnvAppliedKeys()).toEqual(["ANTHROPIC_API_KEY"]);
   });
 
   it("resolves PATH via login shell and caches it", () => {

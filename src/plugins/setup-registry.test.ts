@@ -1,7 +1,8 @@
+// Verifies plugin setup registry discovery and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
@@ -206,6 +207,47 @@ afterEach(() => {
 });
 
 describe("setup-registry module loader", () => {
+  let windowsSourceTransformCase: {
+    expectedFilename: string;
+    filename: unknown;
+    options: Record<string, unknown>;
+  };
+
+  beforeAll(async () => {
+    resetRegistryJitiMocks();
+    vi.resetModules();
+    const module = await import("./setup-registry.js");
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    module.clearPluginSetupRegistryCache();
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
+
+    try {
+      withMockedWindowsPlatform(() => {
+        module.resolvePluginSetupRegistry({
+          workspaceDir: pluginRoot,
+          env: {},
+        });
+      });
+    } finally {
+      restoreVersions();
+    }
+
+    windowsSourceTransformCase = {
+      expectedFilename: pathToFileURL(path.join(pluginRoot, "setup-api.js"), {
+        windows: true,
+      }).href,
+      filename: mockArg(mocks.createJiti, 0, 0),
+      options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
+    };
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+  });
+
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -222,30 +264,8 @@ describe("setup-registry module loader", () => {
   });
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    const restoreVersions = forceNodeRuntimeVersionsForTest();
-
-    try {
-      withMockedWindowsPlatform(() => {
-        resolvePluginSetupRegistry({
-          workspaceDir: pluginRoot,
-          env: {},
-        });
-      });
-    } finally {
-      restoreVersions();
-    }
-
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mockArg(mocks.createJiti, 0, 0)).toBe(
-      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
-    );
-    expect(requireRecord(mockArg(mocks.createJiti, 0, 1)).tryNative).toBe(true);
+    expect(windowsSourceTransformCase.filename).toBe(windowsSourceTransformCase.expectedFilename);
+    expect(windowsSourceTransformCase.options.tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -452,6 +472,50 @@ describe("setup-registry module loader", () => {
     expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
+  });
+
+  it("uses provider auth aliases to route setup provider owner lookup", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          providerAuthAliases: { openai: "openai" },
+          setup: {
+            providers: [{ id: "openai" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: {
+              id: string;
+              aliases: string[];
+              label: string;
+              auth: [];
+            }) => void;
+          }) {
+            api.registerProvider({
+              id: "openai",
+              aliases: ["openai"],
+              label: "OpenAI",
+              auth: [],
+            });
+          },
+        },
+      });
+    });
+
+    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+    expect(provider.id).toBe("openai");
+    expect(provider.label).toBe("OpenAI");
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -866,5 +930,207 @@ describe("setup-registry module loader", () => {
     });
     expect(loadSetupModule).toHaveBeenCalledTimes(1);
     expect(registerSetup).toHaveBeenCalledTimes(7);
+  });
+
+  describe("result cache (ambient process.env)", () => {
+    function mockOpenAiProviderPlugin(): void {
+      mocks.loadPluginManifestRegistry.mockReturnValue({
+        plugins: [
+          {
+            id: "openai",
+            origin: "bundled",
+            rootDir: makeTempDir(),
+            setup: { providers: [{ id: "openai" }] },
+          },
+        ],
+        diagnostics: [],
+      });
+    }
+
+    it("memoizes no-config resolutions without rescanning manifests", () => {
+      mockOpenAiProviderPlugin();
+      mocks.loadPluginManifestRegistry.mockClear();
+      const first = resolvePluginSetupRegistry();
+      const second = resolvePluginSetupRegistry();
+      expect(second).toEqual(first);
+      expect(second).not.toBe(first);
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    });
+
+    it("recomputes after clearPluginSetupRegistryCache (reset contract)", () => {
+      mockOpenAiProviderPlugin();
+      mocks.loadPluginManifestRegistry.mockClear();
+      const first = resolvePluginSetupRegistry();
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+      clearPluginSetupRegistryCache();
+      // A hit also returns a fresh clone; only the loader call count proves invalidation.
+      const second = resolvePluginSetupRegistry();
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+      expect(second).toEqual(first);
+    });
+
+    it("recomputes after clearPluginMetadataLifecycleCaches (install/reload/doctor)", async () => {
+      const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+      mockOpenAiProviderPlugin();
+      mocks.loadPluginManifestRegistry.mockClear();
+      const first = resolvePluginSetupRegistry();
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+      clearPluginMetadataLifecycleCaches();
+      const second = resolvePluginSetupRegistry();
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+      expect(second).toEqual(first);
+    });
+
+    it("keys distinct plugin-id scopes without collision", () => {
+      mockOpenAiProviderPlugin();
+      const all = resolvePluginSetupRegistry();
+      const scoped = resolvePluginSetupRegistry({ pluginIds: ["__no_such_plugin__"] });
+      expect(scoped).not.toBe(all);
+      expect(scoped.providers).toStrictEqual([]);
+      const scopedAgain = resolvePluginSetupRegistry({ pluginIds: ["__no_such_plugin__"] });
+      expect(scopedAgain).toEqual(scoped);
+      expect(scopedAgain).not.toBe(scoped);
+    });
+
+    it("does not let returned entries mutate cached setup results", () => {
+      const pluginRoot = makeTempDir();
+      writeSetupApiStub(pluginRoot);
+      mocks.loadPluginManifestRegistry.mockReturnValue({
+        plugins: [
+          {
+            id: "openai",
+            origin: "bundled",
+            rootDir: pluginRoot,
+            setup: {
+              providers: [{ id: "openai" }],
+              cliBackends: ["codex-cli"],
+              requiresRuntime: true,
+            },
+          },
+        ],
+        diagnostics: [],
+      });
+      mocks.createJiti.mockImplementation(() => {
+        return () => ({
+          default: {
+            register(api: {
+              registerProvider: (provider: {
+                id: string;
+                label: string;
+                aliases: string[];
+                auth: [];
+              }) => void;
+              registerCliBackend: (backend: {
+                id: string;
+                config: { command: string; args: string[] };
+              }) => void;
+            }) {
+              api.registerProvider({
+                id: "openai",
+                label: "OpenAI",
+                aliases: ["openai"],
+                auth: [],
+              });
+              api.registerCliBackend({
+                id: "codex-cli",
+                config: { command: "codex", args: ["run"] },
+              });
+            },
+          },
+        });
+      });
+
+      const first = resolvePluginSetupRegistry();
+      const firstProvider = first.providers[0]?.provider;
+      const firstBackend = first.cliBackends[0]?.backend;
+      if (!firstProvider || !firstBackend) {
+        throw new Error("Expected setup provider and CLI backend");
+      }
+      firstProvider.label = "Mutated";
+      firstProvider.aliases?.push("mutated");
+      const firstBackendConfig = firstBackend.config as { command: string; args: string[] };
+      firstBackendConfig.command = "mutated";
+      firstBackendConfig.args.push("mutated");
+
+      const second = resolvePluginSetupRegistry();
+      expect(second.providers[0]?.provider).toMatchObject({
+        id: "openai",
+        label: "OpenAI",
+        aliases: ["openai"],
+      });
+      expect(second.cliBackends[0]?.backend.config).toMatchObject({
+        command: "codex",
+        args: ["run"],
+      });
+
+      second.providers[0]?.provider.aliases?.push("mutated-again");
+      const secondBackendConfig = second.cliBackends[0]?.backend.config as {
+        command: string;
+        args: string[];
+      };
+      secondBackendConfig.args.push("mutated-again");
+
+      const third = resolvePluginSetupRegistry();
+      expect(third.providers[0]?.provider.aliases).toEqual(["openai"]);
+      expect(third.cliBackends[0]?.backend.config).toMatchObject({
+        command: "codex",
+        args: ["run"],
+      });
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    });
+
+    it("keys ambient entries by discovery environment", () => {
+      const firstRoot = makeTempDir();
+      const secondRoot = makeTempDir();
+      writeSetupApiStub(firstRoot);
+      writeSetupApiStub(secondRoot);
+      mocks.loadPluginManifestRegistry.mockImplementation(
+        (params?: { env?: NodeJS.ProcessEnv }) => {
+          const id = params?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR === secondRoot ? "second" : "first";
+          return {
+            plugins: [
+              {
+                id,
+                origin: "bundled",
+                rootDir: id === "second" ? secondRoot : firstRoot,
+                setup: { providers: [{ id }] },
+              },
+            ],
+            diagnostics: [],
+          };
+        },
+      );
+      mocks.createJiti.mockImplementation((modulePath: string) => {
+        const id = modulePath.includes(secondRoot) ? "second" : "first";
+        return () => ({
+          default: {
+            register(api: {
+              registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+            }) {
+              api.registerProvider({ id, label: id, auth: [] });
+            },
+          },
+        });
+      });
+      const previousBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+      try {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = firstRoot;
+        expect(resolvePluginSetupRegistry().providers.map((entry) => entry.provider.id)).toEqual([
+          "first",
+        ]);
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = secondRoot;
+        expect(resolvePluginSetupRegistry().providers.map((entry) => entry.provider.id)).toEqual([
+          "second",
+        ]);
+      } finally {
+        if (previousBundledDir === undefined) {
+          delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        } else {
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledDir;
+        }
+      }
+      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -1,11 +1,12 @@
+// Assembles the canonical Zod schema for OpenClaw config parsing.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -70,6 +71,11 @@ const GatewayRemoteSchemaShape = {
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
 
+const TailscaleServiceNameSchema = z.string().regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
+  message:
+    'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
+});
+
 const LegacyCanvasHostSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -95,6 +101,32 @@ const SecuritySchema = z
               })
               .strict(),
           )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    installPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        targets: z
+          .array(z.union([z.literal("skill"), z.literal("plugin")]))
+          .min(1)
+          .optional(),
+        exec: z
+          .object({
+            source: z.literal("exec"),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional(),
+            timeoutMs: z.number().int().min(1).optional(),
+            noOutputTimeoutMs: z.number().int().min(1).optional(),
+            maxOutputBytes: z.number().int().min(1).optional(),
+            env: z.record(z.string(), z.string().register(sensitive)).optional(),
+            passEnv: z.array(z.string()).optional(),
+            trustedDirs: z.array(z.string()).optional(),
+            allowInsecurePath: z.boolean().optional(),
+            allowSymlinkCommand: z.boolean().optional(),
+          })
+          .strict()
           .optional(),
       })
       .strict()
@@ -188,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -214,6 +247,14 @@ const HttpUrlSchema = z
     const protocol = new URL(value).protocol;
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
+
+const McpOAuthClientMetadataUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname !== "/";
+  }, "Expected https:// URL with a non-root pathname");
 
 const ResponsesEndpointUrlFetchShape = {
   allowUrl: z.boolean().optional(),
@@ -344,18 +385,50 @@ const TalkSchema = z
 
 const McpServerSchema = z
   .object({
+    enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
-    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
+    transport: z
+      .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
+      .optional(),
     headers: z
       .record(
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
+      .optional(),
+    connectionTimeoutMs: z.number().finite().positive().optional(),
+    connectTimeout: z.number().finite().positive().optional(),
+    connect_timeout: z.number().finite().positive().optional(),
+    requestTimeoutMs: z.number().finite().positive().optional(),
+    timeout: z.number().finite().positive().optional(),
+    supportsParallelToolCalls: z.boolean().optional(),
+    supports_parallel_tool_calls: z.boolean().optional(),
+    auth: z.literal("oauth").optional(),
+    oauth: z
+      .object({
+        scope: z.string().trim().min(1).optional(),
+        redirectUrl: HttpUrlSchema.optional(),
+        clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    sslVerify: z.boolean().optional(),
+    ssl_verify: z.boolean().optional(),
+    clientCert: z.string().optional(),
+    client_cert: z.string().optional(),
+    clientKey: z.string().optional(),
+    client_key: z.string().optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
       .optional(),
     codex: z
       .object({
@@ -373,6 +446,19 @@ const McpServerSchema = z
       })
       .strict()
       .optional(),
+  })
+  .superRefine((data, ctx) => {
+    // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
+    if (
+      data.transport === "stdio" &&
+      (typeof data.command !== "string" || data.command.trim().length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '"stdio" transport requires a non-empty command',
+        path: ["transport"],
+      });
+    }
   })
   .catchall(z.unknown());
 
@@ -476,6 +562,9 @@ export const OpenClawSchema = z
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),
+            logsExporter: z
+              .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
+              .optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
             captureContent: z
@@ -632,6 +721,17 @@ export const OpenClawSchema = z
           .object({
             name: z.string().max(50).optional(),
             avatar: z.string().max(2_000_000).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    tui: z
+      .object({
+        footer: z
+          .object({
+            showRemoteHost: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -990,12 +1090,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        webchat: z
-          .object({
-            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
-          })
-          .strict()
-          .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
@@ -1004,6 +1098,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            serviceName: TailscaleServiceNameSchema.optional(),
             preserveFunnel: z.boolean().optional(),
           })
           .strict()
@@ -1028,8 +1123,18 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
-            certPath: z.string().optional(),
-            keyPath: z.string().optional(),
+            // Reject blank values without transforming the string. Trimming here would
+            // silently rewrite a legitimate filesystem path that contains leading or
+            // trailing spaces and persist the trimmed value into validated config;
+            // runtime path resolution (resolveUserPath) owns all normalization.
+            certPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "certPath must not be blank"),
+            keyPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
             caPath: z.string().optional(),
           })
           .optional(),
@@ -1181,6 +1286,21 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            allowSymlinkTargetWrites: z.boolean().optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
           })
           .strict()
           .optional(),

@@ -1,3 +1,5 @@
+// Subagent announce format e2e tests exercise the full announce flow with
+// channel fixtures, session stores, hooks, and gateway calls wired together.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -24,7 +26,6 @@ import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -80,6 +81,8 @@ function expectInputProvenance(
   params: Record<string, unknown> | undefined,
   sourceSessionKey: string,
 ) {
+  // Announce handoffs are inter-session messages; provenance lets the receiver
+  // distinguish child-output delivery from ordinary user input.
   const inputProvenance = params?.inputProvenance;
   if (!inputProvenance || typeof inputProvenance !== "object") {
     throw new Error("Expected input provenance");
@@ -127,7 +130,6 @@ const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
-const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
 const isEmbeddedAgentRunActiveSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive");
 const isEmbeddedAgentRunStreamingSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunStreaming");
 const queueEmbeddedAgentMessageWithOutcomeSpy = vi.spyOn(
@@ -181,8 +183,10 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
-  async (eventValue?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
-    undefined,
+  async (
+    _eventValue?: unknown,
+    _ctx?: unknown,
+  ): Promise<SubagentDeliveryTargetResult | undefined> => undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
 const hookHasHooksMock = vi.fn<HookRunner["hasHooks"]>(
@@ -216,6 +220,8 @@ const defaultOutcomeAnnounce = {
 };
 
 const announceFormatChannelPlugins = [
+  // Channel fixtures intentionally mix plain channels with Slack-style thread
+  // target resolution so formatting covers direct and threaded destinations.
   {
     pluginId: "discord",
     plugin: createChannelTestPluginBase({ id: "discord", label: "Discord" }),
@@ -417,9 +423,6 @@ describe("subagent announce formatting", () => {
       .mockImplementation(
         () => hookRunnerMock as unknown as ReturnType<typeof hookRunnerGlobal.getGlobalHookRunner>,
       );
-    readLatestAssistantReplySpy
-      .mockReset()
-      .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
     isEmbeddedAgentRunActiveSpy
       .mockReset()
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedAgentRunActive(sessionId));

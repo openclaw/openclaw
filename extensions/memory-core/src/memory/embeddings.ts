@@ -1,3 +1,4 @@
+// Memory Core plugin module implements embeddings behavior.
 import {
   getEmbeddingProvider,
   type EmbeddingProviderAdapter,
@@ -34,6 +35,18 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
+
+function createMissingLlamaCppProviderError(): Error {
+  return new Error(
+    [
+      "Unknown memory embedding provider: local.",
+      "Local GGUF embeddings are provided by the official llama.cpp provider plugin.",
+      "Install it with: openclaw plugins install @openclaw/llama-cpp-provider",
+      "Then restart OpenClaw and retry: openclaw memory status --deep",
+    ].join("\n"),
+  );
+}
 
 function adaptGenericEmbeddingProvider(
   provider: GenericEmbeddingProvider,
@@ -72,6 +85,9 @@ function adaptGenericRuntime(
   return {
     id: runtime.id,
     ...(runtime.cacheKeyData ? { cacheKeyData: runtime.cacheKeyData } : {}),
+    ...(runtime.indexIdentityAliases?.length
+      ? { indexIdentityAliases: runtime.indexIdentityAliases }
+      : {}),
     ...(typeof runtime.inlineQueryTimeoutMs === "number"
       ? { inlineQueryTimeoutMs: runtime.inlineQueryTimeoutMs }
       : {}),
@@ -84,12 +100,24 @@ function adaptGenericRuntime(
 function adaptGenericEmbeddingAdapter(
   adapter: EmbeddingProviderAdapter,
 ): MemoryEmbeddingProviderAdapter {
+  const resolveIndexIdentity = adapter.resolveIndexIdentity;
   return {
     id: adapter.id,
     ...(adapter.defaultModel ? { defaultModel: adapter.defaultModel } : {}),
     ...(adapter.transport ? { transport: adapter.transport } : {}),
     ...(adapter.authProviderId ? { authProviderId: adapter.authProviderId } : {}),
     ...(adapter.formatSetupError ? { formatSetupError: adapter.formatSetupError } : {}),
+    ...(resolveIndexIdentity
+      ? {
+          resolveIndexIdentity: (options: MemoryEmbeddingProviderCreateOptions) =>
+            resolveIndexIdentity({
+              ...options,
+              ...(typeof options.outputDimensionality === "number"
+                ? { dimensions: options.outputDimensionality }
+                : {}),
+            }),
+        }
+      : {}),
     create: async (options) => {
       const result = await adapter.create({
         ...options,
@@ -121,6 +149,9 @@ function getAdapter(
   if (genericAdapter) {
     return adaptGenericEmbeddingAdapter(genericAdapter);
   }
+  if (id === LOCAL_LLAMA_CPP_PROVIDER_ID) {
+    throw createMissingLlamaCppProviderError();
+  }
   throw new Error(`Unknown memory embedding provider: ${id}`);
 }
 
@@ -144,6 +175,51 @@ export function resolveEmbeddingProviderFallbackModel(
     getLegacyMemoryEmbeddingProvider(providerId, config) ??
     getEmbeddingProvider(providerId, config);
   return adapter?.defaultModel ?? fallbackSourceModel;
+}
+
+export function resolveEmbeddingProviderAdapterId(
+  providerId: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): string | undefined {
+  try {
+    return getAdapter(providerId, config).id;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveEmbeddingProviderAdapterTransport(
+  providerId: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): MemoryEmbeddingProviderAdapter["transport"] {
+  try {
+    return getAdapter(providerId, config).transport;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingProviderOptions) {
+  const provider =
+    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+  try {
+    const adapter = getAdapter(provider, options.config);
+    const model = resolveProviderModel(adapter, options.model);
+    const identity = adapter.resolveIndexIdentity?.({
+      ...options,
+      provider,
+      model,
+    });
+    return identity
+      ? {
+          provider: { id: adapter.id, model: identity.model },
+          cacheKeyData: identity.cacheKeyData,
+          aliases: identity.aliases,
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function createWithAdapter(

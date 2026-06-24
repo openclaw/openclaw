@@ -1,3 +1,4 @@
+// Post-install migration helpers guide users through setup after package install.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +34,20 @@ type ResolvedProviderCandidate = {
   source?: string;
 };
 
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
+
 async function resolveCandidates(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -49,8 +64,8 @@ async function resolveCandidates(params: {
   ] = await Promise.all([
     import("../plugins/migration-provider-runtime.js"),
     import("../plugins/manifest-contract-runtime.js"),
-    import("../commands/migrate/context.js"),
-    import("../config/paths.js"),
+    loadMigrationContextModule(),
+    loadConfigPathsModule(),
   ]);
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const installedIds = new Set(params.installedPluginIds);
@@ -169,7 +184,7 @@ export async function offerPostInstallMigrations(
       continue;
     }
     const description = describeCandidate(candidate);
-    let accepted = false;
+    let accepted;
     try {
       accepted = await prompter.confirm({
         message: `Migrate ${description} into this agent now?`,
@@ -194,8 +209,8 @@ export async function offerPostInstallMigrations(
       const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
         await Promise.all([
           import("../commands/migrate.js"),
-          import("../commands/migrate/context.js"),
-          import("../config/paths.js"),
+          loadMigrationContextModule(),
+          loadConfigPathsModule(),
         ]);
       preparation = await candidate.provider.prepareApply?.({
         config: nextConfig,

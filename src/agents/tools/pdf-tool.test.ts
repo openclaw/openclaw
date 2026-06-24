@@ -1,3 +1,5 @@
+// PDF tool tests cover model discovery, input validation, managed inbound refs,
+// native document providers, extraction fallback, and model-facing schema.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import * as modelDiscovery from "../agent-model-discovery.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
@@ -36,7 +39,7 @@ async function loadCreatePdfTool() {
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
-const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
+const CODEX_PDF_MODEL = "openai/gpt-5.4";
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -116,6 +119,8 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
+  // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
+  // remote media loading are replaced with narrow spies at the module boundary.
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
   if (params?.mockLoad !== false) {
     loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
@@ -132,8 +137,8 @@ async function stubPdfToolInfra(
             provider: params?.provider ?? "anthropic",
             api:
               params?.api ??
-              (params?.provider === "openai-codex"
-                ? "openai-codex-responses"
+              (params?.provider === "openai"
+                ? "openai-chatgpt-responses"
                 : params?.provider === "openai"
                   ? "openai-responses"
                   : "anthropic-messages"),
@@ -156,15 +161,18 @@ async function stubPdfToolInfra(
 async function withManagedInboundPdf(
   run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
 ) {
+  // Managed inbound PDFs live under state and may be addressed by claim-check
+  // IDs or absolute paths even when workspace-only policy is active.
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-managed-inbound-"));
   const inboundDir = path.join(stateDir, "media", "inbound");
   const mediaId = "claim-check-test.pdf";
   const mediaPath = path.join(inboundDir, mediaId);
   await fs.mkdir(inboundDir, { recursive: true });
   await fs.writeFile(mediaPath, FAKE_PDF_MEDIA.buffer);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   try {
-    await run({ stateDir, mediaId, mediaPath });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await run({ stateDir, mediaId, mediaPath });
+    });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
@@ -180,7 +188,6 @@ describe("createPdfTool", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     global.fetch = priorFetch;
   });
 
@@ -483,6 +490,8 @@ describe("createPdfTool", () => {
   });
 
   it("uses native PDF path without eager extraction", async () => {
+    // Document-capable providers receive the PDF bytes directly; extraction is
+    // reserved for text-only model paths.
     await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = path.join(agentDir, "workspace");
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
@@ -557,7 +566,11 @@ describe("createPdfTool", () => {
 
   it("uses extraction fallback for non-native models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text"],
+      });
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
@@ -641,8 +654,8 @@ describe("createPdfTool", () => {
   it("adds Codex instructions for PDF extraction fallback requests", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text", "image"],
       });
 
@@ -678,8 +691,8 @@ describe("createPdfTool", () => {
   it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text"],
       });
 

@@ -1,3 +1,4 @@
+// Model set tests cover persisting default model/provider selections.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   repairCodexRuntimePluginInstallForModelSelection: vi.fn(),
+  repairCopilotRuntimePluginInstallForModelSelection: vi.fn(),
   replaceConfigFile: vi.fn(),
 }));
 
@@ -24,6 +26,11 @@ vi.mock("../codex-runtime-plugin-install.js", () => ({
     mocks.repairCodexRuntimePluginInstallForModelSelection(...args),
 }));
 
+vi.mock("../copilot-runtime-plugin-install.js", () => ({
+  repairCopilotRuntimePluginInstallForModelSelection: (...args: unknown[]) =>
+    mocks.repairCopilotRuntimePluginInstallForModelSelection(...args),
+}));
+
 import { modelsSetCommand } from "./set.js";
 
 function makeRuntime(): RuntimeEnv {
@@ -39,6 +46,7 @@ describe("modelsSetCommand", () => {
     vi.clearAllMocks();
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.repairCodexRuntimePluginInstallForModelSelection.mockResolvedValue({ warnings: [] });
+    mocks.repairCopilotRuntimePluginInstallForModelSelection.mockResolvedValue({ warnings: [] });
   });
 
   afterEach(() => {
@@ -88,6 +96,10 @@ describe("modelsSetCommand", () => {
       cfg: replaceParams?.nextConfig,
       model: "anthropic/claude-sonnet-4-6",
     });
+    expect(mocks.repairCopilotRuntimePluginInstallForModelSelection).toHaveBeenCalledWith({
+      cfg: replaceParams?.nextConfig,
+      model: "anthropic/claude-sonnet-4-6",
+    });
     expect(runtime.log).toHaveBeenCalledWith("Default model: anthropic/claude-sonnet-4-6");
   });
 
@@ -134,6 +146,10 @@ describe("modelsSetCommand", () => {
       cfg: replaceParams?.nextConfig,
       model: "openai/gpt-5.5",
     });
+    expect(mocks.repairCopilotRuntimePluginInstallForModelSelection).toHaveBeenCalledWith({
+      cfg: replaceParams?.nextConfig,
+      model: "openai/gpt-5.5",
+    });
     expect(runtime.log).toHaveBeenCalledWith("Default model: openai/gpt-5.5");
   });
 
@@ -167,6 +183,10 @@ describe("modelsSetCommand", () => {
       "zai/glm-4.7": {},
     });
     expect(mocks.repairCodexRuntimePluginInstallForModelSelection).toHaveBeenCalledWith({
+      cfg: replaceParams?.nextConfig,
+      model: "zai/glm-4.7",
+    });
+    expect(mocks.repairCopilotRuntimePluginInstallForModelSelection).toHaveBeenCalledWith({
       cfg: replaceParams?.nextConfig,
       model: "zai/glm-4.7",
     });

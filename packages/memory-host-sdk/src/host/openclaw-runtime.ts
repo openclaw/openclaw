@@ -42,6 +42,8 @@ export { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 export { withProgress, withProgressTotals } from "../../../../src/cli/progress.js";
 export { parseNonNegativeByteSize } from "../../../../src/config/byte-size.js";
 export {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
   getRuntimeConfig,
   /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
   loadConfig,
@@ -54,7 +56,14 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
+export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export {
+  listSessionEntries,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "../../../../src/plugin-sdk/session-store-runtime.js";
+export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,
@@ -80,10 +89,13 @@ export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+  DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
   DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
+  configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
 } from "../../../../src/infra/sqlite-wal.js";
 export type {
+  SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
 } from "../../../../src/infra/sqlite-wal.js";
@@ -94,7 +106,7 @@ export {
 export type { ProcessWarning } from "../../../../src/infra/warning-filter.js";
 export { redactSensitiveText } from "../../../../src/logging/redact.js";
 export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-export { detectMime } from "../../../../src/media/mime.js";
+export { detectMime } from "@openclaw/media-core/mime";
 
 // Memory plugin helpers.
 export {
@@ -140,8 +152,8 @@ export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { formatDocsLink } from "../../../../src/terminal/links.js";
-export { colorize, isRich, theme } from "../../../../src/terminal/theme.js";
+export { formatDocsLink } from "../../../terminal-core/src/links.js";
+export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
 export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";

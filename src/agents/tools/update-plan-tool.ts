@@ -1,3 +1,8 @@
+/**
+ * update_plan built-in tool.
+ *
+ * Validates structured model work plans and stores them in tool details for UI/transcript consumers.
+ */
 import { Type } from "typebox";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -68,11 +73,13 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
 
   const inProgressCount = steps.filter((entry) => entry.status === "in_progress").length;
   if (inProgressCount > 1) {
+    // Multiple in-progress steps make progress state ambiguous for UI and transcript consumers.
     throw new ToolInputError("plan can contain at most one in_progress step");
   }
   return steps;
 }
 
+/** Creates the update_plan tool used by agent runtimes that expose progress planning. */
 export function createUpdatePlanTool(): AnyAgentTool {
   return {
     label: "Update Plan",

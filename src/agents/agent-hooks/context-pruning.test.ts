@@ -1,3 +1,4 @@
+/** Tests context-pruning extension settings, runtime registry, and message pruning. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";
@@ -149,7 +150,7 @@ function createContextHandler(): ContextHandler {
         handler = fn as ContextHandler;
       }
     },
-    appendEntry: (_type: string, dataValue?: unknown) => {},
+    appendEntry: (_type: string, _dataValue?: unknown) => {},
   } as unknown as ExtensionAPI;
 
   contextPruningExtension(api);
@@ -259,7 +260,7 @@ describe("context-pruning", () => {
 
     const next = pruneWithAggressiveDefaults(messages, {
       keepLastAssistants: 1,
-      softTrimRatio: 10.0,
+      softTrimRatio: 10,
       softTrim: DEFAULT_CONTEXT_PRUNING_SETTINGS.softTrim,
     });
 
@@ -399,7 +400,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       hardClear: { enabled: false, placeholder: "[cleared]" },
       softTrim: { maxChars: 200, headChars: 100, tailChars: 100 },
     });
@@ -427,7 +428,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       softTrim: { maxChars: 5, headChars: 7, tailChars: 3 },
     });
 
@@ -448,7 +449,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       softTrim: { maxChars: 10, headChars: 6, tailChars: 6 },
     });
 

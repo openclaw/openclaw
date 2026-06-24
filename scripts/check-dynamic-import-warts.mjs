@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Advises on ineffective or suspicious dynamic import patterns.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -40,6 +41,19 @@ function isTypeOnlyImportDeclaration(node) {
   );
 }
 
+function isTypeOnlyExportDeclaration(node) {
+  if (node.isTypeOnly === true) {
+    return true;
+  }
+  const clause = node.exportClause;
+  return (
+    Boolean(clause) &&
+    ts.isNamedExports(clause) &&
+    clause.elements.length > 0 &&
+    clause.elements.every((element) => element.isTypeOnly)
+  );
+}
+
 function readDeclarationName(node) {
   if (
     (ts.isFunctionDeclaration(node) ||
@@ -77,6 +91,9 @@ function isIgnoredTestHelperPath(filePath) {
   );
 }
 
+/**
+ * Finds dynamic import advisories in a single source file.
+ */
 export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const staticRuntimeImports = new Map();
@@ -100,6 +117,15 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
       ts.isImportDeclaration(node) &&
       ts.isStringLiteral(node.moduleSpecifier) &&
       !isTypeOnlyImportDeclaration(node)
+    ) {
+      addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
+    }
+
+    if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      !isTypeOnlyExportDeclaration(node)
     ) {
       addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
     }
@@ -149,6 +175,9 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   return advisories;
 }
 
+/**
+ * Collects dynamic import advisories across configured source roots.
+ */
 export async function collectDynamicImportAdvisories(options = {}) {
   const roots = options.roots ?? defaultRoots;
   const files = await collectTypeScriptFilesFromRoots(roots, {
@@ -173,6 +202,9 @@ export async function collectDynamicImportAdvisories(options = {}) {
   return advisories;
 }
 
+/**
+ * Runs the dynamic import advisory check.
+ */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
   const json = argv.includes("--json");

@@ -1,3 +1,4 @@
+// Mcp Channels Docker Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import {
   assert,
@@ -11,6 +12,10 @@ import {
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
+import {
+  connectMcpClientWithPairingReconnect,
+  createMcpClientTempState,
+} from "./mcp-client-temp-state.ts";
 
 function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
   return (rows ?? []).map((entry) => ({
@@ -92,6 +97,7 @@ async function main() {
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
   let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
+  const mcpTempState = createMcpClientTempState({ gatewayToken });
 
   try {
     const gatewayConversation = await waitForGatewaySeededConversation(gateway);
@@ -105,20 +111,17 @@ async function main() {
       "expected seeded gateway deliveryContext target",
     );
 
-    mcpHandle = await connectMcpClient({
-      gatewayUrl,
-      gatewayToken,
+    mcpHandle = await connectMcpClientWithPairingReconnect({
+      tempState: mcpTempState,
+      connect: (tempState) =>
+        connectMcpClient({
+          gatewayUrl,
+          gatewayToken,
+          tempState,
+        }),
+      maybeApprovePairing: () => maybeApprovePendingBridgePairing(gateway),
     });
-    let mcp = mcpHandle.client;
-
-    if (await maybeApprovePendingBridgePairing(gateway)) {
-      await Promise.allSettled([mcp.close(), mcpHandle.transport.close()]);
-      mcpHandle = await connectMcpClient({
-        gatewayUrl,
-        gatewayToken,
-      });
-      mcp = mcpHandle.client;
-    }
+    const mcp = mcpHandle.client;
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
       mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
@@ -141,7 +144,7 @@ async function main() {
         );
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded MCP conversation: ${JSON.stringify(
           lastMcpConversationList,
@@ -182,7 +185,7 @@ async function main() {
         return currentMessages.length >= 2 ? currentMessages : undefined;
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded transcript messages: ${JSON.stringify(lastHistory, null, 2)}`,
         { cause: error },
@@ -271,20 +274,20 @@ async function main() {
     const userEvent = await waitFor(
       "MCP user session.message event",
       async () => {
-        const polled = await callTool<{
+        const polledValue = await callTool<{
           structuredContent?: { events?: Array<Record<string, unknown>> };
         }>({
           name: "events_poll",
           arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
         });
-        return (polled.structuredContent?.events ?? []).find(
+        return (polledValue.structuredContent?.events ?? []).find(
           (entry) => entry.text === channelMessage,
         );
       },
       60_000,
     ).catch(() => undefined);
     if (userEvent?.text !== channelMessage) {
-      const polled = await callTool<{
+      const polledLocal = await callTool<{
         structuredContent?: { events?: Array<Record<string, unknown>> };
       }>({
         name: "events_poll",
@@ -295,7 +298,7 @@ async function main() {
           {
             userEvent: userEvent ?? null,
             rawGatewayUserMessage: rawGatewayUserMessage ?? null,
-            mcpEventsAfterAssistant: polled.structuredContent?.events ?? [],
+            mcpEventsAfterAssistant: polledLocal.structuredContent?.events ?? [],
             recentGatewayEvents: gateway.events.slice(-10).map((entry) => ({
               event: entry.event,
               sessionKey: entry.payload.sessionKey,
@@ -397,10 +400,13 @@ async function main() {
       ) + "\n",
     );
   } finally {
-    await Promise.allSettled([
-      ...(mcpHandle ? [mcpHandle.client.close(), mcpHandle.transport.close()] : []),
-      gateway.close(),
-    ]);
+    const closeTasks: Array<Promise<unknown>> = [gateway.close()];
+    if (mcpHandle) {
+      closeTasks.push(mcpHandle.client.close(), mcpHandle.transport.close());
+    }
+    await Promise.allSettled(closeTasks);
+    mcpHandle?.cleanup();
+    mcpTempState.cleanup();
   }
 }
 

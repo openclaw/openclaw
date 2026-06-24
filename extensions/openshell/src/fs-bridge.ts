@@ -1,3 +1,4 @@
+// Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -14,8 +15,10 @@ import { movePathWithCopyFallback } from "./mirror.js";
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
-  source: "workspace" | "agent";
+  source: "workspace" | "agent" | "protectedSkill";
 };
+
+const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
@@ -113,12 +116,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
     await fsPromises.mkdir(hostPath, { recursive: true });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$1"',
-      args: [target.containerPath],
-      signal: params.signal,
-    });
   }
 
   async remove(params: {
@@ -137,17 +136,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
+    await this.backend.removeRemotePath(target.containerPath, {
+      recursive: params.recursive ?? false,
+      signal: params.signal,
+      ignoreMissing: params.force !== false,
+    });
     await fsPromises.rm(hostPath, {
       recursive: params.recursive ?? false,
       force: params.force !== false,
-    });
-    await this.backend.runRemoteShellScript({
-      script: params.recursive
-        ? 'rm -rf -- "$1"'
-        : 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; elif [ -e "$1" ] || [ -L "$1" ]; then rm -f -- "$1"; fi',
-      args: [target.containerPath],
-      signal: params.signal,
-      allowFailure: params.force !== false,
     });
   }
 
@@ -172,13 +168,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
     await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
-      args: [from.containerPath, to.containerPath],
-      signal: params.signal,
-    });
   }
 
   async stat(params: {
@@ -229,7 +221,29 @@ class OpenShellFsBridge implements SandboxFsBridge {
       "/",
     );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    const skillsRoot = this.sandbox.skillsWorkspaceDir
+      ? path.resolve(this.sandbox.skillsWorkspaceDir, "skills")
+      : undefined;
+    const skillsContainerRoot = path.posix.join(
+      workspaceContainerRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
+    const workspaceSkillsShadowRoot = path.resolve(
+      workspaceRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
     const input = params.filePath.trim();
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillTarget = resolveProtectedSkillTarget({
+        input,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillTarget) {
+        return protectedSkillTarget;
+      }
+    }
 
     if (input.startsWith(`${workspaceContainerRoot}/`) || input === workspaceContainerRoot) {
       const relative = path.posix.relative(workspaceContainerRoot, input) || "";
@@ -269,6 +283,18 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillShadowTarget = resolveProtectedSkillShadowTarget({
+        hostPath,
+        workspaceSkillsShadowRoot,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillShadowTarget) {
+        return protectedSkillShadowTarget;
+      }
+    }
+
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
       return {
@@ -280,6 +306,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
         mountHostRoot: workspaceRoot,
         writable: this.sandbox.workspaceAccess === "rw",
         source: "workspace",
+      };
+    }
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw" && isPathInside(skillsRoot, hostPath)) {
+      const relative = path.relative(skillsRoot, hostPath).split(path.sep).join(path.posix.sep);
+      return {
+        hostPath,
+        relativePath: relative
+          ? path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS, relative)
+          : path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS),
+        containerPath: relative
+          ? path.posix.join(skillsContainerRoot, relative)
+          : skillsContainerRoot,
+        mountHostRoot: skillsRoot,
+        writable: false,
+        source: "protectedSkill",
       };
     }
 
@@ -299,6 +341,72 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
+}
+
+function resolveProtectedSkillTarget(params: {
+  input: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  const normalizedInput = path.posix.normalize(params.input.replace(/\\/g, "/"));
+  const isAbsoluteContainer =
+    normalizedInput === params.skillsContainerRoot ||
+    normalizedInput.startsWith(`${params.skillsContainerRoot}/`);
+  const isRelativeContainer =
+    normalizedInput === relativeRoot || normalizedInput.startsWith(`${relativeRoot}/`);
+  if (!isAbsoluteContainer && !isRelativeContainer) {
+    return null;
+  }
+
+  const relative = isAbsoluteContainer
+    ? path.posix.relative(params.skillsContainerRoot, normalizedInput)
+    : path.posix.relative(relativeRoot, normalizedInput);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
+}
+
+function resolveProtectedSkillShadowTarget(params: {
+  hostPath: string;
+  workspaceSkillsShadowRoot: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  if (!isPathInside(params.workspaceSkillsShadowRoot, params.hostPath)) {
+    return null;
+  }
+
+  const relative = path
+    .relative(params.workspaceSkillsShadowRoot, params.hostPath)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
 }
 
 async function assertLocalPathSafety(params: {
@@ -361,10 +469,4 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
-}
-
-export function setReadOpenFlagsResolverForTest(
-  _resolver: (() => { flags: number; supportsNoFollow: boolean }) | undefined,
-): void {
-  // Retained for older OpenShell tests; pinned reads now delegate to fs-safe.
 }

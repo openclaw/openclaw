@@ -1,3 +1,4 @@
+// Zalouser plugin module implements text styles behavior.
 import { TextStyle, type Style } from "./zca-constants.js";
 
 const ESCAPE_SENTINEL_START = "\u0001";
@@ -133,7 +134,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
       continue;
     }
 
-    let line = unquotedLine;
+    const line = unquotedLine;
     const openingFence = resolveOpeningFence(rawLine);
     if (openingFence) {
       const fenceLine = openingFence.quoteIndent > 0 ? unquotedLine : rawLine;

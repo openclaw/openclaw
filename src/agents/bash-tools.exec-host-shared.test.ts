@@ -1,12 +1,22 @@
+/**
+ * Shared exec-host approval helper tests.
+ * Covers pending-state expiry, follow-up failure dedupe, elevated handoffs,
+ * policy merging, and unavailable approval surfaces.
+ */
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeExecApprovalFollowupRuntimeHandoff,
+  isExecApprovalFollowupSessionRebound,
+  registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  createExecApprovalPendingState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
+  resolveBaseExecApprovalDecision,
   resolveExecApprovalUnavailableState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
@@ -37,6 +47,60 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
     ...mod,
     resolveExecApprovals: mocks.resolveExecApprovals,
   };
+});
+
+describe("createExecApprovalPendingState", () => {
+  it("sets a valid pending approval expiry from the current clock", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_800_000_000_000);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: ["careful"],
+          timeoutMs: 60_000,
+        }),
+      ).toMatchObject({
+        warningText: "careful\n\n",
+        expiresAtMs: 1_800_000_060_000,
+        preResolvedDecision: undefined,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires pending approvals immediately while the process clock is invalid", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(Number.NaN);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: [],
+          timeoutMs: 60_000,
+        }).expiresAtMs,
+      ).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires pending approvals immediately when expiry would exceed Date bounds", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: [],
+          timeoutMs: 60_000,
+        }).expiresAtMs,
+      ).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });
 
 describe("sendExecApprovalFollowupResult", () => {
@@ -71,6 +135,7 @@ describe("sendExecApprovalFollowupResult", () => {
         internalRuntimeHandoffId?: string;
         idempotencyKey?: string;
         execApprovalFollowupToken?: string;
+        expectedSessionId?: string;
         bashElevated?: unknown;
       }
     | undefined {
@@ -79,6 +144,7 @@ describe("sendExecApprovalFollowupResult", () => {
           internalRuntimeHandoffId?: string;
           idempotencyKey?: string;
           execApprovalFollowupToken?: string;
+          expectedSessionId?: string;
           bashElevated?: unknown;
         }
       | undefined;
@@ -184,6 +250,21 @@ describe("sendExecApprovalFollowupResult", () => {
     });
   });
 
+  it("does not register elevated runtime handoffs when the process clock is invalid", () => {
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "approval-elevated-invalid-clock",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "on",
+      },
+      nowMs: Number.NaN,
+    });
+
+    expect(registration).toBeUndefined();
+  });
+
   it("does not register elevated runtime handoffs for denied followups", async () => {
     sendExecApprovalFollowup.mockResolvedValue(false);
     const bashElevated = {
@@ -226,6 +307,53 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");
+  });
+
+  it("forwards the approval-time session id to the followup dispatch (non-elevated)", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(true);
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-session-pin-59349",
+        sessionKey: "agent:main:telegram:direct:123",
+        expectedSessionId: "session-original",
+        turnSourceChannel: "telegram",
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    expect(firstExecApprovalFollowupCall()?.expectedSessionId).toBe("session-original");
+  });
+});
+
+describe("isExecApprovalFollowupSessionRebound", () => {
+  it("flags a rebound session when the resolved id differs from the approval-time id", () => {
+    expect(
+      isExecApprovalFollowupSessionRebound({
+        expectedSessionId: "session-original",
+        resolvedSessionId: "session-after-reset",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the followup when the session id is unchanged", () => {
+    expect(
+      isExecApprovalFollowupSessionRebound({
+        expectedSessionId: "session-original",
+        resolvedSessionId: "session-original",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not drop when either session id is missing", () => {
+    expect(isExecApprovalFollowupSessionRebound({ resolvedSessionId: "session-after-reset" })).toBe(
+      false,
+    );
+    expect(isExecApprovalFollowupSessionRebound({ expectedSessionId: "session-original" })).toBe(
+      false,
+    );
+    expect(isExecApprovalFollowupSessionRebound({})).toBe(false);
   });
 });
 
@@ -316,6 +444,19 @@ describe("resolveExecHostApprovalContext", () => {
 });
 
 describe("enforceStrictInlineEvalApprovalBoundary", () => {
+  it("denies unanswered approvals when ask fallback is fail-closed", () => {
+    expect(
+      resolveBaseExecApprovalDecision({
+        decision: null,
+        askFallback: "deny",
+      }),
+    ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+      timedOut: true,
+    });
+  });
+
   it("denies timeout-based fallback when strict inline-eval approval is required", () => {
     expect(
       enforceStrictInlineEvalApprovalBoundary({
@@ -325,6 +466,23 @@ describe("enforceStrictInlineEvalApprovalBoundary", () => {
         requiresInlineEvalApproval: true,
       }),
     ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+  });
+
+  it("denies timeout-based fallback when auto-review defers to human approval", () => {
+    const params = {
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+      requiresInlineEvalApproval: false,
+      requiresAutoReviewHumanApproval: true,
+    } satisfies Parameters<typeof enforceStrictInlineEvalApprovalBoundary>[0] & {
+      requiresAutoReviewHumanApproval: true;
+    };
+
+    expect(enforceStrictInlineEvalApprovalBoundary(params)).toEqual({
       approvedByAsk: false,
       deniedReason: "approval-timeout",
     });

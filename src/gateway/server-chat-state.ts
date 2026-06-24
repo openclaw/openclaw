@@ -1,32 +1,105 @@
+// Gateway chat run state registries.
+// Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 
-export type ChatRunEntry = {
-  sessionKey: string;
-  clientRunId: string;
+export type ChatRunTiming = {
+  ackedAtMs: number;
+  connId: string;
+  dispatchStartedAtMs?: number;
+  firstAssistantEventSent?: boolean;
+  receivedAtMs: number;
 };
+
+export type ChatRunRegistration = {
+  sessionKey: string;
+  agentId?: string;
+  clientRunId: string;
+  chatSendTiming?: ChatRunTiming;
+};
+
+export type ChatRunEntry = ChatRunRegistration & {
+  registeredAtMs: number;
+  registeredSequence: number;
+};
+
+export type ChatAbortMarker = number | { abortedAtMs: number; sequence: number };
+
+let chatRunOrderingSequence = 0;
+
+function nextChatRunOrderingSequence(): number {
+  chatRunOrderingSequence += 1;
+  return chatRunOrderingSequence;
+}
+
+/** Stamp a chat run registration with the process-local ordering metadata used for abort freshness checks. */
+export function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
+  return {
+    ...entry,
+    registeredAtMs: Date.now(),
+    registeredSequence: nextChatRunOrderingSequence(),
+  };
+}
+
+/** Create an abort marker ordered against chat run registrations, using a shared monotonic sequence. */
+export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
+  return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
+}
+
+/** Return the wall-clock timestamp used by maintenance TTL pruning for both legacy and structured markers. */
+export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
+  return typeof marker === "number" ? marker : marker.abortedAtMs;
+}
+
+/**
+ * Return whether an abort marker should suppress events for the given chat run registration.
+ * Structured markers compare the monotonic sequence first so same-millisecond aborts stay ordered;
+ * legacy numeric markers fall back to timestamp comparison, and a missing entry preserves old suppress-on-presence behavior.
+ */
+export function isChatAbortMarkerCurrent(
+  marker: ChatAbortMarker | undefined,
+  entry?: Pick<ChatRunEntry, "registeredAtMs" | "registeredSequence">,
+): boolean {
+  if (marker === undefined) {
+    return false;
+  }
+  if (!entry) {
+    return true;
+  }
+  if (typeof marker !== "number" && typeof entry.registeredSequence === "number") {
+    return marker.sequence >= entry.registeredSequence;
+  }
+  if (typeof entry.registeredAtMs !== "number") {
+    return true;
+  }
+  const abortedAtMs = typeof marker === "number" ? marker : marker.abortedAtMs;
+  return abortedAtMs >= entry.registeredAtMs;
+}
 
 export type BufferedAgentEvent = {
   sessionKey?: string;
+  agentId?: string;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
 export type ChatRunRegistry = {
-  add: (sessionId: string, entry: ChatRunEntry) => void;
+  add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
   clear: () => void;
 };
 
+/** Create the FIFO registry that maps session IDs to active chat runs. */
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
-  const add = (sessionId: string, entry: ChatRunEntry) => {
+  const add = (sessionId: string, entry: ChatRunRegistration) => {
+    const registeredEntry = createChatRunEntry(entry);
     const queue = chatRunSessions.get(sessionId);
     if (queue) {
-      queue.push(entry);
+      queue.push(registeredEntry);
     } else {
-      chatRunSessions.set(sessionId, [entry]);
+      chatRunSessions.set(sessionId, [registeredEntry]);
     }
   };
 
@@ -82,11 +155,12 @@ export type ChatRunState = {
   deltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  abortedRuns: Map<string, number>;
+  abortedRuns: Map<string, ChatAbortMarker>;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
 
+/** Create all mutable chat-run maps used by Gateway runtime state. */
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
@@ -97,7 +171,7 @@ export function createChatRunState(): ChatRunState {
   const deltaLastBroadcastText = new Map<string, string>();
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
-  const abortedRuns = new Map<string, number>();
+  const abortedRuns = new Map<string, ChatAbortMarker>();
 
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);
@@ -171,6 +245,7 @@ type ToolRecipientEntry = {
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
+/** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -197,6 +272,7 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
   };
 }
 
+/** Create the per-session message subscriber registry. */
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
@@ -275,6 +351,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
   };
 }
 
+/** Create the run-id recipient registry used for streaming tool events. */
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
 

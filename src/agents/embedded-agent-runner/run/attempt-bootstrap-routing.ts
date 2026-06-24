@@ -1,8 +1,12 @@
+/**
+ * Resolves bootstrap context targets for one embedded-agent attempt.
+ */
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
-export type AttemptBootstrapRoutingInput = {
+/** Inputs that decide whether this attempt should inject workspace bootstrap context. */
+type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   trigger?: string;
@@ -14,31 +18,20 @@ export type AttemptBootstrapRoutingInput = {
   hasBootstrapFileAccess: boolean;
 };
 
-export type AttemptBootstrapRouting = {
+/** Bootstrap placement decision consumed by system/runtime context assembly. */
+type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
 
-export type AttemptWorkspaceBootstrapRoutingInput = Omit<
+type AttemptWorkspaceBootstrapRoutingInput = Omit<
   AttemptBootstrapRoutingInput,
   "workspaceBootstrapPending"
 > & {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
-
-export function resolveBootstrapContextTargets(params: {
-  bootstrapMode: BootstrapMode;
-}): Pick<
-  AttemptBootstrapRouting,
-  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
-> {
-  return {
-    includeBootstrapInSystemContext: params.bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
-  };
-}
 
 function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
@@ -56,29 +49,31 @@ function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    ...resolveBootstrapContextTargets({ bootstrapMode }),
+    includeBootstrapInSystemContext: bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
   };
 }
 
-export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
-  return (
-    files?.some(
-      (file) =>
-        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
-        !file.missing &&
-        typeof file.content === "string" &&
-        file.content.trim().length > 0,
-    ) ?? false
-  );
-}
-
+/**
+ * Resolves workspace bootstrap routing after checking pending state and
+ * hook-provided bootstrap files. Hook content counts as both pending bootstrap
+ * and file access so generated bootstrap text follows the same route as disk
+ * bootstrap content.
+ */
 export async function resolveAttemptWorkspaceBootstrapRouting(
   params: AttemptWorkspaceBootstrapRoutingInput,
 ): Promise<AttemptBootstrapRouting> {
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
-  const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
+  const hasHookBootstrapContent =
+    params.bootstrapFiles?.some(
+      (file) =>
+        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
+        !file.missing &&
+        typeof file.content === "string" &&
+        file.content.trim().length > 0,
+    ) ?? false;
   return resolveAttemptBootstrapRouting({
     ...params,
     workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,

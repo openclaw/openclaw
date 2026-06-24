@@ -1,3 +1,4 @@
+// Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,7 +58,7 @@ const {
     handlers: Map<string, EventHandler>;
   };
 
-  const createConnectionMock = (): MockConnection => {
+  const createConnectionMockLocal = (): MockConnection => {
     const handlers = new Map<string, EventHandler>();
     const daveSetPassthroughMode = vi.fn();
     const connection: MockConnection = {
@@ -76,7 +77,7 @@ const {
           on: vi.fn(),
           off: vi.fn(),
           destroy: vi.fn(),
-          [Symbol.asyncIterator]: async function* () {},
+          async *[Symbol.asyncIterator]() {},
         })),
       },
       state: {
@@ -98,9 +99,9 @@ const {
     return connection;
   };
 
-  const getVoiceConnectionMock = vi.fn((): MockConnection | undefined => undefined);
+  const getVoiceConnectionMockLocal = vi.fn((): MockConnection | undefined => undefined);
 
-  const realtimeSessionMock = {
+  const realtimeSessionMockLocal = {
     bridge: { supportsToolResultContinuation: true },
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
@@ -114,9 +115,9 @@ const {
   };
 
   return {
-    createConnectionMock,
-    getVoiceConnectionMock,
-    joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
+    createConnectionMock: createConnectionMockLocal,
+    getVoiceConnectionMock: getVoiceConnectionMockLocal,
+    joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
     }),
@@ -148,7 +149,7 @@ const {
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
-    createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMock),
+    createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
     controlRealtimeVoiceAgentRunMock: vi.fn<() => Promise<RealtimeVoiceAgentControlResult>>(
       async () => ({
         ok: false,
@@ -163,7 +164,7 @@ const {
         suppress: false,
       }),
     ),
-    realtimeSessionMock,
+    realtimeSessionMock: realtimeSessionMockLocal,
     decodeOpusStreamMock: vi.fn(),
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
@@ -526,6 +527,30 @@ describe("DiscordVoiceManager", () => {
 
   const sentUserMessages = () =>
     Array.from(realtimeSessionMock.sendUserMessage.mock.calls).map(([message]) => String(message));
+
+  const emitFinalRealtimeUserTranscript = async (
+    bridgeParams:
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | null
+      | undefined,
+    text: string,
+  ) => {
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", text, true);
+    });
+  };
+
+  const flushRealtimeForcedConsultTimers = async (emitTranscripts: () => void | Promise<void>) => {
+    vi.useFakeTimers();
+    try {
+      await emitTranscripts();
+      await vi.advanceTimersByTimeAsync(260);
+    } finally {
+      vi.useRealTimers();
+    }
+  };
 
   const expectUserMessageIncludes = (text: string) => {
     expect(
@@ -2088,12 +2113,11 @@ describe("DiscordVoiceManager", () => {
     const firstConnection = createConnectionMock();
     const secondConnection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
-    let manager!: InstanceType<typeof managerModule.DiscordVoiceManager>;
     entersStateMock.mockImplementationOnce(async () => {
       await manager.destroy();
       throw new Error("The operation was aborted");
     });
-    manager = createManager();
+    const manager: InstanceType<typeof managerModule.DiscordVoiceManager> = createManager();
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -2131,8 +2155,8 @@ describe("DiscordVoiceManager", () => {
 
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("uses the default reconnect grace before destroying disconnected sessions", async () => {
@@ -2152,8 +2176,8 @@ describe("DiscordVoiceManager", () => {
 
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("closes realtime sessions when disconnected recovery destroys the connection", async () => {
@@ -2178,9 +2202,9 @@ describe("DiscordVoiceManager", () => {
     expect(disconnected).toBeTypeOf("function");
     await disconnected?.();
 
-    expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("closes realtime sessions when Discord destroys the connection", async () => {
@@ -2212,7 +2236,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -2297,7 +2321,7 @@ describe("DiscordVoiceManager", () => {
     );
 
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
+    expect(commandArgs.model).toBe("openai/gpt-5.5");
     expect(commandArgs.messageProvider).toBe("discord-voice");
     expect(commandArgs.toolsAllow).toBeUndefined();
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
@@ -2364,6 +2388,49 @@ describe("DiscordVoiceManager", () => {
         expect.objectContaining({ mode: "steer", queued: true }),
       ),
     );
+  });
+
+  it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    expect(() =>
+      bridgeParams?.onToolCall?.(
+        {
+          itemId: "item-empty-consult",
+          callId: "call-empty-consult",
+          name: "openclaw_agent_consult",
+          args: {},
+        },
+        realtimeSessionMock,
+      ),
+    ).not.toThrow();
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-empty-consult", {
+      error: "question required",
+    });
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {
@@ -2560,7 +2627,8 @@ describe("DiscordVoiceManager", () => {
     try {
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
-        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] })
+        .mockResolvedValueOnce({ payloads: [{ text: "third answer" }] });
       const manager = createManager({
         groupPolicy: "open",
         voice: {
@@ -2571,6 +2639,7 @@ describe("DiscordVoiceManager", () => {
       });
 
       await manager.join({ guildId: "g1", channelId: "1001" });
+      const player = getLastAudioPlayer();
       const entry = getSessionEntry(manager) as {
         realtime?: {
           beginSpeakerTurn: (
@@ -2612,6 +2681,19 @@ describe("DiscordVoiceManager", () => {
 
       await vi.advanceTimersByTimeAsync(1_510);
       expectUserMessageIncludes("second answer");
+
+      const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+        | (() => void)
+        | undefined;
+      idleHandler?.();
+      const thirdTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      thirdTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "third question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      expectUserMessageNotIncludes("third answer");
     } finally {
       vi.useRealTimers();
     }
@@ -2768,13 +2850,14 @@ describe("DiscordVoiceManager", () => {
           onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
-    bridgeParams?.onTranscript?.("user", "non-owner question", true);
-    const ownerTurn = entry?.realtime?.beginSpeakerTurn(
-      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
-      "u-owner",
-    );
-    ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", "non-owner question", true);
+      const ownerTurn = entry?.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    });
 
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expectUserMessageIncludes("non-owner answer");
@@ -2870,8 +2953,7 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
 
-    bridgeParams?.onTranscript?.("user", "normal question", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "normal question");
 
     expect(lastAgentCommandArgs().message).toContain("normal question");
     expectUserMessageIncludes("normal answer");
@@ -2923,8 +3005,7 @@ describe("DiscordVoiceManager", () => {
       "u-guest",
     );
     guestTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "agent-1 how is it going", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "agent-1 how is it going");
 
     expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -2935,8 +3016,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Hey, Molty, how is it going", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Hey, Molty, how is it going");
 
     expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
       sessionKey: "discord:g1:c1",
@@ -2995,8 +3075,7 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).not.toHaveBeenCalled();
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-    bridgeParams?.onTranscript?.("user", "Hey, Molty, how is it going", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Hey, Molty, how is it going");
 
     expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
       sessionKey: "discord:g1:c1",
@@ -3055,8 +3134,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Multy?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Multy?");
 
     expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -3120,10 +3198,11 @@ describe("DiscordVoiceManager", () => {
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    bridgeParams?.onTranscript?.("user", "room noise", true);
-    bridgeParams?.onTranscript?.("user", "Molty, so", true);
-    bridgeParams?.onTranscript?.("user", "Malty, what do you have to say?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", "room noise", true);
+      bridgeParams?.onTranscript?.("user", "Molty, so", true);
+      bridgeParams?.onTranscript?.("user", "Malty, what do you have to say?", true);
+    });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(lastAgentCommandArgs().message).toContain("what do you have to say?");
@@ -3171,8 +3250,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "OpenClaw, how is it going", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, how is it going");
 
     expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
       sessionKey: "discord:g1:c1",
@@ -3222,8 +3300,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     longNameTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Claw Bot Helper, should not wake", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Claw Bot Helper, should not wake");
 
     expect(agentCommandMock).not.toHaveBeenCalled();
 
@@ -3232,8 +3309,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     fallbackTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "OpenClaw, fallback still wakes", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, fallback still wakes");
 
     expect(lastAgentCommandArgs().message).toContain("fallback still wakes");
     expect(lastAgentCommandArgs().message).not.toContain("OpenClaw");
@@ -3278,8 +3354,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     montyTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Monty, are you with us?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Monty, are you with us?");
 
     expect(agentCommandArgsAt(0).message).toContain("are you with us?");
     expect(agentCommandArgsAt(0).message).not.toContain("Monty");
@@ -3289,8 +3364,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     motiTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Moti, what's going on today?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Moti, what's going on today?");
 
     expect(agentCommandArgsAt(1).message).toContain("what's going on today?");
     expect(agentCommandArgsAt(1).message).not.toContain("Moti");
@@ -3300,8 +3374,10 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     multiTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Multi, step through the maintainer queue.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(
+      bridgeParams,
+      "Multi, step through the maintainer queue.",
+    );
 
     expect(agentCommandArgsAt(2).message).toContain("step through the maintainer queue.");
     expect(agentCommandArgsAt(2).message).not.toContain("Multi");
@@ -3311,8 +3387,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     martyTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Marty, can you hear me?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Marty, can you hear me?");
 
     expect(agentCommandArgsAt(3).message).toContain("can you hear me?");
     expect(agentCommandArgsAt(3).message).not.toContain("Marty");
@@ -3322,8 +3397,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     openClawTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Open claw can you still hear me?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Open claw can you still hear me?");
 
     expect(agentCommandArgsAt(4).message).toContain("can you still hear me?");
     expect(agentCommandArgsAt(4).message).not.toContain("Open claw");
@@ -3333,8 +3407,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     openClubTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Open Club, can you hear me now?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Open Club, can you hear me now?");
 
     expect(agentCommandArgsAt(5).message).toContain("can you hear me now?");
     expect(agentCommandArgsAt(5).message).not.toContain("Open Club");
@@ -3344,8 +3417,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     openCloudTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Open Cloud, can you hear me too?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Open Cloud, can you hear me too?");
 
     expect(agentCommandArgsAt(6).message).toContain("can you hear me too?");
     expect(agentCommandArgsAt(6).message).not.toContain("Open Cloud");
@@ -3355,8 +3427,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     trailingMoltyTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Can you still hear trailing, Molty.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Can you still hear trailing, Molty.");
 
     expect(agentCommandArgsAt(7).message).toContain("Can you still hear trailing");
     expect(agentCommandArgsAt(7).message).not.toContain("Molty");
@@ -3366,8 +3437,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     trailingMaltyTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "What's going on today, Malty?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "What's going on today, Malty?");
 
     expect(agentCommandArgsAt(8).message).toContain("What's going on today");
     expect(agentCommandArgsAt(8).message).not.toContain("Malty");
@@ -3377,8 +3447,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     openChatTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Open chat, can you hear me now?", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Open chat, can you hear me now?");
 
     expect(agentCommandMock).toHaveBeenCalledTimes(9);
   });
@@ -3421,32 +3490,31 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ambientTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "This is a multi-step maintainer problem.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "This is a multi-step maintainer problem.");
 
     const middleWakeWordTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     middleWakeWordTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "I asked multi about this already.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "I asked multi about this already.");
 
     const openLawTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     openLawTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Open law is not the wake phrase.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Open law is not the wake phrase.");
 
     const fuzzyTrailingTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     fuzzyTrailingTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "I miss the nonsensical German ranting from Multy.", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(
+      bridgeParams,
+      "I miss the nonsensical German ranting from Multy.",
+    );
 
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
@@ -3513,8 +3581,7 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
 
-    bridgeParams?.onTranscript?.("user", "Claw Bot, ship it", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Claw Bot, ship it");
 
     expect(lastAgentCommandArgs().message).toContain("ship it");
     expect(lastAgentCommandArgs().message).not.toContain("Claw");
@@ -3526,8 +3593,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     openerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Okay Google, try the opener name", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Okay Google, try the opener name");
 
     expect(lastAgentCommandArgs().message).toContain("try the opener name");
     expect(lastAgentCommandArgs().message).not.toContain("Okay");
@@ -3570,16 +3636,14 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
 
-    bridgeParams?.onTranscript?.("user", "Claw Bot Helper, ship it", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Claw Bot Helper, ship it");
 
     const fallbackTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     fallbackTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "OpenClaw, ship it", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, ship it");
 
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
@@ -3625,8 +3689,7 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
 
-    bridgeParams?.onTranscript?.("user", "how is it going", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "how is it going");
 
     expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
       sessionKey: "discord:g1:c1",
@@ -3670,16 +3733,16 @@ describe("DiscordVoiceManager", () => {
       "u-guest",
     );
     guestTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "guest question", true);
 
     const ownerTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "owner question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", "guest question", true);
+      bridgeParams?.onTranscript?.("user", "owner question", true);
+    });
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
 
     const guestCommandArgs = agentCommandArgsAt(0);
@@ -3721,16 +3784,16 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     incompleteTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "Get this working and...", true);
 
     const closingTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     closingTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "I'll be right back. See you guys. Bye-bye.", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", "Get this working and...", true);
+      bridgeParams?.onTranscript?.("user", "I'll be right back. See you guys. Bye-bye.", true);
+    });
     expect(agentCommandMock).not.toHaveBeenCalled();
 
     const validTurn = entry.realtime?.beginSpeakerTurn(
@@ -3738,9 +3801,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     validTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "ship it.", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "ship it.");
     expect(lastAgentCommandArgs().message).toContain("ship it.");
     expectUserMessageIncludes("valid answer");
   });
@@ -3776,9 +3837,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     turn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "What?", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "What?");
 
     expect(lastAgentCommandArgs().message).toBe("What?");
     expect(lastAgentCommandArgs().message).not.toContain("consultPolicy");
@@ -3843,20 +3902,21 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     firstTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "first question", true);
     const secondTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     secondTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "second question", true);
     const thirdTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     thirdTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "third question", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(() => {
+      bridgeParams?.onTranscript?.("user", "first question", true);
+      bridgeParams?.onTranscript?.("user", "second question", true);
+      bridgeParams?.onTranscript?.("user", "third question", true);
+    });
 
     resolveFirst?.({ payloads: [{ text: "first answer" }] });
     await vi.waitFor(() => expectUserMessageIncludes("first answer"));
@@ -3864,14 +3924,18 @@ describe("DiscordVoiceManager", () => {
 
     resolveSecond?.({ payloads: [{ text: "second answer" }] });
     resolveThird?.({ payloads: [{ text: "third answer" }] });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expectUserMessageNotIncludes("second answer");
     expectUserMessageNotIncludes("third answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const firstStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expectUserMessageNotIncludes("second answer");
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
@@ -3885,7 +3949,9 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const secondStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(secondStream?.writableEnded).toBe(true));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expectUserMessageNotIncludes("third answer");
 
     idleHandler?.();
@@ -3928,9 +3994,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     firstTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "first question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
     await vi.waitFor(() => expectUserMessageIncludes("first answer"));
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
@@ -3939,9 +4003,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     secondTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "second question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
     expect(
       realtimeSessionMock.handleBargeIn.mock.calls.some(([arg]) => {
         return (arg as { force?: boolean } | undefined)?.force === true;
@@ -3953,7 +4015,9 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const firstStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expectUserMessageNotIncludes("second answer");
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
@@ -3999,9 +4063,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     firstTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "first question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
     await vi.waitFor(() => expectUserMessageIncludes("first answer"));
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
@@ -4010,9 +4072,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     secondTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "second question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
     expectUserMessageNotIncludes("second answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
@@ -4066,27 +4126,27 @@ describe("DiscordVoiceManager", () => {
       "u-guest",
     );
     guestTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "guest question", true);
 
     const ownerTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "owner question", true);
-
-    bridgeParams?.onToolCall?.(
-      {
-        itemId: "item-owner",
-        callId: "call-owner",
-        name: "openclaw_agent_consult",
-        args: { question: "owner question" },
-      },
-      realtimeSessionMock,
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await flushRealtimeForcedConsultTimers(async () => {
+      bridgeParams?.onTranscript?.("user", "guest question", true);
+      bridgeParams?.onTranscript?.("user", "owner question", true);
+      bridgeParams?.onToolCall?.(
+        {
+          itemId: "item-owner",
+          callId: "call-owner",
+          name: "openclaw_agent_consult",
+          args: { question: "owner question" },
+        },
+        realtimeSessionMock,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
     const ownerCommandArgs = agentCommandArgsAt(0);
     expect(ownerCommandArgs.message).toContain("owner question");
@@ -4139,9 +4199,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "late question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
 
     bridgeParams?.onToolCall?.(
       {
@@ -4213,9 +4271,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "late question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
 
     bridgeParams?.onToolCall?.(
       {
@@ -4285,9 +4341,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "late question", true);
-
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
 
     const guestTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
@@ -4314,8 +4368,7 @@ describe("DiscordVoiceManager", () => {
     });
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
 
-    bridgeParams?.onTranscript?.("user", "guest followup", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "guest followup");
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
     const followupCommandArgs = agentCommandArgsAt(1);
@@ -4385,8 +4438,7 @@ describe("DiscordVoiceManager", () => {
       "u-owner",
     );
     secondTurn?.sendInputAudio(Buffer.alloc(8));
-    bridgeParams?.onTranscript?.("user", "repeat question", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "repeat question");
 
     bridgeParams?.onToolCall?.(
       {
@@ -4452,8 +4504,7 @@ describe("DiscordVoiceManager", () => {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
       | undefined;
-    bridgeParams?.onTranscript?.("user", "guest question", true);
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "guest question");
 
     expectUserMessageIncludes("guest answer");
   });
@@ -4465,7 +4516,7 @@ describe("DiscordVoiceManager", () => {
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",

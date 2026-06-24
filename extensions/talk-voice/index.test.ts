@@ -1,9 +1,11 @@
+// Talk Voice tests cover index plugin behavior.
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
 
-function createHarness(config: Record<string, unknown>) {
+function createHarness(initialConfig: Record<string, unknown>) {
+  let config = initialConfig;
   let command: OpenClawPluginCommandDefinition | undefined;
   const runtime = {
     config: {
@@ -48,11 +50,7 @@ function createHarness(config: Record<string, unknown>) {
   return { command, runtime };
 }
 
-function createCommandContext(
-  args: string,
-  channel: string = "discord",
-  gatewayClientScopes?: string[],
-) {
+function createCommandContext(args: string, channel = "discord", gatewayClientScopes?: string[]) {
   return {
     args,
     channel,
@@ -127,7 +125,7 @@ describe("talk-voice plugin", () => {
       { id: "voice-b", name: "Bert" },
     ]);
 
-    const result = await command.handler(createCommandContext("list 1"));
+    const result = await command.handler(createCommandContext("list +01"));
 
     expect(runtime.tts.listVoices).toHaveBeenCalledWith({
       provider: "elevenlabs",

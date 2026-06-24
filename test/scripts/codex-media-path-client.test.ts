@@ -1,14 +1,20 @@
-import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+// Codex Media Path Client tests cover codex media path client script behavior.
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
-import { readPositiveIntEnv } from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
-import { waitForWebSocketOpen } from "../../scripts/e2e/lib/codex-media-path/open-websocket.mjs";
+import {
+  readPositiveIntEnv,
+  readTcpPortEnv,
+} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const tempRoots: string[] = [];
+const fakeAppServerPath = path.resolve(
+  "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs",
+);
 const writeConfigPath = path.resolve("scripts/e2e/lib/codex-media-path/write-config.mjs");
 
 function makeTempRoot(): string {
@@ -19,6 +25,14 @@ function makeTempRoot(): string {
 
 function jsonl(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
+}
+
+function padJsonlToLength(value: Record<string, unknown>, length: number): string {
+  const base = jsonl({ ...value, pad: "" });
+  if (base.length > length) {
+    throw new Error(`cannot pad JSONL down from ${base.length} to ${length}`);
+  }
+  return jsonl({ ...value, pad: "x".repeat(length - base.length) });
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -36,21 +50,43 @@ function runWriteConfig(root: string, env: Record<string, string> = {}) {
   });
 }
 
-class FakeWebSocket extends EventEmitter {
-  terminated = false;
-  closed = false;
-
-  terminate(): void {
-    this.terminated = true;
-    queueMicrotask(() => {
-      this.emit("error", new Error("socket abort after terminate"));
-      this.emit("close");
+async function readStdoutLine(child: ChildProcessWithoutNullStreams): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const stdout = createBoundedChildOutput();
+    const timeout = setTimeout(() => {
+      reject(new Error(`timed out waiting for fake app-server response: ${stdout.text()}`));
+    }, 3_000);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout.append(chunk);
+      const line = stdout
+        .text()
+        .split("\n")
+        .find((entry) => entry.trim());
+      if (line) {
+        clearTimeout(timeout);
+        resolve(line);
+      }
     });
-  }
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`fake app-server exited before response: code=${code} signal=${signal}`));
+    });
+  });
+}
 
-  close(): void {
-    this.closed = true;
+async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
   }
+  await new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+    child.kill("SIGTERM");
+  });
 }
 
 afterEach(() => {
@@ -71,6 +107,10 @@ describe("codex media path limits", () => {
         OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
       }),
     ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
+  });
+
+  it("rejects out-of-range TCP ports", () => {
+    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
   });
 
   it("writes strict positive timeout and port values into generated config", () => {
@@ -95,6 +135,48 @@ describe("codex media path limits", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
+  });
+
+  it("rejects out-of-range write-config gateway ports", () => {
+    const root = makeTempRoot();
+    const result = runWriteConfig(root, { PORT: "65536" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid PORT: 65536");
+  });
+});
+
+describe("codex media path fake app-server", () => {
+  it("returns a structured error when request logging fails", async () => {
+    const requestLogDirectory = makeTempRoot();
+    const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {
+      env: {
+        ...process.env,
+        OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLogDirectory,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr.append(chunk);
+    });
+
+    try {
+      const responseLine = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "request-1", method: "initialize" }));
+      const response = JSON.parse(await responseLine);
+
+      expect(response).toMatchObject({
+        error: {
+          message: expect.stringContaining("fake Codex app-server request log write failed"),
+        },
+        id: "request-1",
+      });
+      expect(stderr.text()).toContain("fake Codex app-server request log write failed");
+    } finally {
+      await stopChild(child);
+    }
   });
 });
 
@@ -151,34 +233,21 @@ describe("codex media path JSONL tailer", () => {
     writeFileSync(logPath, jsonl({ method: "turn/start" }));
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
   });
-});
 
-describe("codex media path WebSocket open guard", () => {
-  it("terminates sockets that never open", async () => {
-    const ws = new FakeWebSocket();
-    const keepAlive = setTimeout(() => {}, 100);
+  it("resets request history when a rotated app-server log keeps the same size", () => {
+    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
+    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
+    const oldText = jsonl({ method: "initialize", pad: "x".repeat(64) });
+    const replacementText = padJsonlToLength({ method: "turn/start" }, oldText.length);
+    const replacement = JSON.parse(replacementText) as Record<string, unknown>;
 
-    try {
-      await expect(waitForWebSocketOpen(ws, 1)).rejects.toThrow("gateway ws open timeout");
-    } finally {
-      clearTimeout(keepAlive);
-    }
+    expect(replacementText.length).toBe(oldText.length);
+    writeFileSync(logPath, oldText);
+    expect(tailer.read()).toEqual([{ method: "initialize", pad: "x".repeat(64) }]);
 
-    expect(ws.terminated).toBe(true);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(ws.listenerCount("open")).toBe(0);
-    expect(ws.listenerCount("error")).toBe(0);
-  });
+    rmSync(logPath, { force: true });
+    writeFileSync(logPath, replacementText);
 
-  it("cleans listeners after successful opens", async () => {
-    const ws = new FakeWebSocket();
-    const opened = waitForWebSocketOpen(ws, 100);
-
-    ws.emit("open");
-
-    await expect(opened).resolves.toBeUndefined();
-    expect(ws.terminated).toBe(false);
-    expect(ws.listenerCount("open")).toBe(0);
-    expect(ws.listenerCount("error")).toBe(0);
+    expect(tailer.read()).toEqual([replacement]);
   });
 });

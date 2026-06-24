@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover cron validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -9,6 +10,14 @@ import {
   validateCronUpdateParams,
 } from "./index.js";
 
+/**
+ * Cron validator regressions for public scheduler RPC payloads.
+ *
+ * The cases cover both canonical `id` selectors and legacy `jobId` aliases,
+ * delivery routing, update clears, and run-log path traversal guards.
+ */
+
+/** Smallest valid cron job create payload shared by add/update variations. */
 const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },
@@ -45,6 +54,36 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts command cron payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "command",
+          argv: ["sh", "-lc", "echo ok"],
+          cwd: "/srv/example",
+          env: { FOO: "bar" },
+          input: "stdin",
+          timeoutSeconds: 30,
+          noOutputTimeoutSeconds: 5,
+          outputMaxBytes: 4096,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "command",
+            argv: ["sh", "-lc", "echo updated"],
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);
@@ -53,6 +92,30 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+  });
+
+  it("accepts nullable model clears only on update payload patches", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "agentTurn",
+          message: "tick",
+          model: null,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("accepts get params for id and jobId selectors", () => {
@@ -99,6 +162,89 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts nullable delivery clears on update params", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            channel: null,
+            to: null,
+            threadId: null,
+            accountId: null,
+            failureDestination: null,
+          },
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            failureDestination: {
+              channel: null,
+              to: null,
+              accountId: null,
+              mode: null,
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects blank cron delivery target strings", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "   ",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            channel: "\t",
+          },
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            failureDestination: {
+              channel: null,
+              to: " ",
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          failureAlert: {
+            channel: "last",
+            to: "\n\t",
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts remove params for id and jobId selectors", () => {
     expect(validateCronRemoveParams({ id: "job-1" })).toBe(true);
     expect(validateCronRemoveParams({ jobId: "job-2" })).toBe(true);
@@ -122,6 +268,7 @@ describe("cron protocol validators", () => {
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
+        compact: true,
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);

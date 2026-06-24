@@ -1,3 +1,6 @@
+// Subagent announce timeout tests cover retry timing and fallback requester
+// resolution when completion delivery cannot finish immediately.
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
@@ -109,6 +112,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
+    // Retry behavior is modeled here because the outer announce flow only sees
+    // whether direct delivery eventually succeeded or failed.
     const buildRequest = () => ({
       method: "agent",
       expectFinal: true,
@@ -130,17 +135,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       },
     });
     const timeoutMs =
-      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
-      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
-        ? Math.min(
-            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
-            2_147_000_000,
-          )
-        : 120_000;
+      clampTimerTimeoutMs(configOverride.agents?.defaults?.subagents?.announceTimeoutMs) ?? 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
-    let retryIndex = 0;
-    for (;;) {
+    for (const delayMs of [...retryDelaysMs, undefined]) {
       const request = buildRequest();
       gatewayCalls.push(request);
       try {
@@ -148,13 +146,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         return { delivered: true, path: "direct" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const delayMs = retryDelaysMs[retryIndex];
         if (!/gateway timeout/i.test(message) || delayMs == null) {
           return { delivered: false, path: "direct", error: message };
         }
-        retryIndex += 1;
       }
     }
+    throw new Error("unreachable direct delivery retry loop exit");
   },
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,
@@ -168,10 +165,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
     const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-    if (typeof configured !== "number" || !Number.isFinite(configured)) {
-      return 120_000;
-    }
-    return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
+    return clampTimerTimeoutMs(configured) ?? 120_000;
   },
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));

@@ -1,3 +1,4 @@
+// Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
@@ -15,6 +16,7 @@ const createSelector = () => {
 function createShellHarness(params?: {
   spawnCommand?: typeof import("node:child_process").spawn;
   env?: Record<string, string>;
+  maxOutputChars?: number;
 }) {
   const messages: string[] = [];
   const chatLog = {
@@ -39,6 +41,7 @@ function createShellHarness(params?: {
     createSelector: createSelectorSpy,
     spawnCommand,
     ...(params?.env ? { env: params.env } : {}),
+    ...(params?.maxOutputChars !== undefined ? { maxOutputChars: params.maxOutputChars } : {}),
   });
   return {
     messages,
@@ -110,5 +113,37 @@ describe("createLocalShellRunner", () => {
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
     expect(harness.messages).toContain("local shell: enabled for this session");
+  });
+
+  it("keeps stderr visible instead of evicting it when stdout fills the output cap", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            // stdout fills the entire cap; stderr then carries the failure reason.
+            stdout.emit("data", Buffer.from("0".repeat(20)));
+            stderr.emit("data", Buffer.from("FATAL"));
+            callback(0, null);
+          });
+        }
+      },
+    }));
+
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      maxOutputChars: 20,
+    });
+
+    const run = harness.runLocalShellLine("!noisy");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    // The failure reason in stderr must survive even though stdout filled the cap;
+    // the previous head-cut kept all stdout and dropped stderr entirely.
+    expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
   });
 });

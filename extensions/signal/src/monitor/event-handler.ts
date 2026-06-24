@@ -1,3 +1,4 @@
+// Signal plugin module implements event handler behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -554,7 +555,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    let payload: SignalReceivePayload | null = null;
+    let payload: SignalReceivePayload | null;
     try {
       payload = JSON.parse(event.data) as SignalReceivePayload;
     } catch (err) {

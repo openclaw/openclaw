@@ -1,8 +1,10 @@
+// Formats detailed subagent run information for the info action.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionStore } from "../../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
@@ -16,18 +18,15 @@ import {
   type SubagentsCommandContext,
 } from "./shared.js";
 
-function formatTimestamp(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  return new Date(valueMs).toISOString();
-}
-
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
   }
-  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
+  const timestamp = timestampMsToIsoString(valueMs);
+  if (!timestamp) {
+    return "n/a";
+  }
+  return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
 function resolveDisplayStatus(
@@ -48,8 +47,13 @@ function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], chi
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
-  const store = loadSessionStore(storePath);
-  return { entry: store[childKey] };
+  return {
+    entry: loadSessionEntry({
+      storePath,
+      sessionKey: childKey,
+      clone: false,
+    }),
+  };
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {

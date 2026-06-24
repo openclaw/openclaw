@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements text runtime behavior.
 export {
   convertMarkdownTables,
   sanitizeAssistantVisibleText,
@@ -10,9 +11,11 @@ export {
   isSelfChatMode,
   jidToE164,
   markdownToWhatsApp,
+  resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
   type JidToE164Options,
+  type LidLookup,
   type WebChannel,
 } from "./targets-runtime.js";

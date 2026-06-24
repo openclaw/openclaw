@@ -1,3 +1,6 @@
+/**
+ * Runs compaction hooks and post-compaction side effects for embedded sessions.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -20,6 +23,7 @@ function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "a
 async function runPostCompactionSessionMemorySync(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
 }): Promise<void> {
   if (!params.config) {
@@ -33,6 +37,7 @@ async function runPostCompactionSessionMemorySync(params: {
     const agentId = resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.config,
+      agentId: params.agentId,
     });
     const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
     if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
@@ -60,6 +65,7 @@ async function runPostCompactionSessionMemorySync(params: {
 function syncPostCompactionSessionMemory(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
   mode: "off" | "async" | "await";
 }): Promise<void> {
@@ -70,34 +76,44 @@ function syncPostCompactionSessionMemory(params: {
   const syncTask = runPostCompactionSessionMemorySync({
     config: params.config,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     sessionFile: params.sessionFile,
   });
   if (params.mode === "await") {
     return syncTask;
   }
+  // Async mode should never hold the user turn open; failures are logged inside the task.
   void syncTask;
   return Promise.resolve();
 }
 
+/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
 }): Promise<void> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
   }
-  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
+  emitSessionTranscriptUpdate({
+    sessionFile,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),
   });
 }
 
-export type CompactionHookRunner = {
+/** Narrow adapter over the global hook runner methods used by compaction. */
+type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
     metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
@@ -126,6 +142,7 @@ export type CompactionHookRunner = {
   ) => Promise<void> | void;
 };
 
+/** Converts the global hook runner into the compaction-specific hook shape. */
 export function asCompactionHookRunner(
   hookRunner: ReturnType<typeof getGlobalHookRunner> | null | undefined,
 ): CompactionHookRunner | null {
@@ -154,6 +171,7 @@ function estimateTokenCountSafe(
   }
 }
 
+/** Builds before-hook metrics while tolerating providers that cannot estimate all messages. */
 export function buildBeforeCompactionHookMetrics(params: {
   originalMessages: AgentMessage[];
   currentMessages: AgentMessage[];
@@ -170,6 +188,7 @@ export function buildBeforeCompactionHookMetrics(params: {
   };
 }
 
+/** Runs internal and plugin before-compaction hooks, forwarding hook-produced messages. */
 export async function runBeforeCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
@@ -239,6 +258,7 @@ export async function runBeforeCompactionHooks(params: {
   };
 }
 
+/** Estimates compacted-session token count and rejects impossible growth from stale estimates. */
 export function estimateTokensAfterCompaction(params: {
   messagesAfter: AgentMessage[];
   observedTokenCount?: number;
@@ -260,6 +280,7 @@ export function estimateTokensAfterCompaction(params: {
   return tokensAfter;
 }
 
+/** Runs internal and plugin after-compaction hooks with the final compacted metrics. */
 export async function runAfterCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;

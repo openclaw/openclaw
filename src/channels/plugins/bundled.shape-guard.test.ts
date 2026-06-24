@@ -1,9 +1,10 @@
+// Bundled shape guard tests cover bundled channel package metadata and export shape.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
@@ -195,6 +196,35 @@ afterEach(() => {
 
 describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
+  let realBundledSourceTreeProbe: {
+    hasAccountInspector: boolean;
+    pluginIds: readonly string[];
+  };
+
+  beforeAll(async () => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: (params: {
+          includeChannelConfigs: boolean;
+          includeSyntheticChannelConfigs: boolean;
+        }) =>
+          actual
+            .listBundledChannelPluginMetadata(params)
+            .filter((metadata) => metadata.manifest.id === "slack"),
+      };
+    });
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=real-bundled-source-tree-preload",
+    );
+    realBundledSourceTreeProbe = {
+      hasAccountInspector: typeof bundled.getBundledChannelAccountInspector("slack") === "function",
+      pluginIds: [...bundled.listBundledChannelPluginIds()],
+    };
+  });
 
   it("lists source bundled plugin roots without in-process directory scans", () => {
     expectNoReaddirSyncDuring(() => {
@@ -225,28 +255,8 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("loads real bundled channel entry contracts from the source tree", async () => {
-    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
-      return {
-        ...actual,
-        listBundledChannelPluginMetadata: (params: {
-          includeChannelConfigs: boolean;
-          includeSyntheticChannelConfigs: boolean;
-        }) =>
-          actual
-            .listBundledChannelPluginMetadata(params)
-            .filter((metadata) => metadata.manifest.id === "slack"),
-      };
-    });
-
-    const bundled = await importFreshModule<typeof import("./bundled.js")>(
-      import.meta.url,
-      "./bundled.js?scope=real-bundled-source-tree",
-    );
-
-    expect(bundled.listBundledChannelPluginIds()).toEqual(["slack"]);
-    expect(bundled.hasBundledChannelEntryFeature("slack", "accountInspect")).toBe(true);
+    expect(realBundledSourceTreeProbe.pluginIds).toEqual(["slack"]);
+    expect(realBundledSourceTreeProbe.hasAccountInspector).toBe(true);
   });
 
   it("fills sparse bundled channel plugin metadata from package metadata", async () => {
@@ -306,12 +316,12 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-package-metadata",
       );
 
-      const plugin = bundled.requireBundledChannelPlugin("alpha");
-      expect(plugin.meta.id).toBe("alpha");
-      expect(plugin.meta.label).toBe("Alpha");
-      expect(plugin.meta.selectionLabel).toBe("Use Alpha");
-      expect(plugin.meta.docsPath).toBe("/channels/alpha");
-      expect(plugin.meta.blurb).toBe("Alpha channel metadata.");
+      const plugin = bundled.getBundledChannelPlugin("alpha");
+      expect(plugin?.meta.id).toBe("alpha");
+      expect(plugin?.meta.label).toBe("Alpha");
+      expect(plugin?.meta.selectionLabel).toBe("Use Alpha");
+      expect(plugin?.meta.docsPath).toBe("/channels/alpha");
+      expect(plugin?.meta.blurb).toBe("Alpha channel metadata.");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -382,7 +392,7 @@ describe("bundled channel entry shape guards", () => {
       expect(metadataRootDir).toBe(tempRoot);
       expect(generatedRootDir).toBe(tempRoot);
       expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
-      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+      expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -449,7 +459,7 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-package-local-dist-sdk-alias",
       );
 
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Package dist Alpha");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Package dist Alpha");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -504,7 +514,7 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-direct-dist-sdk-alias",
       );
 
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Direct dist Alpha");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Direct dist Alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
@@ -578,7 +588,7 @@ describe("bundled channel entry shape guards", () => {
       expect(generatedRootDir).toBe(pluginsRoot);
       expect(generatedScanDir).toBe(pluginsRoot);
       expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
-      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+      expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -663,7 +673,7 @@ describe("bundled channel entry shape guards", () => {
       );
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootA, "dist", "extensions");
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha A");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha A");
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup A");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.A.entry-token",
@@ -674,7 +684,7 @@ describe("bundled channel entry shape guards", () => {
       bundled.setBundledChannelRuntime("alpha", { marker: "first" } as never);
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootB, "dist", "extensions");
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha B");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha B");
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup B");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.B.entry-token",

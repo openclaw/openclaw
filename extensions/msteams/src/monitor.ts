@@ -1,3 +1,4 @@
+// Msteams plugin module implements monitor behavior.
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -9,7 +10,7 @@ import {
   type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
@@ -23,7 +24,7 @@ import {
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
-  createMSTeamsPollStoreFs,
+  createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
@@ -252,8 +253,8 @@ export async function monitorMSTeamsProvider(
     typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
       ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
-  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreFs();
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
+  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
+  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
 
   log.info(`starting provider (port ${port})`);
 
@@ -620,7 +621,7 @@ export async function monitorMSTeamsProvider(
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
       log.error("msteams server error", { error: formatUnknownError(err) });
-      reject(err);
+      reject(toLintErrorObject(err, "MSTeams server failed"));
     };
     httpServer.once("listening", onListening);
     httpServer.once("error", onError);
@@ -651,6 +652,20 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
 
 /**

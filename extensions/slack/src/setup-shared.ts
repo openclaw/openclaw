@@ -1,7 +1,9 @@
+// Slack plugin module implements setup shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./channel-api.js";
 
@@ -132,6 +134,9 @@ export function setSlackChannelAllowlist(
 }
 
 export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
+  if (account.config.mode === "relay") {
+    return isSlackPluginAccountConfigured(account);
+  }
   const hasConfiguredBotToken =
     Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
   const hasConfiguredAppToken =

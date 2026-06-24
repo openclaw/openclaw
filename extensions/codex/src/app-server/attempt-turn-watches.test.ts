@@ -1,3 +1,5 @@
+// Codex tests cover attempt turn watches plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 
@@ -8,6 +10,8 @@ describe("Codex app-server attempt turn watches", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -85,9 +89,59 @@ describe("Codex app-server attempt turn watches", () => {
         idleMs: 10,
         timeoutMs: 10,
         lastActivityReason: "turn:start",
+        details: {
+          activeAppServerTurnRequests: 0,
+          activeTurnItemCount: 0,
+          terminalTurnNotificationQueued: false,
+          completionIdleWatchArmed: true,
+          assistantCompletionIdleWatchArmed: false,
+          terminalIdleWatchArmed: false,
+        },
       },
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");
+  });
+
+  it("prefers completion idle timeout when completion and progress watches are due together", () => {
+    const harness = createController();
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:item/tool/call:response", {
+      arm: true,
+      attemptProgress: true,
+      attemptTimeoutMs: 10,
+    });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "completion",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "request:item/tool/call:response",
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");
+  });
+
+  it("clamps oversized completion idle timeouts before scheduling", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const harness = createController({
+      turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    harness.controller.touchActivity("turn:start", { arm: true });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("clamps oversized completion idle override timeouts before scheduling", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const harness = createController();
+
+    harness.controller.armCompletionIdleWatch({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not fire completion idle timeout after terminal notification is queued", () => {

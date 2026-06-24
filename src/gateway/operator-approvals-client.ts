@@ -1,4 +1,5 @@
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+// Gateway operator-approvals client helper.
+// Connects a backend Gateway client scoped to operator approval events.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -9,25 +10,6 @@ import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.j
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
 
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
-
-function shouldOmitOperatorApprovalDeviceIdentity(params: {
-  url: string;
-  token?: string;
-  password?: string;
-}): boolean {
-  return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
-}
-
 function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
   // This token is process-local authority; loopback alone may be a tunnel or another gateway.
   return (
@@ -35,6 +17,13 @@ function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
   );
 }
 
+function shouldOmitApprovalRuntimeDeviceIdentity(params: {
+  sendsApprovalRuntimeToken: boolean;
+}): boolean {
+  return params.sendsApprovalRuntimeToken;
+}
+
+/** Create a Gateway client authorized for operator approval event handling. */
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
@@ -54,12 +43,13 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
+  const sendsApprovalRuntimeToken = shouldSendApprovalRuntimeToken(bootstrap.urlSource);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    ...(shouldSendApprovalRuntimeToken(bootstrap.urlSource)
+    ...(sendsApprovalRuntimeToken
       ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
@@ -67,10 +57,8 @@ export async function createOperatorApprovalsGatewayClient(
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitOperatorApprovalDeviceIdentity({
-      url: bootstrap.url,
-      token: bootstrap.auth.token,
-      password: bootstrap.auth.password,
+    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
+      sendsApprovalRuntimeToken,
     })
       ? null
       : undefined,
@@ -82,6 +70,7 @@ export async function createOperatorApprovalsGatewayClient(
   });
 }
 
+/** Run a callback with a started operator-approvals Gateway client and close it after. */
 export async function withOperatorApprovalsGatewayClient<T>(
   params: {
     config: OpenClawConfig;

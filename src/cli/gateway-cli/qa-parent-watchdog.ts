@@ -1,7 +1,8 @@
+// QA watchdog for shutting down orphaned gateway children and cleaning staged temp roots.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 
 export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 export const QA_TEMP_ROOT_ENV = "OPENCLAW_QA_TEMP_ROOT";
@@ -48,6 +49,7 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
 }
 
 function resolveQaCleanupRoot(rawValue: string | undefined): string | null {
+  // Only cleanup roots with the QA prefix; env values are external to the child process.
   const raw = rawValue?.trim();
   if (!raw) {
     return null;
@@ -108,7 +110,6 @@ export function installQaParentWatchdog(
     ((callback: () => void, ms: number) => setInterval(callback, ms) as QaParentWatchdogTimer);
   let stopped = false;
   let exiting = false;
-  let timer: QaParentWatchdogTimer;
 
   const stop = () => {
     if (stopped) {
@@ -118,7 +119,7 @@ export function installQaParentWatchdog(
     clearIntervalFn(timer);
   };
 
-  timer = setIntervalFn(() => {
+  const timer: QaParentWatchdogTimer = setIntervalFn(() => {
     if (stopped || exiting) {
       return;
     }
@@ -147,7 +148,7 @@ export function installQaParentWatchdog(
             }
           }
           for (const cleanupRoot of qaCleanupRoots) {
-            await rm(cleanupRoot).catch((cleanupError) => {
+            await rm(cleanupRoot).catch((cleanupError: unknown) => {
               logger.warn(
                 `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${
                   cleanupError instanceof Error ? cleanupError.message : String(cleanupError)

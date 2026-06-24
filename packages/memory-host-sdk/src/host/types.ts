@@ -1,5 +1,8 @@
+// Public memory host contracts shared by runtime, QMD, builtin search, and
+// package consumers.
 export type MemorySource = "memory" | "sessions";
 
+/** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -12,6 +15,7 @@ export type MemorySearchResult = {
   citation?: string;
 };
 
+/** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
@@ -21,12 +25,36 @@ export type MemoryEmbeddingProbeResult = {
   cacheExpiresAtMs?: number;
 };
 
+/** Progress event emitted during memory sync. */
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
   label?: string;
 };
 
+export type MemorySessionSyncTarget = {
+  /** Owning OpenClaw agent. Omit only when the active manager scope already supplies it. */
+  agentId?: string;
+  /** Storage-neutral transcript/session identity. */
+  sessionId: string;
+  /** Optional visible session-store key for callers that already carry it. */
+  sessionKey?: string;
+};
+
+export type MemorySyncParams = {
+  reason?: string;
+  force?: boolean;
+  /** Storage-neutral session transcript targets to refresh. */
+  sessions?: MemorySessionSyncTarget[];
+  /**
+   * @deprecated Use `sessions` with `{ agentId, sessionId, sessionKey? }`.
+   * During the deprecation window only canonical OpenClaw transcript paths are accepted.
+   */
+  sessionFiles?: string[];
+  progress?: (update: MemorySyncProgressUpdate) => void;
+};
+
+/** Runtime backend/mode diagnostics for memory search. */
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
@@ -34,6 +62,7 @@ export type MemorySearchRuntimeDebug = {
   fallback?: string;
 };
 
+/** Result of reading a memory file, optionally paginated/truncated. */
 export type MemoryReadResult = {
   text: string;
   path: string;
@@ -43,6 +72,7 @@ export type MemoryReadResult = {
   nextFrom?: number;
 };
 
+/** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
@@ -82,6 +112,7 @@ export type MemoryProviderStatus = {
   custom?: Record<string, unknown>;
 };
 
+/** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
     query: string,
@@ -92,16 +123,13 @@ export interface MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
+      signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
-  sync?(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void>;
+  sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;

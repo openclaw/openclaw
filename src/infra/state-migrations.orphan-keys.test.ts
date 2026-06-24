@@ -1,3 +1,4 @@
+// Tests migration cleanup for orphaned state keys.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -186,6 +187,41 @@ describe("migrateOrphanedSessionKeys", () => {
       const store = readStore(storePath);
       expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("current");
       expect(store["agent:main:main"]).toBeUndefined();
+    });
+  });
+
+  it("lowercases mixed-case session keys, keeping the freshest duplicate", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      writeStore(storePath, {
+        "agent:ops:MySession": { sessionId: "mixed", updatedAt: 1000 },
+        "agent:ops:mysession": { sessionId: "lower", updatedAt: 2000 },
+        "agent:ops:OtherCase": { sessionId: "other", updatedAt: 1500 },
+      });
+
+      await migrateFixtureState(stateDir);
+
+      const store = readStore(storePath);
+      expect(requireStoreEntry(store, "agent:ops:mysession").sessionId).toBe("lower");
+      expect(store["agent:ops:MySession"]).toBeUndefined();
+      expect(requireStoreEntry(store, "agent:ops:othercase").sessionId).toBe("other");
+      expect(store["agent:ops:OtherCase"]).toBeUndefined();
+    });
+  });
+
+  it("canonicalizes mixed-case agent segments in ACP keys, preserving the opaque id", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      const acpId = "33333333-3333-4333-8333-333333333333";
+      writeStore(storePath, {
+        [`agent:OPS:acp:${acpId}`]: { sessionId: "sess-acp", updatedAt: 1000 },
+      });
+
+      await migrateFixtureState(stateDir);
+
+      const store = readStore(storePath);
+      expect(requireStoreEntry(store, `agent:ops:acp:${acpId}`).sessionId).toBe("sess-acp");
+      expect(store[`agent:OPS:acp:${acpId}`]).toBeUndefined();
     });
   });
 

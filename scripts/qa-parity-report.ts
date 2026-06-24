@@ -1,4 +1,6 @@
+// Qa Parity Report script supports OpenClaw repository automation.
 import { runQaParityReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 type Options = {
   baselineLabel?: string;
@@ -12,21 +14,26 @@ type Options = {
   tokenEfficiency?: boolean;
 };
 
-function takeValue(args: string[], index: number, flag: string): string {
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value.`);
-  }
-  return value;
-}
-
 function parseArgs(args: string[]): Options {
-  const opts: Options = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case "--help":
-      case "-h":
+  return parseFlagArgs(
+    args,
+    {},
+    [
+      stringFlag("--baseline-label", "baselineLabel", { rejectShortOptions: true }),
+      stringFlag("--baseline-summary", "baselineSummary", { rejectShortOptions: true }),
+      stringFlag("--candidate-label", "candidateLabel", { rejectShortOptions: true }),
+      stringFlag("--candidate-summary", "candidateSummary", { rejectShortOptions: true }),
+      stringFlag("--output-dir", "outputDir", { rejectShortOptions: true }),
+      stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
+      booleanFlag("--runtime-axis", "runtimeAxis"),
+      stringFlag("--summary", "summary", { rejectShortOptions: true }),
+      booleanFlag("--token-efficiency", "tokenEfficiency"),
+    ],
+    {
+      onUnhandledArg(arg: string) {
+        if (arg !== "--help" && arg !== "-h") {
+          throw new Error(`Unknown qa parity-report option: ${arg}`);
+        }
         process.stdout.write(`Usage: openclaw qa parity-report [options]
 
 Options:
@@ -42,69 +49,38 @@ Options:
   -h, --help                  Display help
 `);
         process.exit(0);
-      case "--baseline-label":
-        opts.baselineLabel = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--baseline-summary":
-        opts.baselineSummary = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--candidate-label":
-        opts.candidateLabel = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--candidate-summary":
-        opts.candidateSummary = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--output-dir":
-        opts.outputDir = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--repo-root":
-        opts.repoRoot = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--runtime-axis":
-        opts.runtimeAxis = true;
-        break;
-      case "--summary":
-        opts.summary = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--token-efficiency":
-        opts.tokenEfficiency = true;
-        break;
-      default:
-        throw new Error(`Unknown qa parity-report option: ${arg}`);
+      },
+    },
+  ) as Options;
+}
+
+try {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.runtimeAxis) {
+    if (!opts.summary) {
+      throw new Error("--summary is required when --runtime-axis is set.");
+    }
+  } else {
+    if (!opts.candidateSummary) {
+      throw new Error("--candidate-summary is required.");
+    }
+    if (!opts.baselineSummary) {
+      throw new Error("--baseline-summary is required.");
     }
   }
-  return opts;
-}
 
-const opts = parseArgs(process.argv.slice(2));
-if (opts.runtimeAxis) {
-  if (!opts.summary) {
-    throw new Error("--summary is required when --runtime-axis is set.");
-  }
-} else {
-  if (!opts.candidateSummary) {
-    throw new Error("--candidate-summary is required.");
-  }
-  if (!opts.baselineSummary) {
-    throw new Error("--baseline-summary is required.");
-  }
+  await runQaParityReportCommand({
+    ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
+    ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
+    ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
+    ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
+    ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+    ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
+    ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
+    ...(opts.summary ? { summary: opts.summary } : {}),
+    ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
+  });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
 }
-
-await runQaParityReportCommand({
-  ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
-  ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
-  ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
-  ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
-  ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
-  ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
-  ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
-  ...(opts.summary ? { summary: opts.summary } : {}),
-  ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
-});

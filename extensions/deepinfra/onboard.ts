@@ -1,3 +1,4 @@
+// Deepinfra setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   type OpenClawConfig,
@@ -6,7 +7,7 @@ import { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-mode
 
 export { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF };
 
-export function applyDeepInfraProviderConfig(
+export function applyDeepInfraConfig(
   cfg: OpenClawConfig,
   modelRef: string = DEEPINFRA_DEFAULT_MODEL_REF,
 ): OpenClawConfig {
@@ -16,7 +17,7 @@ export function applyDeepInfraProviderConfig(
     alias: models[modelRef]?.alias ?? "DeepInfra",
   };
 
-  return {
+  return applyAgentDefaultModelPrimary({
     ...cfg,
     agents: {
       ...cfg.agents,
@@ -25,12 +26,5 @@ export function applyDeepInfraProviderConfig(
         models,
       },
     },
-  };
-}
-
-export function applyDeepInfraConfig(
-  cfg: OpenClawConfig,
-  modelRef: string = DEEPINFRA_DEFAULT_MODEL_REF,
-): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyDeepInfraProviderConfig(cfg, modelRef), modelRef);
+  }, modelRef);
 }

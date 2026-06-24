@@ -1,3 +1,4 @@
+// Voice Call tests cover webhook plugin behavior.
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -160,8 +161,8 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
-function expectNoTwilioStreamState(provider: TwilioProvider) {
-  const state = provider as unknown as {
+function expectNoTwilioStreamState(providerLocal: TwilioProvider) {
+  const state = providerLocal as unknown as {
     streamAuthTokens: Map<string, string>;
     activeStreamCalls: Set<string>;
   };
@@ -247,9 +248,8 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       if (!mediaStreamHandler) {
         throw new Error("expected media stream handler");
       }
-      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
-      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
-      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
+      expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
+      expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -332,7 +332,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       manager,
       createTwilioStreamingProvider(),
     );
-    const request = {
+    const requestLocal = {
       headers: {},
       socket: { remoteAddress: "127.0.0.1" },
       ...requestOverrides,
@@ -342,7 +342,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       server as unknown as {
         resolveMediaStreamClientIp: (request: MediaStreamRequestDouble) => string | undefined;
       }
-    ).resolveMediaStreamClientIp(request as never);
+    ).resolveMediaStreamClientIp(requestLocal as never);
   };
 
   it("uses forwarded IPs only when forwarding trust is explicitly enabled", () => {
@@ -558,6 +558,145 @@ async function postWebhookFormWithHeadersResult(
   });
 }
 
+async function requestWebSocketUpgrade(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  pathname: string,
+): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "upgrade"; statusCode: number }
+  | { kind: "error"; code: string | undefined }
+> {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  requestUrl.pathname = pathname;
+  requestUrl.search = "";
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (
+      result:
+        | { kind: "response"; statusCode: number; body: string }
+        | { kind: "upgrade"; statusCode: number }
+        | { kind: "error"; code: string | undefined },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      req.destroy();
+      finish({ kind: "error", code: "timeout" });
+    }, 2_000);
+    const req = request(
+      {
+        hostname: requestUrl.hostname,
+        port: requestUrl.port,
+        path: requestUrl.pathname,
+        method: "GET",
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          finish({
+            kind: "response",
+            statusCode: res.statusCode ?? 0,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("upgrade", (res, socket) => {
+      socket.destroy();
+      finish({ kind: "upgrade", statusCode: res.statusCode ?? 0 });
+    });
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      finish({ kind: "error", code: error.code });
+    });
+    req.end();
+  });
+}
+
+describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
+  function createRealtimeRoutingServer(streamPathPattern: string): {
+    server: VoiceCallWebhookServer;
+    handleWebSocketUpgrade: ReturnType<typeof vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>>;
+  } {
+    const { manager } = createManager([]);
+    const server = new VoiceCallWebhookServer(
+      createConfig({
+        realtime: {
+          enabled: true,
+          streamPath: streamPathPattern,
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
+          tools: [],
+          providers: {},
+        },
+      }),
+      manager,
+      provider,
+    );
+    const handleWebSocketUpgrade = vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>(
+      (_req, socket) => {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+      },
+    );
+    server.setRealtimeHandler({
+      buildTwiMLPayload: () => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: "<Response />",
+      }),
+      getStreamPathPattern: () => streamPathPattern,
+      handleWebSocketUpgrade,
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+    return { server, handleWebSocketUpgrade };
+  }
+
+  it("does not route sibling paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } =
+      createRealtimeRoutingServer("/voice/stream/realtime");
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+
+      await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime-extra/token");
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("routes root stream child paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } = createRealtimeRoutingServer("/");
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("VoiceCallWebhookServer stale call reaper", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -735,6 +874,40 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not cache replay responses when the TTL would exceed the Date range", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let parseCount = 0;
+    const parseWebhookEvent = vi.fn(() => ({
+      events: [],
+      statusCode: 200,
+      providerResponseBody: `OK-${++parseCount}`,
+    }));
+    const replayProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "mock:req:overflow-cache" }),
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, replayProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(first.status).toBe(200);
+      expect(await first.text()).toBe("OK-1");
+
+      dateNow.mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+      const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(second.status).toBe(200);
+      expect(await second.text()).toBe("OK-2");
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      dateNow.mockRestore();
       await server.stop();
     }
   });

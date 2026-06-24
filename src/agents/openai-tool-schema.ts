@@ -1,15 +1,26 @@
+/**
+ * OpenAI strict JSON-schema normalization for tool inventories and request payloads.
+ *
+ * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
+ */
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 
+/**
+ * OpenAI strict-tool-schema normalization and diagnostics.
+ *
+ * Strict schemas need all object properties required and `additionalProperties: false`; model
+ * compatibility settings can also remove unsupported schema constructs before strict checks run.
+ */
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
 };
 
-type ToolWithParameters = {
-  name?: unknown;
-  parameters: unknown;
-};
+const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
+let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -31,15 +42,66 @@ function resolveToolSchemaModelCompat(
   };
 }
 
+function resolveStrictOpenAISchemaCacheKey(
+  modelCompat: ToolSchemaCompatInput | null | undefined,
+): string {
+  const compat = resolveToolSchemaModelCompat(modelCompat);
+  return JSON.stringify([
+    [...(compat?.unsupportedToolSchemaKeywords ?? [])].toSorted(),
+    shouldOmitEmptyArrayItems(compat),
+  ]);
+}
+
+function readCachedStrictOpenAISchema(schema: object, key: string): unknown {
+  return strictOpenAISchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
+}
+
+function rememberStrictOpenAISchema(schema: object, key: string, value: unknown): unknown {
+  const entries = strictOpenAISchemaCache.get(schema) ?? [];
+  strictOpenAISchemaCache.set(
+    schema,
+    [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
+      0,
+      MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
+    ),
+  );
+  return value;
+}
+
+export function clearOpenAIToolSchemaCacheForTest(): void {
+  strictOpenAISchemaCache = new WeakMap();
+}
+
+/** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */
 export function normalizeStrictOpenAIJsonSchema(
   schema: unknown,
   modelCompat?: ToolSchemaCompatInput | null,
 ): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(
-    normalizeToolParameterSchema(schema ?? {}, {
-      modelCompat: resolveToolSchemaModelCompat(modelCompat),
-    }),
-    0,
+  const schemaInput = schema ?? {};
+  if (!schemaInput || typeof schemaInput !== "object") {
+    return normalizeStrictOpenAIJsonSchemaRecursive(
+      normalizeToolParameterSchema(schemaInput, {
+        modelCompat: resolveToolSchemaModelCompat(modelCompat),
+      }),
+      0,
+    );
+  }
+  const cacheKey = resolveStrictOpenAISchemaCacheKey(modelCompat);
+  const cached = readCachedStrictOpenAISchema(schemaInput, cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  return rememberStrictOpenAISchema(
+    schemaInput,
+    cacheKey,
+    // Cache by input object and compatibility key so repeated inventory generation preserves object
+    // identity without mixing schemas normalized for different provider limitations.
+    normalizeStrictOpenAIJsonSchemaRecursive(
+      normalizeToolParameterSchema(schemaInput, {
+        modelCompat: resolveToolSchemaModelCompat(modelCompat),
+      }),
+      0,
+    ),
   );
 }
 
@@ -89,6 +151,7 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   return changed ? normalized : schema;
 }
 
+/** Normalizes tool parameters using strict OpenAI rules only when strict mode is active. */
 export function normalizeOpenAIStrictToolParameters<T>(
   schema: T,
   strict: boolean,
@@ -101,6 +164,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
   return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
 }
 
+/** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
@@ -111,25 +175,26 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
-export function findOpenAIStrictToolSchemaDiagnostics(
-  tools: readonly ToolWithParameters[],
+/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
+export function findOpenAIStrictToolProjectionDiagnostics(
+  projection: OpenAIToolProjection,
 ): OpenAIStrictToolSchemaDiagnostic[] {
-  return tools.flatMap((tool, toolIndex) => {
-    const violations = findStrictOpenAIJsonSchemaViolations(
-      normalizeStrictOpenAIJsonSchema(tool.parameters),
-      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [
-      {
-        toolIndex,
-        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
-        violations,
-      },
-    ];
-  });
+  return [
+    ...projection.diagnostics.map((diagnostic) => ({
+      toolIndex: diagnostic.toolIndex,
+      ...(diagnostic.toolName ? { toolName: diagnostic.toolName } : {}),
+      violations: [...diagnostic.violations],
+    })),
+    ...projection.tools.flatMap((tool) => {
+      const violations = findStrictOpenAIJsonSchemaViolations(
+        normalizeStrictOpenAIJsonSchema(tool.parameters),
+        `${tool.name}.parameters`,
+      );
+      return violations.length > 0
+        ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
+        : [];
+    }),
+  ];
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -245,12 +310,13 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
   return violations;
 }
 
-export function resolveOpenAIStrictToolFlagForInventory(
-  tools: readonly ToolWithParameters[],
+/** Resolves strict mode for the projected tools that will be emitted in the request payload. */
+export function resolveOpenAIProjectedToolsStrictToolFlag(
+  projection: OpenAIToolProjection,
   strict: boolean | null | undefined,
 ): boolean | undefined {
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }

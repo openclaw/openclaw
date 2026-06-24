@@ -1,3 +1,6 @@
+// Xai plugin module implements runtime model compat behavior.
+// Reasoning effort is configurable only for grok-4.3*; encrypted reasoning include/replay is
+// handled separately in stream.ts for all reasoning-capable xAI models.
 import { applyXaiModelCompat } from "./model-compat.js";
 
 type XaiRuntimeModelCompat = {

@@ -1,3 +1,4 @@
+// Interactive transcript export template used by auto-reply HTML reports.
 (function () {
   "use strict";
 
@@ -12,7 +13,15 @@
     bytes[i] = binary.charCodeAt(i);
   }
   const data = JSON.parse(new TextDecoder("utf-8").decode(bytes));
-  const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+  const {
+    header,
+    entries,
+    leafId: defaultLeafId,
+    hasLeafControl = false,
+    systemPrompt,
+    tools,
+    renderedTools,
+  } = data;
 
   // ============================================================
   // URL PARAMETER HANDLING
@@ -348,6 +357,16 @@
         .join("");
     }
     return "";
+  }
+
+  function renderableContentBlocks(content) {
+    if (Array.isArray(content)) {
+      return content;
+    }
+    if (typeof content === "string") {
+      return [{ type: "text", text: content }];
+    }
+    return [];
   }
 
   function getSearchableText(entry, label) {
@@ -1044,7 +1063,7 @@
       if (!result) {
         return "";
       }
-      const textBlocks = result.content.filter((c) => c.type === "text");
+      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
       return textBlocks.map((c) => c.text).join("\n");
     };
 
@@ -1052,7 +1071,7 @@
       if (!result) {
         return [];
       }
-      return result.content.filter((c) => c.type === "image");
+      return renderableContentBlocks(result.content).filter((c) => c.type === "image");
     };
 
     const renderResultImages = () => {
@@ -1344,10 +1363,12 @@
         const text =
           typeof content === "string"
             ? content
-            : content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n");
+            : Array.isArray(content)
+                ? content
+                    .filter((c) => c.type === "text")
+                    .map((c) => c.text)
+                    .join("\n")
+                : "";
         if (text.trim()) {
           html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
         }
@@ -1357,8 +1378,9 @@
 
       if (msg.role === "assistant") {
         let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
+        const contentBlocks = renderableContentBlocks(msg.content);
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {
             html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
           } else if (block.type === "thinking" && block.thinking.trim()) {
@@ -1369,7 +1391,7 @@
           }
         }
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "toolCall") {
             html += renderToolCall(block);
           }
@@ -1474,7 +1496,7 @@
               cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
             }
           }
-          toolCalls += msg.content.filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
@@ -1938,6 +1960,9 @@
     } else {
       navigateTo(leafId, "none");
     }
+  } else if (hasLeafControl) {
+    // A null leaf selected by a control record is an intentional empty branch.
+    navigateTo(null, "none");
   } else if (entries.length > 0) {
     // Fallback: use last entry if no leafId
     navigateTo(entries[entries.length - 1].id, "none");

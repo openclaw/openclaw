@@ -1,3 +1,4 @@
+// Covers doctor contract registry load paths for plugins.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,8 +73,8 @@ module.exports = {
     const entry = isRecord(entries[pluginId]) ? { ...entries[pluginId] } : {};
     const llm = isRecord(entry.llm) ? { ...entry.llm } : {};
     const allowedModels = Array.isArray(llm.allowedModels) ? [...llm.allowedModels] : [];
-    if (!allowedModels.includes("openai-codex/gpt-5.4-mini")) {
-      allowedModels.push("openai-codex/gpt-5.4-mini");
+    if (!allowedModels.includes("openai/gpt-5.4-mini")) {
+      allowedModels.push("openai/gpt-5.4-mini");
     }
     root.plugins = plugins;
     plugins.entries = entries;
@@ -88,6 +89,55 @@ module.exports = {
       changes: ["configured load-path doctor contract LLM policy"],
     };
   },
+};
+`,
+    "utf8",
+  );
+}
+
+function writeDistDoctorPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: pluginId,
+        name: "Dist Doctor",
+        version: "0.0.0-test",
+        configSchema: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${pluginId}`,
+        version: "0.0.0-test",
+        type: "module",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "dist", "doctor-contract-api.cjs"),
+    `
+module.exports = {
+  legacyConfigRules: [
+    {
+      path: ["plugins", "entries", ${JSON.stringify(pluginId)}, "config", "distOnly"],
+      message: "dist doctor contract warning",
+    },
+  ],
 };
 `,
     "utf8",
@@ -192,6 +242,26 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
+  it("discovers doctor warning rules from package dist contracts", () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "dist-doctor";
+    writeDistDoctorPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    const rules = listPluginDoctorLegacyConfigRules({
+      config,
+      env: makeHermeticDoctorEnv(stateDir),
+      pluginIds: [pluginId],
+    });
+    expect(rules).toEqual([
+      {
+        path: ["plugins", "entries", pluginId, "config", "distOnly"],
+        message: "dist doctor contract warning",
+      },
+    ]);
+  });
+
   it("applies compatibility normalizers from plugins.load.paths", () => {
     const stateDir = makeTempDir();
     const pluginRoot = makeTempDir();
@@ -209,7 +279,7 @@ describe("doctor contract registry load-path plugins", () => {
     expect(result.changes).toEqual(["configured load-path doctor contract LLM policy"]);
     expect(llm).toEqual({
       allowModelOverride: true,
-      allowedModels: ["openai-codex/gpt-5.4-mini"],
+      allowedModels: ["openai/gpt-5.4-mini"],
     });
   });
 

@@ -1,3 +1,4 @@
+// Msteams tests cover welcome card plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
@@ -21,6 +22,28 @@ describe("buildMSTeamsPresentationCard", () => {
       version: "1.4",
       body: [{ type: "TextBlock", text: "Deploy finished", wrap: true }],
       actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
+    });
+  });
+
+  it("submits command actions as command text", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Plugins",
+                  action: { type: "command", command: "/codex plugins menu" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      actions: [{ type: "Action.Submit", title: "Plugins", data: "/codex plugins menu" }],
     });
   });
 

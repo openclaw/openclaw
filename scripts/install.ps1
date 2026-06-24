@@ -171,7 +171,23 @@ function Check-Node {
     return $false
 }
 
-function Get-WindowsNodeArchitecture {
+function Get-WindowsPortableArchitecture {
+    # Native ARM64 Windows may run Windows PowerShell under x64 emulation, so
+    # process env vars can report AMD64 even when the host CPU is ARM64.
+    try {
+        $processor = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($processor -and $processor.Architecture -eq 12) {
+            return "arm64"
+        }
+    } catch {}
+
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop | Select-Object -First 1
+        if ($computerSystem -and $computerSystem.SystemType -match "ARM64") {
+            return "arm64"
+        }
+    } catch {}
+
     foreach ($architecture in @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)) {
         if ($architecture -match "ARM64") {
             return "arm64"
@@ -227,7 +243,7 @@ function Ensure-PortableNodeOnUserPath {
 }
 
 function Resolve-PortableNodeDownload {
-    $architecture = Get-WindowsNodeArchitecture
+    $architecture = Get-WindowsPortableArchitecture
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
@@ -528,9 +544,16 @@ function Resolve-PortableGitDownload {
         throw "Could not resolve latest git-for-windows release metadata."
     }
 
+    $architecture = Get-WindowsPortableArchitecture
+    $assetPattern = if ($architecture -eq "arm64") { '^MinGit-.*-arm64\.zip$' } else { '^MinGit-.*-64-bit\.zip$' }
     $asset = $release.assets |
-        Where-Object { $_.name -match '^MinGit-.*-64-bit\.zip$' -and $_.name -notmatch 'busybox' } |
+        Where-Object { $_.name -match $assetPattern -and $_.name -notmatch 'busybox' } |
         Select-Object -First 1
+    if (-not $asset -and $architecture -eq "arm64") {
+        $asset = $release.assets |
+            Where-Object { $_.name -match '^MinGit-.*-64-bit\.zip$' -and $_.name -notmatch 'busybox' } |
+            Select-Object -First 1
+    }
 
     if (-not $asset) {
         throw "Could not find a MinGit zip asset in the latest git-for-windows release."
@@ -655,7 +678,10 @@ function Invoke-InteractiveOpenClawCommand {
         throw "openclaw command not found on PATH."
     }
 
-    $null = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $process = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "openclaw $($Arguments -join ' ') failed with exit code $($process.ExitCode)."
+    }
 }
 
 function Resolve-CommandPath {
@@ -875,22 +901,16 @@ function Ensure-Pnpm {
         }
     }
     Write-Host "[*] Installing pnpm..." -ForegroundColor Yellow
-    $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
+    $pnpmInstalled = $false
     try {
+        Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
+        $pnpmInstalled = ($LASTEXITCODE -eq 0)
+    } catch {
         $pnpmInstalled = $false
-        try {
-            Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
-            $pnpmInstalled = ($LASTEXITCODE -eq 0)
-        } catch {
-            $pnpmInstalled = $false
-        }
-        if (-not $pnpmInstalled) {
-            Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
-            Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
-        }
-    } finally {
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
+    }
+    if (-not $pnpmInstalled) {
+        Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
+        Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
     }
     if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir)) {
         throw "pnpm install completed, but $pnpmSpec is not first on PATH."
@@ -1057,6 +1077,84 @@ function Test-NpmConfigRawKey {
     return $false
 }
 
+function Add-NpmCacheCandidate {
+    param(
+        [System.Collections.Generic.List[string]]$Candidates,
+        [object]$Path
+    )
+    foreach ($rawPath in @($Path)) {
+        $trimmed = "$rawPath".Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed) -and -not $Candidates.Contains($trimmed)) {
+            $Candidates.Add($trimmed)
+        }
+    }
+}
+
+function Get-NpmDebugLogRootCandidates {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    Add-NpmCacheCandidate -Candidates $candidates -Path $env:NPM_CONFIG_CACHE
+
+    $detectedCache = (Invoke-NpmCommand -Arguments @("config", "get", "cache") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path $detectedCache
+    }
+
+    if ($env:LOCALAPPDATA) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:LOCALAPPDATA "npm-cache")
+    }
+    if ($env:APPDATA) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:APPDATA "npm-cache")
+    }
+    if ($env:USERPROFILE) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:USERPROFILE "AppData\Local\npm-cache")
+    }
+
+    return $candidates
+}
+
+function Get-LatestNpmDebugLogPath {
+    foreach ($cacheDir in (Get-NpmDebugLogRootCandidates)) {
+        $logDir = Join-Path $cacheDir "_logs"
+        if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
+            continue
+        }
+        $latestLog = Get-ChildItem -LiteralPath $logDir -Filter "*-debug-*.log" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if ($latestLog) {
+            return $latestLog.FullName
+        }
+    }
+    return $null
+}
+
+function Write-NpmInstallFailureDetails {
+    param([object[]]$Output)
+    $printedOutput = $false
+    foreach ($line in @($Output)) {
+        if ($null -eq $line) {
+            continue
+        }
+        $text = "$line"
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            continue
+        }
+        Write-Host $text
+        $printedOutput = $true
+    }
+
+    $latestLog = Get-LatestNpmDebugLogPath
+    if ($latestLog) {
+        Write-Host "Latest npm debug log ($latestLog):" -ForegroundColor Yellow
+        Get-Content -LiteralPath $latestLog -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        return
+    }
+
+    if (-not $printedOutput) {
+        Write-Host "npm produced no console output and no npm debug log was found." -ForegroundColor Yellow
+    }
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -1092,7 +1190,6 @@ function Install-OpenClaw {
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
     $prevAudit = $env:NPM_CONFIG_AUDIT
-    $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $prevNodeLlamaSkipDownload = $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD
     $prevBefore = $env:NPM_CONFIG_BEFORE
     $prevMinReleaseAge = $env:NPM_CONFIG_MIN_RELEASE_AGE
@@ -1100,7 +1197,6 @@ function Install-OpenClaw {
     $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
     $env:NPM_CONFIG_FUND = "false"
     $env:NPM_CONFIG_AUDIT = "false"
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
@@ -1116,7 +1212,7 @@ function Install-OpenClaw {
                 Write-Host "Re-run with verbose output to see the full error:" -ForegroundColor Yellow
                 Write-Host '  powershell -c "irm https://openclaw.ai/install.ps1 | iex"' -ForegroundColor Cyan
             }
-            $npmOutput | ForEach-Object { Write-Host $_ }
+            Write-NpmInstallFailureDetails -Output $npmOutput
             return $false
         }
     } finally {
@@ -1124,7 +1220,6 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_UPDATE_NOTIFIER = $prevUpdateNotifier
         $env:NPM_CONFIG_FUND = $prevFund
         $env:NPM_CONFIG_AUDIT = $prevAudit
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
         $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload
         $env:NPM_CONFIG_BEFORE = $prevBefore
         $env:NPM_CONFIG_MIN_RELEASE_AGE = $prevMinReleaseAge
@@ -1168,23 +1263,23 @@ function Install-OpenClawFromGit {
 
     Remove-LegacySubmodule -RepoDir $RepoDir
 
-    $prevPnpmScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
+    $prevNodeLlamaPostinstall = $env:NODE_LLAMA_CPP_POSTINSTALL
     $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
         throw "pnpm not found after installation."
     }
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     $env:PNPM_CONFIG_CHILD_CONCURRENCY = "1"
     $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "4"
     $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
     $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
     $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
+    $env:NODE_LLAMA_CPP_POSTINSTALL = "skip"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
@@ -1226,12 +1321,12 @@ function Install-OpenClawFromGit {
         if ($pushedRepoLocation) {
             Pop-Location
         }
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
         $env:PNPM_CONFIG_CHILD_CONCURRENCY = $prevPnpmChildConcurrency
         $env:PNPM_CONFIG_NETWORK_CONCURRENCY = $prevPnpmNetworkConcurrency
         $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
+        $env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall
         $env:NODE_OPTIONS = $prevNodeOptions
     }
 

@@ -1,8 +1,11 @@
+// Covers message-action media param collection, sandbox normalization, base64
+// hydration, structured attachments, JSON params, and plugin alias gating.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 
 const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
@@ -25,6 +28,22 @@ const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
+async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await test(stateDir);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 describe("message action media helpers", () => {
   beforeEach(() => {
     resolveChannelMessageToolMediaSourceParamKeysMock.mockClear();
@@ -40,7 +59,11 @@ describe("message action media helpers", () => {
           channel: "workspace",
           target: "#C12345678",
           message: "hi",
+          buffer: Buffer.from("artifact").toString("base64"),
+          filename: "artifact.txt",
+          contentType: "text/plain",
           media: "https://example.com/photo.png",
+          media_urls: ["https://example.com/extra.png"],
         },
       }),
     ).toStrictEqual([]);
@@ -122,10 +145,18 @@ describe("message action media helpers", () => {
       ).rejects.toThrow(/data:/i);
       await expect(
         normalizeSandboxMediaList({
-          values: [" file:///workspace/assets/photo.png ", "/workspace/assets/photo.png", " "],
+          values: [
+            " file:///workspace/assets/photo.png ",
+            "/workspace/assets/photo.png",
+            "buffer://message-send/attachment",
+            " ",
+          ],
           sandboxRoot: ` ${sandboxRoot} `,
         }),
-      ).resolves.toEqual([path.join(sandboxRoot, "assets", "photo.png")]);
+      ).resolves.toEqual([
+        path.join(sandboxRoot, "assets", "photo.png"),
+        "buffer://message-send/attachment",
+      ]);
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -232,6 +263,7 @@ describe("message action media helpers", () => {
           media: " /workspace/uploads/photo.png ",
           filePath: "",
           image: "file:///workspace/assets/event-cover.png",
+          media_urls: [" /workspace/extra/diagram.png ", ""],
           avatarPath: "/workspace/avatars/profile.png",
           avatar_url: "mxc://matrix.org/abc123def456",
           ignored: "/workspace/not-included.png",
@@ -243,6 +275,7 @@ describe("message action media helpers", () => {
       "file:///workspace/assets/event-cover.png",
       "/workspace/avatars/profile.png",
       "mxc://matrix.org/abc123def456",
+      "/workspace/extra/diagram.png",
     ]);
   });
 
@@ -593,6 +626,130 @@ describe("message action media helpers", () => {
     });
 
     expect(args.caption).toBeUndefined();
+  });
+
+  it("hydrates buffer-only send params into outbound media paths", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const args: Record<string, unknown> = {
+        buffer: Buffer.from("artifact bytes").toString("base64"),
+        filename: "artifact.txt",
+        contentType: "text/plain",
+      };
+
+      await hydrateAttachmentParamsForAction({
+        cfg,
+        channel: "workspace",
+        args,
+        action: "send",
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(typeof args.media).toBe("string");
+      expect(args.mediaUrl).toBe(args.media);
+      expect(args.mediaUrls).toEqual([args.media]);
+      expect(args.buffer).toBeUndefined();
+      await expect(fs.readFile(String(args.media), "utf8")).resolves.toBe("artifact bytes");
+    });
+  });
+
+  it("rejects oversized buffer-only send params before base64 decoding", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const fromSpy = vi.spyOn(Buffer, "from");
+      const args: Record<string, unknown> = {
+        buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+        contentType: "application/octet-stream",
+      };
+
+      try {
+        await expect(
+          hydrateAttachmentParamsForAction({
+            cfg,
+            channel: "workspace",
+            args,
+            action: "send",
+            mediaPolicy: { mode: "host" },
+          }),
+        ).rejects.toThrow(/too large|limit/i);
+
+        const base64Calls = (fromSpy.mock.calls as ReadonlyArray<readonly unknown[]>).filter(
+          (call) => call[1] === "base64",
+        );
+        expect(base64Calls).toHaveLength(0);
+        expect(args.media).toBeUndefined();
+        expect(args.mediaUrl).toBeUndefined();
+      } finally {
+        fromSpy.mockRestore();
+      }
+    });
+  });
+
+  it("rejects invalid buffer-only send base64 without staging media", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const args: Record<string, unknown> = {
+        buffer: "not-base64!",
+        contentType: "text/plain",
+      };
+
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg,
+          channel: "workspace",
+          args,
+          action: "send",
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow(/invalid base64/i);
+
+      expect(args.media).toBeUndefined();
+      expect(args.mediaUrl).toBeUndefined();
+    });
+  });
+
+  it("skips send buffer materialization when an explicit media source is present", async () => {
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const args: Record<string, unknown> = {
+        buffer: Buffer.from("ignored").toString("base64"),
+        mediaUrl: "https://example.com/pic.png",
+      };
+
+      await hydrateAttachmentParamsForAction({
+        cfg,
+        channel: "workspace",
+        args,
+        action: "send",
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(args.mediaUrl).toBe("https://example.com/pic.png");
+      expect(args.media).toBeUndefined();
+      expect(args.buffer).toBeUndefined();
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+
+  it("previews dry-run buffer-only sends without writing outbound media files", async () => {
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const args: Record<string, unknown> = {
+        buffer: Buffer.from("preview").toString("base64"),
+        filename: "preview.txt",
+        contentType: "text/plain",
+      };
+
+      await hydrateAttachmentParamsForAction({
+        cfg,
+        channel: "workspace",
+        args,
+        action: "send",
+        dryRun: true,
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(args.media).toBe("buffer://message-send/attachment");
+      expect(args.mediaUrl).toBe("buffer://message-send/attachment");
+      expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
+      expect(args.buffer).toBeUndefined();
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
   });
 });
 

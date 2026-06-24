@@ -1,3 +1,4 @@
+// Realtime Talk Live Smoke script supports OpenClaw repository automation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
 import { createServer } from "vite";
 import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   parseStrictIntegerOption,
   previewForDevToolLog,
@@ -16,12 +18,17 @@ const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
+const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
   "gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
+
+type RealtimeSmokeCliOptions = {
+  help: boolean;
+};
 
 type SmokeResult = {
   name: string;
@@ -40,6 +47,43 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
+type OpenAIRealtimeBrowserResponseReader = (
+  response: Response,
+  label: string,
+  maxBytes: number,
+) => Promise<string>;
+
+type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
+  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
+};
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
+
+function usage(): string {
+  return [
+    "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
+    "",
+    "Options:",
+    "  -h, --help    Show this help",
+    "",
+    "Environment:",
+    "  OPENAI_API_KEY",
+    "  GEMINI_API_KEY or GOOGLE_API_KEY",
+  ].join("\n");
+}
+
+function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
+  return { help: argv.includes("--help") || argv.includes("-h") };
+}
+
 function getEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
@@ -49,9 +93,25 @@ function shortError(error: unknown): string {
   return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
 }
 
-async function readBoundedText(response: Response): Promise<string> {
-  const text = await response.text();
-  return previewForDevToolLog(text, 600);
+async function readBoundedText(
+  response: Response,
+  label: string,
+  maxBytes = OPENAI_HTTP_RESPONSE_MAX_BYTES,
+  signal?: AbortSignal,
+): Promise<string> {
+  return await readBoundedResponseText(response, label, maxBytes, {
+    createTooLargeError: (message) => new Error(message),
+    signal,
+  });
+}
+
+async function readBoundedJsonResponse(
+  response: Response,
+  label: string,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const text = await readBoundedText(response, label, OPENAI_HTTP_RESPONSE_MAX_BYTES, signal);
+  return JSON.parse(text) as Record<string, unknown>;
 }
 
 function resolveOpenAIHttpTimeoutMs(
@@ -95,6 +155,63 @@ function compareStrings(left: string | undefined, right: string | undefined): nu
   return (left ?? "").localeCompare(right ?? "");
 }
 
+async function readOpenAIRealtimeBrowserResponseText(
+  response: Response,
+  label: string,
+  maxBytes: number,
+): Promise<string> {
+  const responseBodyTooLargeError = (errorLabel: string, errorMaxBytes: number): Error =>
+    new Error(`${errorLabel} response body exceeded ${errorMaxBytes} bytes`);
+  const rawContentLength = response.headers.get("content-length");
+  if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw responseBodyTooLargeError(label, maxBytes);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError(label, maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
+function openAIRealtimeBrowserResponseReaderInitScript(): string {
+  return `globalThis.openclawReadBoundedRealtimeResponseText = ${readOpenAIRealtimeBrowserResponseText.toString()};`;
+}
+
 async function createOpenAIClientSecret(
   apiKey: string,
   options: OpenAIHttpOptions = {},
@@ -124,12 +241,18 @@ async function createOpenAIClientSecret(
       });
       if (!response.ok) {
         throw new Error(
-          `OpenAI Realtime client secret failed (${response.status}): ${await readBoundedText(
-            response,
+          `OpenAI Realtime client secret failed (${response.status}): ${previewForDevToolLog(
+            await readBoundedText(
+              response,
+              "OpenAI Realtime client secret error",
+              OPENAI_HTTP_RESPONSE_MAX_BYTES,
+              signal,
+            ),
+            600,
           )}`,
         );
       }
-      return (await response.json()) as Record<string, unknown>;
+      return await readBoundedJsonResponse(response, "OpenAI Realtime client secret", signal);
     },
   });
   const nested =
@@ -194,8 +317,14 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
     try {
       const page = await context.newPage();
       await page.evaluate("globalThis.__name = (fn) => fn");
+      await page.evaluate(openAIRealtimeBrowserResponseReaderInitScript());
       const result = await page.evaluate(
-        async ({ clientSecret: secret, timeoutMs }) => {
+        async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
+          const readBoundedTextLocal = (globalThis as OpenAIWebRtcSmokeGlobal)
+            .openclawReadBoundedRealtimeResponseText;
+          if (!readBoundedTextLocal) {
+            throw new Error("OpenAI Realtime bounded response reader was not installed");
+          }
           const withBrowserTimeout = async <T>(
             label: string,
             run: (signal: AbortSignal) => Promise<T>,
@@ -253,12 +382,16 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
             });
             const offer = await peer.createOffer();
             await peer.setLocalDescription(offer);
+            const offerSdp = offer.sdp;
+            if (!offerSdp) {
+              throw new Error("OpenAI Realtime SDP offer did not include SDP");
+            }
             const answer = await withBrowserTimeout(
               "OpenAI Realtime SDP offer request",
               async (signal) => {
                 const response = await fetch("https://api.openai.com/v1/realtime/calls", {
                   method: "POST",
-                  body: offer.sdp,
+                  body: offerSdp,
                   headers: {
                     Authorization: `Bearer ${secret}`,
                     "Content-Type": "application/sdp",
@@ -268,7 +401,11 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
                 if (!response.ok) {
                   throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
                 }
-                return await response.text();
+                return await readBoundedTextLocal(
+                  response,
+                  "OpenAI Realtime SDP answer",
+                  sdpAnswerMaxBytes,
+                );
               },
             );
             await peer.setRemoteDescription({ type: "answer", sdp: answer });
@@ -283,7 +420,11 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
             media?.getTracks().forEach((track) => track.stop());
           }
         },
-        { clientSecret, timeoutMs: openAIHttpTimeoutMs },
+        {
+          clientSecret,
+          sdpAnswerMaxBytes: OPENAI_HTTP_RESPONSE_MAX_BYTES,
+          timeoutMs: openAIHttpTimeoutMs,
+        },
       );
       return {
         name: "openai-webrtc-browser",
@@ -393,9 +534,9 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
               window.clearTimeout(timeout);
               resolve({ setupComplete: true, readyState: ws.readyState });
-            })().catch((error) => {
+            })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(error);
+              reject(toLintErrorObject(error, "Non-Error rejection"));
             });
           });
           ws.addEventListener("error", () => {
@@ -619,7 +760,12 @@ try {
   }
 }
 
-async function main(): Promise<void> {
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const cli = parseRealtimeSmokeArgs(argv);
+  if (cli.help) {
+    console.log(usage());
+    return;
+  }
   const openAIKey = getEnv("OPENAI_API_KEY");
   const googleKey = getEnv("GEMINI_API_KEY") ?? getEnv("GOOGLE_API_KEY");
   const browser = await chromium.launch({
@@ -670,13 +816,32 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
-    console.error(shortError(error));
+  await main().catch((error: unknown) => {
+    console.error(error instanceof CliArgumentError ? error.message : shortError(error));
     process.exitCode = 1;
   });
 }
 
 export const testing = {
+  OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
+  parseRealtimeSmokeArgs,
+  readOpenAIRealtimeBrowserResponseText,
+  readBoundedText,
   resolveOpenAIHttpTimeoutMs,
+  usage,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

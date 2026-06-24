@@ -1,3 +1,4 @@
+// Codex tests cover node cli sessions plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -71,6 +72,35 @@ describe("codex cli node sessions", () => {
         cwd: "/repo",
         sessionFile: path.join(sessionDir, `rollout-2026-05-13T08-29-58-${sessionId}.jsonl`),
         messageCount: 2,
+      },
+    ]);
+  });
+
+  it("ignores Date-invalid Codex history timestamps", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cf";
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      JSON.stringify({ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }),
+    );
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ filter: "bad timestamp", limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{
+        sessionId?: string;
+        updatedAt?: string;
+        lastMessage?: string;
+        messageCount?: number;
+      }>;
+    };
+
+    expect(parsed.sessions).toEqual([
+      {
+        sessionId,
+        lastMessage: "bad timestamp",
+        messageCount: 1,
       },
     ]);
   });

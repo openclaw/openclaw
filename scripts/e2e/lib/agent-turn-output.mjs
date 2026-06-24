@@ -1,25 +1,17 @@
+// Helpers for extracting agent turn output from E2E protocol events.
 import fs from "node:fs";
+import { readTextFileTail, tailText } from "./text-file-utils.mjs";
 
 const ERROR_DETAIL_TAIL_BYTES = 64 * 1024;
+const OUTPUT_SCAN_TAIL_BYTES = 2 * 1024 * 1024;
 const REPLY_TEXT_PREVIEW_BYTES = 8 * 1024;
 const REPLY_TEXT_PREVIEW_COUNT = 5;
 const REQUEST_LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const REQUEST_LOG_SCAN_CARRY_CHARS = 256;
 const OPENAI_REQUEST_PATH_PATTERN = /\/v1\/(responses|chat\/completions)/u;
 
-function readTextFile(file) {
-  return fs.readFileSync(file, "utf8");
-}
-
 function textByteLength(text) {
   return Buffer.byteLength(text, "utf8");
-}
-
-function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  if (textByteLength(text) <= maxBytes) {
-    return text;
-  }
-  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
 }
 
 function summarizeReplyTexts(replyTexts) {
@@ -30,29 +22,6 @@ function summarizeReplyTexts(replyTexts) {
     tail: tailText(text, REPLY_TEXT_PREVIEW_BYTES),
   }));
   return JSON.stringify({ count: replyTexts.length, recent });
-}
-
-function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-
-  const length = Math.min(maxBytes, stat.size);
-  const start = stat.size - length;
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function fileContainsPattern(file, pattern) {
@@ -98,6 +67,19 @@ function parseJson(text) {
   }
 }
 
+function isJsonObjectRecordStart(text, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = text[cursor];
+    if (char === "\n" || char === "\r") {
+      return true;
+    }
+    if (char !== " " && char !== "\t") {
+      return false;
+    }
+  }
+  return true;
+}
+
 function parseJsonObjectsFromText(text) {
   const payloads = [];
   let start = -1;
@@ -108,7 +90,7 @@ function parseJsonObjectsFromText(text) {
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
     if (start === -1) {
-      if (char === "{") {
+      if (char === "{" && isJsonObjectRecordStart(text, index)) {
         start = index;
         depth = 1;
         inString = false;
@@ -168,8 +150,45 @@ function textValues(values) {
   return values.filter((value) => typeof value === "string" && value.length > 0);
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFailureStatus(value) {
+  return (
+    typeof value === "string" &&
+    ["blocked", "canceled", "cancelled", "error", "failed", "failure"].includes(value.toLowerCase())
+  );
+}
+
+function hasFailureSignal(value) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.isError === true ||
+    value.ok === false ||
+    isFailureStatus(value.status) ||
+    isFailureStatus(value.livenessState) ||
+    (Object.hasOwn(value, "error") && value.error !== null && value.error !== undefined)
+  );
+}
+
 export function extractAgentReplyTexts(text) {
   return parseJsonPayloads(text).flatMap((payload) => {
+    const envelopeFailed =
+      hasFailureSignal(payload) ||
+      hasFailureSignal(payload?.meta) ||
+      hasFailureSignal(payload?.result) ||
+      hasFailureSignal(payload?.result?.meta);
+    if (envelopeFailed) {
+      return [];
+    }
+    const payloadEntries = Array.isArray(payload?.payloads)
+      ? payload.payloads
+      : Array.isArray(payload?.result?.payloads)
+        ? payload.result.payloads
+        : [];
     const directTexts = textValues([
       payload?.finalAssistantVisibleText,
       payload?.finalAssistantRawText,
@@ -180,25 +199,22 @@ export function extractAgentReplyTexts(text) {
       payload?.result?.meta?.finalAssistantVisibleText,
       payload?.result?.meta?.finalAssistantRawText,
     ]);
-    const payloadEntries = Array.isArray(payload?.payloads)
-      ? payload.payloads
-      : Array.isArray(payload?.result?.payloads)
-        ? payload.result.payloads
-        : [];
     const payloadTexts = payloadEntries.flatMap((entry) =>
-      typeof entry?.text === "string" && entry.text.length > 0 ? [entry.text] : [],
+      entry?.isError !== true && typeof entry?.text === "string" && entry.text.length > 0
+        ? [entry.text]
+        : [],
     );
     return directTexts.concat(payloadTexts);
   });
 }
 
 export function assertAgentReplyContainsMarker(marker, outputPath) {
-  const output = readTextFile(outputPath);
+  const output = readTextFileTail(outputPath, OUTPUT_SCAN_TAIL_BYTES);
   const replyTexts = extractAgentReplyTexts(output);
   if (replyTexts.some((text) => text.includes(marker))) {
     return;
   }
-  const outputTail = tailText(output);
+  const outputTail = tailText(output, ERROR_DETAIL_TAIL_BYTES);
   throw new Error(
     `agent reply payload did not contain marker ${marker}. Reply payload summary: ${summarizeReplyTexts(replyTexts)}. Output tail: ${outputTail}`,
   );
@@ -208,6 +224,6 @@ export function assertOpenAiRequestLogUsed(requestLogPath, label = "mock OpenAI 
   if (fileContainsPattern(requestLogPath, OPENAI_REQUEST_PATH_PATTERN)) {
     return;
   }
-  const requestLogTail = readTextFileTail(requestLogPath);
+  const requestLogTail = readTextFileTail(requestLogPath, ERROR_DETAIL_TAIL_BYTES);
   throw new Error(`${label} was not used. Request log tail: ${requestLogTail}`);
 }

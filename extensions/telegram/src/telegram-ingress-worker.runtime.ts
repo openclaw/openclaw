@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
@@ -8,8 +9,8 @@ import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
   resolveTelegramLongPollTimeoutSeconds,
 } from "./request-timeouts.js";
-import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
 import type {
+  TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
   TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
@@ -20,14 +21,27 @@ const retryInitialMs = 1000;
 const retryMaxMs = 30_000;
 let stopped = false;
 let activeController: AbortController | undefined;
+let nextSpoolRequestId = 0;
+const pendingSpoolRequests = new Map<
+  string,
+  {
+    resolve(updateId: number): void;
+    reject(err: Error): void;
+  }
+>();
 
 function post(message: TelegramIngressWorkerMessage): void {
-  // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads ports do not accept a targetOrigin argument.
-  parentPort?.postMessage(message);
+  if (parentPort) {
+    Reflect.apply(Reflect.get(parentPort, "postMessage") as (value: unknown) => void, parentPort, [
+      message,
+    ]);
+  }
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatErrorMessage(err: unknown): string {
@@ -37,17 +51,76 @@ function formatErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function readTelegramErrorCode(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "error_code" in err) {
+    const code = (err as { error_code: unknown }).error_code;
+    if (typeof code === "number") {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function postPollError(err: unknown): void {
+  const errorCode = readTelegramErrorCode(err);
+  post({
+    type: "poll-error",
+    message: formatErrorMessage(err),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    finishedAt: Date.now(),
+  });
+}
+
 function resolveBackoff(attempt: number): number {
   return Math.min(retryMaxMs, retryInitialMs * 2 ** Math.max(0, attempt - 1));
 }
 
-parentPort?.on("message", (message: { type?: string }) => {
-  if (message?.type !== "stop") {
+function rejectPendingSpoolRequests(err: Error): void {
+  for (const pending of pendingSpoolRequests.values()) {
+    pending.reject(err);
+  }
+  pendingSpoolRequests.clear();
+}
+
+parentPort?.on("message", (message: TelegramIngressWorkerCommand) => {
+  if (message?.type === "stop") {
+    stopped = true;
+    const err = new Error("telegram ingress worker stopped");
+    activeController?.abort(err);
+    rejectPendingSpoolRequests(err);
     return;
   }
-  stopped = true;
-  activeController?.abort(new Error("telegram ingress worker stopped"));
+  if (message?.type !== "spool-ack") {
+    return;
+  }
+  const pending = pendingSpoolRequests.get(message.requestId);
+  if (!pending) {
+    return;
+  }
+  pendingSpoolRequests.delete(message.requestId);
+  if (message.result.ok) {
+    pending.resolve(message.result.updateId);
+    return;
+  }
+  pending.reject(new Error(message.result.message));
 });
+
+async function requestSpoolUpdate(params: { update: unknown; queued: number }): Promise<number> {
+  if (!parentPort) {
+    throw new Error("Telegram ingress worker missing parent port.");
+  }
+  const requestId = String(++nextSpoolRequestId);
+  const updateId = await new Promise<number>((resolve, reject) => {
+    pendingSpoolRequests.set(requestId, { resolve, reject });
+    post({
+      type: "update",
+      requestId,
+      update: params.update,
+      queued: params.queued,
+    });
+  });
+  return updateId;
+}
 
 async function fetchJson(params: {
   fetch: typeof fetch;
@@ -69,15 +142,21 @@ async function fetchJson(params: {
     });
     const json = (await response.json()) as {
       ok?: unknown;
+      error_code?: unknown;
       result?: unknown;
       description?: unknown;
     };
     if (!response.ok || json.ok !== true) {
-      throw new Error(
+      const message =
         typeof json.description === "string"
           ? json.description
-          : `Telegram getUpdates failed with HTTP ${response.status}`,
-      );
+          : `Telegram getUpdates failed with HTTP ${response.status}`;
+      // Preserve the Bot API error_code across the worker boundary so the
+      // parent session can distinguish getUpdates conflicts (409) from fatal
+      // errors (401) without parsing description strings.
+      throw typeof json.error_code === "number"
+        ? Object.assign(new Error(message), { error_code: json.error_code })
+        : new Error(message);
     }
     return json.result;
   } finally {
@@ -124,10 +203,7 @@ async function main(): Promise<void> {
           if (stopped) {
             break;
           }
-          const updateId = await writeTelegramSpooledUpdate({
-            spoolDir: options.spoolDir,
-            update,
-          });
+          const updateId = await requestSpoolUpdate({ update, queued: result.length });
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;
           }
@@ -145,11 +221,7 @@ async function main(): Promise<void> {
           break;
         }
         failures += 1;
-        post({
-          type: "poll-error",
-          message: formatErrorMessage(err),
-          finishedAt: Date.now(),
-        });
+        postPollError(err);
         if (!isRecoverableTelegramNetworkError(err, { context: "polling" })) {
           throw err;
         }
@@ -165,8 +237,8 @@ main()
   .then(() => {
     parentPort?.close();
   })
-  .catch((err) => {
-    post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
+  .catch((err: unknown) => {
+    postPollError(err);
     parentPort?.close();
     process.exitCode = stopped ? 0 : 1;
   });

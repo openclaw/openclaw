@@ -1,5 +1,7 @@
+// Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -14,7 +16,6 @@ import {
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type JsonObject = Record<string, unknown>;
@@ -114,6 +115,7 @@ export async function loadToolPlugin(params: {
   rootDir: string;
   entryPath: string;
 }): Promise<LoadedToolPlugin> {
+  // Authoring validation imports the entry once and requires SDK metadata from defineToolPlugin.
   if (!fs.existsSync(params.entryPath)) {
     throw new Error(
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,

@@ -65,7 +65,7 @@ docker_e2e_run_with_harness \
     openclaw_e2e_wait_mock_openai \"\$mock_port\"
     tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-channels-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480 $PORT
     tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
@@ -73,8 +73,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker MCP smoke failed"
-  cat "$CLIENT_LOG"
+  docker_e2e_print_log "$CLIENT_LOG"
   exit "$status"
 fi
 
+docker_e2e_print_log "$CLIENT_LOG"
 echo "OK"

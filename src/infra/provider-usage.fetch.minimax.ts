@@ -1,7 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Fetches and normalizes MiniMax provider usage records.
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -192,16 +195,12 @@ function pickString(record: Record<string, unknown>, keys: readonly string[]): s
 
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (value < 1e12) {
-      return Math.floor(value * 1000);
-    }
-    return Math.floor(value);
+    const timestampMs = value < 1e12 ? Math.floor(value * 1000) : Math.floor(value);
+    return asDateTimestampMs(timestampMs);
   }
   if (typeof value === "string" && value.trim()) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return asDateTimestampMs(parsed);
   }
   return undefined;
 }
@@ -412,6 +411,7 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,

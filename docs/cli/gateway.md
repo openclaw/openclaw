@@ -165,9 +165,14 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
+openclaw gateway health --port 18789
 ```
 
 The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
+
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. This overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for the health call.
+</ParamField>
 
 ### `gateway usage-cost`
 
@@ -176,11 +181,19 @@ Fetch usage-cost summaries from session logs.
 ```bash
 openclaw gateway usage-cost
 openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --agent work --json
+openclaw gateway usage-cost --all-agents
 openclaw gateway usage-cost --json
 ```
 
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
+</ParamField>
+<ParamField path="--agent <id>" type="string">
+  Scope the cost summary to one configured agent id.
+</ParamField>
+<ParamField path="--all-agents" type="boolean">
+  Aggregate the cost summary across all configured agents. Cannot be combined with `--agent`.
 </ParamField>
 
 ### `gateway stability`
@@ -334,13 +347,18 @@ If you pass `--url`, that explicit target is added ahead of both. Human output l
 - `Local loopback`
 
 <Note>
-If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+If multiple probe targets are reachable, it prints all of them. An SSH tunnel, TLS/proxy URL, and configured remote URL can all point at the same gateway even when their transport ports differ; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Multiple gateways are supported when you use isolated profiles (e.g., a rescue bot), but most installs still run a single gateway.
 </Note>
 
 ```bash
 openclaw gateway probe
 openclaw gateway probe --json
+openclaw gateway probe --port 18789
 ```
+
+<ParamField path="--port <port>" type="number">
+  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
+</ParamField>
 
 <AccordionGroup>
   <Accordion title="Interpretation">
@@ -379,7 +397,7 @@ openclaw gateway probe --json
   </Accordion>
   <Accordion title="Common warning codes">
     - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
-    - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+    - `multiple_gateways`: distinct gateway identities were reachable, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway does not trigger this warning.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 

@@ -1,3 +1,4 @@
+// Covers supervisor marker files used to identify managed OpenClaw processes.
 import { describe, expect, it } from "vitest";
 import { detectRespawnSupervisor, SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
@@ -43,6 +44,39 @@ describe("detectRespawnSupervisor", () => {
   it("detects systemd only from non-blank platform-specific hints", () => {
     expect(detectRespawnSupervisor({ INVOCATION_ID: "abc123" }, "linux")).toBe("systemd");
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
+  });
+
+  it("detects Linux OpenClaw gateway service markers only for opt-in callers", () => {
+    const gatewayServiceEnv = {
+      OPENCLAW_SERVICE_MARKER: " openclaw ",
+      OPENCLAW_SERVICE_KIND: " gateway ",
+    };
+    expect(detectRespawnSupervisor(gatewayServiceEnv, "linux")).toBeNull();
+    expect(
+      detectRespawnSupervisor(gatewayServiceEnv, "linux", {
+        includeLinuxOpenClawGatewayServiceMarker: true,
+      }),
+    ).toBe("systemd");
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "worker",
+        },
+        "linux",
+        { includeLinuxOpenClawGatewayServiceMarker: true },
+      ),
+    ).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "other",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        "linux",
+        { includeLinuxOpenClawGatewayServiceMarker: true },
+      ),
+    ).toBeNull();
   });
 
   it("detects scheduled-task supervision on Windows from either hint family", () => {

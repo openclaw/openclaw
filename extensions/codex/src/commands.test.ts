@@ -1,3 +1,4 @@
+// Codex tests cover commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -112,12 +113,12 @@ function inMemoryCodexPluginsIO(
 } {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
-    plugins: JSON.parse(JSON.stringify(initial)),
+    plugins: structuredClone(initial),
   };
   return {
-    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
-    currentConfig: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
+    readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update) => {
       update(store);
     },
@@ -149,6 +150,16 @@ function requireResultText(result: PluginCommandResult): string {
 
 function expectResultTextContains(result: PluginCommandResult, expected: string): void {
   expect(requireResultText(result)).toContain(expected);
+}
+
+function buttonCommands(result: PluginCommandResult): string[] {
+  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
+  if (!block || block.type !== "buttons") {
+    throw new Error("expected button presentation");
+  }
+  return block.buttons.map((button) =>
+    button.action?.type === "command" ? button.action.command : "",
+  );
 }
 
 function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
@@ -208,11 +219,6 @@ function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArra
 function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
   return mockCall(mockFn, callIndex)[argIndex];
 }
-
-function requireRequestParams(call: unknown[] | undefined): Record<string, unknown> {
-  return requireRecord(call?.[2], "expected request params object");
-}
-
 function requestParams(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
   return requireRecord(mockArg(mockFn, callIndex, 2), "expected request params object");
 }
@@ -267,6 +273,31 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("renders the top-level Codex menu as portable native slash commands", async () => {
+    const result = await handleCodexCommand(createContext(""));
+
+    expectResultTextContains(result, "/codex plugins menu");
+    expect(buttonCommands(result)).toEqual([
+      "/codex plugins menu",
+      "/codex permissions menu",
+      "/codex fast menu",
+      "/codex computer-use menu",
+      "/codex account",
+      "/codex help",
+    ]);
+  });
+
+  it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO();
+
+    const result = await handleCodexCommand(createContext("plugins menu"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "/codex plugins enable");
+    expect(buttonCommands(result)).toContain("/codex plugins list");
+  });
+
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({
       "google-calendar": {
@@ -312,8 +343,8 @@ describe("codex command", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const deps = createDeps({
       codexControlRequest: vi.fn(
-        async (_pluginConfig: unknown, method: string, requestParams: unknown) => {
-          requests.push({ method, params: requestParams });
+        async (_pluginConfig: unknown, method: string, requestParamsValue: unknown) => {
+          requests.push({ method, params: requestParamsValue });
           return {
             thread: { id: "thread-123", cwd: "/repo" },
             model: "gpt-5.4",
@@ -595,6 +626,26 @@ describe("codex command", () => {
     });
   });
 
+  it("normalizes signed decimal Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [],
+      },
+    }));
+
+    await handleCodexCommand(createContext("sessions --host mb-m5 --limit +05 bridge"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "bridge",
+      limit: 5,
+    });
+  });
+
   it("rejects partial Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
@@ -715,7 +766,7 @@ describe("codex command", () => {
   });
 
   it("shows model ids from Codex app-server", async () => {
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
     const listCodexAppServerModels = vi.fn(async (_options?: { config?: unknown }) => ({
       models: [
         {
@@ -805,7 +856,7 @@ describe("codex command", () => {
   });
 
   it("reports status unavailable when every Codex probe fails", async () => {
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
     const offline = { ok: false as const, error: "offline" };
     const deps = createDeps({
       readCodexStatusProbes: vi.fn(async () => ({
@@ -1257,7 +1308,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1329,7 +1380,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1382,12 +1433,11 @@ describe("codex command", () => {
     expect(result.text).not.toContain("subscription unavailable");
   });
 
-  it("shows Codex auth order before OpenAI fallback order", async () => {
+  it("shows OpenAI subscription auth before API-key fallback order", async () => {
     const config = {
       auth: {
         order: {
-          openai: ["openai:api-key"],
-          "openai-codex": ["openai-codex:personal-email@gmail.com"],
+          openai: ["openai:personal-email@gmail.com", "openai:api-key"],
         },
       },
     };
@@ -1401,9 +1451,9 @@ describe("codex command", () => {
             provider: "openai",
             key: "sk-test",
           },
-          "openai-codex:personal-email@gmail.com": {
+          "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1411,7 +1461,7 @@ describe("codex command", () => {
           },
         },
         lastGood: {
-          "openai-codex": "openai-codex:personal-email@gmail.com",
+          openai: "openai:personal-email@gmail.com",
         },
       },
       config,
@@ -1443,7 +1493,7 @@ describe("codex command", () => {
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
     );
-    expect(result.text).not.toContain("api-key");
+    expect(result.text).toContain("\n  2. api-key   API key   — available if needed");
   });
 
   it("explains when an API-key backup is active because the subscription is paused", async () => {
@@ -1457,7 +1507,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1470,7 +1520,7 @@ describe("codex command", () => {
           },
           "openai:work-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "work-access-token",
             refresh: "work-refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1567,7 +1617,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1626,10 +1676,10 @@ describe("codex command", () => {
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited");
     expect(result.text).toContain(
-      "\n  1. api-key-backup   API key   — active now \u00b7 billed per token",
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
     );
     expect(result.text).toContain(
-      "\n  2. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+      "\n  2. api-key-backup   API key   — active now \u00b7 billed per token",
     );
     expect(result.text).not.toContain(
       "personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -1643,17 +1693,17 @@ describe("codex command", () => {
       {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "stale-access-token",
             refresh: "stale-refresh-token",
             expires: now + 2 * 24 * 60 * 60 * 1000,
             email: "previous@example.com",
           },
-          "openai-codex:fresh-email@example.com": {
+          "openai:fresh-email@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "fresh-access-token",
             refresh: "fresh-refresh-token",
             expires: now + 9 * 24 * 60 * 60 * 1000,
@@ -1661,10 +1711,10 @@ describe("codex command", () => {
           },
         },
         order: {
-          "openai-codex": ["openai-codex:fresh-email@example.com", "openai-codex:default"],
+          openai: ["openai:fresh-email@example.com", "openai:default"],
         },
         lastGood: {
-          "openai-codex": "openai-codex:default",
+          openai: "openai:default",
         },
       },
       config,
@@ -1697,13 +1747,14 @@ describe("codex command", () => {
       "\n  2. previous@example.com   ChatGPT subscription   — available if needed",
     );
     expect(result.text).not.toContain("previous@example.com   ChatGPT subscription   — active now");
-    expect(result.text).not.toContain("openai-codex:");
+    expect(result.text).not.toContain("openai:");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
     const config = {};
-    const now = Date.now();
+    const ignoredNow = Date.now();
+    void ignoredNow;
     installAuthProfileStore(
       {
         version: 1,
@@ -1759,26 +1810,26 @@ describe("codex command", () => {
       {
         version: 1,
         profiles: {
-          "openai-codex:fresh@example.com": {
+          "openai:fresh@example.com": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "fresh-token",
             expires: now - 1000,
             email: "fresh@example.com",
           },
-          "openai-codex:stale@example.com": {
+          "openai:stale@example.com": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "stale-token",
             expires: now - 2000,
             email: "stale@example.com",
           },
         },
         order: {
-          "openai-codex": ["openai-codex:fresh@example.com", "openai-codex:stale@example.com"],
+          openai: ["openai:fresh@example.com", "openai:stale@example.com"],
         },
         lastGood: {
-          "openai-codex": "openai-codex:stale@example.com",
+          openai: "openai:stale@example.com",
         },
       },
       config,
@@ -2130,11 +2181,13 @@ describe("codex command", () => {
           buttons: [
             {
               label: "Send diagnostics",
+              action: { type: "command", command: `/codex diagnostics confirm ${token}` },
               value: `/codex diagnostics confirm ${token}`,
               style: "danger",
             },
             {
               label: "Cancel",
+              action: { type: "command", command: `/codex diagnostics cancel ${token}` },
               value: `/codex diagnostics cancel ${token}`,
               style: "secondary",
             },
@@ -2328,12 +2381,14 @@ describe("codex command", () => {
       `${secondSessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParams) => ({
+    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParamsLocal) => ({
       ok: true as const,
       value: {
         threadId:
-          requestParams && typeof requestParams === "object" && "threadId" in requestParams
-            ? requestParams.threadId
+          requestParamsLocal &&
+          typeof requestParamsLocal === "object" &&
+          "threadId" in requestParamsLocal
+            ? requestParamsLocal.threadId
             : undefined,
       },
     }));
@@ -2508,7 +2563,7 @@ describe("codex command", () => {
         await firstConfirmBindingRead;
       }
       return {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         threadId: "thread-race",
         cwd: "/repo",
         sessionFile: bindingSessionFile,
@@ -3299,7 +3354,7 @@ describe("codex command", () => {
         schemaVersion: 1,
         threadId: "thread-123",
         cwd: "/repo",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         modelProvider: "openai",
       }),
     );
@@ -3347,10 +3402,12 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
+      sessionKey: undefined,
+      agentId: "main",
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
     });
     expect(requestConversationBinding).toHaveBeenCalledWith({
       summary: "Codex app-server thread thread-123 in /repo",
@@ -3406,6 +3463,8 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo with space",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
+      sessionKey: undefined,
+      agentId: "main",
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,

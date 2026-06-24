@@ -1,3 +1,8 @@
+/**
+ * Runtime adapter forwarders.
+ *
+ * Creates directory and outbound adapters whose methods delegate to lazily resolved runtimes.
+ */
 import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.adapters.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -28,9 +33,14 @@ async function resolveForwardedMethod<Runtime, Fn>(params: {
   if (method) {
     return method;
   }
+  // Fail at call time instead of registration time so optional runtime methods
+  // can stay absent until the caller actually invokes that capability.
   throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
 }
 
+/**
+ * Creates a directory adapter whose methods forward to a lazily resolved runtime.
+ */
 export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
   self?: (runtime: Runtime) => ChannelDirectoryAdapter["self"] | null | undefined;
@@ -82,6 +92,9 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   return adapter;
 }
 
+/**
+ * Creates outbound delegates whose methods forward to a lazily resolved runtime.
+ */
 export function createRuntimeOutboundDelegates<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
   renderPresentation?: {

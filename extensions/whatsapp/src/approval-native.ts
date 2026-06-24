@@ -1,16 +1,12 @@
-import {
-  createChannelApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+// Whatsapp plugin module implements approval native behavior.
+import { createChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
-  createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
-  nativeApprovalTargetsMatch,
-  resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
@@ -19,7 +15,6 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -33,8 +28,8 @@ import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-a
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
+type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
 type ChannelApprovalForwardTarget = Parameters<
   NonNullable<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
@@ -46,40 +41,13 @@ type WhatsAppApprovalTarget = {
   threadId?: string | number | null;
 };
 
+const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   return resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function targetAccountMatchesWhatsAppAccount(params: {
-  cfg: OpenClawConfig;
-  targetAccountId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  const targetAccountId = normalizeOptionalString(params.targetAccountId);
-  const accountId = normalizeOptionalString(params.accountId);
-  if (targetAccountId) {
-    return !accountId || normalizeAccountId(targetAccountId) === normalizeAccountId(accountId);
-  }
-  if (!accountId) {
-    return true;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const defaultAccountId = normalizeAccountId(resolveDefaultWhatsAppAccountId(params.cfg));
-  if (normalizedAccountId === defaultAccountId) {
-    return true;
-  }
-  const enabledAccountIds = listWhatsAppAccountIds(params.cfg)
-    .filter((candidateAccountId) =>
-      isWhatsAppApprovalTransportEnabled({
-        cfg: params.cfg,
-        accountId: candidateAccountId,
-      }),
-    )
-    .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
-  return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
 }
 
 function normalizeWhatsAppForwardTarget(
@@ -98,73 +66,6 @@ function normalizeWhatsAppForwardTarget(
     threadId: target.threadId ?? null,
   };
 }
-
-function hasMatchingWhatsAppTarget(params: {
-  cfg: OpenClawConfig;
-  config: ApprovalForwardingConfig;
-  accountId?: string | null;
-  target?: ChannelApprovalForwardTarget;
-}): boolean {
-  const candidateTarget = params.target ? normalizeWhatsAppForwardTarget(params.target) : null;
-  return (params.config.targets ?? []).some((target) => {
-    const configuredTarget = normalizeWhatsAppForwardTarget(target);
-    if (!configuredTarget) {
-      return false;
-    }
-    if (
-      !targetAccountMatchesWhatsAppAccount({
-        cfg: params.cfg,
-        targetAccountId: configuredTarget.accountId,
-        accountId: params.accountId,
-      })
-    ) {
-      return false;
-    }
-    if (!candidateTarget) {
-      return true;
-    }
-    return nativeApprovalTargetsMatch({
-      channel: "whatsapp",
-      left: configuredTarget,
-      right: candidateTarget,
-    });
-  });
-}
-
-function hasWhatsAppOriginOrSessionTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-}): boolean {
-  if (resolveTurnSourceWhatsAppOriginTarget(params.request)) {
-    return true;
-  }
-
-  const sessionTarget = resolveApprovalRequestSessionTarget({
-    cfg: params.cfg,
-    request: params.request,
-  });
-  return (
-    normalizeLowercaseStringOrEmpty(sessionTarget?.channel) === "whatsapp" &&
-    targetAccountMatchesWhatsAppAccount({
-      cfg: params.cfg,
-      targetAccountId: sessionTarget?.accountId,
-      accountId: params.accountId,
-    })
-  );
-}
-
-const whatsappApprovalForwarding = createChannelApprovalForwardingEvaluator({
-  channel: "whatsapp",
-  isTransportEnabled: isWhatsAppApprovalTransportEnabled,
-  hasMatchingTarget: hasMatchingWhatsAppTarget,
-  hasOriginOrSessionTarget: hasWhatsAppOriginOrSessionTarget,
-});
-
-const canApprovalPotentiallyRouteToWhatsApp = whatsappApprovalForwarding.isPotentialRoute;
-const canAnyApprovalPotentiallyRouteToWhatsApp = whatsappApprovalForwarding.canAnyPotentiallyRoute;
-const isWhatsAppSessionApprovalEligible = whatsappApprovalForwarding.isSessionEligible;
-const isWhatsAppExplicitTargetEligible = whatsappApprovalForwarding.isExplicitTargetEligible;
 
 function resolveTurnSourceWhatsAppOriginTarget(
   request: ApprovalRequest,
@@ -191,14 +92,23 @@ function resolveSessionWhatsAppOriginTarget(sessionTarget: {
   return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
 
-function shouldHandleWhatsAppApprovalRequest(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind?: ApprovalKind;
-  request: ApprovalRequest;
-}): boolean {
-  return whatsappApprovalForwarding.shouldHandleRequest(params);
-}
+const whatsappApprovalRouteGates = createNativeApprovalChannelRouteGates({
+  channel: "whatsapp",
+  defaultForwardingMode: DEFAULT_APPROVAL_FORWARDING_MODE,
+  isTransportEnabled: isWhatsAppApprovalTransportEnabled,
+  listAccountIds: listWhatsAppAccountIds,
+  resolveDefaultAccountId: resolveDefaultWhatsAppAccountId,
+  normalizeForwardTarget: normalizeWhatsAppForwardTarget,
+  resolveTurnSourceTarget: resolveTurnSourceWhatsAppOriginTarget,
+});
+
+const {
+  canApprovalPotentiallyRouteToChannel: canApprovalPotentiallyRouteToWhatsApp,
+  canAnyApprovalPotentiallyRouteToChannel: canAnyApprovalPotentiallyRouteToWhatsApp,
+  isSessionApprovalEligible: isWhatsAppSessionApprovalEligible,
+  isExplicitTargetEligible: isWhatsAppExplicitTargetEligible,
+  shouldHandleApprovalRequest: shouldHandleWhatsAppApprovalRequest,
+} = whatsappApprovalRouteGates;
 
 const resolveWhatsAppOriginTargetBase = createChannelNativeOriginTargetResolver({
   channel: "whatsapp",
@@ -362,7 +272,3 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
           .whatsappApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
-
-export const whatsappNativeApprovalAdapter = splitChannelApprovalCapability(
-  whatsappApprovalCapability,
-);

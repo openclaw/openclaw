@@ -1,9 +1,18 @@
+// Runs package update move, inventory, and cleanup steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
+import { trimLogTail } from "./restart-sentinel.js";
+import {
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  type PackageUpdateStepAdvisory,
+  type UpdatePostInstallDoctorResult,
+} from "./update-doctor-result.js";
+export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
@@ -20,6 +29,10 @@ import {
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
+/**
+ * Captures one package-manager or filesystem step from the global update flow.
+ * Callers surface these records directly in update diagnostics.
+ */
 export type PackageUpdateStepResult = {
   name: string;
   command: string;
@@ -28,6 +41,10 @@ export type PackageUpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: PackageUpdateStepAdvisory;
 };
 
 type PackageUpdateStepRunner = (params: {
@@ -60,15 +77,72 @@ function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function removePathBestEffort(targetPath: string): Promise<void> {
-  await fs
-    .rm(targetPath, {
+function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
+  return step.exitCode !== 0 && step.advisory === undefined;
+}
+
+function isNormalProcessExit(step: {
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}): boolean {
+  return (
+    step.termination !== "timeout" &&
+    step.termination !== "no-output-timeout" &&
+    step.termination !== "signal" &&
+    step.killed !== true &&
+    (step.signal === undefined || step.signal === null)
+  );
+}
+
+export function markPackagePostInstallDoctorAdvisory<
+  T extends {
+    exitCode: number | null;
+    stderrTail?: string | null;
+    signal?: NodeJS.Signals | null;
+    killed?: boolean;
+    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+    advisory?: PackageUpdateStepAdvisory;
+  },
+>(
+  step: T,
+  result: UpdatePostInstallDoctorResult | null,
+): T & {
+  advisory?: PackageUpdateStepAdvisory;
+} {
+  if (
+    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
+    result?.status !== "advisory" ||
+    !isNormalProcessExit(step)
+  ) {
+    return step;
+  }
+  const advisoryTail = [
+    step.stderrTail,
+    ...result.advisory.details,
+    PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+  ]
+    .filter((line): line is string => Boolean(line?.trim()))
+    .join("\n");
+  return {
+    ...step,
+    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
+  };
+}
+
+async function removePathBestEffort(targetPath: string): Promise<boolean> {
+  try {
+    await fs.rm(targetPath, {
       recursive: true,
       force: true,
       maxRetries: process.platform === "win32" ? 5 : 2,
       retryDelay: 100,
-    })
-    .catch(() => undefined);
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readPackageVersionIfPresent(packageRoot: string | null): Promise<string | null> {
@@ -335,7 +409,7 @@ async function replaceNpmBinShims(params: {
   targetLayout: NpmGlobalPrefixLayout;
   packageName: string;
 }): Promise<void> {
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(params.stageLayout.binDir);
   } catch {
@@ -420,6 +494,7 @@ async function swapStagedNpmInstall(params: {
   const backupRoot = path.join(targetLayout.globalRoot, `.openclaw-${process.pid}-${Date.now()}`);
   let movedExisting = false;
   let movedStaged = false;
+  let removedBackup = true;
   try {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     if (await pathExists(targetPackageRoot)) {
@@ -444,7 +519,7 @@ async function swapStagedNpmInstall(params: {
       });
     }
     if (movedExisting) {
-      await removePathBestEffort(backupRoot);
+      removedBackup = await removePathBestEffort(backupRoot);
     }
     return {
       name: "global install swap",
@@ -453,7 +528,9 @@ async function swapStagedNpmInstall(params: {
       durationMs: Date.now() - startedAt,
       exitCode: 0,
       stdoutTail: movedExisting
-        ? `replaced ${params.packageName}`
+        ? removedBackup
+          ? `replaced ${params.packageName}`
+          : `replaced ${params.packageName}; preserved old package at ${backupRoot} for delayed cleanup`
         : `installed ${params.packageName}`,
       stderrTail: null,
     };
@@ -480,6 +557,10 @@ async function swapStagedNpmInstall(params: {
   }
 }
 
+/**
+ * Runs the global package update flow, including npm staging when possible,
+ * package verification, optional post-verification, and cleanup.
+ */
 export async function runGlobalPackageUpdateSteps(params: {
   installTarget: ResolvedGlobalInstallTarget;
   installSpec: string;
@@ -499,7 +580,7 @@ export async function runGlobalPackageUpdateSteps(params: {
 }> {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
-  let stagedInstall: StagedNpmInstall | null = null;
+  let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 
   try {
@@ -667,10 +748,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
-    const failedStep =
-      finalInstallStep.exitCode !== 0
-        ? finalInstallStep
-        : (steps.find((step) => step !== updateStep && step.exitCode !== 0) ?? null);
+    const failedStep = isBlockingPackageUpdateStep(finalInstallStep)
+      ? finalInstallStep
+      : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
     return {
       steps,
@@ -679,7 +759,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       failedStep,
     };
   } finally {
-    await cleanupStagedNpmInstall(stagedInstall);
+    await cleanupStagedNpmInstall(stagedInstall ?? null);
     if (packedInstallDir) {
       await removePathBestEffort(packedInstallDir);
     }

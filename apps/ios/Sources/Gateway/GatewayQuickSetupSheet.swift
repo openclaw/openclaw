@@ -30,27 +30,13 @@ struct GatewayQuickSetupSheet: View {
                 }
 
                 if let candidate = self.bestCandidate {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(verbatim: candidate.name)
-                            .font(.headline)
-                        Text(verbatim: candidate.debugID)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            // Use verbatim strings so Bonjour-provided values can't be interpreted as
-                            // localized format strings (which can crash with Objective-C exceptions).
-                            Text(verbatim: "Discovery: \(self.gatewayController.discoveryStatusText)")
-                            Text(verbatim: "Status: \(self.appModel.gatewayDisplayStatusText)")
-                            Text(verbatim: "Node: \(self.appModel.nodeStatusText)")
-                            Text(verbatim: "Operator: \(self.appModel.operatorStatusText)")
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    }
-                    .padding(12)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    GatewayQuickSetupCandidatePanel(
+                        name: candidate.name,
+                        debugID: candidate.debugID,
+                        discoveryStatusText: self.gatewayController.discoveryStatusText,
+                        gatewayDisplayStatusText: self.appModel.gatewayDisplayStatusText,
+                        nodeStatusText: self.appModel.nodeStatusText,
+                        operatorStatusText: self.appModel.operatorStatusText)
 
                     Button {
                         self.connectError = nil
@@ -95,7 +81,7 @@ struct GatewayQuickSetupSheet: View {
                     .buttonStyle(.bordered)
                     .disabled(self.connecting)
 
-                    Toggle("Don’t show this again", isOn: self.$quickSetupDismissed)
+                    self.fullRowToggle("Don’t show this again", isOn: self.$quickSetupDismissed)
                         .padding(.top, 4)
                 } else {
                     Text("No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.")
@@ -135,6 +121,23 @@ struct GatewayQuickSetupSheet: View {
         self.gatewayController.gateways.first
     }
 
+    private func fullRowToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(title, isOn: isOn)
+            .contentShape(Rectangle())
+            .overlay {
+                // Keep Toggle semantics for accessibility while making the full visual row tappable.
+                Button {
+                    isOn.wrappedValue.toggle()
+                } label: {
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+            }
+    }
+
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
         problem.canTrustRotatedCertificate ? "Trust certificate" : "Connect"
     }
@@ -150,5 +153,45 @@ struct GatewayQuickSetupSheet: View {
         let err = await self.gatewayController.connectWithDiagnostics(candidate)
         self.connecting = false
         self.connectError = err
+    }
+}
+
+private struct GatewayQuickSetupCandidatePanel: View {
+    private static let readableMonospaceWidth: CGFloat = 72 * 8
+
+    let name: String
+    let debugID: String
+    let discoveryStatusText: String
+    let gatewayDisplayStatusText: String
+    let nodeStatusText: String
+    let operatorStatusText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: self.name)
+                .font(.system(.headline, design: .monospaced))
+                .foregroundStyle(.primary)
+            Text(verbatim: self.debugID)
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                // Use verbatim strings so Bonjour-provided values can't be interpreted as
+                // localized format strings (which can crash with Objective-C exceptions).
+                Text(verbatim: "Discovery: \(self.discoveryStatusText)")
+                Text(verbatim: "Status: \(self.gatewayDisplayStatusText)")
+                Text(verbatim: "Node: \(self.nodeStatusText)")
+                Text(verbatim: "Operator: \(self.operatorStatusText)")
+            }
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: Self.readableMonospaceWidth, alignment: .leading)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }

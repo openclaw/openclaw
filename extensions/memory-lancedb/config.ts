@@ -1,3 +1,4 @@
+// Memory Lancedb helper module supports config behavior.
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -226,11 +227,11 @@ export const memoryConfigSchema = {
       }
       storageOptions = {};
       // Validate all values are strings
-      for (const [key, value] of Object.entries(storageOpts)) {
-        if (typeof value !== "string") {
+      for (const [key, valueLocal] of Object.entries(storageOpts)) {
+        if (typeof valueLocal !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);
         }
-        storageOptions[key] = resolveEnvVars(value);
+        storageOptions[key] = resolveEnvVars(valueLocal);
       }
     }
 

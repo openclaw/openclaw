@@ -1,16 +1,18 @@
+// Builds stable snapshots of plugin registry contributions.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -21,6 +23,7 @@ import {
 import {
   getInstalledPluginRecord,
   extractPluginInstallRecordsFromInstalledPluginIndex,
+  hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
   listInstalledPluginRecords,
   loadInstalledPluginIndexWithDiscovery,
@@ -32,6 +35,7 @@ import {
 } from "./installed-plugin-index.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
@@ -136,6 +140,16 @@ function resolvePluginRegistrySnapshotMemoKey(
   if (!canMemoizePluginRegistrySnapshot(params)) {
     return undefined;
   }
+  const persistedReadsEnabled =
+    params.preferPersisted !== false && !hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
+  const persistedRegistryFingerprint = persistedReadsEnabled
+    ? hashJson(
+        readPersistedInstalledPluginIndexSync({
+          env,
+          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+        }),
+      )
+    : "disabled";
   return hashJson({
     config: params.config ?? null,
     cwd: process.cwd(),
@@ -144,12 +158,7 @@ function resolvePluginRegistrySnapshotMemoKey(
     preferPersisted: params.preferPersisted ?? null,
     // Plugin manifests are process-stable inside the Gateway, while the persisted
     // registry envelope can change through explicit refresh/install flows.
-    registryFile: fileFingerprint(
-      resolveInstalledPluginIndexStorePath({
-        env,
-        ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-      }),
-    ),
+    registry: persistedRegistryFingerprint,
     pluginRoots: fingerprintPluginSourceRoots(params, env),
     stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
     workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
@@ -167,20 +176,33 @@ function fingerprintPluginSourceRoots(
     env,
   });
   return {
-    global: fileFingerprint(cacheInputs.roots.global),
-    loadPaths: cacheInputs.loadPaths.map((entry) => fileFingerprint(entry)),
-    stock: cacheInputs.roots.stock ? fileFingerprint(cacheInputs.roots.stock) : null,
-    workspace: cacheInputs.roots.workspace ? fileFingerprint(cacheInputs.roots.workspace) : null,
+    global: sourceRootFingerprint(cacheInputs.roots.global),
+    loadPaths: cacheInputs.loadPaths.map((entry) => sourceRootFingerprint(entry)),
+    stock: cacheInputs.roots.stock ? sourceRootFingerprint(cacheInputs.roots.stock) : null,
+    workspace: cacheInputs.roots.workspace
+      ? sourceRootFingerprint(cacheInputs.roots.workspace)
+      : null,
   };
 }
 
-function fileFingerprint(filePath: string): unknown {
+function sourceRootFingerprint(rootPath: string): unknown {
+  return {
+    root: fileFingerprint(rootPath),
+    // Directory mtimes can be too coarse on some Linux filesystems. Include only
+    // immediate child names/kinds so same-tick plugin installs invalidate the
+    // process memo without rereading manifests on hot registry lookups.
+    children: directoryChildFingerprint(rootPath),
+  };
+}
+
+function directoryChildFingerprint(directoryPath: string): unknown {
   try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
+    return fs
+      .readdirSync(directoryPath, { withFileTypes: true })
+      .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
+      .toSorted(([left], [right]) => left.localeCompare(right));
   } catch {
-    return [filePath, "missing"];
+    return "unreadable";
   }
 }
 
@@ -299,9 +321,58 @@ function hasMismatchedPersistedBundledPluginRoot(
   if (!bundledPluginsDir) {
     return false;
   }
-  return index.plugins.some(
-    (plugin) =>
-      plugin.origin === "bundled" && !isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir),
+  let sourceOverlayDirs: string[] | undefined;
+  return index.plugins.some((plugin) => {
+    if (plugin.origin !== "bundled" || isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir)) {
+      return false;
+    }
+    sourceOverlayDirs ??= listBundledSourceOverlayDirs({
+      bundledRoot: bundledPluginsDir,
+      env,
+    });
+    return !isAllowedPersistedBundledPluginRoot(
+      plugin.rootDir,
+      bundledPluginsDir,
+      sourceOverlayDirs,
+    );
+  });
+}
+
+function isAllowedPersistedBundledPluginRoot(
+  pluginRootDir: string,
+  bundledPluginsDir: string,
+  sourceOverlayDirs: readonly string[],
+): boolean {
+  if (isPathInsideOrEqual(pluginRootDir, bundledPluginsDir)) {
+    return true;
+  }
+  if (sourceOverlayDirs.some((overlayDir) => isPathInsideOrEqual(pluginRootDir, overlayDir))) {
+    return true;
+  }
+  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
+  if (!legacyRoot || !isSourceCheckoutBundledPluginRoot(legacyRoot)) {
+    return false;
+  }
+  const relativePluginRoot = path.relative(
+    resolveComparablePath(legacyRoot),
+    resolveComparablePath(pluginRootDir),
+  );
+  if (!isRelativePathInsideOrEqual(relativePluginRoot)) {
+    return false;
+  }
+  // Discovery prefers a built plugin whenever the same child exists in the
+  // packaged root. Keep source-only bundled plugins, but invalidate stale
+  // source records once their built peer appears.
+  return !fs.existsSync(path.join(bundledPluginsDir, relativePluginRoot));
+}
+
+function isSourceCheckoutBundledPluginRoot(extensionsDir: string): boolean {
+  const packageRoot = path.dirname(extensionsDir);
+  return (
+    fs.existsSync(extensionsDir) &&
+    fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    fs.existsSync(path.join(packageRoot, "src"))
   );
 }
 
@@ -440,8 +511,8 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
   const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
-  const persistedInstallRecordReadsEnabled = !disabledByEnv;
-  let persistedIndex: InstalledPluginIndex | null = null;
+  const persistedInstallRecordReadsEnabled = persistedReadsEnabled;
+  let persistedIndex: InstalledPluginIndex | null;
   if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);
     if (persistedReadsEnabled && persistedIndex) {
@@ -475,6 +546,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMissingConfigPathActivationMetadata(persistedIndex)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry is missing config-path startup metadata; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasStalePersistedPluginMetadata(persistedIndex)) {
         diagnostics.push({

@@ -1,7 +1,9 @@
+// Diagnostic log event tests cover structured events written to diagnostic logs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
@@ -16,7 +18,9 @@ const SPAN_ID = "00f067aa0ba902b7";
 const PROTO_KEY = "__proto__";
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 beforeEach(() => {
@@ -34,10 +38,13 @@ afterEach(() => {
 
 describe("diagnostic log events", () => {
   it("emits structured log records through diagnostics", async () => {
-    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+    const received: Array<{
+      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
+      metadata: DiagnosticEventMetadata;
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
       if (evt.type === "log.record") {
-        received.push(evt);
+        received.push({ event: evt, metadata });
       }
     });
 
@@ -50,10 +57,11 @@ describe("diagnostic log events", () => {
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    const [event] = received;
-    if (!event) {
+    const [record] = received;
+    if (!record) {
       throw new Error("missing diagnostic log event");
     }
+    const { event, metadata } = record;
     expect(event.type).toBe("log.record");
     expect(event.level).toBe("INFO");
     expect(event.message).toBe("hello diagnostic logs");
@@ -65,6 +73,8 @@ describe("diagnostic log events", () => {
       traceId: TRACE_ID,
       spanId: SPAN_ID,
     });
+    expect(metadata.trusted).toBe(false);
+    expect(metadata.trustedTraceContext).toBeUndefined();
   });
 
   it("uses active request trace context for unbound log records", async () => {
@@ -72,10 +82,13 @@ describe("diagnostic log events", () => {
       traceId: TRACE_ID,
       spanId: SPAN_ID,
     });
-    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+    const received: Array<{
+      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
+      metadata: DiagnosticEventMetadata;
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
       if (evt.type === "log.record") {
-        received.push(evt);
+        received.push({ event: evt, metadata });
       }
     });
 
@@ -87,7 +100,9 @@ describe("diagnostic log events", () => {
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    expect(received[0]?.trace).toEqual(trace);
+    expect(received[0]?.event.trace).toEqual(trace);
+    expect(received[0]?.metadata.trusted).toBe(false);
+    expect(received[0]?.metadata.trustedTraceContext).toBe(true);
   });
 
   it("redacts and bounds internal log records before diagnostic emission", async () => {

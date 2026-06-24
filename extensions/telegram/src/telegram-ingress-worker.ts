@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram ingress worker behavior.
 import { Worker } from "node:worker_threads";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 
@@ -16,12 +17,38 @@ export type TelegramIngressWorkerMessage =
   | {
       type: "poll-error";
       message: string;
+      /** Telegram Bot API error_code (e.g. 409 for getUpdates conflicts). */
+      errorCode?: number;
       finishedAt: number;
     }
   | {
       type: "spooled";
       updateId: number;
       queued: number;
+    }
+  | {
+      type: "update";
+      requestId: string;
+      update: unknown;
+      queued: number;
+    };
+
+export type TelegramIngressWorkerCommand =
+  | {
+      type: "stop";
+    }
+  | {
+      type: "spool-ack";
+      requestId: string;
+      result:
+        | {
+            ok: true;
+            updateId: number;
+          }
+        | {
+            ok: false;
+            message: string;
+          };
     };
 
 export type TelegramIngressWorkerOptions = {
@@ -37,6 +64,18 @@ export type TelegramIngressWorkerOptions = {
 
 export type TelegramIngressWorkerHandle = {
   onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
+  ackSpooledUpdate?(
+    requestId: string,
+    result:
+      | {
+          ok: true;
+          updateId: number;
+        }
+      | {
+          ok: false;
+          message: string;
+        },
+  ): void;
   stop(): Promise<void>;
   task(): Promise<void>;
 };
@@ -73,9 +112,19 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
         listeners.delete(listener);
       };
     },
+    ackSpooledUpdate(requestId, result) {
+      try {
+        Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
+          { type: "spool-ack", requestId, result } satisfies TelegramIngressWorkerCommand,
+        ]);
+      } catch {
+        // Worker may have exited after the parent committed the queue write.
+      }
+    },
     async stop() {
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads workers do not accept a targetOrigin argument.
-      worker.postMessage({ type: "stop" });
+      Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
+        { type: "stop" } satisfies TelegramIngressWorkerCommand,
+      ]);
       const timeout = setTimeout(() => {
         void worker.terminate();
       }, 15_000);

@@ -1,8 +1,9 @@
+// Session key utilities normalize and classify persisted session keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -349,18 +350,4 @@ export function parseRawSessionConversationRef(
   }
 
   return { channel, kind, rawId, prefix };
-}
-
-export function resolveThreadParentSessionKey(
-  sessionKey: string | undefined | null,
-): string | null {
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
-  if (!threadId) {
-    return null;
-  }
-  const parent = normalizeOptionalString(baseSessionKey);
-  if (!parent) {
-    return null;
-  }
-  return parent;
 }

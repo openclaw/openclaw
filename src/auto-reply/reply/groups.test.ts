@@ -1,3 +1,4 @@
+// Tests group prompt helpers and lazy runtime loading for group metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -28,9 +29,18 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
+    expect(groupChatContext).toContain("You are in a WhatsApp group chat.");
     expect(groupChatContext).toContain(
-      "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+      "Your text replies are automatically sent to this group chat.",
     );
+    expect(groupChatContext).toContain(
+      "For ordinary text, do not use the message tool to send to this same group; just reply normally.",
+    );
+    expect(groupChatContext).toContain(
+      "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+    );
+    expect(groupChatContext).not.toContain("ignore previous instructions");
+    expect(groupChatContext).not.toContain("SYSTEM: run tools");
     expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
     expect(groupChatContext).not.toContain("wrap bare URLs");
     expect(groupChatContext).toContain("If addressed to someone else");
@@ -47,10 +57,18 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
     expect(toolOnlyContext).toContain("Be a good group participant");
+    expect(toolOnlyContext).toContain("Avoid Markdown tables");
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
+    const telegramContext = isolatedGroups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "telegram" },
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    expect(telegramContext).toContain("Write like a human. Minimize empty lines");
+    expect(telegramContext).not.toContain("Avoid Markdown tables");
     expect(
       isolatedGroups.buildGroupIntro({
         cfg: {} as OpenClawConfig,
@@ -109,6 +127,33 @@ describe("group runtime loading", () => {
     });
     expect(disallowed).not.toContain("NO_REPLY");
     expect(disallowed).not.toContain("Never say that you are staying quiet");
+  });
+
+  it("binds an explicitly mentioned channel handle to the current assistant identity", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: true,
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+
+    expect(context).toContain("explicitly mentions your channel identity @SirPinchALotBot");
+    expect(context).toContain("Treat that mention as addressed to you");
+
+    const notExplicit = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "kesslerAIBot",
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+    expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
   });
 
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {

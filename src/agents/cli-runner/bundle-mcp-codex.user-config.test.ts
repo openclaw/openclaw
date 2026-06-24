@@ -1,3 +1,4 @@
+/** Tests projecting OpenClaw user MCP servers into Codex app-server config. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCodexUserMcpServersThreadConfigPatch } from "./bundle-mcp-codex.js";
@@ -109,6 +110,8 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
   });
 
   it("filters Codex-scoped user MCP servers by OpenClaw agent id", () => {
+    // Agent-scoped MCP servers should follow the active OpenClaw agent, while
+    // unscoped servers remain global.
     const cfg = {
       mcp: {
         servers: {
@@ -160,6 +163,34 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
       { agentId: "apolo" },
     );
     expect(patch).toBeUndefined();
+  });
+
+  it("omits disabled user MCP servers from Codex app-server projection", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          disabled: {
+            enabled: false,
+            transport: "streamable-http",
+            url: "https://disabled.example.com/mcp",
+          },
+          enabled: {
+            transport: "stdio",
+            command: "node",
+            args: ["enabled-mcp.js"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        enabled: {
+          command: "node",
+          args: ["enabled-mcp.js"],
+        },
+      },
+    });
   });
 
   it("normalizes Codex agent scopes before matching", () => {

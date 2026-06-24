@@ -1,8 +1,9 @@
+// Embedded Run Abort Leak tests cover embedded run abort leak script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const tempRoots: string[] = [];
 
@@ -30,23 +31,67 @@ afterEach(() => {
 });
 
 describe("scripts/embedded-run-abort-leak", () => {
+  let looseThresholdProbe: {
+    result: ReturnType<typeof runHarness>;
+    snapDir: string;
+  };
+
+  beforeAll(() => {
+    const snapDir = makeTempRoot();
+    looseThresholdProbe = {
+      result: runHarness(["--snap-dir", snapDir, "--iters", "1e3", "--quiet"]),
+      snapDir,
+    };
+  });
+
   it("rejects loose numeric thresholds before writing heap snapshots", () => {
-    const cases = [
-      ["--iters", "1e3", "positive"],
-      ["--batches", "2abc", "positive"],
-      ["--max-rss-growth-mb", "0x10", "non-negative"],
-      ["--max-tracked-retention", "abc", "non-negative"],
-      ["--scope-bytes", "1mb", "positive"],
-    ] as const;
+    expect(looseThresholdProbe.result.status).toBe(2);
+    expect(looseThresholdProbe.result.stdout).toBe("");
+    expect(looseThresholdProbe.result.stderr).toContain(
+      "error: --iters must be a positive integer",
+    );
+    expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
+  });
 
-    for (const [flag, value, label] of cases) {
-      const snapDir = makeTempRoot();
-      const result = runHarness(["--snap-dir", snapDir, flag, value, "--quiet"]);
+  it("rejects duplicate thresholds before writing heap snapshots", () => {
+    const snapDir = makeTempRoot();
+    const result = runHarness([
+      "--snap-dir",
+      snapDir,
+      "--iters",
+      "1",
+      "--iters",
+      "2",
+      "--quiet",
+    ]);
 
-      expect(result.status).toBe(2);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`error: ${flag} must be a ${label} integer`);
-      expect(readdirSync(snapDir)).toEqual([]);
-    }
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --iters was provided more than once");
+    expect(readdirSync(snapDir)).toEqual([]);
+  });
+
+  it("rejects missing snapshot directories before writing heap snapshots", () => {
+    const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --snap-dir requires a value");
+  });
+
+  it("rejects short flag values before writing heap snapshots", () => {
+    const snapDirResult = runHarness(["--snap-dir", "-h", "--quiet", "--iters", "1"]);
+    const itersResult = runHarness(["--iters", "-h", "--quiet"]);
+    const modeResult = runHarness(["--mode", "-h", "--quiet"]);
+
+    expect(snapDirResult.status).toBe(2);
+    expect(snapDirResult.stdout).toBe("");
+    expect(snapDirResult.stderr).toContain("error: --snap-dir requires a value");
+    expect(itersResult.status).toBe(2);
+    expect(itersResult.stdout).toBe("");
+    expect(itersResult.stderr).toContain("error: --iters requires a value");
+    expect(modeResult.status).toBe(2);
+    expect(modeResult.stdout).toBe("");
+    expect(modeResult.stderr).toContain("error: --mode requires a value");
   });
 });

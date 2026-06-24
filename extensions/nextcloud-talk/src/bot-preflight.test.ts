@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover bot preflight plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
@@ -69,6 +70,19 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
 
   it("passes when the matching bot has the response feature bit", async () => {
     mockBotAdmin(1 | 2 | 8);
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: true,
+      code: "ok",
+      botId: "7",
+      botName: "OpenClaw",
+      features: 11,
+      message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
+    });
+  });
+
+  it("normalizes signed decimal bot feature strings through the shared parser", async () => {
+    mockBotAdmin("+011");
 
     await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
       ok: true,

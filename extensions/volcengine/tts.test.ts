@@ -1,3 +1,4 @@
+// Volcengine tests cover tts plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";
@@ -127,6 +128,28 @@ describe("Volcengine speech provider", () => {
       name: "anna",
       locale: "en-US",
       gender: "female",
+    });
+  });
+
+  it("rejects non-decimal speedRatio directive values", () => {
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Volcengine speedRatio "0x1"'],
     });
   });
 

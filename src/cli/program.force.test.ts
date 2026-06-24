@@ -1,3 +1,4 @@
+// Program force tests cover root force flag behavior and command propagation.
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("node:child_process", async () => {
@@ -15,6 +16,7 @@ vi.mock("../infra/ports-probe.js", () => ({
 }));
 
 import { execFileSync } from "node:child_process";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import {
   forceFreePort,
   forceFreePortAndWait,
@@ -171,6 +173,23 @@ describe("gateway --force helpers", () => {
     vi.useRealTimers();
   });
 
+  it("bounds oversized force-free intervals by the remaining timeout", async () => {
+    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    await expect(
+      forceFreePortAndWait(18789, {
+        timeoutMs: 2,
+        intervalMs: Number.MAX_SAFE_INTEGER,
+        sigtermTimeoutMs: 1,
+      }),
+    ).rejects.toThrow(/still has listeners/);
+
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
+  });
+
   it("falls back to fuser when lsof is permission denied", async () => {
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       if (cmd.includes("lsof")) {
@@ -283,6 +302,11 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
     expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    expect(execFileSync).toHaveBeenCalledWith(
+      getWindowsSystem32ExePath("netstat.exe"),
+      ["-ano", "-p", "TCP"],
+      { encoding: "utf-8" },
+    );
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {

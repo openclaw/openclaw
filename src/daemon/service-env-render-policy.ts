@@ -1,9 +1,11 @@
+/** Applies platform render policy for managed daemon service environment values. */
 import type { MutableServiceEnvPlan } from "./service-env-plan.js";
 import {
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
 
+// LaunchAgent plists need selected dotenv values inlined so launchd receives them.
 function isLaunchAgentServiceEnvironment(params: {
   platform: NodeJS.Platform;
   serviceEnvironment: Record<string, string | undefined>;
@@ -37,6 +39,8 @@ export function applyManagedServiceEnvRenderPolicy(params: {
     if (entry.source !== "state-dotenv" || !managedKeys.has(entry.normalizedKey)) {
       continue;
     }
+    // launchd does not read shell dotenv files; inline only the managed dotenv
+    // keys declared for this service.
     params.plan.environment[entry.rawKey] = entry.value;
     params.plan.environmentValueSources[entry.rawKey] = "inline";
   }

@@ -1,3 +1,4 @@
+// Node daemon tests cover node daemon command runtime behavior and errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { runNodeDaemonStatus } from "./daemon.js";
@@ -43,9 +44,10 @@ vi.mock("../../daemon/runtime-hints.js", () => ({
   buildPlatformServiceStartHints: () => ["openclaw node install", "openclaw node start"],
 }));
 
-vi.mock("../../terminal/theme.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
+vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../packages/terminal-core/src/theme.js")
+  >("../../../packages/terminal-core/src/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,

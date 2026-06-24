@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover core plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -205,17 +206,19 @@ describe("nextcloud talk core", () => {
     });
 
     try {
-      const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
-        await import("./signature.js");
+      const {
+        generateNextcloudTalkSignature: generateNextcloudTalkSignatureLocal,
+        verifyNextcloudTalkSignature: verifyNextcloudTalkSignatureLocal,
+      } = await import("./signature.js");
       const body = JSON.stringify({ hello: "world" });
-      const generated = generateNextcloudTalkSignature({
+      const generated = generateNextcloudTalkSignatureLocal({
         body,
         secret: "secret-123",
       });
       const shortSignature = generated.signature.slice(0, 12);
 
       expect(
-        verifyNextcloudTalkSignature({
+        verifyNextcloudTalkSignatureLocal({
           signature: shortSignature,
           random: generated.random,
           body,

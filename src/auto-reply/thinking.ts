@@ -1,4 +1,6 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+// Thinking/reasoning level catalog helpers for auto-reply model controls.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -7,30 +9,30 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
-  formatXHighModelHint,
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
   resolveResponseUsageMode,
-  resolveElevatedMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
-  ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
@@ -38,11 +40,8 @@ import {
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
+/** UI-facing thinking level option. */
 export type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
@@ -93,7 +92,9 @@ function resolveThinkingPolicyContext(params: {
     normalizedProvider,
     modelId,
     modelKey,
+    api: candidate?.api,
     reasoning: candidate?.reasoning,
+    ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
 }
@@ -172,6 +173,7 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
+/** Resolve supported thinking levels and default for a provider/model pair. */
 export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
@@ -185,12 +187,25 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     reasoning: context.reasoning,
+    ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
-  const pluginProfile = resolveProviderThinkingProfile({
+  const providerProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
     context: providerContext,
   });
+  // Any anthropic-messages catalog row routes through the canonical Claude
+  // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
+  // non-Claude models on the anthropic-messages transport collapse to the Claude
+  // base set, deliberately bypassing the later compat-driven xhigh upgrade —
+  // anthropic-messages does not carry a generic xhigh contract.
+  const anthropicMessagesProfile =
+    context.api === "anthropic-messages"
+      ? resolveClaudeThinkingProfile(context.modelId, context.params, {
+          includeNativeMax: true,
+        })
+      : undefined;
+  const pluginProfile = providerProfile ?? anthropicMessagesProfile;
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
     if (
@@ -238,11 +253,6 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
-}
-
 function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,
@@ -254,10 +264,7 @@ function supportsThinkingLevel(
   );
 }
 
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  return supportsThinkingLevel(provider, model, "xhigh");
-}
-
+/** List thinking level ids supported by provider/model. */
 export function listThinkingLevels(
   provider?: string | null,
   model?: string | null,
@@ -267,6 +274,7 @@ export function listThinkingLevels(
   return profile.levels.map((level) => level.id);
 }
 
+/** List labeled thinking level options supported by provider/model. */
 export function listThinkingLevelOptions(
   provider?: string | null,
   model?: string | null,
@@ -276,6 +284,7 @@ export function listThinkingLevelOptions(
   return profile.levels.map(({ id, label }) => ({ id, label }));
 }
 
+/** List display labels for thinking levels supported by provider/model. */
 export function listThinkingLevelLabels(
   provider?: string | null,
   model?: string | null,
@@ -284,6 +293,7 @@ export function listThinkingLevelLabels(
   return listThinkingLevelOptions(provider, model, catalog).map((level) => level.label);
 }
 
+/** Format supported thinking level labels for command/status output. */
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
@@ -294,6 +304,7 @@ export function formatThinkingLevels(
   return profile.levels.map(({ label }) => label).join(separator);
 }
 
+/** Resolve the default thinking level for a provider/model pair. */
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
@@ -314,23 +325,7 @@ export function resolveThinkingDefaultForModel(params: {
   return resolveSupportedThinkingLevelFromProfile(profile, "medium");
 }
 
-export function resolveLargestSupportedThinkingLevel(
-  provider?: string | null,
-  model?: string | null,
-): ThinkLevel {
-  const profile = resolveThinkingProfile({ provider, model });
-  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
-  for (const level of profile.levels) {
-    if (level.id === "off") {
-      continue;
-    }
-    if (!bestLevel || level.rank > bestLevel.rank) {
-      bestLevel = level;
-    }
-  }
-  return bestLevel?.id ?? "off";
-}
-
+/** Return whether a specific thinking level is supported by provider/model. */
 export function isThinkingLevelSupported(params: {
   provider?: string | null;
   model?: string | null;
@@ -356,6 +351,7 @@ function resolveSupportedThinkingLevelFromProfile(
   );
 }
 
+/** Clamp a requested thinking level to the closest supported provider/model level. */
 export function resolveSupportedThinkingLevel(params: {
   provider?: string | null;
   model?: string | null;

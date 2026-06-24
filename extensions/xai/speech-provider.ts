@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -26,6 +27,7 @@ import {
 } from "./tts.js";
 
 const XAI_SPEECH_RESPONSE_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
+const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiSpeechResponseFormat = (typeof XAI_SPEECH_RESPONSE_FORMATS)[number];
 
@@ -130,6 +132,16 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
   };
 }
 
+function resolveGeneratedAudioMaxBytes(req: {
+  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
+}): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
+}
+
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   handled: boolean;
   overrides?: SpeechProviderOverrides;
@@ -231,6 +243,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         speed: overrides.speed ?? config.speed,
         responseFormat,
         timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return {
         audioBuffer,
@@ -254,6 +267,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         speed: overrides.speed ?? config.speed,
         responseFormat: outputFormat,
         timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },

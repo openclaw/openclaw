@@ -1,3 +1,4 @@
+// Credentials module supports OpenClaw QA credential workflows.
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -725,7 +726,7 @@ export const listCredentialSets = internalQuery({
       );
     }
 
-    let rows: CredentialSetRecord[] = [];
+    let rows: CredentialSetRecord[];
     const kind = args.kind?.trim();
     if (kind) {
       if (normalizedStatus === "all") {

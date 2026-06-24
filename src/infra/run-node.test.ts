@@ -1,3 +1,4 @@
+// Tests node process runner lifecycle and captured output.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -127,9 +128,7 @@ function createFakeProcess() {
 }
 
 // Launcher plumbing tests do not need the real runtime artifact copier.
-async function skipRuntimePostBuild(): Promise<void> {
-  return;
-}
+async function skipRuntimePostBuild(): Promise<void> {}
 
 async function syncBundledPluginMetadata(params?: {
   cwd?: string;
@@ -1534,7 +1533,11 @@ describe("run-node script", () => {
         buildPaths: [DIST_ENTRY, BUILD_STAMP],
       });
 
-      const fakeProcess = createFakeProcess();
+      const fakeProcess = Object.assign(createFakeProcess(), {
+        stdin: {
+          isTTY: true,
+        },
+      });
       const child = Object.assign(new EventEmitter(), {
         kill: vi.fn((signal: string) => {
           queueMicrotask(() => child.emit("exit", 0, null));
@@ -1585,11 +1588,99 @@ describe("run-node script", () => {
       expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCall?.[2].stdio).toBe("inherit");
+      expect(spawnCall?.[2]).toMatchObject({ detached: false });
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "force-cleans the active openclaw child process group after forwarded SIGTERM",
+    async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupTrackedProject(tmp, {
+          files: {
+            [ROOT_SRC]: "export const value = 1;\n",
+          },
+          oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+          buildPaths: [DIST_ENTRY, BUILD_STAMP],
+        });
+
+        const fakeProcess = Object.assign(createFakeProcess(), {
+          stdin: {
+            isTTY: false,
+          },
+        });
+        const child = Object.assign(new EventEmitter(), {
+          pid: 42_420,
+          kill: vi.fn(),
+        });
+        const groupSignals: Array<[number, string | number]> = [];
+        const spawn = vi.fn<
+          (
+            cmd: string,
+            args: string[],
+            options: unknown,
+          ) => {
+            kill: (signal?: string) => boolean;
+            on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
+            pid: number;
+          }
+        >(() => ({
+          kill: (signal) => {
+            child.kill(signal ?? "SIGTERM");
+            return true;
+          },
+          on: (event, cb) => {
+            child.on(event, cb);
+          },
+          pid: child.pid,
+        }));
+
+        const exitCodePromise = runNodeMain({
+          cwd: tmp,
+          args: ["status"],
+          env: {
+            ...process.env,
+            OPENCLAW_RUNNER_LOG: "0",
+          },
+          platform: "darwin",
+          process: fakeProcess,
+          signalProcess: (pid: number, signal?: string | number) => {
+            groupSignals.push([pid, signal ?? "SIGTERM"]);
+            if (signal === "SIGTERM") {
+              queueMicrotask(() => child.emit("exit", 0, null));
+            }
+            return true;
+          },
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+          execPath: process.execPath,
+        });
+
+        await vi.waitFor(() => {
+          expect(spawn).toHaveBeenCalled();
+        });
+        fakeProcess.emit("SIGTERM");
+        const exitCode = await exitCodePromise;
+
+        expect(exitCode).toBe(143);
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { detached?: boolean; stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
+        expect(spawnCall?.[2]).toMatchObject({ detached: true, stdio: "inherit" });
+        expect(groupSignals).toEqual([
+          [-42_420, "SIGTERM"],
+          [-42_420, "SIGKILL"],
+        ]);
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+      });
+    },
+  );
 
   it("rebuilds when extension sources are newer than the build stamp", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
@@ -2309,6 +2400,82 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports missing static runtime overlay asset outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIFFS_PACKAGE,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_DIFFS_VIEWER_RUNTIME,
+          DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_RUNTIME_DIFFS_VIEWER_RUNTIME));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("does not require static asset outputs when runtime static assets are disabled", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIFFS_PACKAGE,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_RUNTIME_EXTENSION_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
   it("does not require static asset outputs when the declared source is absent", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -2798,7 +2965,7 @@ describe("run-node script", () => {
         }) as unknown as NodeJS.Process;
 
         const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
-        expect(fakeProcess.kill).toHaveBeenCalledWith(987654, 0);
+        expect(fakeProcess["kill"]).toHaveBeenCalledWith(987654, 0);
         expect(JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf-8")).pid).toBe(
           4242,
         );

@@ -1,12 +1,19 @@
+// Control UI test helper supports control ui e2e setup.
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import {
+  controlUiBrowserOnlySharedModuleAliases,
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -38,19 +45,11 @@ export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
   defaultAgentId?: string;
+  deferredMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
   models?: Array<{ id: string; name: string; provider: string }>;
   sessionKey?: string;
-};
-
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -76,16 +75,47 @@ export type MockGatewayControls = {
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
+const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+export const systemChromiumExecutableCandidates = [
+  "/snap/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+] as const;
+
 function resolveRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../..");
 }
 
+export function resolvePlaywrightChromiumExecutablePath(
+  defaultExecutablePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  canRun: (chromiumExecutablePath: string) => boolean = canRunPlaywrightChromium,
+): string {
+  const executableOverride = env[chromiumExecutableOverrideEnvKey]?.trim();
+  if (executableOverride) {
+    return executableOverride;
+  }
+  if (canRun(defaultExecutablePath)) {
+    return defaultExecutablePath;
+  }
+  return (
+    systemChromiumExecutableCandidates.find((candidate) => canRun(candidate)) ??
+    defaultExecutablePath
+  );
+}
+
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
-  return existsSync(chromiumExecutablePath);
+  if (!existsSync(chromiumExecutablePath)) {
+    return false;
+  }
+  return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
 export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
+  const { createServer } = await import("vite");
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();
@@ -107,10 +137,13 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
       ],
     },
     publicDir: path.join(uiRoot, "public"),
+    plugins: [controlUiBrowserOnlySharedModuleAliases()],
     resolve: {
-      alias: {
-        json5: json5EsmPath,
-      },
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     root: uiRoot,
     server: {
@@ -164,6 +197,7 @@ function normalizeScenario(
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     defaultAgentId,
+    deferredMethods: scenario.deferredMethods ?? [],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
@@ -240,7 +274,7 @@ function installControlUiMockGateway(input: {
 
   const scenario: BrowserScenario = input.scenario;
   const protocolVersion = input.protocolVersion;
-  const deferredMethods: string[] = [];
+  const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
   const sockets: unknown[] = [];
@@ -251,7 +285,7 @@ function installControlUiMockGateway(input: {
   }
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
-    return Object.prototype.hasOwnProperty.call(record, key);
+    return Object.hasOwn(record, key);
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -346,7 +380,7 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: [] },
+          features: { events: [], methods: ["chat.metadata", "chat.startup"] },
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -379,11 +413,65 @@ function installControlUiMockGateway(input: {
           mainKey: "main",
           scope: "agent",
         };
+      case "agents.files.list":
+        return {
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          files: [],
+          workspace: "",
+        };
+      case "agents.files.get":
+        return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+        };
+      case "chat.startup":
+        return {
+          agentsList: {
+            agents: [
+              {
+                id: scenario.defaultAgentId,
+                identity: { name: scenario.assistantName },
+                name: scenario.assistantName,
+              },
+            ],
+            defaultId: scenario.defaultAgentId,
+            mainKey: "main",
+            scope: "agent",
+          },
+          messages: scenario.historyMessages,
+          metadata: {
+            models: scenario.models,
+          },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        };
+      case "chat.metadata":
+        return {
+          commands: [],
+          models: scenario.models,
         };
       case "chat.send":
         return {

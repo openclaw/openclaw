@@ -78,15 +78,19 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "heartbeat_respond",
     "tts",
     "gateway",
@@ -95,7 +99,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -117,8 +120,11 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -222,8 +228,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 41962,
-    "roughTokens": 10491
+    "chars": 51775,
+    "roughTokens": 12944
   },
   "openClawDeveloperInstructions": {
     "chars": 1983,
@@ -234,8 +240,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6780
   },
   "totalWithDynamicToolsJson": {
-    "chars": 69083,
-    "roughTokens": 17271
+    "chars": 78896,
+    "roughTokens": 19724
   },
   "userInputText": {
     "chars": 1367,
@@ -547,9 +553,10 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "heartbeat_respond",
   "tts",
   "gateway",
@@ -558,7 +565,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -589,19 +595,10 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each entry uses media.",
           "items": {
             "properties": {
-              "filePath": {
-                "type": "string"
-              },
-              "fileUrl": {
-                "type": "string"
-              },
               "media": {
-                "type": "string"
-              },
-              "mediaUrl": {
                 "type": "string"
               },
               "mimeType": {
@@ -610,14 +607,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
               "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
               "type": {
                 "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              },
-              "url": {
                 "type": "string"
               }
             },
@@ -652,9 +643,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         "filename": {
           "type": "string"
         },
-        "filePath": {
-          "type": "string"
-        },
         "forceDocument": {
           "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
@@ -676,9 +664,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "mimeType": {
-          "type": "string"
-        },
-        "path": {
           "type": "string"
         },
         "quoteText": {
@@ -713,7 +698,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   },
   {
     "deferLoading": true,
@@ -749,7 +735,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "type": "object"
     },
     "name": "heartbeat_respond",
-    "namespace": "openclaw"
+    "type": "function"
   }
 ]
 ```

@@ -1,4 +1,12 @@
+// Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
@@ -8,13 +16,6 @@ import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatHelpExamples } from "./help-format.js";
 import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
@@ -60,6 +61,7 @@ function printDirectoryList(params: {
   );
 }
 
+/** Register directory lookup commands and shared channel/account resolution. */
 export function registerDirectoryCli(program: Command) {
   const directory = program
     .command("directory")
@@ -112,12 +114,15 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
+      // Installing an explicit channel can update plugin records; commit before directory calls
+      // so subsequent registry reads see the channel the user just selected.
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,
       });
       cfg = committed.config;
     } else if (autoEnabled.changes.length > 0) {
+      // Auto-enable changes are config-only and must be persisted before later CLI invocations.
       await replaceConfigFile({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,

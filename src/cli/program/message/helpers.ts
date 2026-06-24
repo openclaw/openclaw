@@ -1,3 +1,4 @@
+// Shared helpers for message CLI actions: common flags, plugin preload, numeric validation, and stop hooks.
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import {
@@ -18,6 +19,7 @@ import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
 import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../../plugin-registry.js";
 
+/** Shared helpers used by every message subcommand registration. */
 export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
   withMessageTarget: (command: Command) => Command;
@@ -32,11 +34,13 @@ const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_N
 const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
   ["pollDurationHours", "--poll-duration-hours"],
   ["pollDurationSeconds", "--poll-duration-seconds"],
-  ["durationMin", "--duration-min"],
   ["limit", "--limit"],
   ["autoArchiveMin", "--auto-archive-min"],
 ]);
-const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([["deleteDays", "--delete-days"]]);
+const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
+  ["durationMin", "--duration-min"],
+  ["deleteDays", "--delete-days"],
+]);
 
 type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
 type MessagePluginPreloadPlan =
@@ -126,6 +130,8 @@ function resolveMessagePluginPreloadPlan(
   const loadOptions = scopedChannel
     ? { scope: "configured-channels" as const, onlyChannelIds: [scopedChannel] }
     : { scope: "configured-channels" as const };
+  // Gateway-owned actions can execute without loading channel plugins in the CLI process;
+  // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
   if (
     opts.dryRun === true ||
     ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
@@ -136,6 +142,7 @@ function resolveMessagePluginPreloadPlan(
   return { preload: false };
 }
 
+/** Create shared option decorators and the common message action runner. */
 export function createMessageCliHelpers(
   message: Command,
   messageChannelOptions: string,
@@ -179,6 +186,7 @@ export function createMessageCliHelpers(
         defaultRuntime.error(danger(String(err)));
       },
     );
+    // Outbound actions may start plugin-side resources; run bounded stop hooks even after failure.
     if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
       await runPluginStopHooks();
     }

@@ -1,7 +1,9 @@
+/** Shared reply test harness with mocked agent/runtime dependencies and temp HOME isolation. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 type ReplyRuntimeMocks = {
@@ -44,7 +46,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
   listChatCommands: () => [],
 }));
 
-vi.mock("../skill-commands.runtime.js", () => ({
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: () => [],
 }));
 
@@ -119,36 +121,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-type HomeEnvSnapshot = {
-  HOME: string | undefined;
-  USERPROFILE: string | undefined;
-  HOMEDRIVE: string | undefined;
-  HOMEPATH: string | undefined;
-  OPENCLAW_STATE_DIR: string | undefined;
-  OPENCLAW_AGENT_DIR: string | undefined;
-};
-
-function snapshotHomeEnv(): HomeEnvSnapshot {
-  return {
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-  };
-}
-
-function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
+/** Creates a per-test HOME fixture and restores environment variables after each case. */
 export function createTempHomeHarness(options: { prefix: string; beforeEachCase?: () => void }) {
   let fixtureRoot = "";
   let caseId = 0;
@@ -167,31 +140,30 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
   async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${++caseId}`);
     await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
-    const envSnapshot = snapshotHomeEnv();
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-    process.env.OPENCLAW_AGENT_DIR = path.join(home, ".openclaw", "agent");
-
+    const env: Record<string, string | undefined> = {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      OPENCLAW_AGENT_DIR: path.join(home, ".openclaw", "agent"),
+    };
     if (process.platform === "win32") {
       const match = home.match(/^([A-Za-z]:)(.*)$/);
       if (match) {
-        process.env.HOMEDRIVE = match[1];
-        process.env.HOMEPATH = match[2] || "\\";
+        env.HOMEDRIVE = match[1];
+        env.HOMEPATH = match[2] || "\\";
       }
     }
 
-    try {
+    return await withEnvAsync(env, async () => {
       options.beforeEachCase?.();
       return await fn(home);
-    } finally {
-      restoreHomeEnv(envSnapshot);
-    }
+    });
   }
 
   return { withTempHome };
 }
 
+/** Builds a minimal reply config rooted in a temp HOME fixture. */
 export function makeReplyConfig(home: string) {
   return withFastReplyConfig({
     agents: {
@@ -209,6 +181,7 @@ export function makeReplyConfig(home: string) {
   });
 }
 
+/** Creates fresh runtime mocks for reply tests. */
 export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   return {
     runEmbeddedAgent: vi.fn(),
@@ -219,10 +192,12 @@ export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   };
 }
 
+/** Installs runtime mocks into the hoisted Vitest module state. */
 export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   replyRuntimeMockState.mocks = mocks;
 }
 
+/** Resets mock call history and default model catalog responses. */
 export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   mocks.runEmbeddedAgent.mockClear();
   mocks.loadModelCatalog.mockClear();
@@ -231,6 +206,7 @@ export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   ]);
 }
 
+/** Builds the minimal embedded-agent text result consumed by reply tests. */
 export function makeEmbeddedTextResult(text: string) {
   return {
     payloads: [{ text }],

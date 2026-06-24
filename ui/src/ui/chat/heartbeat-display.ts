@@ -1,3 +1,4 @@
+// Control UI chat module implements heartbeat display behavior.
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
@@ -98,6 +99,9 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   const entry = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(entry.role);
   if (role !== "assistant") {
+    return false;
+  }
+  if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
     return false;
   }
 

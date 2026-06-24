@@ -1,8 +1,11 @@
+// Media generation background test support centralizes task/announcement mocks
+// and assertions shared by image, video, and music generation tests.
 import { expect, vi } from "vitest";
 
 type MockWithReset = {
   mockReset(): void;
   mockResolvedValue?(value: unknown): void;
+  mockReturnValue?(value: unknown): void;
 };
 
 export const taskExecutorMocks = {
@@ -14,6 +17,7 @@ export const taskExecutorMocks = {
 
 export const announceDeliveryMocks = {
   deliverSubagentAnnouncement: vi.fn(),
+  loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
 };
 
 export const taskDeliveryRuntimeMocks = {
@@ -33,6 +37,7 @@ type TaskDeliveryBackgroundMocks = {
 
 type AnnouncementBackgroundMocks = {
   deliverSubagentAnnouncement: MockWithReset;
+  loadRequesterSessionEntry: MockWithReset;
 };
 
 type MediaBackgroundResetMocks = {
@@ -52,15 +57,6 @@ type ProgressExpectation = {
   taskExecutorMocks: TaskExecutorBackgroundMocks;
   runId: string;
   progressSummary: string;
-};
-
-type DirectSendExpectation = {
-  sendMessageMock: unknown;
-  channel: string;
-  to: string;
-  threadId: string;
-  content: string;
-  mediaUrls: string[];
 };
 
 type FallbackAnnouncementExpectation = {
@@ -131,33 +127,35 @@ export function createMediaCompletionFixture({
 }
 
 export function resetMediaBackgroundMocks({
-  taskExecutorMocks,
-  taskDeliveryRuntimeMocks,
-  announceDeliveryMocks,
+  taskExecutorMocks: taskExecutorMocksResult,
+  taskDeliveryRuntimeMocks: taskDeliveryRuntimeMocksLocal,
+  announceDeliveryMocks: announceDeliveryMocksLocal,
 }: MediaBackgroundResetMocks): void {
-  taskExecutorMocks.createRunningTaskRun.mockReset();
-  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  taskExecutorMocks.completeTaskRunByRunId.mockReset();
-  taskExecutorMocks.failTaskRunByRunId.mockReset();
-  taskDeliveryRuntimeMocks.sendMessage.mockReset();
-  taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue?.({
+  taskExecutorMocksResult.createRunningTaskRun.mockReset();
+  taskExecutorMocksResult.recordTaskRunProgressByRunId.mockReset();
+  taskExecutorMocksResult.completeTaskRunByRunId.mockReset();
+  taskExecutorMocksResult.failTaskRunByRunId.mockReset();
+  taskDeliveryRuntimeMocksLocal.sendMessage.mockReset();
+  taskDeliveryRuntimeMocksLocal.sendMessage.mockResolvedValue?.({
     channel: "discord",
     to: "channel:1",
     via: "direct",
     mediaUrl: null,
     result: { messageId: "msg-1" },
   });
-  announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+  announceDeliveryMocksLocal.deliverSubagentAnnouncement.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReturnValue?.({ entry: undefined });
 }
 
 export function expectQueuedTaskRun({
-  taskExecutorMocks,
+  taskExecutorMocks: taskExecutorMocksValue,
   taskKind,
   sourceId,
   progressSummary,
 }: QueuedTaskExpectation): void {
   const params = requireMockFirstParam(
-    taskExecutorMocks.createRunningTaskRun,
+    taskExecutorMocksValue.createRunningTaskRun,
     "createRunningTaskRun params",
   );
   expect(params.taskKind).toBe(taskKind);
@@ -166,32 +164,16 @@ export function expectQueuedTaskRun({
 }
 
 export function expectRecordedTaskProgress({
-  taskExecutorMocks,
+  taskExecutorMocks: taskExecutorMocksLocal,
   runId,
   progressSummary,
 }: ProgressExpectation): void {
   const params = requireMockFirstParam(
-    taskExecutorMocks.recordTaskRunProgressByRunId,
+    taskExecutorMocksLocal.recordTaskRunProgressByRunId,
     "recordTaskRunProgressByRunId params",
   );
   expect(params.runId).toBe(runId);
   expect(params.progressSummary).toBe(progressSummary);
-}
-
-export function expectDirectMediaSend({
-  sendMessageMock,
-  channel,
-  to,
-  threadId,
-  content,
-  mediaUrls,
-}: DirectSendExpectation): void {
-  const params = requireMockFirstParam(sendMessageMock, "sendMessage params");
-  expect(params.channel).toBe(channel);
-  expect(params.to).toBe(to);
-  expect(params.threadId).toBe(threadId);
-  expect(params.content).toBe(content);
-  expect(params.mediaUrls).toEqual(mediaUrls);
 }
 
 export function expectFallbackMediaAnnouncement({
@@ -204,6 +186,8 @@ export function expectFallbackMediaAnnouncement({
   resultMediaPath,
   mediaUrls,
 }: FallbackAnnouncementExpectation): void {
+  // Fallback announcements are agent-mediated completions: internal events must
+  // carry media URLs and a visible-reply instruction for the completion agent.
   expect(deliverAnnouncementMock).toHaveBeenCalledTimes(1);
   const params = requireMockFirstParam(
     deliverAnnouncementMock,
@@ -224,5 +208,5 @@ export function expectFallbackMediaAnnouncement({
   expect(event.status).toBe("ok");
   expect(String(event.result)).toContain(resultMediaPath);
   expect(event.mediaUrls).toEqual(mediaUrls);
-  expect(String(event.replyInstruction)).toContain("message-tool delivery");
+  expect(String(event.replyInstruction)).toContain("visible-reply contract");
 }

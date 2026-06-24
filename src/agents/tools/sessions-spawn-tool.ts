@@ -1,3 +1,8 @@
+/**
+ * sessions_spawn built-in tool.
+ *
+ * Starts subagent or ACP-backed sessions with inherited tool policy and delivery context.
+ */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
@@ -7,6 +12,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -18,6 +24,7 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import {
@@ -35,7 +42,6 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   normalizeToolModelOverride,
-  readNonNegativeIntegerParam,
   readStringParam,
   ToolInputError,
 } from "./common.js";
@@ -53,6 +59,10 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "thread_id",
   "replyTo",
   "reply_to",
+] as const;
+const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = [
+  "runTimeoutSeconds",
+  "timeoutSeconds",
 ] as const;
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
@@ -170,9 +180,6 @@ function createSessionsSpawnToolSchema(params: {
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
-    runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-    // Back-compat: older callers used timeoutSeconds for this tool.
-    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -282,6 +289,16 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
         );
       }
+      const unsupportedTimeoutParam = UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS.find((key) =>
+        resolveSnakeCaseParamKey(params, key),
+      );
+      if (unsupportedTimeoutParam) {
+        const providedTimeoutParam =
+          resolveSnakeCaseParamKey(params, unsupportedTimeoutParam) ?? unsupportedTimeoutParam;
+        throw new ToolInputError(
+          `sessions_spawn does not support per-call "${providedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+        );
+      }
       const task = readStringParam(params, "task", { required: true });
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
@@ -343,10 +360,6 @@ export function createSessionsSpawnTool(
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
       }
-      const runTimeoutSeconds =
-        readNonNegativeIntegerParam(params, "runTimeoutSeconds") ??
-        // Back-compat: older callers used timeoutSeconds for this tool.
-        readNonNegativeIntegerParam(params, "timeoutSeconds");
       const thread = params.thread === true;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
@@ -359,11 +372,14 @@ export function createSessionsSpawnTool(
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
-        if (Array.isArray(attachments) && attachments.length > 0) {
+        const acpAttachments = resolveAcpSessionsSpawnImageAttachments({
+          config: opts?.config ?? getRuntimeConfig(),
+          attachments,
+        });
+        if (acpAttachments?.status === "forbidden" || acpAttachments?.status === "error") {
           return jsonResult({
-            status: "error",
-            error:
-              "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            status: acpAttachments.status,
+            error: acpAttachments.error,
             ...roleContext,
           });
         }
@@ -375,15 +391,16 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
-            runTimeoutSeconds,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
             sandbox,
             streamTo,
+            attachments: acpAttachments?.attachments,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
@@ -399,10 +416,7 @@ export function createSessionsSpawnTool(
         const childSessionKey = result.childSessionKey?.trim();
         const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
         const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
+          result.status === "accepted" && Boolean(childSessionKey) && Boolean(childRunId);
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
           const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
@@ -434,9 +448,10 @@ export function createSessionsSpawnTool(
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
+              requesterAgentId: opts?.requesterAgentIdOverride,
               cleanup: trackedCleanup,
               label: label || undefined,
-              runTimeoutSeconds,
+              runTimeoutSeconds: result.runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
@@ -465,7 +480,6 @@ export function createSessionsSpawnTool(
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           cwd,
-          runTimeoutSeconds,
           thread,
           mode,
           cleanup,

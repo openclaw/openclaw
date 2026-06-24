@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for OpenAI Responses payload policy.
+ * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
@@ -85,6 +89,31 @@ describe("openai responses payload policy", () => {
     expect(payload).toEqual({
       store: true,
       context_management: [{ type: "compaction", compact_threshold: 80_000 }],
+    });
+  });
+
+  it("accepts plus-signed responses compaction thresholds", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesCompactThreshold: "+120000" },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 120_000 }],
     });
   });
 
@@ -192,8 +221,8 @@ describe("openai responses payload policy", () => {
   it("emits store false for native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
       { storeMode: "disable" },
@@ -208,7 +237,7 @@ describe("openai responses payload policy", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
         api: "openclaw-openai-responses-transport",
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
       { storeMode: "disable" },

@@ -1,3 +1,4 @@
+// Document Extract plugin module implements document extractor behavior.
 import type { PdfDocument, PdfEngine, PdfImage } from "clawpdf";
 import type {
   DocumentExtractedImage,
@@ -15,7 +16,7 @@ async function loadPdfEngine(): Promise<PdfEngine> {
   if (!pdfEnginePromise) {
     pdfEnginePromise = import("clawpdf")
       .then(({ createEngine }) => createEngine())
-      .catch((err) => {
+      .catch((err: unknown) => {
         pdfEnginePromise = null;
         throw new Error("Dependency clawpdf is required for PDF extraction", {
           cause: err,

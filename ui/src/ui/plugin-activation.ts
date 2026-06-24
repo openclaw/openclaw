@@ -1,3 +1,4 @@
+// Control UI module implements plugin activation behavior.
 import type { ConfigSnapshot } from "./types.ts";
 
 type PluginActivationOptions = {
@@ -12,7 +13,7 @@ export function isPluginEnabledInConfigSnapshot(
   const enabledByDefault = options?.enabledByDefault ?? true;
   const config = configSnapshot?.config;
   if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return true;
+    return enabledByDefault;
   }
 
   const plugins =

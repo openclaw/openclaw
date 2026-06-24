@@ -1,3 +1,4 @@
+// Configure daemon tests cover daemon install prompts, progress labels, and runtime install calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
@@ -37,7 +38,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -100,7 +101,7 @@ describe("maybeInstallDaemon", () => {
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlan.mock.calls[0]?.[0]).toBe(false);
+    expect("token" in buildGatewayInstallPlan.mock.calls[0][0]).toBe(false);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 

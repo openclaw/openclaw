@@ -1,3 +1,4 @@
+/** Verifies ClawHub plugin spec parsing and install metadata handling. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
@@ -106,31 +108,6 @@ function createLoggerSpies() {
   };
 }
 
-function createZipCentralDirectoryArchive(params: {
-  actualEntryCount: number;
-  declaredEntryCount?: number;
-  declaredCentralDirectorySize?: number;
-}): Buffer {
-  const centralDirectory = Buffer.concat(
-    Array.from({ length: params.actualEntryCount }, (_, index) => {
-      const name = Buffer.from(`file-${index}.txt`);
-      const header = Buffer.alloc(46 + name.byteLength);
-      header.writeUInt32LE(0x02014b50, 0);
-      header.writeUInt16LE(name.byteLength, 28);
-      name.copy(header, 46);
-      return header;
-    }),
-  );
-  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
-  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
-  eocd.writeUInt32LE(0, 16);
-  return Buffer.concat([centralDirectory, eocd]);
-}
-
 function expectClawHubInstallFlow(params: {
   baseUrl: string;
   version: string;
@@ -172,6 +149,11 @@ type PackageLookupCall = {
 type ArchiveInstallCall = {
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  installPolicyRequest?: {
+    kind?: string;
+    requestedSpecifier?: string;
+    source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
+  };
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
@@ -323,12 +305,36 @@ describe("installPluginFromClawHub", () => {
       archivePath: "/tmp/clawhub-demo/archive.zip",
     });
     expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toEqual({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+    });
     expect(logger.info).toHaveBeenCalledWith("ClawHub code-plugin demo@2026.3.22 channel=official");
     expect(logger.info).toHaveBeenCalledWith(
       "Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0",
     );
     expect(logger.warn).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks custom ClawHub registries as third-party install policy authority", async () => {
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.internal.example",
+    });
+
+    expectClawHubInstallFlow({
+      baseUrl: "https://clawhub.internal.example",
+      version: "2026.3.22",
+      archivePath: "/tmp/clawhub-demo/archive.zip",
+    });
+    expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
+    });
   });
 
   it("marks official source-linked OpenClaw packages as trusted for install scanning", async () => {
@@ -829,7 +835,7 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("installs when a CalVer correction runtime satisfies the base plugin API range", async () => {
+  it("installs when a release correction runtime satisfies the base plugin API range", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.3-1");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
@@ -2063,6 +2069,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2072,7 +2079,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {
@@ -2085,6 +2092,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2101,7 +2109,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {

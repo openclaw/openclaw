@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.reaction plugin behavior.
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -364,6 +365,7 @@ describe("resolveReactionSyntheticEvent", () => {
       uuid: () => "fixed-uuid",
     });
     expect(result?.message.message_id).toBe("om_msg1:reaction:THUMBSUP:fixed-uuid");
+    expect(result?.message.typing_target_message_id).toBe("om_msg1");
   });
 
   it("drops unverified reactions when sender verification times out", async () => {
@@ -398,6 +400,7 @@ describe("resolveReactionSyntheticEvent", () => {
       },
       message: {
         message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+        typing_target_message_id: "om_msg1",
         chat_id: "oc_group_from_event",
         chat_type: "group",
         message_type: "text",

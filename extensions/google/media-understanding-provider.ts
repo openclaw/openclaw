@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -18,8 +19,6 @@ import {
   resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./runtime-api.js";
 
-export const DEFAULT_GOOGLE_AUDIO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
-export const DEFAULT_GOOGLE_VIDEO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
 const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
@@ -122,7 +121,7 @@ export async function transcribeGeminiAudio(
 ): Promise<AudioTranscriptionResult> {
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
-    defaultBaseUrl: DEFAULT_GOOGLE_AUDIO_BASE_URL,
+    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     defaultModel: DEFAULT_GOOGLE_AUDIO_MODEL,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
     defaultMime: "audio/wav",
@@ -137,7 +136,7 @@ export async function describeGeminiVideo(
 ): Promise<VideoDescriptionResult> {
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
-    defaultBaseUrl: DEFAULT_GOOGLE_VIDEO_BASE_URL,
+    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     defaultModel: DEFAULT_GOOGLE_VIDEO_MODEL,
     defaultPrompt: DEFAULT_GOOGLE_VIDEO_PROMPT,
     defaultMime: "video/mp4",

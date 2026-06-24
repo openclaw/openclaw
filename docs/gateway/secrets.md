@@ -183,6 +183,13 @@ Define providers under `secrets.providers`:
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
       },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
+      },
     },
     defaults: {
       env: "default",
@@ -219,6 +226,11 @@ Define providers under `secrets.providers`:
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
     - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - Plugin-managed exec providers can use `pluginIntegration` instead of
+      copied `command`/`args`. OpenClaw resolves the current command details
+      from the installed plugin manifest during startup/reload. If the plugin is
+      disabled, removed, untrusted, or no longer declares the integration,
+      active SecretRefs using that provider fail closed.
 
     Request payload (stdin):
 
@@ -323,6 +335,8 @@ the config fields that accept SecretRefs.
     - `BWS_ACCESS_TOKEN` available to the Gateway service.
     - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
       binary path.
+    - `BWS_SERVER_URL` must be set in the environment when using a self-hosted
+      Bitwarden instance.
 
     ```json5
     {
@@ -331,7 +345,7 @@ the config fields that accept SecretRefs.
           bws: {
             source: "exec",
             command: "/usr/local/bin/openclaw-bws-resolver.mjs",
-            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            passEnv: ["BWS_ACCESS_TOKEN", "BWS_SERVER_URL", "PATH", "BWS_BIN"],
             jsonOnly: true,
           },
         },

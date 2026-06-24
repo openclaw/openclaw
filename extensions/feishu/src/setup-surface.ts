@@ -1,3 +1,4 @@
+// Feishu plugin module implements setup surface behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -55,8 +56,8 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
     if (!account || typeof account !== "object") {
       return false;
     }
-    const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
-    const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
+    const hasOwnAppId = Object.hasOwn(account, "appId");
+    const hasOwnAppSecret = Object.hasOwn(account, "appSecret");
     const accountAppIdConfigured = hasOwnAppId
       ? isAppIdConfigured((account as Record<string, unknown>).appId)
       : isAppIdConfigured(feishuCfg?.appId);
@@ -251,6 +252,13 @@ function applyNewAppSecurityPolicy(
 // Scan-to-create flow
 // ---------------------------------------------------------------------------
 
+let appRegistrationModulePromise: Promise<typeof import("./app-registration.js")> | null = null;
+
+const loadAppRegistrationModule = async () => {
+  appRegistrationModulePromise ??= import("./app-registration.js");
+  return await appRegistrationModulePromise;
+};
+
 async function promptFeishuDomain(params: {
   prompter: WizardPrompter;
   initialValue?: FeishuDomain;
@@ -281,7 +289,7 @@ async function runScanToCreate(
   domain: FeishuDomain,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
-    await import("./app-registration.js");
+    await loadAppRegistrationModule();
   try {
     await initAppRegistration(domain);
   } catch {
@@ -340,7 +348,7 @@ async function runNewAppFlow(params: {
   const targetAccountId = resolveDefaultFeishuAccountId(next);
 
   // ----- QR scan flow -----
-  let appId: string | null = null;
+  let appId: string | null;
   let appSecret: SecretInput | null = null;
   let appSecretProbeValue: string | null = null;
   let scanDomain: FeishuDomain | undefined;
@@ -359,7 +367,6 @@ async function runNewAppFlow(params: {
   if (scanResult) {
     appId = scanResult.appId;
     appSecret = scanResult.appSecret;
-    appSecretProbeValue = scanResult.appSecret;
     scanDomain = scanResult.domain;
     scanOpenId = scanResult.openId;
   } else {
@@ -392,7 +399,7 @@ async function runNewAppFlow(params: {
 
     // Fetch openId via API for manual flow.
     if (appId && appSecretProbeValue) {
-      const { getAppOwnerOpenId } = await import("./app-registration.js");
+      const { getAppOwnerOpenId } = await loadAppRegistrationModule();
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,
@@ -414,7 +421,9 @@ async function runNewAppFlow(params: {
 
   // ----- Apply credentials & security policy -----
   const configProgress = prompter.progress(t("wizard.feishu.configuring"));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
 
   if (appId && appSecret) {
     next = patchFeishuConfig(next, targetAccountId, {

@@ -1,9 +1,10 @@
+// Covers commitment runtime scheduling, extraction, and notification behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS } from "./config.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
@@ -12,6 +13,8 @@ import {
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
+
+const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
@@ -42,6 +45,7 @@ function requireFirstEmbeddedAgentRequest(): {
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
+  let stateDirEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
@@ -50,6 +54,8 @@ describe("commitment extraction runtime", () => {
     resolveDefaultModelMock.mockReset();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    stateDirEnvSnapshot?.restore();
+    stateDirEnvSnapshot = undefined;
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
   });
@@ -57,7 +63,8 @@ describe("commitment extraction runtime", () => {
   async function createConfig(): Promise<OpenClawConfig> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitment-runtime-"));
     tmpDirs.push(tmpDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
     return {
       commitments: {
         enabled: true,
@@ -188,7 +195,7 @@ describe("commitment extraction runtime", () => {
     cfg.agents = {
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.5",
+          primary: "openai/gpt-5.5",
         },
       },
     };
@@ -196,7 +203,7 @@ describe("commitment extraction runtime", () => {
       payloads: [{ text: '{"candidates":[]}' }],
     });
     resolveDefaultModelMock.mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
     });
     configureCommitmentExtractionRuntime({
@@ -221,7 +228,7 @@ describe("commitment extraction runtime", () => {
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const request = requireFirstEmbeddedAgentRequest();
-    expect(request.provider).toBe("openai-codex");
+    expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
   });
@@ -291,6 +298,49 @@ describe("commitment extraction runtime", () => {
         assistantText: "I hope it goes well.",
       }),
     ).toBe(true);
+  });
+
+  it("uses the queued item timestamp for terminal failure cooldowns", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error("OAuth token refresh failed");
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    try {
+      await expect(drainCommitmentExtractionQueue()).rejects.toThrow("OAuth token refresh failed");
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + 1,
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel-1",
+          channel: "discord",
+          userText: "The interview is tomorrow.",
+          assistantText: "I hope it goes well.",
+        }),
+      ).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("bounds hidden extraction queue growth before spending extractor tokens", async () => {

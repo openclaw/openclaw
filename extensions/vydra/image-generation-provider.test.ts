@@ -1,3 +1,4 @@
+// Vydra tests cover image generation provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraImageGenerationProvider } from "./image-generation-provider.js";
@@ -69,6 +70,28 @@ describe("vydra image-generation provider", () => {
         status: "completed",
       },
     });
+  });
+
+  it("rejects generated image downloads that exceed the configured media cap", async () => {
+    stubVydraApiKey();
+    stubFetch(
+      jsonResponse({
+        jobId: "job-123",
+        status: "completed",
+        imageUrl: "https://cdn.vydra.ai/generated/test.png",
+      }),
+      binaryResponse("too-large", "image/png"),
+    );
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Vydra image download exceeds 1 bytes");
   });
 
   it("passes request SSRF policy to the image creation request", async () => {

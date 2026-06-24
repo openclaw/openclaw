@@ -6,10 +6,10 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { hasBinary } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { hasBinary } from "../skills/loading/config.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
 import {
@@ -138,8 +138,6 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 function settleProcess(proc: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
-    let escalation: ReturnType<typeof setTimeout> | undefined;
-    let finalTimeout: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       if (settled) {
         return;
@@ -156,7 +154,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
 
     proc.kill("SIGTERM");
 
-    escalation = setTimeout(() => {
+    const escalation: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       try {
         proc.kill("SIGKILL");
       } catch {
@@ -164,7 +162,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
       }
     }, 3_000);
 
-    finalTimeout = setTimeout(() => {
+    const finalTimeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       if (!settled) {
         log.warn("gog process did not exit after SIGKILL; giving up");
         settle();

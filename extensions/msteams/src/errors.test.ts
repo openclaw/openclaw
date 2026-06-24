@@ -1,3 +1,4 @@
+// Msteams tests cover errors plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyMSTeamsSendError,
@@ -55,6 +56,39 @@ describe("msteams errors", () => {
       classifyMSTeamsSendError({
         statusCode: 429,
         response: { headers: new Headers({ "retry-after": "3 seconds" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
+  it("ignores unsafe retry-after magnitudes", () => {
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfterMs: Number.MAX_SAFE_INTEGER + 1,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: Number.MAX_SAFE_INTEGER,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: "9007199254741",
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "9007199254741" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "9007199254741" }) },
       }).retryAfterMs,
     ).toBeUndefined();
   });

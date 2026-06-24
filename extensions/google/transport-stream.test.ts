@@ -1,6 +1,8 @@
+// Google tests cover transport stream plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,14 +12,14 @@ const {
   googleAuthGetAccessTokenMock,
   googleAuthMock,
 } = vi.hoisted(() => {
-  const googleAuthGetAccessTokenMock = vi.fn();
+  const googleAuthGetAccessTokenMockLocal = vi.fn();
   return {
     buildGuardedModelFetchMock: vi.fn(),
     guardedFetchMock: vi.fn(),
-    googleAuthGetAccessTokenMock,
+    googleAuthGetAccessTokenMock: googleAuthGetAccessTokenMockLocal,
     googleAuthMock: vi.fn(function GoogleAuthMock() {
       return {
-        getAccessToken: googleAuthGetAccessTokenMock,
+        getAccessToken: googleAuthGetAccessTokenMockLocal,
       };
     }),
   };
@@ -36,6 +38,7 @@ let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildG
 let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
+let resolveGoogleGemini3FirstResponseRetryMs: typeof import("./transport-stream.js").resolveGoogleGemini3FirstResponseRetryMs;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
 let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
@@ -101,6 +104,22 @@ function buildRawSseResponse(sse: string): Response {
     start(controller) {
       controller.enqueue(encoder.encode(sse));
       controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function buildOpenRawSseResponse(params: { sse: string; onCancel: () => void }): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(params.sse));
+    },
+    cancel() {
+      params.onCancel();
     },
   });
   return new Response(body, {
@@ -265,6 +284,35 @@ function toolResultTurn(toolCallId = "call_1", timestamp = 1): Record<string, un
   };
 }
 
+function parallelGoogleToolCallAssistantTurn(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    provider: "google",
+    api: "google-generative-ai",
+    model: "gemini-2.5-flash",
+    stopReason: "toolUse",
+    timestamp: 0,
+    content: [
+      { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+      { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
+    ],
+  };
+}
+
+function googleToolResultMessage(name: "screenshot" | "weather"): Record<string, unknown> {
+  return {
+    role: "toolResult",
+    toolCallId: name === "screenshot" ? "call_1" : "call_2",
+    toolName: name,
+    content:
+      name === "screenshot"
+        ? [{ type: "image", mimeType: "image/png", data: "png-bytes" }]
+        : [{ type: "text", text: "Sunny, 21C" }],
+    isError: false,
+    timestamp: 1,
+  };
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
@@ -272,6 +320,7 @@ describe("google transport stream", () => {
       buildGoogleGemini3FirstResponseRetryParams,
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
+      resolveGoogleGemini3FirstResponseRetryMs,
     } = await import("./transport-stream.js"));
     ({
       hasGoogleVertexAuthorizedUserAdcSync,
@@ -290,6 +339,7 @@ describe("google transport stream", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -426,6 +476,31 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it("strips redundant google provider prefixes from Gemini API model paths", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = buildGeminiModel({
+      id: "google/gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse",
+    );
+  });
+
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
@@ -470,6 +545,62 @@ describe("google transport stream", () => {
         thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=",
       },
     ]);
+  });
+
+  it("keeps duplicate tool-call ids distinct while retaining the first signature", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "first",
+                      args: { value: 1 },
+                    },
+                    thoughtSignature: "first_signature",
+                  },
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "second",
+                      args: { value: 2 },
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(buildGeminiModel(), {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never),
+    );
+    const result = await stream.result();
+    const toolCalls = result.content.filter((block) => block.type === "toolCall");
+
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "first",
+      arguments: { value: 1 },
+      thoughtSignature: "first_signature",
+    });
+    expect(toolCalls[1]).toMatchObject({
+      name: "second",
+      arguments: { value: 2 },
+      thoughtSignature: "first_signature",
+    });
+    expect(toolCalls[1]?.id).not.toBe("call_1");
   });
 
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
@@ -548,6 +679,16 @@ describe("google transport stream", () => {
     });
   });
 
+  it("rejects non-integer Gemini 3 first-response retry env values", () => {
+    const envName = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+
+    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "1200" })).toBe(1200);
+    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "0" })).toBe(0);
+    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "0x10" })).toBe(45_000);
+    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "100.5" })).toBe(45_000);
+    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "1e3" })).toBe(45_000);
+  });
+
   it("wraps malformed Gemini SSE JSON", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
 
@@ -570,6 +711,37 @@ describe("google transport stream", () => {
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
   });
 
+  it("cancels open Gemini SSE bodies when parsing fails", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: "data: {not json\n\n",
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
+    expect(cancelCalled).toBe(true);
+  });
+
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
@@ -577,7 +749,12 @@ describe("google transport stream", () => {
         (_url: string, init?: RequestInit) =>
           new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener("abort", () => {
-              reject(init.signal?.reason ?? new Error("aborted"));
+              reject(
+                toLintErrorObject(
+                  init.signal?.reason ?? new Error("aborted"),
+                  "Non-Error rejection",
+                ),
+              );
             });
           }),
       )
@@ -755,6 +932,29 @@ describe("google transport stream", () => {
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-expiry-"));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    googleAuthGetAccessTokenMock
+      .mockResolvedValueOnce("ya29.first-token")
+      .mockResolvedValueOnce("ya29.second-token");
+    const tokenFetchMock = vi.fn();
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.first-token",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.second-token",
+    });
+
+    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
+    expect(tokenFetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses google-auth-library bearer auth for Google Vertex credential marker requests", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-stream-"));
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
@@ -796,6 +996,46 @@ describe("google transport stream", () => {
       accept: "text/event-stream",
     });
     expect(new Headers(guardedInit.headers).has("x-goog-api-key")).toBe(false);
+  });
+
+  it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+    const tokenFetchMock = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel({ id: "google/gemini-3.1-pro-preview" }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    // The provider prefix must be stripped from the Vertex model path, matching
+    // resolveGoogleModelPath; otherwise the id becomes models/google%2F... (404).
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toContain(
+      "/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent",
+    );
+    expect(guardedCall[0]).not.toContain("google%2F");
   });
 
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {
@@ -866,6 +1106,106 @@ describe("google transport stream", () => {
     expect(result.provider).toBe("google-vertex");
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
+  it("refreshes authorized_user ADC from a compressed token response", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "gzip-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        gzipSync(JSON.stringify({ access_token: "ya29.gzip-token", expires_in: 3600 })),
+        {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(tokenFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.gzip-token",
+    });
+  });
+
+  it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-unsafe-adc-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "ya29.unsafe-token",
+            expires_in: Number.MAX_SAFE_INTEGER,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "ya29.fresh-token", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.unsafe-token",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.fresh-token",
+    });
+
+    expect(tokenFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
@@ -1498,6 +1838,76 @@ describe("google transport stream", () => {
     expect(generationConfig).not.toHaveProperty("thinkingConfig");
   });
 
+  it("forwards configured stop sequences to the Gemini generationConfig", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: ["</tool>", "\n\nObservation:"],
+      } as never,
+    );
+
+    const generationConfig = requireGenerationConfig(params);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
+  it("omits stopSequences when the stop list is empty", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: [],
+      } as never,
+    );
+
+    expect(params.generationConfig ?? {}).not.toHaveProperty("stopSequences");
+  });
+
+  it("sends stopSequences in the serialized Gemini request body via the guarded fetch transport", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"google-generative-ai">,
+      {},
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+          stop: ["</tool>", "\n\nObservation:"],
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    const init = requireRequestInit(guardedCall, "guarded fetch");
+    const payload = parseRequestJsonBody(init);
+    const generationConfig = requireGenerationConfig(payload);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
   it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),
@@ -1718,6 +2128,49 @@ describe("google transport stream", () => {
   });
 
   it.each([
+    ["image first", ["screenshot", "weather"]],
+    ["image last", ["weather", "screenshot"]],
+  ] as const)(
+    "keeps parallel function responses immediate and retains the deferred %s result",
+    (_label, resultOrder) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image"] }),
+        {
+          messages: [
+            { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
+            parallelGoogleToolCallAssistantTurn(),
+            ...resultOrder.map(googleToolResultMessage),
+          ],
+        } as never,
+      );
+
+      expect(params.contents.map((content) => content.role)).toEqual([
+        "user",
+        "model",
+        "user",
+        "user",
+      ]);
+      expect(params.contents[2]).toEqual({
+        role: "user",
+        parts: resultOrder.map((name) => ({
+          functionResponse: {
+            name,
+            response:
+              name === "screenshot" ? { output: "(see attached image)" } : { output: "Sunny, 21C" },
+          },
+        })),
+      });
+      expect(params.contents[3]).toEqual({
+        role: "user",
+        parts: [
+          { text: "Tool result image:" },
+          { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+        ],
+      });
+    },
+  );
+
+  it.each([
     ["gemini-2.5-flash-lite", "minimal", 512],
     ["gemini-2.5-flash-lite", "low", 2048],
     ["gemini-2.5-flash", "minimal", 128],
@@ -1859,3 +2312,17 @@ describe("google transport stream", () => {
     ]);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

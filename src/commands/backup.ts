@@ -1,3 +1,4 @@
+// CLI command wrapper for backup archive creation and optional verification.
 import {
   createBackupArchive,
   formatBackupCreateSummary,
@@ -6,7 +7,6 @@ import {
 } from "../infra/backup-create.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-export type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 
 type BackupVerifyRuntime = typeof import("./backup-verify.js");
 
@@ -18,6 +18,7 @@ function loadBackupVerifyRuntime(): Promise<BackupVerifyRuntime> {
   return backupVerifyRuntimeLoader.load();
 }
 
+/** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},

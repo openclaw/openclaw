@@ -1,5 +1,11 @@
 import fsSync from "node:fs";
 import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -11,7 +17,6 @@ import {
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -19,7 +24,6 @@ import {
   checkQmdBinaryAvailability,
   resolveQmdBinaryUnavailableReason,
 } from "../memory-host-sdk/engine-qmd.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
@@ -36,8 +40,6 @@ import {
 } from "../plugins/memory-runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
@@ -376,7 +378,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   if (plugins.deny.includes(memorySlot)) {
     return false;
   }
-  if (!Object.prototype.hasOwnProperty.call(plugins.entries, memorySlot)) {
+  if (!Object.hasOwn(plugins.entries, memorySlot)) {
     return false;
   }
   const entry = plugins.entries[memorySlot];
@@ -467,39 +469,34 @@ export async function noteMemorySearchHealth(
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
-    if (hasLocalEmbeddings(resolved.local, true)) {
-      // Model path looks valid (explicit file, hf: URL, or default model).
-      // If a gateway probe is available and reports not-ready, warn anyway —
-      // the model download or node-llama-cpp setup may have failed at runtime.
-      if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
-        const detail = opts.gatewayMemoryProbe.error?.trim();
-        note(
-          [
-            'Memory search provider is set to "local" and a model path is configured,',
-            "but the gateway reports local embeddings are not ready.",
-            detail ? `Gateway probe: ${detail}` : null,
-            "",
-            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Memory search",
-        );
-      }
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
+    const hasUnavailableConfiguredLocalModel =
+      Boolean(normalizeOptionalString(resolved.local.modelPath)) && !hasExplicitLocalModel;
+    if (opts?.gatewayMemoryProbe?.skipped && !hasUnavailableConfiguredLocalModel) {
+      return;
+    }
+    const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
       [
-        'Memory search provider is set to "local" but no local model file was found.',
+        hasExplicitLocalModel
+          ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
+          : 'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
+        detail ? `Gateway probe: ${detail}` : null,
         "",
         "Fix (pick one):",
-        `- Install node-llama-cpp and set a local model path in config`,
+        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
+        `- Set a local GGUF model path in config`,
         suggestedRemoteProvider
           ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
           : `- Switch to a remote embedding provider in config`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
       "Memory search",
     );
     return;
@@ -609,15 +606,9 @@ export async function noteMemorySearchHealth(
 /**
  * Check whether local embeddings are available.
  *
- * When `useDefaultFallback` is true (explicit `provider: "local"`), an empty
- * modelPath is treated as available because the runtime falls back to
- * DEFAULT_LOCAL_MODEL (an auto-downloaded HuggingFace model).
- *
  */
-function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
-  const modelPath =
-    normalizeOptionalString(local.modelPath) ||
-    (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
+function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
+  const modelPath = normalizeOptionalString(local.modelPath);
   if (!modelPath) {
     return false;
   }
@@ -664,6 +655,9 @@ async function hasApiKeyForProvider(
 }
 
 function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
+  if (provider === "openai") {
+    return "OPENAI_API_KEY";
+  }
   const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
   return metadata?.envVars[0] ?? `${provider.toUpperCase()}_API_KEY`;
 }

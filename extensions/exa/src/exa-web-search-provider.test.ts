@@ -1,7 +1,30 @@
-import { describe, expect, it } from "vitest";
+// Exa tests cover exa web search provider plugin behavior.
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
@@ -184,6 +207,10 @@ describe("exa web search provider", () => {
     ]);
     expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
     expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
+    expect(testing.resolveExaSearchCount("+05", 10)).toBe(5);
+    expect(testing.resolveExaSearchCount("0x10", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount("1e2", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount(1.5, 10)).toBe(10);
   });
 
   it("returns validation errors for conflicting time filters", async () => {
@@ -236,5 +263,21 @@ describe("exa web search provider", () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
       "Exa API returned malformed JSON",
     );
+  });
+
+  it("bounds Exa API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    const detail = await testing.readExaErrorDetail(tracked.response);
+
+    expect(detail).toContain("exa upstream unavailable");
+    expect(detail).not.toContain("tail");
+    expect(await testing.readExaErrorDetail(new Response("short"))).toBe("short");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

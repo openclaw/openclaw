@@ -1,9 +1,10 @@
+// Setup plugin config helpers build plugin config from onboarding answers.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 

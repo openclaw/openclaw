@@ -1,3 +1,4 @@
+// Control UI tests cover channels behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot } from "../types.ts";
 import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
@@ -44,7 +45,7 @@ function createState(): ChannelsState {
 }
 
 function requireClientRequest(state: ChannelsState) {
-  const request = state.client?.request;
+  const request = state.client?.["request"];
   if (!request) {
     throw new Error("Expected channels controller client request");
   }
@@ -83,7 +84,7 @@ describe("channels controller WhatsApp wait", () => {
 describe("loadChannels", () => {
   it("keeps a stale slow probe from replacing a newer non-probe snapshot", async () => {
     const state = createState();
-    const request = vi.mocked(state.client!.request);
+    const request = vi.mocked(state.client!["request"]);
     const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
     const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
     request.mockImplementation(async (_method: string, params?: unknown) => {

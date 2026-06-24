@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements models behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -5,7 +6,10 @@ import type {
 import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeModelCompat,
+  supportsClaudeAdaptiveThinking,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
@@ -77,6 +81,9 @@ export function resolveCopilotForwardCompatModel(
       cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(staticOverride.thinkingLevelMap
+        ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+        : {}),
       ...(compat ? { compat } : {}),
     } as ProviderRuntimeModel);
   }
@@ -145,6 +152,44 @@ function resolveCopilotApiForVendor(
   return resolveCopilotTransportApi(modelId);
 }
 
+function mergeCopilotCompat(
+  base: ModelDefinitionConfig["compat"] | undefined,
+  reasoningEfforts: string[] | null | undefined,
+): ModelDefinitionConfig["compat"] | undefined {
+  const supportedReasoningEfforts = Array.isArray(reasoningEfforts)
+    ? [
+        ...new Set(
+          reasoningEfforts
+            .map((effort) => normalizeOptionalLowercaseString(effort))
+            .filter((effort): effort is string => Boolean(effort)),
+        ),
+      ]
+    : [];
+  if (supportedReasoningEfforts.length === 0) {
+    return base;
+  }
+  return {
+    ...base,
+    supportedReasoningEfforts,
+  };
+}
+
+function resolveCopilotThinkingLevelMap(
+  api: ModelDefinitionConfig["api"],
+  modelId: string,
+  compat: ModelDefinitionConfig["compat"] | undefined,
+): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
+  const efforts = compat?.supportedReasoningEfforts;
+  if (api !== "anthropic-messages" || !Array.isArray(efforts)) {
+    return undefined;
+  }
+  const supportsAdaptiveEffort = supportsClaudeAdaptiveThinking({ id: modelId });
+  return {
+    xhigh: supportsAdaptiveEffort && efforts.includes("xhigh") ? "xhigh" : null,
+    max: supportsAdaptiveEffort && efforts.includes("max") ? "max" : null,
+  };
+}
+
 function mapCopilotApiModelToDefinition(
   entry: CopilotApiModelEntry,
 ): ModelDefinitionConfig | undefined {
@@ -174,17 +219,20 @@ function mapCopilotApiModelToDefinition(
   const contextWindow =
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = resolveCopilotModelCompat(id);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
+  const api = resolveCopilotApiForVendor(entry.vendor, id);
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
   const definition: ModelDefinitionConfig = {
     id,
     name: entry.name?.trim() || id,
-    api: resolveCopilotApiForVendor(entry.vendor, id),
+    api,
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
   };
   return definition;

@@ -1,3 +1,4 @@
+// Tests system-run approval context construction.
 import { describe, expect, test } from "vitest";
 import {
   parsePreparedSystemRunPayload,
@@ -117,6 +118,29 @@ describe("parsePreparedSystemRunPayload", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
       },
+    });
+  });
+
+  test("parses prepared exec policy metadata", () => {
+    expect(
+      parsePreparedSystemRunPayload({
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: "/tmp",
+          commandText: "jq --version",
+        },
+        execPolicy: { security: "allowlist", ask: "always" },
+      }),
+    ).toEqual({
+      plan: {
+        argv: ["jq", "--version"],
+        cwd: "/tmp",
+        commandText: "jq --version",
+        commandPreview: null,
+        agentId: null,
+        sessionKey: null,
+      },
+      execPolicy: { security: "allowlist", ask: "always" },
     });
   });
 

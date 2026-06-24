@@ -1,3 +1,5 @@
+// Tool media handler tests cover media extraction from tool results, trusted
+// local media flags, and quiet/verbose tool-output emission paths.
 import { describe, expect, it, vi } from "vitest";
 import {
   handleToolExecutionEnd,
@@ -5,7 +7,6 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
-// Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
@@ -13,6 +14,8 @@ function createMockContext(overrides?: {
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): EmbeddedAgentSubscribeContext {
+  // Minimal mock context factory. Only the fields needed for the media emission
+  // path are modeled; everything else is a no-op handler dependency.
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
     params: {
@@ -22,6 +25,7 @@ function createMockContext(overrides?: {
       toolResultFormat: overrides?.toolResultFormat,
     },
     state: {
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),
@@ -37,13 +41,16 @@ function createMockContext(overrides?: {
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
+      messagingToolSourceReplyPayloads: [],
+      messageToolOnlySourceReplyDelivered: false,
       messagingToolSentTargets: [],
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
-    trustedLocalMediaToolNames: overrides?.trustedLocalMediaToolNames ?? overrides?.builtinToolNames,
+    trustedLocalMediaToolNames:
+      overrides?.trustedLocalMediaToolNames ?? overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -87,6 +94,8 @@ async function emitPngMediaToolResult(
   ctx: EmbeddedAgentSubscribeContext,
   opts?: { isError?: boolean },
 ) {
+  // Browser-style image results carry a text block plus structured path details;
+  // media extraction should queue the path without emitting verbose output.
   await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
     toolName: "browser",
@@ -94,7 +103,7 @@ async function emitPngMediaToolResult(
     isError: opts?.isError ?? false,
     result: {
       content: [
-        { type: "text", text: "MEDIA:/tmp/screenshot.png" },
+        { type: "text", text: "Screenshot saved." },
         { type: "image", data: "base64", mimeType: "image/png" },
       ],
       details: { path: "/tmp/screenshot.png" },
@@ -112,7 +121,12 @@ async function emitUntrustedToolMediaResult(
     toolCallId: "tc-1",
     isError: false,
     result: {
-      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+      content: [{ type: "text", text: "Generated media." }],
+      details: {
+        media: {
+          mediaUrl: mediaPathOrUrl,
+        },
+      },
     },
   });
 }
@@ -124,8 +138,11 @@ async function emitMcpMediaToolResult(ctx: EmbeddedAgentSubscribeContext, mediaP
     toolCallId: "tc-1",
     isError: false,
     result: {
-      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+      content: [{ type: "text", text: "Generated media." }],
       details: {
+        media: {
+          mediaUrl: mediaPathOrUrl,
+        },
         mcpServer: "probe",
         mcpTool: "browser",
       },
@@ -146,7 +163,12 @@ async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
     toolCallId: "tc-1",
     isError: false,
     result: {
-      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+      content: [{ type: "text", text: "Generated media." }],
+      details: {
+        media: {
+          mediaUrl: mediaPathOrUrl,
+        },
+      },
     },
   });
 
@@ -205,7 +227,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.log.warn).not.toHaveBeenCalled();
   });
 
-  it("emits media when verbose is off and tool result has MEDIA: path", async () => {
+  it("emits media when verbose is off and tool result has an image path", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
@@ -215,7 +237,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("preserves audio_as_voice when queuing trusted text MEDIA tool output", async () => {
+  it("preserves audio_as_voice when queuing trusted structured media output", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({
       shouldEmitToolOutput: false,
@@ -232,9 +254,15 @@ describe("handleToolExecutionEnd media emission", () => {
         content: [
           {
             type: "text",
-            text: "Generated audio reply.\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus",
+            text: "Generated audio reply.",
           },
         ],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
       },
     });
 
@@ -337,7 +365,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
-  it("queues one voice copy when TTS output also contains a legacy media directive", async () => {
+  it("queues one voice copy when TTS output text mentions the generated file", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       onToolResult: vi.fn(),
@@ -351,7 +379,7 @@ describe("handleToolExecutionEnd media emission", () => {
       toolCallId: "tc-1",
       isError: false,
       result: {
-        content: [{ type: "text", text: "Generated audio reply.\nMEDIA:/tmp/reply.opus" }],
+        content: [{ type: "text", text: "Generated audio reply at /tmp/reply.opus" }],
         details: {
           media: {
             mediaUrl: "/tmp/reply.opus",
@@ -423,7 +451,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(toolName).toBe("tts");
     expect(summary).toBeUndefined();
     expect(output).toBe("remote tool output");
-    expect(options).toBeTypeOf("object");
+    expect(options).toBeUndefined();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
@@ -444,7 +472,7 @@ describe("handleToolExecutionEnd media emission", () => {
         content: [
           {
             type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.",
           },
         ],
         details: {
@@ -458,14 +486,14 @@ describe("handleToolExecutionEnd media emission", () => {
     return ctx;
   }
 
-  it("does not queue structured media already emitted in plain verbose output", async () => {
+  it("queues structured media even when plain verbose output is emitted", async () => {
     const ctx = await handleVerboseGeneratedImage("plain");
 
     expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
-  it("does not queue trusted bundled plugin media already emitted in plain verbose output", async () => {
+  it("queues trusted bundled plugin media even when plain verbose output is emitted", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       toolResultFormat: "plain",
@@ -481,7 +509,7 @@ describe("handleToolExecutionEnd media emission", () => {
         content: [
           {
             type: "text",
-            text: "Meeting audio attached.\nMEDIA:/tmp/meeting.wav",
+            text: "Meeting audio attached.",
           },
         ],
         details: {
@@ -493,7 +521,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/meeting.wav"]);
   });
   it("queues structured media once for markdown verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("markdown");

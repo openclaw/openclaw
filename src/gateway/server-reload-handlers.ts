@@ -1,10 +1,13 @@
+// Gateway hot-reload handlers.
+// Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { refreshContextWindowCache } from "../agents/context.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../agents/embedded-agent-runner/run-state.js";
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import { loadModelCatalog, resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -96,12 +99,31 @@ function resetPreparedModelRuntimeStateForHotReload(): void {
   markGatewayModelCatalogStaleForReload();
 }
 
+function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
+  return (
+    plan.reloadPlugins ||
+    plan.changedPaths.some(
+      (path) =>
+        path === "models" ||
+        path.startsWith("models.") ||
+        path === "agents" ||
+        path === "agents.defaults" ||
+        path === "agents.list" ||
+        path.startsWith("agents.list.") ||
+        path === "agents.defaults.workspace" ||
+        path.startsWith("agents.defaults.workspace."),
+    )
+  );
+}
+
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
   onWarn: (message: string) => void;
   label: string;
 }) {
+  // MCP runtime disposal may need async provider cleanup. Bound it so config
+  // reload can proceed and report the stale runtime risk.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const disposePromise = params.dispose().catch((error: unknown) => {
     params.onWarn(`${params.label} failed: ${String(error)}`);
@@ -440,7 +462,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             import("../hooks/gmail-watcher-lifecycle.js"),
           ]);
           if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err) => {
+            await stopGmailWatcher().catch((err: unknown) => {
               params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
             });
           }
@@ -500,7 +522,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err) => {
+    if (shouldRefreshContextWindowCache(plan)) {
+      await refreshContextWindowCache(nextConfig);
+      // Provider discovery is best-effort; a slow hook must not hold hot reload open.
+      void loadModelCatalog({ config: nextConfig });
+    }
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
 
@@ -563,20 +590,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersValue = formatTaskBlockers();
             params.logReload.warn(
               `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersValue ? ` (${taskBlockersValue})` : ""
               }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersLocal = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersLocal ? ` (${taskBlockersLocal})` : ""
               }; forcing restart`,
             );
           },
@@ -683,6 +710,9 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
           await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {
           clearSecretsRuntimeSnapshot();
+        }
+        if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
+          await refreshContextWindowCache(previousSnapshot.config);
         }
         params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
         if (sharedGatewaySessionGenerationChanged) {

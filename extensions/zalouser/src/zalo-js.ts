@@ -1,9 +1,18 @@
+// Zalouser plugin module implements zalo js behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  asFiniteNumberInRange,
+  isFutureDateTimestampMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   privateFileStoreSync,
@@ -53,6 +62,8 @@ const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
 const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
 const LISTENER_WATCHDOG_INTERVAL_MS = 30_000;
 const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
+const ZALO_TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000;
+const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 const apiByProfile = new Map<string, API>();
 const apiInitByProfile = new Map<string, Promise<API>>();
@@ -261,17 +272,28 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
-    return rawTs > 1_000_000_000_000 ? rawTs : rawTs * 1000;
+  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
+  const parsed =
+    typeof rawTs === "number"
+      ? rawTs
+      : typeof rawTs === "string"
+        ? parseStrictFiniteNumber(rawTs)
+        : undefined;
+  const timestamp = asFiniteNumberInRange(parsed, {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (timestamp === undefined) {
+    return fallbackTimestamp();
   }
-  const parsed = Number.parseInt(
-    typeof rawTs === "string" ? rawTs : typeof rawTs === "number" ? String(rawTs) : "",
-    10,
-  );
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return Date.now();
+  if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
   }
-  return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
+  if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
+    return fallbackTimestamp();
+  }
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -830,7 +852,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
   if (!cached) {
     return null;
   }
-  if (cached.expiresAt <= Date.now()) {
+  if (!isFutureDateTimestampMs(cached.expiresAt)) {
     groupContextCache.delete(key);
     return null;
   }
@@ -842,7 +864,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
 
 function trimGroupContextCache(now: number): void {
   for (const [key, value] of groupContextCache) {
-    if (value.expiresAt > now) {
+    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
       continue;
     }
     groupContextCache.delete(key);
@@ -862,9 +884,13 @@ function writeCachedGroupContext(profile: string, context: ZaloGroupContext): vo
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
+    expiresAt,
   });
   trimGroupContextCache(now);
 }
@@ -962,6 +988,9 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
 
 export const testing = {
   toInboundMessage,
+  readCachedGroupContext,
+  writeCachedGroupContext,
+  clearCachedGroupContext,
 };
 export { testing as __testing };
 
@@ -1604,7 +1633,7 @@ export async function startZaloQrLogin(params: {
     return { message: "Failed to initialize Zalo QR login." };
   }
 
-  const timeoutMs = Math.max(params.timeoutMs ?? DEFAULT_QR_START_TIMEOUT_MS, 3000);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_QR_START_TIMEOUT_MS, 3000);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -1657,7 +1686,7 @@ export async function waitForZaloQrLogin(params: {
     };
   }
 
-  const timeoutMs = Math.max(params.timeoutMs ?? DEFAULT_QR_WAIT_TIMEOUT_MS, 1000);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_QR_WAIT_TIMEOUT_MS, 1000);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -1730,9 +1759,9 @@ export async function startZaloListener(params: {
     );
   }
 
-  const { api, ownUserId } = await withZaloApi(profile, async (api) => ({
-    api,
-    ownUserId: await resolveOwnUserId(api),
+  const { api, ownUserId } = await withZaloApi(profile, async (apiLocal) => ({
+    api: apiLocal,
+    ownUserId: await resolveOwnUserId(apiLocal),
   }));
   let stopped = false;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;

@@ -1,3 +1,4 @@
+// Logs CLI tests cover log command routing and runtime log output behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
@@ -78,7 +79,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
     ...args: Parameters<typeof import("./logs-cli.runtime.js").execFileUtf8Tail>
   ) => execFileUtf8Tail(...args),
   resolveGatewaySystemdServiceName: (
-    ...args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
+    ..._args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
   ) => "openclaw-gateway",
 }));
 

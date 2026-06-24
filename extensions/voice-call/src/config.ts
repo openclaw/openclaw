@@ -1,3 +1,4 @@
+// Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
@@ -8,6 +9,7 @@ import {
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { normalizePath } from "./path-utils.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -192,7 +194,6 @@ const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
 const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
-export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
 
 const OutboundConfigSchema = z
   .object({
@@ -280,9 +281,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
-export type VoiceCallRealtimeAgentContextConfig = z.infer<
-  typeof VoiceCallRealtimeAgentContextConfigSchema
->;
 
 export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -294,9 +292,6 @@ export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "adaptive",
   "max",
 ]);
-export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
-  typeof VoiceCallRealtimeConsultThinkingLevelSchema
->;
 
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -527,20 +522,8 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
-function normalizeWebhookLikePath(pathname: string): string {
-  const trimmed = pathname.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (prefixed === "/") {
-    return prefixed;
-  }
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-}
-
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizeWebhookLikePath(servePath);
+  const normalized = normalizePath(servePath);
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
@@ -573,7 +556,7 @@ export function resolveVoiceCallNumberRouteKey(
   if (!routes) {
     return undefined;
   }
-  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+  if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
 

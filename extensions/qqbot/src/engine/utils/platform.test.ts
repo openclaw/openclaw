@@ -1,3 +1,4 @@
+// Qqbot tests cover platform plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -250,7 +251,7 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     const relative = path.relative(parent, candidate);
     return (
       relative === "" ||
-      (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+      (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
     );
   }
 

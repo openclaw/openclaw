@@ -1,3 +1,4 @@
+// Google API module exposes the plugin public contract.
 import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
@@ -30,6 +31,8 @@ export {
 export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,

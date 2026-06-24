@@ -1,3 +1,4 @@
+// Verifies trust-model audit findings and severity mapping.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -28,8 +29,7 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
           channels: { whatsapp: { groupPolicy: "open" } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[0].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some(
               (finding) =>
@@ -45,8 +45,7 @@ describe("security audit trust model findings", () => {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[1].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some(
               (finding) =>
@@ -70,8 +69,7 @@ describe("security audit trust model findings", () => {
             },
           },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[2].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
@@ -90,8 +88,7 @@ describe("security audit trust model findings", () => {
             fs: { workspaceOnly: true },
           },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[3].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
@@ -116,8 +113,7 @@ describe("security audit trust model findings", () => {
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[4].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           const finding = requireMultiUserHeuristicFinding(findings);
           expect(finding.severity).toBe("warn");
           expect(finding.detail).toContain(
@@ -137,8 +133,7 @@ describe("security audit trust model findings", () => {
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[5].cfg);
+        assert: (findings: ReturnType<typeof audit>) => {
           expect(
             findings.some(
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
@@ -146,10 +141,100 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "flags open dmPolicy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } },
+          channels: { feishu: { groupPolicy: "disabled", dmPolicy: "open" } },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "flags open dmPolicy when runtime/filesystem tools are exposed without guards",
+        cfg: {
+          channels: { feishu: { groupPolicy: "disabled", dmPolicy: "open" } },
+          tools: { elevated: { enabled: false }, profile: "coding" },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "flags account-level open dmPolicy",
+        cfg: {
+          channels: {
+            discord: {
+              dmPolicy: "allowlist",
+              accounts: { work: { dmPolicy: "open" } },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.detail).toContain("channels.discord.accounts.work.dmPolicy");
+          expect(finding?.detail).not.toContain("channels.discord.dmPolicy");
+        },
+      },
+      {
+        name: "flags supported legacy open dm.policy",
+        cfg: {
+          channels: { discord: { dm: { policy: "open" } } },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.detail).toContain("channels.discord.dm.policy");
+        },
+      },
+      {
+        name: "preserves the detected nested-only DM policy path in remediation",
+        cfg: {
+          channels: { matrix: { dm: { policy: "open" } } },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.detail).toContain("channels.matrix.dm.policy");
+          expect(finding?.remediation).toContain("each listed group/DM policy");
+          expect(finding?.remediation).not.toContain("dmPolicy");
+        },
+      },
+      {
+        name: "prefers canonical dmPolicy over conflicting legacy dm.policy",
+        cfg: {
+          channels: {
+            discord: {
+              dmPolicy: "allowlist",
+              dm: { policy: "open" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some((finding) =>
+              finding.checkId.startsWith("security.exposure.open_groups_"),
+            ),
+          ).toBe(false);
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
-      testCase.assert();
+      testCase.assert(audit(testCase.cfg));
     }
   });
 });

@@ -1,9 +1,14 @@
+/**
+ * Extracts native Codex subagent completion notifications from trusted
+ * inter-agent commentary messages emitted by the app-server.
+ */
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 
+/** Terminal status values OpenClaw accepts for Codex native subagent completion. */
 export type CodexNativeSubagentCompletionStatus = "succeeded" | "failed" | "cancelled";
 
 type CodexNativeSubagentCompletionDetails = {
@@ -12,14 +17,17 @@ type CodexNativeSubagentCompletionDetails = {
   result: string;
 };
 
+/** Completion associated with a resolved child thread id. */
 export type CodexNativeSubagentCompletion = CodexNativeSubagentCompletionDetails & {
   childThreadId: string;
 };
 
+/** Completion parsed from a notification payload before agent-path matching resolves the thread. */
 export type CodexNativeSubagentNotificationCompletion = CodexNativeSubagentCompletionDetails & {
   agentPath: string;
 };
 
+/** Extracts trusted subagent completion payloads from a Codex server notification. */
 export function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
@@ -41,6 +49,7 @@ export function extractCodexNativeSubagentCompletions(
   );
 }
 
+/** Parses one or more tagged subagent completion payloads from commentary text. */
 export function extractCodexNativeSubagentCompletionsFromText(
   text: string,
 ): CodexNativeSubagentNotificationCompletion[] {
@@ -107,10 +116,13 @@ function readCompletionStatus(status: JsonObject):
     if (!mappedStatus) {
       continue;
     }
+    const result = stringifyResult(value, mappedStatus);
+    const noFinalAssistantMessage =
+      mappedStatus === "succeeded" && result.kind === "no_final_assistant_message";
     return {
       status: mappedStatus,
-      label: rawKey,
-      result: stringifyResult(value),
+      label: noFinalAssistantMessage ? "completed_without_final_message" : rawKey,
+      result: result.text,
     };
   }
   return undefined;
@@ -140,18 +152,42 @@ function mapCompletionStatus(value: string): CodexNativeSubagentCompletionStatus
   return undefined;
 }
 
-function stringifyResult(value: JsonValue | undefined): string {
+function stringifyResult(
+  value: JsonValue | undefined,
+  status: CodexNativeSubagentCompletionStatus,
+): {
+  text: string;
+  kind?: "no_final_assistant_message";
+} {
   if (typeof value === "string") {
-    return value.trim() || "(no output)";
+    const text = value.trim();
+    if (text) {
+      return { text };
+    }
+    return status === "succeeded"
+      ? completedWithoutFinalAssistantMessage()
+      : { text: "(no output)" };
   }
   if (value === null || value === undefined) {
-    return "(no output)";
+    return status === "succeeded"
+      ? completedWithoutFinalAssistantMessage()
+      : { text: "(no output)" };
   }
   try {
-    return JSON.stringify(value);
+    return { text: JSON.stringify(value) };
   } catch {
-    return "(unserializable output)";
+    return { text: "(unserializable output)" };
   }
+}
+
+function completedWithoutFinalAssistantMessage(): {
+  text: string;
+  kind: "no_final_assistant_message";
+} {
+  return {
+    text: "Codex native subagent completed without a final assistant message.",
+    kind: "no_final_assistant_message",
+  };
 }
 
 function readTrustedInterAgentCommunicationContent(item: JsonObject): string | undefined {

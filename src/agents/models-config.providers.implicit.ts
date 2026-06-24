@@ -1,3 +1,16 @@
+/**
+ * Discovers implicit model-provider config from plugin provider catalogs and
+ * static catalogs. It merges discovered provider models with explicit config
+ * while preserving user-controlled provider fields.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,7 +23,6 @@ import {
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -26,8 +38,8 @@ import type {
 import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
+  resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -222,6 +234,7 @@ function appendNormalizedPluginMetadataOwners(
   }
 }
 
+/** Resolve the plugin discovery filter used by implicit provider discovery tests. */
 export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -232,6 +245,7 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   return resolveProviderDiscoveryFilter(params);
 }
 
+/** Resolve provider owner plugin IDs from a preloaded metadata snapshot for tests. */
 export function resolvePluginMetadataProviderOwnersForTest(
   pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
   provider: string,
@@ -266,6 +280,8 @@ function mergeImplicitProviderConfig(params: {
     return merge({ existing, implicit });
   }
   if (params.dynamicProviderModels) {
+    // Wildcard-visible providers preserve discovered catalog updates while
+    // keeping explicit user config authoritative for non-model fields.
     return mergeProviderModels(implicit, existing);
   }
   return {
@@ -276,6 +292,19 @@ function mergeImplicitProviderConfig(params: {
         ? existing.models
         : implicit.models,
   };
+}
+
+function resolveImplicitProviderAuthMarker(params: {
+  ctx: ImplicitProviderContext;
+  providerId: string;
+  provider: ProviderConfig;
+}): ProviderConfig {
+  return resolveMissingProviderApiKey({
+    providerKey: params.providerId,
+    provider: params.provider,
+    env: params.ctx.env,
+    profileApiKey: undefined,
+  });
 }
 
 function resolveConfiguredImplicitProvider(params: {
@@ -377,6 +406,8 @@ async function resolvePluginImplicitProviders(
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
+    // Static catalogs are preferred for entries-only discovery and as a fallback
+    // when runtime discovery produces no usable provider config.
     let result = useStaticCatalog
       ? await runProviderStaticCatalog({
           provider,
@@ -413,7 +444,7 @@ async function resolvePluginImplicitProviders(
       result,
     });
     for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
-      discovered[providerId] = mergeImplicitProviderConfig({
+      const mergedProvider = mergeImplicitProviderConfig({
         providerId,
         existing:
           discovered[providerId] ??
@@ -431,6 +462,11 @@ async function resolvePluginImplicitProviders(
           config: ctx.config,
           providerId,
         }),
+      });
+      discovered[providerId] = resolveImplicitProviderAuthMarker({
+        ctx,
+        providerId,
+        provider: mergedProvider,
       });
     }
   }
@@ -464,6 +500,8 @@ async function runProviderCatalogWithTimeout(
     return await catalogRun;
   }
 
+  // Live discovery should not hang startup; timeout means skip this provider,
+  // while non-timeout catalog failures still surface to the caller.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -491,6 +529,7 @@ async function runProviderCatalogWithTimeout(
   }
 }
 
+/** Resolve all implicit provider configs contributed by runtime plugin discovery. */
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {

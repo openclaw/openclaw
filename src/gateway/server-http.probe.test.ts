@@ -1,3 +1,5 @@
+// Server HTTP probe tests cover readiness, health, disabled compat routes, and
+// auth handling through the in-memory HTTP harness.
 import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
@@ -10,6 +12,16 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+type GatewayServerHarness = Parameters<typeof dispatchRequest>[0];
+type GatewayRequestOptions = Parameters<typeof createRequest>[0];
+
+async function sendGatewayRequest(server: GatewayServerHarness, options: GatewayRequestOptions) {
+  const req = createRequest(options);
+  const { res, getBody } = createResponse();
+  await dispatchRequest(server, req, res);
+  return { res, getBody };
+}
+
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   it("returns 404 when compat endpoints are disabled", async () => {
     await withGatewayServer({
@@ -17,13 +29,11 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
       resolvedAuth: AUTH_NONE,
       run: async (server) => {
         for (const path of ["/v1/chat/completions", "/v1/responses"]) {
-          const req = createRequest({
+          const { res, getBody } = await sendGatewayRequest(server, {
             path,
             method: "POST",
             headers: { "content-type": "application/json" },
           });
-          const { res, getBody } = createResponse();
-          await dispatchRequest(server, req, res);
 
           expect(res.statusCode, path).toBe(404);
           expect(getBody(), path).toBe("Not Found");
@@ -46,9 +56,7 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/ready" });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
+        const { res, getBody } = await sendGatewayRequest(server, { path: "/ready" });
 
         expect(res.statusCode).toBe(200);
         expect(JSON.parse(getBody())).toEqual({ ready: true, failing: [], uptimeMs: 45_000 });
@@ -68,13 +76,11 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({
+        const { res, getBody } = await sendGatewayRequest(server, {
           path: "/ready",
           remoteAddress: "10.0.0.8",
           host: "gateway.test",
         });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
 
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(getBody())).toEqual({ ready: false });
@@ -94,14 +100,12 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({
+        const { res, getBody } = await sendGatewayRequest(server, {
           path: "/ready",
           remoteAddress: "10.0.0.8",
           host: "gateway.test",
           authorization: "Bearer test-token",
         });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
 
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(getBody())).toEqual({
@@ -131,14 +135,12 @@ describe("gateway probe endpoints", () => {
       },
       run: async (server) => {
         const sendReady = async (authorization: string) => {
-          const req = createRequest({
+          const { res, getBody } = await sendGatewayRequest(server, {
             path: "/ready",
             remoteAddress: "10.0.0.8",
             host: "gateway.test",
             authorization,
           });
-          const { res, getBody } = createResponse();
-          await dispatchRequest(server, req, res);
           return { statusCode: res.statusCode, body: JSON.parse(getBody()) };
         };
 
@@ -201,7 +203,7 @@ describe("gateway probe endpoints", () => {
             getReadiness,
           },
           run: async (server) => {
-            const req = createRequest({
+            const { res, getBody } = await sendGatewayRequest(server, {
               path: "/ready",
               remoteAddress: "10.0.0.1",
               host: "gateway.test",
@@ -212,8 +214,6 @@ describe("gateway probe endpoints", () => {
                 "x-forwarded-proto": "https",
               },
             });
-            const { res, getBody } = createResponse();
-            await dispatchRequest(server, req, res);
 
             expect(res.statusCode).toBe(503);
             expect(JSON.parse(getBody())).toEqual({ ready: false });
@@ -233,9 +233,7 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/ready" });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
+        const { res, getBody } = await sendGatewayRequest(server, { path: "/ready" });
 
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(getBody())).toEqual({ ready: false, failing: ["internal"], uptimeMs: 0 });
@@ -255,9 +253,7 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/healthz" });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
+        const { res, getBody } = await sendGatewayRequest(server, { path: "/healthz" });
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
@@ -275,9 +271,7 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getRuntimeConfig },
       run: async (server) => {
-        const req = createRequest({ path: "/healthz" });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
+        const { res, getBody } = await sendGatewayRequest(server, { path: "/healthz" });
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
@@ -333,9 +327,10 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/readyz", method: "HEAD" });
-        const { res, getBody } = createResponse();
-        await dispatchRequest(server, req, res);
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/readyz",
+          method: "HEAD",
+        });
 
         expect(res.statusCode).toBe(503);
         expect(getBody()).toBe("");

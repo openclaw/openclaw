@@ -1,3 +1,4 @@
+// Telegram plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildDmGroupAccountAllowlistAdapter,
@@ -26,7 +27,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -35,7 +36,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import {
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+  type ResolvedTelegramAccount,
+} from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
@@ -86,6 +92,7 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -98,13 +105,7 @@ import { parseTelegramTopicConversation } from "./topic-conversation.js";
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
-let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
 let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
-
-async function loadTelegramSendModule() {
-  telegramSendModulePromise ??= import("./send.js");
-  return await telegramSendModulePromise;
-}
 
 async function loadTelegramUpdateOffsetRuntime() {
   telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
@@ -276,10 +277,22 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
     telegramMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
+  resolveCliActionRequest: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveCliActionRequest?.(
+      ctx,
+    ) ??
+    telegramMessageActionsImpl.resolveCliActionRequest?.(ctx) ?? {
+      action: ctx.action,
+      args: ctx.args,
+    },
   extractToolSend: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.extractToolSend?.(ctx) ??
     telegramMessageActionsImpl.extractToolSend?.(ctx) ??
     null,
+  isToolDeliveryAction: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
+    telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
+    false,
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
@@ -553,21 +566,58 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
+  const canonicalThreadId =
+    resolvedThreadId !== undefined
+      ? buildTelegramCanonicalTopicThreadId({ chatId, topicId: resolvedThreadId })
+      : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
     route: baseRoute,
-    threadId: resolvedThreadId,
+    threadId: canonicalThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],
-    canRecoverCurrentThread: ({ route }) =>
-      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
+    canRecoverCurrentThread: ({ route: routeLocal }) =>
+      routeLocal.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
+  const routeThreadId = resolveTelegramNativeTopicThreadId(route.threadId, resolvedThreadId);
   return {
     ...route,
+    ...(routeThreadId !== undefined ? { threadId: routeThreadId } : {}),
     from:
-      route.threadId !== undefined
-        ? `telegram:${chatId}:topic:${route.threadId}`
+      routeThreadId !== undefined
+        ? `telegram:${chatId}:topic:${routeThreadId}`
         : `telegram:${chatId}`,
   };
+}
+
+function buildTelegramCanonicalTopicThreadId(params: { chatId: string; topicId: number }): string {
+  // Core session routing sees one canonical thread id. Telegram topic ids are
+  // chat-scoped, so direct-topic sessions include the chat id to avoid collisions.
+  return `${params.chatId}:${params.topicId}`;
+}
+
+function resolveTelegramNativeTopicThreadId(
+  threadId?: string | number,
+  nativeTopicId?: number,
+): string | number | undefined {
+  if (nativeTopicId !== undefined) {
+    return nativeTopicId;
+  }
+  // Keep the chat-scoped canonical id inside OpenClaw state; translate it back
+  // only when returning Telegram route metadata used by send/typing paths.
+  if (threadId === undefined) {
+    return undefined;
+  }
+  const parsedThreadId = parseTelegramThreadId(threadId);
+  if (parsedThreadId !== undefined) {
+    return parsedThreadId;
+  }
+  if (typeof threadId === "string") {
+    const canonicalMatch = /:(\d+)$/.exec(threadId.trim());
+    if (canonicalMatch?.[1]) {
+      return Number(canonicalMatch[1]);
+    }
+  }
+  return threadId;
 }
 
 async function resolveTelegramTargets(params: {
@@ -733,7 +783,12 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        const capabilities = inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
+        if (mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true) {
+          capabilities.push("richText");
+        }
+        return capabilities;
       },
       reactionGuidance: ({ cfg, accountId }) => {
         const level = resolveTelegramReactionLevel({
@@ -744,6 +799,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     messaging: {
+      defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>

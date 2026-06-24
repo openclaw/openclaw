@@ -1,9 +1,11 @@
 #!/usr/bin/env -S node --import tsx
+// Plugin Npm Release Check script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import {
   collectChangedExtensionIdsFromGitRange,
   collectPublishablePluginPackages,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
@@ -38,6 +40,10 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
               changedExtensionIds,
             })
           : publishable;
+
+  if (selectionMode !== undefined || selection.length > 0) {
+    assertPluginReleaseVersionFloors(selected, "plugin-npm-release-check");
+  }
 
   console.log("plugin-npm-release-check: publishable plugin metadata looks OK.");
   if (baseRef && headRef && selected.length === 0) {

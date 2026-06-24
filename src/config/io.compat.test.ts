@@ -1,27 +1,19 @@
+// Verifies config IO compatibility loading and migration behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
-  try {
-    await run(home);
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
 
 async function writeConfig(
   home: string,
   dirname: ".openclaw",
   port: number,
-  filename: string = "openclaw.json",
+  filename = "openclaw.json",
 ) {
   const dir = path.join(home, dirname);
   await fs.mkdir(dir, { recursive: true });
@@ -32,12 +24,35 @@ async function writeConfig(
 
 function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
   return createConfigIO({
-    env,
+    env: { HOME: home, ...env },
     homedir: () => home,
   });
 }
 
 describe("config io paths", () => {
+  let whatsappSharedAccessDefaults: unknown;
+
+  beforeAll(() => {
+    const migrated = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    whatsappSharedAccessDefaults = migrated.config.channels?.whatsapp?.accounts?.default;
+  });
+
   it("uses ~/.openclaw/openclaw.json when config exists", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
@@ -99,7 +114,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
@@ -134,7 +149,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
@@ -172,7 +187,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: { OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
+        env: { HOME: home, OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
@@ -228,24 +243,7 @@ describe("config io paths", () => {
   });
 
   it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
-    const migrated = normalizeCompatibilityConfigValues({
-      channels: {
-        whatsapp: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          accounts: {
-            work: {
-              enabled: true,
-              authDir: "/tmp/wa-work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-    expect(migrated.config.channels?.whatsapp?.accounts?.default).toEqual({
+    expect(whatsappSharedAccessDefaults).toEqual({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",

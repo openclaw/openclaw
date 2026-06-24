@@ -1,5 +1,7 @@
+// Talk Voice plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -8,7 +10,7 @@ import {
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep: number = 6): string {
+function mask(s: string, keep = 6): string {
   const trimmed = s.trim();
   if (trimmed.length <= keep) {
     return "***";
@@ -97,12 +99,7 @@ function asTrimmedString(value: unknown): string {
 }
 
 function parsePositiveIntegerToken(value: unknown): number | undefined {
-  const trimmed = asTrimmedString(value);
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return parseStrictPositiveInteger(value);
 }
 
 function resolveCommandLabel(channel: string): string {

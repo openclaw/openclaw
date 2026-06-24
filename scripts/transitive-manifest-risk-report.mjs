@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
+// Reports transitive npm package manifest risks such as lifecycle scripts,
+// exotic specs, and recently published versions.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mjs";
 import {
   collectAllResolvedPackagesFromLockfile,
@@ -19,6 +22,10 @@ const PINNED_GITHUB_TARBALL_PATTERN =
   /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
+const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
+/** Maximum npm packument response size accepted by the risk scanner. */
+export const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const NPM_PACKUMENT_FETCH_TIMEOUT_MS = 60_000;
 
 function isAllowedPinnedSpec(spec) {
   if (typeof spec !== "string") {
@@ -54,6 +61,17 @@ function resolveRegistryBaseUrl() {
 
 function isExoticResolvedVersion(version) {
   return EXOTIC_SPEC_PATTERN.test(version);
+}
+
+export async function readBoundedNpmRegistryText(
+  response,
+  maxBytes = NPM_PACKUMENT_RESPONSE_MAX_BYTES,
+  options = {},
+) {
+  return await readBoundedResponseText(response, "npm registry", maxBytes, {
+    signal: options.signal,
+    formatTooLargeMessage: (_label, bytes) => `npm registry response exceeded ${bytes} bytes`,
+  });
 }
 
 function packageVersionsFromPayload(payload) {
@@ -209,12 +227,26 @@ function collectManifestFindings({
   return { findings, workspaceExcludedFindings };
 }
 
-async function fetchNpmManifest({ packageName, version, fetchImpl, registryBaseUrl }) {
-  const response = await fetchImpl(`${registryBaseUrl}/${encodePackageName(packageName)}`);
+export async function fetchNpmManifest({
+  packageName,
+  version,
+  fetchImpl,
+  registryBaseUrl,
+  maxBytes = NPM_PACKUMENT_RESPONSE_MAX_BYTES,
+  timeoutMs = NPM_PACKUMENT_FETCH_TIMEOUT_MS,
+}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const response = await fetchImpl(`${registryBaseUrl}/${encodePackageName(packageName)}`, {
+    headers: {
+      Accept: NPM_PACKUMENT_ACCEPT_HEADER,
+    },
+    signal,
+  });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
-  const packument = await response.json();
+  const packumentText = await readBoundedNpmRegistryText(response, maxBytes, { signal });
+  const packument = JSON.parse(packumentText);
   const manifest = packument.versions?.[version];
   if (!manifest) {
     throw new Error(`version ${version} not found`);
@@ -609,7 +641,7 @@ export async function main(argv = process.argv.slice(2)) {
     renderTransitiveManifestRiskMarkdownReport(report),
   );
   const artifactHint =
-    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
       `package manifests; ${report.findingCount} reported risk signals, ` +
@@ -623,8 +655,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     (exitCode) => {
       process.exitCode = exitCode;
     },
-    (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+    /** @param {unknown} error */ (error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

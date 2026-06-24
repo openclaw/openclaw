@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
+// Covers git commit helper behavior in fake repositories.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
@@ -51,21 +51,18 @@ async function makeFakeGitRepo(
   }
 }
 
+async function makeFakeOpenClawPackage(root: string) {
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+}
+
 describe("git commit resolution", () => {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
   let testing: (typeof import("./git-commit.js"))["testing"];
-  let repoHead: string;
 
   beforeAll(async () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
     ({ resolveCommitHash, testing } = await import("./git-commit.js"));
   });
 
@@ -86,6 +83,11 @@ describe("git commit resolution", () => {
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
     const temp = await makeTempDir("git-commit-cwd");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
+
     const otherRepo = path.join(temp, "other");
     const otherCommit = "1234567890abcdef1234567890abcdef12345678";
     await makeFakeGitRepo(otherRepo, { head: otherCommit });
@@ -93,11 +95,16 @@ describe("git commit resolution", () => {
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
     vi.spyOn(process, "cwd").mockReturnValue(otherRepo);
 
-    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
+    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoCommit.slice(0, 7));
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherCommit.slice(0, 7));
   });
 
-  it("prefers live git metadata over stale build info in a real checkout", () => {
+  it("prefers live git metadata over stale build info in a package checkout", async () => {
+    const temp = await makeTempDir("git-commit-live-checkout");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(
@@ -108,7 +115,7 @@ describe("git commit resolution", () => {
           readBuildInfoCommit: () => "deadbee",
         },
       }),
-    ).toBe(repoHead);
+    ).toBe(repoCommit.slice(0, 7));
   });
 
   it("caches build-info fallback results per resolved search directory", async () => {
@@ -155,9 +162,15 @@ describe("git commit resolution", () => {
     expect(readPackageJsonCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
-  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", () => {
+  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
+    const temp = await makeTempDir("git-commit-invalid-module-url");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
+
     expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
-      repoHead,
+      repoCommit.slice(0, 7),
     );
   });
 
@@ -224,24 +237,28 @@ describe("git commit resolution", () => {
 
   it("caches deterministic null results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-null-cache");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
+    const repoRootEntry = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRootEntry, {
       head: "not-a-commit\n",
     });
 
     const readGitCommit = vi.fn(() => null);
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(
+      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
+    ).toBeNull();
     const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(
+      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
+    ).toBeNull();
     expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-caught-null-cache");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
+    const repoRootResult = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRootResult, {
       head: "0123456789abcdef0123456789abcdef01234567\n",
     });
     const readGitCommit = vi.fn(() => {
@@ -253,7 +270,7 @@ describe("git commit resolution", () => {
 
     expect(
       resolveCommitHash({
-        cwd: repoRoot,
+        cwd: repoRootResult,
         env: {},
         readers: {
           readGitCommit,
@@ -266,7 +283,7 @@ describe("git commit resolution", () => {
     expect(firstCallReads).toBe(2);
     expect(
       resolveCommitHash({
-        cwd: repoRoot,
+        cwd: repoRootResult,
         env: {},
         readers: {
           readGitCommit,
@@ -316,33 +333,33 @@ describe("git commit resolution", () => {
 
   it("resolves refs from the git commondir in worktree layouts", async () => {
     const temp = await makeTempDir("git-commit-worktree");
-    const repoRoot = path.join(temp, "repo");
+    const repoRootValue = path.join(temp, "repo");
     const worktreeGitDir = path.join(temp, "worktree-git");
     const commonGitDir = path.join(temp, "common-git");
     await fs.mkdir(commonGitDir, { recursive: true });
     const refPath = path.join(commonGitDir, "refs", "heads", "main");
     await fs.mkdir(path.dirname(refPath), { recursive: true });
     await fs.writeFile(refPath, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", "utf-8");
-    await makeFakeGitRepo(repoRoot, {
+    await makeFakeGitRepo(repoRootValue, {
       gitdir: worktreeGitDir,
       head: "ref: refs/heads/main\n",
       commondir: "../common-git",
     });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
+    expect(resolveCommitHash({ cwd: repoRootValue, env: {} })).toBe("bbbbbbb");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {
     const temp = await makeTempDir("git-commit-long-head");
-    const repoRoot = path.join(temp, "repo");
+    const repoRootLocal = path.join(temp, "repo");
     const longRefName = `refs/heads/${"segment/".repeat(40)}main`;
-    await makeFakeGitRepo(repoRoot, {
+    await makeFakeGitRepo(repoRootLocal, {
       head: `ref: ${longRefName}\n`,
       refs: {
         [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
+    expect(resolveCommitHash({ cwd: repoRootLocal, env: {} })).toBe("ccccccc");
   });
 });

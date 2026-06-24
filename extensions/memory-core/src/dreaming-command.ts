@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming command behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -118,13 +119,4 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
   }
 
   return { text: formatUsage(formatStatus(currentConfig)) };
-}
-
-export function registerDreamingCommand(api: OpenClawPluginApi): void {
-  api.registerCommand({
-    name: "dreaming",
-    description: "Enable or disable memory dreaming.",
-    acceptsArgs: true,
-    handler: async (ctx) => await handleDreamingCommand(api, ctx),
-  });
 }

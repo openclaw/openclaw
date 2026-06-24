@@ -1,3 +1,4 @@
+// Msteams tests cover sdk plugin behavior.
 import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsApp, createMSTeamsTokenProvider } from "./sdk.js";
@@ -14,8 +15,8 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const { mockGetToken } = vi.hoisted(() => {
-  const mockGetToken = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
-  return { mockGetToken };
+  const mockGetTokenLocal = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
+  return { mockGetToken: mockGetTokenLocal };
 });
 vi.mock("@azure/identity", () => {
   class ManagedIdentityCredential {

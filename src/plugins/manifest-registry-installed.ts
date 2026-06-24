@@ -1,10 +1,11 @@
+/** Builds manifest registry records from installed plugin index snapshots. */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
@@ -15,6 +16,7 @@ import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  normalizeManifestChannelCommandDefaults,
   type OpenClawPackageManifest,
   type PackageManifest,
   type PluginPackageChannel,
@@ -25,7 +27,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
-} from "./status-dependencies.js";
+} from "./status-dependencies-core.js";
 
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();
@@ -273,28 +275,6 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
-function normalizePackageChannelCommands(
-  commands: unknown,
-): PluginPackageChannel["commands"] | undefined {
-  if (!isRecord(commands)) {
-    return undefined;
-  }
-  const nativeCommandsAutoEnabled =
-    typeof commands.nativeCommandsAutoEnabled === "boolean"
-      ? commands.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof commands.nativeSkillsAutoEnabled === "boolean"
-      ? commands.nativeSkillsAutoEnabled
-      : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
-}
-
 function normalizePackageChannelExposure(
   exposure: unknown,
 ): PluginPackageChannel["exposure"] | undefined {
@@ -479,7 +459,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   if (exposure) {
     channel.exposure = exposure;
   }
-  const commands = normalizePackageChannelCommands(value.commands);
+  const commands = normalizeManifestChannelCommandDefaults(value.commands);
   if (commands) {
     channel.commands = commands;
   }

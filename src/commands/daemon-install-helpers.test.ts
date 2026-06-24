@@ -1,8 +1,10 @@
+// Daemon install helper tests cover install plan construction, tokens, and platform-specific service setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -13,6 +15,18 @@ const mocks = vi.hoisted(() => ({
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
   resolveOpenClawWrapperPath: vi.fn(),
+  loadPluginManifestRegistry: vi.fn<
+    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
+  >(() => ({
+    diagnostics: [],
+    plugins: [],
+  })),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn<
+    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
+  >(() => ({
+    diagnostics: [],
+    plugins: [],
+  })),
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
@@ -39,6 +53,36 @@ vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
 }));
 
+vi.mock("../plugins/manifest-registry.js", async (importActual) => {
+  const actual = await importActual<typeof import("../plugins/manifest-registry.js")>();
+  const hasPluginIntegrationProvider = (
+    params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+  ) =>
+    Object.values(params?.config?.secrets?.providers ?? {}).some(
+      (provider) =>
+        provider?.source === "exec" &&
+        typeof provider === "object" &&
+        "pluginIntegration" in provider,
+    );
+  return {
+    ...actual,
+    loadPluginManifestRegistry: (
+      params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+    ) =>
+      hasPluginIntegrationProvider(params)
+        ? mocks.loadPluginManifestRegistry(params)
+        : actual.loadPluginManifestRegistry(params),
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async (importActual) => {
+  const actual = await importActual<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+  };
+});
+
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
@@ -59,6 +103,16 @@ function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<s
     throw new Error(`Expected ${label} first argument`);
   }
   return arg as Record<string, any>;
+}
+
+function writeSecurePluginEntrypoint(pathname: string): void {
+  fs.writeFileSync(pathname, "");
+  fs.chmodSync(pathname, 0o644);
+}
+
+function createSecurePluginRoot(pathname: string): void {
+  fs.mkdirSync(pathname);
+  fs.chmodSync(pathname, 0o755);
 }
 
 describe("resolveGatewayDevMode", () => {
@@ -108,6 +162,11 @@ function mockNodeGatewayPlanFixture(
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
+  mocks.loadPluginManifestRegistry.mockReturnValue({ diagnostics: [], plugins: [] });
+  mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    diagnostics: [],
+    plugins: [],
+  });
 }
 
 describe("buildGatewayInstallPlan", () => {
@@ -415,6 +474,263 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    const pluginRoot = path.join(isolatedHome, "acme-secrets");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-secrets",
+          origin: "global",
+          rootDir: pluginRoot,
+          secretProviderIntegrations: {
+            "secret-store": {
+              source: "exec",
+              command: "${node}",
+              args: ["./secret-ref-resolver.js"],
+              passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
+            },
+          },
+        },
+      ],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        ACME_SECRETS_ADDR: "http://secrets.example.test",
+        ACME_SECRETS_TOKEN: "secret-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            "team-secrets": {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "acme-secrets",
+                integrationId: "secret-store",
+              },
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "team-secrets", id: "providers/discord/token" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.ACME_SECRETS_ADDR).toBe("http://secrets.example.test");
+    expect(plan.environment.ACME_SECRETS_TOKEN).toBe("secret-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("includes passEnv values for plugin config exec SecretRefs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    const pluginRoot = path.join(isolatedHome, "acme-secrets");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-secrets",
+          origin: "global",
+          rootDir: pluginRoot,
+          secretProviderIntegrations: {
+            "secret-store": {
+              source: "exec",
+              command: "${node}",
+              args: ["./secret-ref-resolver.js"],
+              passEnv: ["ACME_SECRETS_TOKEN"],
+            },
+          },
+        },
+      ],
+    });
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-plugin",
+          origin: "global",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "apiKey", expected: "string" }],
+            },
+          },
+        },
+      ],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        ACME_SECRETS_TOKEN: "secret-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            "acme-plugin": {
+              enabled: true,
+              config: {
+                apiKey: {
+                  source: "exec",
+                  provider: "team-secrets",
+                  id: "providers/acme-plugin/apiKey",
+                },
+              },
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            "team-secrets": {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "acme-secrets",
+                integrationId: "secret-store",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.ACME_SECRETS_TOKEN).toBe("secret-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("includes passEnv values for auth-profile exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/OpenAI/api-key"],
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("includes passEnv values for auth-profile plugin-managed exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    const pluginRoot = path.join(isolatedHome, "acme-secrets");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-secrets",
+          origin: "global",
+          rootDir: pluginRoot,
+          secretProviderIntegrations: {
+            "secret-store": {
+              source: "exec",
+              command: "${node}",
+              args: ["./secret-ref-resolver.js"],
+              passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
+            },
+          },
+        },
+      ],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        ACME_SECRETS_ADDR: "http://secrets.example.test",
+        ACME_SECRETS_TOKEN: "secret-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            "team-secrets": {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "acme-secrets",
+                integrationId: "secret-store",
+              },
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "team-secrets",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.ACME_SECRETS_ADDR).toBe("http://secrets.example.test");
+    expect(plan.environment.ACME_SECRETS_TOKEN).toBe("secret-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
   it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -490,6 +806,62 @@ describe("buildGatewayInstallPlan", () => {
       expect(warningOutput).toContain(blockedName);
     }
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+  });
+
+  it("blocks dangerous passEnv values for auth-profile exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        NODE_OPTIONS: "--require /tmp/evil.js",
+      }),
+      port: 3000,
+      runtime: "node",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/OpenAI/api-key"],
+              passEnv: ["HOME", "NODE_OPTIONS"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.HOME).toBe(isolatedHome);
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(warn).not.toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
+      "Auth profile",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "NODE_OPTIONS" blocked by host-env security policy',
+      "Auth profile",
+    );
   });
 
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
@@ -772,6 +1144,79 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "OPENROUTER_API_KEY,TAVILY_API_KEY",
     );
+  });
+
+  it("retains .env values for macOS LaunchAgent env SecretRefs", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
+  });
+
+  it("retains .env values when config env has an unresolved self reference", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            MINIMAX_API_KEY: "${MINIMAX_API_KEY}",
+          },
+        },
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
   });
 
   it("does not retain config env values for macOS LaunchAgent env files", async () => {
@@ -1126,5 +1571,48 @@ describe("gatewayInstallErrorHint", () => {
     expect(gatewayInstallErrorHint("linux")).toMatch(
       /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
     );
+  });
+});
+
+describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
+  const managedKeys = new Set<string>();
+
+  it("continues to drop stale OPENCLAW_ALLOW_ROOT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      { OPENCLAW_ALLOW_ROOT: "1" },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
+  });
+
+  it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+  });
+
+  it("still drops arbitrary OPENCLAW_FOO", () => {
+    const result = collectPreservedExistingServiceEnvVars({ OPENCLAW_FOO: "bar" }, managedKeys);
+    expect(result.OPENCLAW_FOO).toBeUndefined();
+  });
+
+  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+        OPENCLAW_BAZ: "qux",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+    expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });

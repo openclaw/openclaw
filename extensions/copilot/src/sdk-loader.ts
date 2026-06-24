@@ -1,3 +1,4 @@
+// Copilot plugin module implements sdk loader behavior.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -9,9 +10,7 @@ export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.en
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
 
-export const COPILOT_SDK_FALLBACK_DIR = resolveCopilotSdkFallbackDir();
-
-export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.4";
+export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.9";
 
 let cached: Promise<typeof Sdk> | undefined;
 
@@ -30,7 +29,7 @@ export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promi
 
   const promise = doLoad(options);
   if (useCache) {
-    cached = promise.catch((err) => {
+    cached = promise.catch((err: unknown) => {
       cached = undefined;
       throw err;
     });
@@ -85,14 +84,17 @@ function createMissingSdkError(
   const lines = [
     "[copilot] @github/copilot-sdk is not installed.",
     "",
-    "The Copilot agent runtime requires @github/copilot-sdk (~260 MB",
-    "after pulling its platform-specific @github/copilot CLI binary).",
-    "Install it once with:",
+    "The external @openclaw/copilot plugin depends on @github/copilot-sdk",
+    "(~260 MB after pulling its platform-specific @github/copilot CLI binary).",
+    "Reinstall the plugin once with:",
     "",
-    `  pnpm add ${COPILOT_SDK_SPEC}`,
-    `  # or: npm install ${COPILOT_SDK_SPEC}`,
+    "  openclaw plugins install @openclaw/copilot",
     "",
-    `Alternatively, install into the on-demand fallback location at\n  ${fallbackPath}`,
+    "For source checkouts or offline repair, install the SDK directly:",
+    "",
+    `  npm install ${COPILOT_SDK_SPEC}`,
+    "",
+    `The legacy fallback location is still probed at\n  ${fallbackPath}`,
     "",
     "Primary resolution error:",
     `  ${summarizeError(primaryErr)}`,

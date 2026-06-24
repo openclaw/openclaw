@@ -1,3 +1,5 @@
+// Subagent announce dispatch tests lock down direct-vs-steer ordering for
+// progress updates and completion messages.
 import { describe, expect, it, vi } from "vitest";
 import {
   mapSteerOutcomeToDeliveryResult,
@@ -100,6 +102,38 @@ describe("runSubagentAnnounceDispatch", () => {
     expect(result.phases).toEqual([
       { phase: "direct-primary", delivered: false, path: "direct", error: "network" },
       { phase: "steer-fallback", delivered: true, path: "steered", error: undefined },
+    ]);
+  });
+
+  it("does not fallback-steer after terminal completion direct failure", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "media send may have partially succeeded",
+      terminal: true,
+    }));
+
+    // Terminal direct failures can represent partial media delivery; fallback
+    // steering would risk duplicate or contradictory completion messages.
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("media send may have partially succeeded");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "media send may have partially succeeded",
+      },
     ]);
   });
 

@@ -1,4 +1,6 @@
+// Commander registration for debug proxy capture, validation, query, and blob commands.
 import { InvalidArgumentError, type Command } from "commander";
+import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
@@ -9,24 +11,21 @@ const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
 );
 
 async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
+  // Keep proxy CA/server/sqlite dependencies out of normal CLI startup.
   return await proxyCliRuntimeLoader.load();
 }
 
 function parseIntegerOption(value: string | undefined, flag: string): number {
-  const trimmed = value?.trim() ?? "";
-  if (!/^\d+$/u.test(trimmed)) {
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined) {
     throw new InvalidArgumentError(`${flag} must be an integer.`);
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new InvalidArgumentError(`${flag} must be a safe integer.`);
   }
   return parsed;
 }
 
 function parsePortOption(value: string | undefined): number {
   const parsed = parseIntegerOption(value, "--port");
-  if (parsed > 65_535) {
+  if (parsed < 0 || parsed > 65_535) {
     throw new InvalidArgumentError("--port must be between 0 and 65535.");
   }
   return parsed;

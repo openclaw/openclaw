@@ -1,3 +1,4 @@
+// Coverage for preserving current-attempt error context across model fallback.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
@@ -33,6 +34,8 @@ function isCurrentAttemptAssistant(value: unknown): value is CurrentAttemptAssis
 }
 
 function setupDeepseekFallbackErrorMatchers() {
+  // DeepSeek matchers prove failover classification uses the current candidate
+  // assistant instead of stale history from the previous provider.
   mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
     const assistant = args[0];
     return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
@@ -44,6 +47,8 @@ function setupDeepseekFallbackErrorMatchers() {
 }
 
 function captureFormattedAssistant() {
+  // Capture the assistant passed to formatting so tests can inspect which
+  // provider/model error object drove the final failover message.
   let lastFormattedAssistant: unknown;
   mockedFormatAssistantErrorText.mockImplementation((...args: unknown[]) => {
     lastFormattedAssistant = args[0];
@@ -69,7 +74,7 @@ function makeCrossProviderFallbackConfig() {
     agents: {
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.4",
+          primary: "openai/gpt-5.4",
           fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
         },
       },
@@ -108,7 +113,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You have hit your ChatGPT usage limit (plus plan).",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),
@@ -126,6 +131,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-cross-provider-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
@@ -160,6 +169,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-compaction-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "anthropic",
+      model: "test-model",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
@@ -173,6 +186,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   });
 
   it("does not reuse a prior provider session assistant when the current candidate times out", async () => {
+    // Timeout failover has no reliable current assistant. Reusing the previous
+    // provider's session error would misattribute the failed candidate.
     const getLastFormattedAssistant = captureFormattedAssistant();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -181,7 +196,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),
@@ -193,6 +208,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-timeout",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
@@ -213,7 +232,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),
@@ -225,6 +244,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-non-timeout",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);

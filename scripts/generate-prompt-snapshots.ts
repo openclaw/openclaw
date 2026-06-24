@@ -1,3 +1,4 @@
+// Generate Prompt Snapshots script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -22,7 +23,7 @@ const oxfmtPath = path.resolve(
 );
 const execFileAsync = promisify(execFile);
 
-type PromptSnapshotFile = ReturnType<typeof createHappyPathPromptSnapshotFiles>[number];
+type PromptSnapshotFile = Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>[number];
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -60,7 +61,7 @@ async function readSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 }
 
 export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const files = createHappyPathPromptSnapshotFiles();
+  const files = await createHappyPathPromptSnapshotFiles();
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-snapshots-"));
   try {
     await writeSnapshotFiles(tmpRoot, files);

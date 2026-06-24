@@ -1,3 +1,7 @@
+/**
+ * Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+ * helpers.
+ */
 import { v0_8 } from "@a2ui/lit";
 import { ContextProvider } from "@lit/context";
 import { themeContext } from "@openclaw/a2ui-theme-context";
@@ -457,15 +461,15 @@ class OpenClawA2UIHost extends LitElement {
         context[key] = resolved;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalString")) {
+      if (Object.hasOwn(value, "literalString")) {
         context[key] = value.literalString ?? "";
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalNumber")) {
+      if (Object.hasOwn(value, "literalNumber")) {
         context[key] = value.literalNumber ?? 0;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalBoolean")) {
+      if (Object.hasOwn(value, "literalBoolean")) {
         context[key] = value.literalBoolean ?? false;
         continue;
       }

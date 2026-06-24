@@ -1,4 +1,6 @@
+// Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -435,6 +437,83 @@ describe("setupChannels workspace shadow exclusion", () => {
       channels: {
         "custom-chat": { token: "secret" },
       },
+    });
+  });
+
+  it("allowlists ClickClack when it is explicitly selected for setup", async () => {
+    const setupWizard = {
+      channel: "clickclack",
+      getStatus: vi.fn(async () => ({
+        channel: "clickclack",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            clickclack: {
+              ...cfg.channels?.clickclack,
+              token: "secret",
+            },
+          },
+        },
+      })),
+    };
+    const clickClackPlugin = makeSetupPlugin({
+      id: "clickclack",
+      label: "ClickClack",
+      setupWizard,
+    });
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "clickclack",
+            meta: makeMeta("clickclack", "ClickClack"),
+          },
+        ],
+      }),
+    );
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
+      makePluginRegistry({
+        channelSetups: [
+          {
+            pluginId: "clickclack",
+            source: "bundled",
+            enabled: true,
+            plugin: clickClackPlugin,
+          },
+        ],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("clickclack").mockResolvedValueOnce("__done__");
+
+    const next = await setupChannels(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(next.plugins?.allow).toEqual(["memory-core", "clickclack"]);
+    expect(next.plugins?.entries?.clickclack?.enabled).toBe(true);
+    expect(next.channels?.clickclack).toEqual({
+      enabled: true,
+      token: "secret",
     });
   });
 

@@ -1,15 +1,25 @@
-import type { TSchema } from "typebox";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
-import { detectMime } from "../../media/mime.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
+/**
+ * Shared built-in tool contracts and helpers.
+ *
+ * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
+ */
+import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
-} from "../../shared/number-coercion.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { TSchema } from "typebox";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "../runtime/index.js";
+import type {
+  AgentTool,
+  AgentToolProgress,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -17,6 +27,11 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
 type ErasedAgentToolExecute = {
@@ -32,6 +47,14 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    prepareBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["prepareBeforeToolCallParams"];
+    finalizeBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["finalizeBeforeToolCallParams"];
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
@@ -393,6 +416,66 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
+}
+
+export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
+
+export function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
+  return {
+    content: [],
+    details: undefined,
+    progress: {
+      text: progress.text,
+      visibility: "channel",
+      privacy: "public",
+      ...(progress.id ? { id: progress.id } : {}),
+    },
+  };
+}
+
+// Tool progress is a UI side channel. The model-facing tool result remains in
+// `content`; progress text must already be safe to show in channel previews.
+export function emitToolProgress(
+  onUpdate: AgentToolUpdateCallback | undefined,
+  progress: PublicToolProgress,
+): void {
+  const text = progress.text.trim();
+  if (!onUpdate || !text) {
+    return;
+  }
+  try {
+    onUpdate(toolProgressResult({ ...progress, text }));
+  } catch {
+    // Progress is best-effort UI state; tool execution must not depend on subscribers.
+  }
+}
+
+// Long-running tools can arm delayed progress and cancel it on completion or
+// abort. This avoids stale "still working" lines after a fast or canceled call.
+export function scheduleToolProgress(
+  onUpdate: AgentToolUpdateCallback | undefined,
+  progress: PublicToolProgress,
+  delayMs: number,
+  options: { signal?: AbortSignal } = {},
+): () => void {
+  if (!onUpdate || options.signal?.aborted) {
+    return () => {};
+  }
+  let cleared = false;
+  const clear = () => {
+    if (cleared) {
+      return;
+    }
+    cleared = true;
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", clear);
+  };
+  const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+    clear();
+    emitToolProgress(onUpdate, progress);
+  }, delayMs);
+  options.signal?.addEventListener("abort", clear, { once: true });
+  return clear;
 }
 
 export async function imageResult(params: {

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,9 @@ import type {
 } from "./embeddings.types.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
+// Parent-side local embedding worker client for isolating node-llama-cpp state.
+
+/** Request payloads sent from the parent process to the local embedding worker child. */
 type LocalEmbeddingWorkerRequestPayload =
   | {
       type: "initialize";
@@ -35,6 +39,7 @@ type LocalEmbeddingWorkerRequestPayload =
 
 type LocalEmbeddingWorkerRequest = LocalEmbeddingWorkerRequestPayload & { id: number };
 
+/** Response payloads sent from the local embedding worker child back to the parent. */
 type LocalEmbeddingWorkerResponse =
   | {
       id: number;
@@ -52,12 +57,14 @@ type LocalEmbeddingWorkerResponse =
           };
     };
 
+/** Pending parent request plus abort cleanup. */
 type PendingRequest = {
   resolve: (value: number[] | number[][] | undefined) => void;
   reject: (err: unknown) => void;
   abort?: () => void;
 };
 
+/** Resolve the worker child script for source, package, and bundled runtime layouts. */
 function resolveDefaultWorkerScriptPath(): string {
   const currentPath = fileURLToPath(import.meta.url);
   const extension = path.extname(currentPath);
@@ -71,18 +78,27 @@ function resolveDefaultWorkerScriptPath(): string {
   return path.join(path.dirname(currentPath), sibling);
 }
 
+/** Keep only local embedding options that are safe and necessary to send over IPC. */
 function serializeLocalEmbeddingOptions(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): EmbeddingProviderOptions {
   return {
     config: {},
     provider: "local",
     model: options.model,
     fallback: "none",
-    local: options.local,
+    outputDimensionality: options.outputDimensionality,
+    local: {
+      ...options.local,
+      ...(runtimeOptions?.nodeLlamaCppImportUrl
+        ? { nodeLlamaCppImportUrl: runtimeOptions.nodeLlamaCppImportUrl }
+        : {}),
+    } as EmbeddingProviderOptions["local"],
   };
 }
 
+/** Create a typed failure for unexpected worker process exits. */
 function createWorkerExitError(code: number | null, signal: NodeJS.Signals | null): Error {
   const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
   return createLocalEmbeddingWorkerFailureError({
@@ -94,6 +110,7 @@ function createWorkerExitError(code: number | null, signal: NodeJS.Signals | nul
   });
 }
 
+/** Convert worker response errors into Error objects while preserving worker error codes. */
 function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: false }): Error {
   if (typeof error.error === "object" && error.error) {
     const message = error.error.message || "Local embedding worker failed";
@@ -128,6 +145,7 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
+/** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
   let skipNext = false;
@@ -151,6 +169,7 @@ function resolveWorkerExecArgv(): string[] {
   return args;
 }
 
+/** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
@@ -158,10 +177,12 @@ class LocalEmbeddingWorkerClient {
 
   constructor(private readonly scriptPath: string) {}
 
+  /** Start or reuse the child worker and initialize its provider. */
   async initialize(options: EmbeddingProviderOptions): Promise<void> {
     await this.send({ type: "initialize", options });
   }
 
+  /** Request one query embedding from the child worker. */
   async embedQuery(
     options: EmbeddingProviderOptions,
     text: string,
@@ -171,6 +192,7 @@ class LocalEmbeddingWorkerClient {
     return Array.isArray(result) ? (result as number[]) : [];
   }
 
+  /** Request a batch of embeddings from the child worker. */
   async embedBatch(
     options: EmbeddingProviderOptions,
     texts: string[],
@@ -180,6 +202,7 @@ class LocalEmbeddingWorkerClient {
     return Array.isArray(result) ? (result as number[][]) : [];
   }
 
+  /** Ask the child to close gracefully, then force shutdown after a short grace period. */
   async close(): Promise<void> {
     const child = this.child;
     if (!child) {
@@ -204,6 +227,7 @@ class LocalEmbeddingWorkerClient {
     }
   }
 
+  /** Ensure the child process exists and has lifecycle failure handlers installed. */
   private ensureChild(): ChildProcess {
     if (this.child?.connected) {
       return this.child;
@@ -238,6 +262,7 @@ class LocalEmbeddingWorkerClient {
     return child;
   }
 
+  /** Send one request over IPC and bind its abort signal to child shutdown. */
   private async send(
     request: LocalEmbeddingWorkerRequestPayload,
     options?: EmbeddingProviderCallOptions,
@@ -252,7 +277,12 @@ class LocalEmbeddingWorkerClient {
         const abort = () => {
           this.pending.delete(id);
           this.shutdownChild();
-          reject(options.signal?.reason ?? new Error("Local embedding request aborted"));
+          reject(
+            toLintErrorObject(
+              options.signal?.reason ?? new Error("Local embedding request aborted"),
+              "Non-Error rejection",
+            ),
+          );
         };
         options.signal.addEventListener("abort", abort, { once: true });
         pending.abort = () => options.signal?.removeEventListener("abort", abort);
@@ -275,6 +305,7 @@ class LocalEmbeddingWorkerClient {
     });
   }
 
+  /** Route one worker response to the matching pending request. */
   private handleMessage(message: unknown): void {
     const response = message as Partial<LocalEmbeddingWorkerResponse>;
     if (typeof response.id !== "number") {
@@ -295,6 +326,7 @@ class LocalEmbeddingWorkerClient {
     );
   }
 
+  /** Disconnect and kill the current child process if it is still alive. */
   private shutdownChild(): void {
     const child = this.child;
     this.child = null;
@@ -309,6 +341,7 @@ class LocalEmbeddingWorkerClient {
     }
   }
 
+  /** Reject all pending requests after child process failure. */
   private rejectPending(err: unknown): void {
     const pending = [...this.pending.values()];
     this.pending.clear();
@@ -319,12 +352,13 @@ class LocalEmbeddingWorkerClient {
   }
 }
 
+/** Create the public local embedding provider backed by the child worker client. */
 export async function createLocalEmbeddingWorkerProvider(
   options: EmbeddingProviderOptions,
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
-  const workerOptions = serializeLocalEmbeddingOptions(options);
+  const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
   );
@@ -361,4 +395,19 @@ export async function createLocalEmbeddingWorkerProvider(
       await client.close();
     },
   };
+}
+
+/** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

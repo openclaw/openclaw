@@ -56,14 +56,6 @@
     "target": "Mantis"
   },
   {
-    "source": "OpenClaw App SDK",
-    "target": "OpenClaw 应用 SDK"
-  },
-  {
-    "source": "OpenClaw App SDK API design",
-    "target": "OpenClaw 应用 SDK API 设计"
-  },
-  {
     "source": "Message lifecycle refactor",
     "target": "消息生命周期重构"
   },
@@ -264,8 +256,64 @@
     "target": "Feishu"
   },
   {
+    "source": "ClickClack",
+    "target": "ClickClack"
+  },
+  {
+    "source": "IRC",
+    "target": "IRC"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Nextcloud Talk",
+    "target": "Nextcloud Talk"
+  },
+  {
+    "source": "Nostr",
+    "target": "Nostr"
+  },
+  {
+    "source": "QQ bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "SMS",
+    "target": "SMS"
+  },
+  {
+    "source": "Synology Chat",
+    "target": "Synology Chat"
+  },
+  {
+    "source": "Tlon",
+    "target": "Tlon"
+  },
+  {
+    "source": "Twitch",
+    "target": "Twitch"
+  },
+  {
+    "source": "Twilio",
+    "target": "Twilio"
+  },
+  {
     "source": "Yuanbao",
     "target": "腾讯元宝"
+  },
+  {
+    "source": "Zalo",
+    "target": "Zalo"
+  },
+  {
+    "source": "Zalo Personal",
+    "target": "Zalo Personal"
+  },
+  {
+    "source": "Zalo personal",
+    "target": "Zalo Personal"
   },
   {
     "source": "WeChat",
@@ -564,6 +612,10 @@
     "target": "QQ Bot"
   },
   {
+    "source": "QQBot",
+    "target": "QQ Bot"
+  },
+  {
     "source": "Release Policy",
     "target": "发布策略"
   },
@@ -732,6 +784,14 @@
     "target": "OC Path 插件"
   },
   {
+    "source": "Parallel plugin",
+    "target": "Parallel 插件"
+  },
+  {
+    "source": "Parallel search",
+    "target": "Parallel 搜索"
+  },
+  {
     "source": "CLI reference",
     "target": "CLI 参考"
   },
@@ -882,6 +942,14 @@
   {
     "source": "Matrix QA",
     "target": "Matrix QA"
+  },
+  {
+    "source": "Maturity scorecard",
+    "target": "成熟度评分卡"
+  },
+  {
+    "source": "Maturity taxonomy",
+    "target": "成熟度分类法"
   },
   {
     "source": "Matrix presentation metadata",
@@ -1104,7 +1172,39 @@
     "target": "Plugin Manifest"
   },
   {
+    "source": "Workboard plugin",
+    "target": "Workboard 插件"
+  },
+  {
+    "source": "workboard",
+    "target": "workboard"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
+  },
+  {
+    "source": "Models CLI",
+    "target": "模型 CLI"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Cohere",
+    "target": "Cohere"
+  },
+  {
+    "source": "Cohere plugin",
+    "target": "Cohere 插件"
+  },
+  {
+    "source": "cohere",
+    "target": "cohere"
+  },
+  {
+    "source": "Zalo ClawBot",
+    "target": "Zalo ClawBot"
   }
 ]

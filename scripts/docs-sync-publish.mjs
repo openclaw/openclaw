@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Syncs source docs into the generated publish tree.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -169,7 +170,15 @@ const GENERATED_LOCALES = [
   },
 ];
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     target: "",
     sourceRepo: "",
@@ -184,27 +193,27 @@ function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = argv[index + 1] ?? "";
+        args.target = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = argv[index + 1] ?? "";
+        args.sourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = argv[index + 1] ?? "";
+        args.sourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = argv[index + 1] ?? "";
+        args.clawhubRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = argv[index + 1] ?? "";
+        args.clawhubSourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = argv[index + 1] ?? "";
+        args.clawhubSourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       default:
@@ -298,6 +307,9 @@ function getGitHeadSha(repoPath) {
   }
 }
 
+/**
+ * Resolves the local ClawHub repository path used for docs mirroring.
+ */
 export function resolveClawHubRepoPath(value = "", options = {}) {
   const required = options.required !== false;
   const candidates = [
@@ -542,7 +554,7 @@ function rewriteClawHubMarkdownLinkTarget(rawTarget, relativeSourceDir, source) 
     return rawTarget;
   }
 
-  let normalizedRelative = "";
+  let normalizedRelative;
   if (pathPart.startsWith("docs/")) {
     normalizedRelative = normalizeSlashes(pathPart.slice("docs/".length));
   } else if (
@@ -579,6 +591,9 @@ function rewriteClawHubMarkdownLinks(raw, relativeSourcePath, source) {
   });
 }
 
+/**
+ * Mirrors ClawHub docs into the target docs tree.
+ */
 export function syncClawHubDocsTree(targetDocsDir, options = {}) {
   const repoPath = resolveClawHubRepoPath(options.repoPath || "", {
     required: options.required !== false,

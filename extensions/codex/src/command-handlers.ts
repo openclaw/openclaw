@@ -1,5 +1,7 @@
+// Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
@@ -38,6 +40,10 @@ import {
   handleCodexPluginsSubcommand,
   type CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+import {
+  buildCodexCommandPickerPresentation,
+  type CodexCommandPickerButton,
+} from "./command-presentation.js";
 import {
   codexControlRequest,
   readCodexStatusProbes,
@@ -239,12 +245,134 @@ export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   pendingCodexDiagnosticsConfirmationTokensByScope.clear();
 }
 
+/**
+ * No-arg `/codex` picker. Codex owns the command tree; channels render the
+ * portable command actions as inline controls when their transport can.
+ */
+function buildCodexSubcommandPickerReply(): PluginCommandResult {
+  const verbs: CodexCommandPickerButton[] = [
+    { label: "plugins", command: "/codex plugins menu" },
+    { label: "permissions", command: "/codex permissions menu" },
+    { label: "fast", command: "/codex fast menu" },
+    { label: "computer-use", command: "/codex computer-use menu" },
+    { label: "account", command: "/codex account" },
+    { label: "help", command: "/codex help" },
+  ];
+
+  const fallbackTextLines = [
+    "Codex commands. Pick a category or type:",
+    "",
+    ...verbs.map((v, i) => `  ${i + 1}. ${v.command}`),
+    "",
+    "Tap 'help' (or type /codex help) for the full list of typeable verbs",
+    "including threads, mcp, binding, detach, skills, resume, bind, steer,",
+    "model, diagnostics, compact, review, computer-use.",
+    "",
+    "Top-level shortcuts cover everyday operations: /status, /fast, /help, /stop, /models.",
+  ];
+
+  return {
+    text: fallbackTextLines.join("\n"),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex commands",
+      "Pick a Codex subcommand:",
+      verbs,
+    ),
+  };
+}
+
+/** Sub-picker for `/codex fast menu` (on / off / status). */
+function buildCodexFastMenuReply(): PluginCommandResult {
+  const modes = ["on", "off", "status"] as const;
+  const buttons: CodexCommandPickerButton[] = [
+    ...modes.map((mode) => ({ label: mode, command: `/codex fast ${mode}` })),
+    { label: "back", command: "/codex" },
+  ];
+  const fallbackTextLines = [
+    "Codex fast mode. Pick one or type /codex fast <mode>:",
+    "",
+    ...modes.map((m, i) => `  ${i + 1}. /codex fast ${m}`),
+    "",
+    "Type '/codex' to go back to the main menu.",
+  ];
+  return {
+    text: fallbackTextLines.join("\n"),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex fast mode",
+      "Pick a Codex fast mode:",
+      buttons,
+    ),
+  };
+}
+
+/** Sub-picker for `/codex permissions menu` (default / yolo / status). */
+function buildCodexPermissionsMenuReply(): PluginCommandResult {
+  const modes = ["default", "yolo", "status"] as const;
+  const buttons: CodexCommandPickerButton[] = [
+    ...modes.map((mode) => ({ label: mode, command: `/codex permissions ${mode}` })),
+    { label: "back", command: "/codex" },
+  ];
+  const fallbackTextLines = [
+    "Codex permissions. Pick one or type /codex permissions <mode>:",
+    "",
+    ...modes.map((m, i) => `  ${i + 1}. /codex permissions ${m}`),
+    "",
+    "Type '/codex' to go back to the main menu.",
+  ];
+  return {
+    text: fallbackTextLines.join("\n"),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex permissions",
+      "Pick a Codex permissions mode:",
+      buttons,
+    ),
+  };
+}
+
+/** Sub-picker for `/codex computer-use menu` (status / install). */
+function buildCodexComputerUseMenuReply(): PluginCommandResult {
+  const actions = ["status", "install"] as const;
+  const buttons: CodexCommandPickerButton[] = [
+    ...actions.map((action) => ({
+      label: action,
+      command: `/codex computer-use ${action}`,
+    })),
+    { label: "back", command: "/codex" },
+  ];
+  const fallbackTextLines = [
+    "Codex computer-use. Pick one or type /codex computer-use <action>:",
+    "",
+    ...actions.map((a, i) => `  ${i + 1}. /codex computer-use ${a}`),
+    "",
+    "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
+    "",
+    "Type '/codex' to go back to the main menu.",
+  ];
+  return {
+    text: fallbackTextLines.join("\n"),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex computer-use",
+      "Pick a Codex computer-use action:",
+      buttons,
+    ),
+  };
+}
+
+/** Returns true when the rest-args are exactly `["menu"]` (case-insensitive). */
+function isMenuVerb(rest: readonly string[]): boolean {
+  return rest.length === 1 && (rest[0] ?? "").trim().toLowerCase() === "menu";
+}
+
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
 ): Promise<PluginCommandResult> {
   const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
-  const [subcommand = "status", ...rest] = splitArgs(ctx.args);
+  const args = splitArgs(ctx.args);
+  if (args.length === 0) {
+    return buildCodexSubcommandPickerReply();
+  }
+  const [subcommand = "status", ...rest] = args;
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
@@ -320,9 +448,15 @@ export async function handleCodexSubcommand(
     return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "fast") {
+    if (isMenuVerb(rest)) {
+      return buildCodexFastMenuReply();
+    }
     return { text: await setConversationFastMode(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "permissions") {
+    if (isMenuVerb(rest)) {
+      return buildCodexPermissionsMenuReply();
+    }
     return { text: await setConversationPermissions(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "compact") {
@@ -359,6 +493,9 @@ export async function handleCodexSubcommand(
     );
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
+    if (isMenuVerb(rest)) {
+      return buildCodexComputerUseMenuReply();
+    }
     return {
       text: await handleComputerUseCommand(deps, options.pluginConfig, rest),
     };
@@ -545,6 +682,8 @@ async function bindConversation(
     sessionFile: ctx.sessionFile,
     workspaceDir,
     agentDir: scope.agentDir,
+    sessionKey: ctx.sessionKey,
+    agentId: scope.sessionAgentId,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
@@ -898,13 +1037,17 @@ async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<str
   return (await resolveControlTarget(ctx))?.sessionFile;
 }
 
-function resolveCodexConversationControlScope(ctx: PluginCommandContext): { agentDir: string } {
+function resolveCodexConversationControlScope(ctx: PluginCommandContext): {
+  agentDir: string;
+  sessionAgentId: string;
+} {
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: ctx.sessionKey,
     config: ctx.config,
   });
   return {
     agentDir: resolveAgentDir(ctx.config, sessionAgentId),
+    sessionAgentId,
   };
 }
 
@@ -1005,8 +1148,18 @@ async function requestCodexDiagnosticsFeedbackApproval(
         {
           type: "buttons",
           buttons: [
-            { label: "Send diagnostics", value: confirmCommand, style: "danger" },
-            { label: "Cancel", value: cancelCommand, style: "secondary" },
+            {
+              label: "Send diagnostics",
+              action: { type: "command", command: confirmCommand },
+              value: confirmCommand,
+              style: "danger",
+            },
+            {
+              label: "Cancel",
+              action: { type: "command", command: cancelCommand },
+              value: cancelCommand,
+              style: "secondary",
+            },
           ],
         },
       ],
@@ -1932,9 +2085,8 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
     }
     if (arg === "--limit") {
       const value = readRequiredOptionValue(args, index);
-      const parsedLimit =
-        value && /^\+?\d+$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
-      if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
+      const parsedLimit = parseStrictPositiveInteger(value);
+      if (parsedLimit === undefined) {
         parsed.help = true;
         continue;
       }

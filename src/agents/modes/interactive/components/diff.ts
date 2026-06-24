@@ -1,3 +1,8 @@
+/**
+ * Interactive terminal diff renderer.
+ *
+ * Produces colored line and intra-line highlights for the Pi TUI review surfaces.
+ */
 import * as Diff from "diff";
 import { theme } from "../theme/theme.js";
 
@@ -70,7 +75,7 @@ function renderIntraLineDiff(
   return { removedLine, addedLine };
 }
 
-export interface RenderDiffOptions {
+interface RenderDiffOptions {
   /** File path (unused, kept for API compatibility) */
   filePath?: string;
 }

@@ -1,3 +1,4 @@
+// Covers gateway exposure audit classification.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
@@ -156,7 +157,7 @@ describe("security audit gateway exposure findings", () => {
     const finding = requireFinding(findings, expectedFinding.checkId, expectedFinding.checkId);
     expect(finding.severity).toBe(expectedFinding.severity);
     if (expectedNoFinding) {
-      expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
+      expect(findings.map((findingLocal) => findingLocal.checkId)).not.toContain(expectedNoFinding);
     }
   });
 

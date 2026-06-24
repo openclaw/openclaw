@@ -1,7 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Simple completion runtime tests cover model resolution, provider auth, and
+// one-shot completion wiring before requests reach the shared LLM stream path.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 
+// Hoisted mocks keep Vitest module replacement stable while the implementation
+// under test imports auth, model resolution, and transport helpers at module load.
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
@@ -36,7 +40,7 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("./github-copilot-token.js", () => ({
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
@@ -271,8 +275,8 @@ describe("prepareSimpleCompletionModel", () => {
       return;
     }
 
-    // The returned auth.apiKey should be the exchanged runtime token,
-    // not the original GitHub token
+    // Callers must only receive the short-lived Copilot runtime token. The
+    // original GitHub token is broader auth material and must not leave prep.
     expect(result.auth.apiKey).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
@@ -471,6 +475,44 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("can preserve asynchronous provider model discovery", async () => {
+    // Use a standalone mock so the default beforeEach delegation from
+    // resolveModelAsyncMock → resolveModelMock does not pollute call
+    // history. The point of the test is that when useAsyncModelResolution
+    // is true, only the async resolver is invoked.
+    const resolveModelAsync = vi.fn().mockResolvedValue({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    // Reset the hoisted sync mock so any leftover calls from earlier tests
+    // or beforeEach setup don't cause a false positive.
+    hoisted.resolveModelMock.mockReset();
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      useAsyncModelResolution: true,
+      modelResolver: resolveModelAsync,
+    });
+
+    expectPreparedModelResult(result);
+    expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveModelAsync).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      {},
+    );
+  });
+
   it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
@@ -520,7 +562,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     } as OpenClawConfig;
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4-mini",
       },
       authStorage: {
@@ -539,9 +581,9 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.4-mini");
-    expect(result.selection.runtimeProvider).toBe("openai-codex");
+    expect(result.selection.runtimeProvider).toBe("openai");
     expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openai-codex",
+      "openai",
       "gpt-5.4-mini",
       expect.any(String),
       cfg,
@@ -551,7 +593,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     );
     expect(
       (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 });
 

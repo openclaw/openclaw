@@ -1,8 +1,13 @@
+// Imessage tests cover monitor.watch subscribe retry plugin behavior.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
+import {
+  describeIMessageInboundDropDiagnostic,
+  shouldThrottleIMessageInboundDropDiagnostic,
+} from "./monitor/monitor-provider.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -109,9 +114,16 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       { timeoutMs: 10_000 },
     );
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
-      "imessage: watch.subscribe startup failed (attempt 1/3): Error: imsg rpc timeout (watch.subscribe); retrying",
-    );
+    const retryLog = String(runtime.log.mock.calls[0]?.[0]);
+    expect(retryLog).toContain("imessage: watch.subscribe startup failed attempt=1/3");
+    expect(retryLog).toContain("account=default");
+    expect(retryLog).toContain("cliPath=imsg");
+    expect(retryLog).toContain("dbPath=default");
+    expect(retryLog).toContain("timeoutMs=10000");
+    expect(retryLog).toContain("since_rowid=none");
+    expect(retryLog).toContain("attachments=false");
+    expect(retryLog).toContain("retry_in_ms=1000");
+    expect(retryLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
     expect(
       runtime.error.mock.calls.some(([message]) =>
         String(message).includes("imessage: monitor failed"),
@@ -132,7 +144,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const monitorErrorPromise = monitorIMessageProvider({
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
-    }).catch((error) => error);
+    }).catch((error: unknown) => error);
 
     await vi.runAllTimersAsync();
     const monitorError = await monitorErrorPromise;
@@ -141,8 +153,69 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect((monitorError as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(runtime.error.mock.calls[0]?.[0])).toContain(
-      "imessage: monitor failed: Error: imsg rpc timeout (watch.subscribe)",
+    const failureLog = String(runtime.error.mock.calls[0]?.[0]);
+    expect(failureLog).toContain(
+      "imessage: monitor failed: imessage: watch.subscribe startup failed attempt=3/3",
     );
+    expect(failureLog).toContain("account=default");
+    expect(failureLog).toContain("timeoutMs=10000");
+    expect(failureLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
+  });
+});
+
+describe("describeIMessageInboundDropDiagnostic", () => {
+  it("describes echo-style drops without message content or sender handles", () => {
+    const diagnostic = describeIMessageInboundDropDiagnostic({
+      accountId: "default",
+      reason: "echo",
+      message: {
+        id: 42,
+        chat_id: 123,
+        guid: "p:0/secret-guid",
+        is_group: false,
+        created_at: "2026-06-09T10:00:00.000Z",
+      },
+    });
+
+    expect(diagnostic).toBe(
+      'imessage: dropped inbound message account=default reason="echo" chat_id=123 group=false message_id=42 guid=present created_at=2026-06-09T10:00:00.000Z',
+    );
+    expect(diagnostic).not.toContain("secret-guid");
+    expect(diagnostic).not.toContain("+1555");
+  });
+
+  it("describes from-me drops and marks them for throttling", () => {
+    const diagnostic = describeIMessageInboundDropDiagnostic({
+      accountId: "default",
+      reason: "from me",
+      message: {
+        id: 43,
+        chat_id: 456,
+        guid: "p:0/outbound-guid",
+        is_group: true,
+        created_at: "2026-06-09T10:01:00.000Z",
+      },
+    });
+
+    expect(diagnostic).toBe(
+      'imessage: dropped inbound message account=default reason="from me" chat_id=456 group=true message_id=43 guid=present created_at=2026-06-09T10:01:00.000Z',
+    );
+    expect(diagnostic).not.toContain("outbound-guid");
+    expect(shouldThrottleIMessageInboundDropDiagnostic("from me")).toBe(true);
+    expect(shouldThrottleIMessageInboundDropDiagnostic("echo")).toBe(false);
+  });
+
+  it("keeps normal policy drops quiet", () => {
+    expect(
+      describeIMessageInboundDropDiagnostic({
+        accountId: "default",
+        reason: "no mention",
+        message: {
+          id: 42,
+          chat_id: 123,
+          is_group: true,
+        },
+      }),
+    ).toBeNull();
   });
 });

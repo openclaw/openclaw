@@ -1,5 +1,7 @@
+// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -31,7 +33,6 @@ import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { restoreTerminalState } from "../terminal/restore.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
@@ -56,6 +57,47 @@ type OnboardSearchModule = typeof import("../commands/onboard-search.js");
 
 let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
+
+async function showControlUiDashboardNote(params: {
+  prompter: WizardPrompter;
+  settings: GatewayWizardSettings;
+  authedUrl: string;
+  controlUiBasePath: string | undefined;
+  hintToken: string | undefined;
+}): Promise<{ opened: boolean }> {
+  let opened = false;
+  let openHint: string | undefined;
+  const browserSupport = await detectBrowserOpenSupport();
+  if (browserSupport.ok) {
+    opened = await openUrl(params.authedUrl);
+    if (!opened) {
+      openHint = formatControlUiSshHint({
+        port: params.settings.port,
+        basePath: params.controlUiBasePath,
+        token: params.hintToken,
+      });
+    }
+  } else {
+    openHint = formatControlUiSshHint({
+      port: params.settings.port,
+      basePath: params.controlUiBasePath,
+      token: params.hintToken,
+    });
+  }
+
+  await params.prompter.note(
+    [
+      t("wizard.finalize.dashboardLinkWithToken", { url: params.authedUrl }),
+      opened ? t("wizard.finalize.dashboardOpened") : t("wizard.finalize.dashboardCopyPaste"),
+      openHint,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    t("wizard.finalize.dashboardReady"),
+  );
+
+  return { opened };
+}
 
 function getLocalizedGatewayDaemonRuntimeOptions() {
   return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
@@ -83,7 +125,7 @@ export async function finalizeSetupWizard(
 
   const withWizardProgress = async <T>(
     label: string,
-    options: { doneMessage?: string | (() => string | undefined) },
+    optionsLocal: { doneMessage?: string | (() => string | undefined) },
     work: (progress: { update: (message: string) => void }) => Promise<T>,
   ): Promise<T> => {
     const progress = prompter.progress(label);
@@ -91,7 +133,9 @@ export async function finalizeSetupWizard(
       return await work(progress);
     } finally {
       progress.stop(
-        typeof options.doneMessage === "function" ? options.doneMessage() : options.doneMessage,
+        typeof optionsLocal.doneMessage === "function"
+          ? optionsLocal.doneMessage()
+          : optionsLocal.doneMessage,
       );
     }
   };
@@ -223,7 +267,9 @@ export async function finalizeSetupWizard(
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
-              warn: (message, title) => prompter.note(message, title),
+              warn: (message, title) => {
+                void prompter.note(message, title);
+              },
               config: nextConfig,
             },
           );
@@ -433,8 +479,7 @@ export async function finalizeSetupWizard(
   );
 
   let controlUiOpened = false;
-  let controlUiOpenHint: string | undefined;
-  let seededInBackground = false;
+  const seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
@@ -484,7 +529,7 @@ export async function finalizeSetupWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
+      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
         await launchTuiCli({
           local: true,
@@ -493,45 +538,21 @@ export async function finalizeSetupWizard(
           timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
       }
       launchedTui = true;
     } else if (hatchChoice === "web") {
-      const browserSupport = await detectBrowserOpenSupport();
-      if (browserSupport.ok) {
-        controlUiOpened = await openUrl(authedUrl);
-        if (!controlUiOpened) {
-          controlUiOpenHint = formatControlUiSshHint({
-            port: settings.port,
-            basePath: controlUiBasePath,
-            token:
-              settings.authMode === "token" && !suppressGatewayTokenOutput
-                ? settings.gatewayToken
-                : undefined,
-          });
-        }
-      } else {
-        controlUiOpenHint = formatControlUiSshHint({
-          port: settings.port,
-          basePath: controlUiBasePath,
-          token:
-            settings.authMode === "token" && !suppressGatewayTokenOutput
-              ? settings.gatewayToken
-              : undefined,
-        });
-      }
-      await prompter.note(
-        [
-          t("wizard.finalize.dashboardLinkWithToken", { url: authedUrl }),
-          controlUiOpened
-            ? t("wizard.finalize.dashboardOpened")
-            : t("wizard.finalize.dashboardCopyPaste"),
-          controlUiOpenHint,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        t("wizard.finalize.dashboardReady"),
-      );
+      const dashboard = await showControlUiDashboardNote({
+        prompter,
+        settings,
+        authedUrl,
+        controlUiBasePath,
+        hintToken:
+          settings.authMode === "token" && !suppressGatewayTokenOutput
+            ? settings.gatewayToken
+            : undefined,
+      });
+      controlUiOpened = dashboard.opened;
     } else {
       await prompter.note(
         t("wizard.finalize.dashboardWhenReady", {
@@ -561,36 +582,14 @@ export async function finalizeSetupWizard(
     !suppressGatewayTokenOutput &&
     hatchChoice === null;
   if (shouldOpenControlUi) {
-    const browserSupport = await detectBrowserOpenSupport();
-    if (browserSupport.ok) {
-      controlUiOpened = await openUrl(authedUrl);
-      if (!controlUiOpened) {
-        controlUiOpenHint = formatControlUiSshHint({
-          port: settings.port,
-          basePath: controlUiBasePath,
-          token: settings.gatewayToken,
-        });
-      }
-    } else {
-      controlUiOpenHint = formatControlUiSshHint({
-        port: settings.port,
-        basePath: controlUiBasePath,
-        token: settings.gatewayToken,
-      });
-    }
-
-    await prompter.note(
-      [
-        t("wizard.finalize.dashboardLinkWithToken", { url: authedUrl }),
-        controlUiOpened
-          ? t("wizard.finalize.dashboardOpened")
-          : t("wizard.finalize.dashboardCopyPaste"),
-        controlUiOpenHint,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      t("wizard.finalize.dashboardReady"),
-    );
+    const dashboard = await showControlUiDashboardNote({
+      prompter,
+      settings,
+      authedUrl,
+      controlUiBasePath,
+      hintToken: settings.gatewayToken,
+    });
+    controlUiOpened = dashboard.opened;
   }
 
   const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
@@ -645,6 +644,18 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
+    } else if (webSearchEnabled !== false && entry.requiresCredential === false) {
+      // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama) need
+      // no API key — report ready rather than the credential-required warning.
+      await prompter.note(
+        [
+          t("wizard.finalize.webSearchKeyFree"),
+          "",
+          t("wizard.finalize.webSearchProvider", { provider: label }),
+          t("wizard.finalize.webDocs"),
+        ].join("\n"),
+        t("wizard.finalize.webSearchTitle"),
+      );
     } else if (webSearchEnabled !== false && hasCredential) {
       await prompter.note(
         [
@@ -656,7 +667,7 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
-    } else if (!hasCredential) {
+    } else if (entry.requiresCredential !== false && !hasCredential) {
       await prompter.note(
         [
           t("wizard.finalize.webSearchNoKey", { provider: label }),

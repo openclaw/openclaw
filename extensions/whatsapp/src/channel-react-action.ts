@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements channel react action behavior.
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import {
   isWhatsAppGroupJid,
@@ -243,5 +244,3 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     params.cfg,
   );
 }
-
-export const handleWhatsAppReactAction = handleWhatsAppMessageAction;

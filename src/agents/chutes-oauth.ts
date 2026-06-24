@@ -1,6 +1,11 @@
+/**
+ * Implements Chutes OAuth PKCE, callback parsing, token exchange, and refresh
+ * for agent model authentication.
+ */
 import { createHash, randomBytes } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -17,6 +22,7 @@ type ChutesUserInfo = {
   created_at?: string;
 };
 
+/** OAuth client settings for the Chutes authorization-code flow. */
 export type ChutesOAuthAppConfig = {
   clientId: string;
   clientSecret?: string;
@@ -28,12 +34,14 @@ type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
 
+/** Generates a PKCE verifier/challenge pair for Chutes login. */
 export function generateChutesPkce(): ChutesPkce {
   const verifier = randomBytes(32).toString("hex");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
 
+/** Parses pasted Chutes redirect input and enforces the expected OAuth state. */
 export function parseOAuthCallbackInput(
   input: string,
   expectedState: string,
@@ -81,9 +89,18 @@ export function parseOAuthCallbackInput(
   return { code, state };
 }
 
-function coerceExpiresAt(expiresInSeconds: number, now: number): number {
-  const value = now + Math.max(0, Math.floor(expiresInSeconds)) * 1000 - DEFAULT_EXPIRES_BUFFER_MS;
-  return Math.max(value, now + 30_000);
+function resolveChutesExpiresAt(value: unknown, now: number): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(value, {
+    nowMs: now,
+    bufferMs: DEFAULT_EXPIRES_BUFFER_MS,
+    minRemainingMs: 30_000,
+  });
+}
+
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 async function fetchChutesUserInfo(params: {
@@ -95,6 +112,7 @@ async function fetchChutesUserInfo(params: {
     headers: { Authorization: `Bearer ${params.accessToken}` },
   });
   if (!response.ok) {
+    await cancelUnreadResponseBody(response);
     return null;
   }
   const data = (await response.json()) as unknown;
@@ -105,6 +123,7 @@ async function fetchChutesUserInfo(params: {
   return typed;
 }
 
+/** Exchanges an authorization code for stored Chutes OAuth credentials. */
 export async function exchangeChutesCodeForTokens(params: {
   app: ChutesOAuthAppConfig;
   code: string;
@@ -144,7 +163,7 @@ export async function exchangeChutesCodeForTokens(params: {
 
   const access = data.access_token?.trim();
   const refresh = data.refresh_token?.trim();
-  const expiresIn = data.expires_in ?? 0;
+  const expires = resolveChutesExpiresAt(data.expires_in, now);
 
   if (!access) {
     throw new Error("Chutes token exchange returned no access_token");
@@ -152,19 +171,23 @@ export async function exchangeChutesCodeForTokens(params: {
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
+  if (expires === undefined) {
+    throw new Error("Chutes token exchange returned invalid expires_in");
+  }
 
   const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
 
   return {
     access,
     refresh,
-    expires: coerceExpiresAt(expiresIn, now),
+    expires,
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
   } as unknown as ChutesStoredOAuth;
 }
 
+/** Refreshes stored Chutes OAuth credentials, preserving refresh tokens when absent. */
 export async function refreshChutesTokens(params: {
   credential: ChutesStoredOAuth;
   fetchFn?: typeof fetch;
@@ -210,18 +233,22 @@ export async function refreshChutesTokens(params: {
   };
   const access = data.access_token?.trim();
   const newRefresh = data.refresh_token?.trim();
-  const expiresIn = data.expires_in ?? 0;
+  const expires = resolveChutesExpiresAt(data.expires_in, now);
 
   if (!access) {
     throw new Error("Chutes token refresh returned no access_token");
+  }
+  if (expires === undefined) {
+    throw new Error("Chutes token refresh returned invalid expires_in");
   }
 
   return {
     ...params.credential,
     access,
-    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
+    // RFC 6749 section 6 makes new refresh tokens optional; Chutes may omit one
+    // on refresh, so preserve the old token unless a replacement is returned.
     refresh: newRefresh || refreshToken,
-    expires: coerceExpiresAt(expiresIn, now),
+    expires,
     clientId,
   } as unknown as ChutesStoredOAuth;
 }

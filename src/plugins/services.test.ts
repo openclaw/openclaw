@@ -1,3 +1,4 @@
+// Covers plugin service registration and lookup behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -367,6 +368,23 @@ describe("startPluginServices", () => {
 
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
+    const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
+      contexts: officialDiagnosticsOtelContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry(
+        [officialDiagnosticsOtelService],
+        "diagnostics-otel",
+        "config",
+        true,
+      ),
+      config: createServiceConfig(),
+    });
+
+    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {

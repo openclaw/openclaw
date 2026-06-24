@@ -1,8 +1,8 @@
+// Test project script tests cover fixture project discovery and validation.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const {
   applyParallelVitestCachePaths,
@@ -107,25 +107,32 @@ const {
   ) => number;
 };
 
-const require = createRequire(import.meta.url);
-const resolveExpectedVitestCliEntry = () => {
-  const vitestPackageJson = require.resolve("vitest/package.json");
-  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+const runVitestModulePath = "../../scripts/run-vitest.mjs";
+const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
+  runVitestModulePath
+)) as unknown as {
+  resolveVitestCliEntry: () => string;
+  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
 };
-const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
-  ["1", "true", "yes", "on"].includes(
-    env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "",
-  )
-    ? []
-    : ["--no-maglev"];
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
-  ...resolveExpectedVitestNodeArgs(process.env),
-  resolveExpectedVitestCliEntry(),
+  ...resolveVitestNodeArgs(process.env),
+  resolveVitestCliEntry(),
 ];
 
 describe("test-projects args", () => {
+  beforeAll(() => {
+    for (const target of [
+      "src/gateway/gateway-connection.test-mocks.ts",
+      "extensions/memory-core/src/memory/test-runtime-mocks.ts",
+      "test/helpers/temp-dir.ts",
+      "src/commands/onboard-non-interactive.test-helpers.ts",
+    ]) {
+      buildVitestRunPlans([target]);
+    }
+  });
+
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
       forwardedArgs: ["src/foo.test.ts", "-t", "target"],
@@ -282,6 +289,17 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes fake-timer unit-fast targets to the serial fake-timer config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
         watchMode: false,
       },
     ]);
@@ -497,25 +515,29 @@ describe("test-projects args", () => {
     ).toBe(1);
   });
 
-  it("keeps conservative core full-suite runs on aggregate shards", () => {
+  it("keeps conservative local full-suite runs on leaf project configs", () => {
     const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
     const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
     const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const originalLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const originalCi = process.env.CI;
+    const originalActions = process.env.GITHUB_ACTIONS;
     try {
       process.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
       delete process.env.OPENCLAW_TEST_WORKERS;
       delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
       delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      delete process.env.CI;
+      delete process.env.GITHUB_ACTIONS;
 
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
-      expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-      expect(configs).toContain("test/vitest/vitest.full-core-support-boundary.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.boundary.config.ts");
-      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");
+      expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
+      expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+      expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
     } finally {
       if (originalVitestMaxWorkers === undefined) {
         delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
@@ -536,6 +558,16 @@ describe("test-projects args", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = originalLeafShards;
+      }
+      if (originalCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = originalCi;
+      }
+      if (originalActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = originalActions;
       }
     }
   });
@@ -586,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -643,25 +675,36 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("widens non-test helper file targets to sibling tests inside the routed suite", () => {
+  it("routes non-test helper file targets to importing tests inside the routed suites", () => {
     expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
       {
         config: "test/vitest/vitest.gateway.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/gateway/**/*.test.ts"],
+        includePatterns: ["src/gateway/call.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.tui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/tui/gateway-chat.test.ts"],
         watchMode: false,
       },
     ]);
   });
 
-  it("widens extension helper targets to sibling extension tests", () => {
+  it("routes extension helper targets to importing extension tests", () => {
     expect(
       buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
     ).toEqual([
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/memory-core/src/memory/**/*.test.ts"],
+        includePatterns: [
+          "extensions/memory-core/src/memory/index.test.ts",
+          "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
+          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
+        ],
         watchMode: false,
       },
     ]);
@@ -810,12 +853,92 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("widens top-level test helpers to sibling repo tests under contracts", () => {
+  it("routes top-level test helpers to importing repo tests", () => {
     expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/install-sh-version.test.ts",
+          "src/proxy-capture/store.sqlite.test.ts",
+          "test/scripts/android-version.test.ts",
+          "test/scripts/resolve-openclaw-ref.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/entry.compile-cache.test.ts"],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/helpers/**/*.test.ts"],
+        includePatterns: [
+          "src/scripts/docs-link-audit.test.ts",
+          "src/scripts/sync-plugin-versions.test.ts",
+          "test/helpers/temp-dir.test.ts",
+          "test/scripts/android-pin-version.test.ts",
+          "test/scripts/bench-cli-startup.test.ts",
+          "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/check-workflows.test.ts",
+          "test/scripts/ci-hydrate-testbox-env.test.ts",
+          "test/scripts/clawhub-fixture-server.test.ts",
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/config-reload-mutate-metadata.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/docs-list.test.ts",
+          "test/scripts/doctor-install-switch-wrapper.test.ts",
+          "test/scripts/e2e-text-file-utils.test.ts",
+          "test/scripts/fixture-common.test.ts",
+          "test/scripts/fixture-plugin-commands.test.ts",
+          "test/scripts/incremental-line-reader.test.ts",
+          "test/scripts/ios-configure-signing.test.ts",
+          "test/scripts/ios-pin-version.test.ts",
+          "test/scripts/ios-team-id.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/kitchen-sink-rpc-walk.test.ts",
+          "test/scripts/onboard-config-fixtures.test.ts",
+          "test/scripts/parallels-lib-helpers.test.ts",
+          "test/scripts/parallels-smoke-model.test.ts",
+          "test/scripts/plugin-package-dependencies.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/proxy-install-ca.test.ts",
+          "test/scripts/release-preflight.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
+          "test/scripts/report-test-temp-creations.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
+          "test/scripts/test-projects.test.ts",
+          "test/test-env.test.ts",
+          "test/vitest-scoped-config.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/status.scan.shared.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/agents/models-config.file-mode.test.ts",
+          "src/agents/sandbox/ssh.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        forwardedArgs: [
+          "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
+          "test/openclaw-launcher.e2e.test.ts",
+        ],
+        includePatterns: null,
         watchMode: false,
       },
     ]);
@@ -879,11 +1002,11 @@ describe("test-projects args", () => {
   });
 
   it("routes direct OpenAI provider extension file targets to the OpenAI provider config", () => {
-    expect(buildVitestRunPlans(["extensions/openai/openai-codex-provider.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["extensions/openai/openai-chatgpt-provider.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.extension-provider-openai.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/openai/openai-codex-provider.test.ts"],
+        includePatterns: ["extensions/openai/openai-chatgpt-provider.test.ts"],
         watchMode: false,
       },
     ]);
@@ -913,6 +1036,25 @@ describe("test-projects args", () => {
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
     ).toStrictEqual([]);
+  });
+
+  it("routes auth setup script changes to the focused auth monitor test", () => {
+    const changedPaths = ["scripts/setup-auth-system.sh"];
+
+    expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/auth-monitor.test.ts"],
+    });
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/auth-monitor.test.ts"],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {
@@ -1063,6 +1205,43 @@ describe("test-projects args", () => {
       fs.writeFileSync(path.join(tempDir, "src", "new.test.ts"), "test('new', () => {});\n");
 
       expect(findUnmatchedExplicitTestTargets(["src/new.test.ts"], tempDir)).toEqual([]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes explicit test-support helper files to affected tests", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(["src/commands/onboard-non-interactive.test-helpers.ts"]),
+    ).toEqual([]);
+
+    expect(buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("rejects explicit test-support helper files with no importing tests", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, "src", "lonely", "runtime.test-helpers.ts"),
+        "export {};\n",
+      );
+
+      expect(
+        findUnmatchedExplicitTestTargets(["src/lonely/runtime.test-helpers.ts"], tempDir),
+      ).toEqual([
+        {
+          target: "src/lonely/runtime.test-helpers.ts",
+          reason: "target-matched-no-test-files",
+        },
+      ]);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

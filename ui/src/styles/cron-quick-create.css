@@ -202,7 +202,7 @@
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.cqc-textarea:focus {
+.cqc-textarea:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);
@@ -241,7 +241,7 @@
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.cqc-input:focus {
+.cqc-input:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);

@@ -1,23 +1,41 @@
+// `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
-import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
-import { formatCliCommand } from "./command-format.js";
-import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
-import { formatPluginLine } from "./plugins-list-format.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
+/** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
   verbose?: boolean;
 };
 
+async function loadHumanListModules() {
+  const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
+    import("../plugins/source-display.js"),
+    import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/theme.js"),
+    import("./command-format.js"),
+    import("./plugins-list-format.js"),
+  ]);
+
+  return {
+    formatPluginLine: listFormat.formatPluginLine,
+    formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
+    formatCliCommand: commandFormat.formatCliCommand,
+    getTerminalTableWidth: table.getTerminalTableWidth,
+    renderTable: table.renderTable,
+    resolvePluginSourceRoots: sourceDisplay.resolvePluginSourceRoots,
+    theme: themeModule.theme,
+  };
+}
+
+/** Render installed plugin discovery state as JSON, compact table, or verbose text. */
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
+  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
   const cfg = getRuntimeConfig();
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
@@ -38,6 +56,16 @@ export async function runPluginsListCommand(
     writeRuntimeJson(runtime, payload);
     return;
   }
+
+  const {
+    formatCliCommand,
+    formatPluginLine,
+    formatPluginSourceForTable,
+    getTerminalTableWidth,
+    renderTable,
+    resolvePluginSourceRoots,
+    theme,
+  } = await loadHumanListModules();
 
   if (list.length === 0) {
     runtime.log(

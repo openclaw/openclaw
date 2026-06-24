@@ -1,3 +1,4 @@
+// Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
@@ -125,6 +126,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
+      deep: false,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

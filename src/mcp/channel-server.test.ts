@@ -1,3 +1,4 @@
+// Channel MCP server tests cover channel tool registration and requests.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
@@ -217,6 +218,37 @@ describe("openclaw channel mcp server", () => {
         ).toBe(true);
       });
 
+      test("clamps direct bridge session limits to the public MCP windows", async () => {
+        const sessionKey = "agent:main:main";
+        const gatewayRequest = vi.fn(async (method: string) => {
+          if (method === "sessions.list") {
+            return { sessions: [] };
+          }
+          if (method === "sessions.get") {
+            return { messages: [] };
+          }
+          throw new Error(`unexpected gateway method ${method}`);
+        });
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        attachReadyGateway(bridge, gatewayRequest);
+
+        await bridge.listConversations({ limit: 10_000 });
+        await bridge.readMessages(sessionKey, 10_000);
+
+        expect(gatewayRequest).toHaveBeenNthCalledWith(
+          1,
+          "sessions.list",
+          expect.objectContaining({ limit: 500 }),
+        );
+        expect(gatewayRequest).toHaveBeenNthCalledWith(2, "sessions.get", {
+          key: sessionKey,
+          limit: 200,
+        });
+      });
+
       test("serializes conversation and message payloads into MCP primary content", async () => {
         const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
         try {
@@ -268,7 +300,7 @@ describe("openclaw channel mcp server", () => {
 
       test("emits Claude channel and permission notifications", async () => {
         const sessionKey = "agent:main:main";
-        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
+        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null | undefined;
         try {
           const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
           const permissionNotifications: Array<{
@@ -489,14 +521,10 @@ describe("openclaw channel mcp server", () => {
 
       (
         bridge as unknown as {
-          pendingClaudePermissions: Map<string, Record<string, unknown>>;
+          pendingClaudePermissions: Map<string, number>;
           server: { server: { notification: ReturnType<typeof vi.fn> } };
         }
-      ).pendingClaudePermissions.set("abcde", {
-        toolName: "Bash",
-        description: "run npm test",
-        inputPreview: '{"cmd":"npm test"}',
-      });
+      ).pendingClaudePermissions.set("abcde", Date.now());
       (
         bridge as unknown as {
           server: { server: { notification: ReturnType<typeof vi.fn> } };

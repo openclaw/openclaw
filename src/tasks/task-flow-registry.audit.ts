@@ -1,8 +1,10 @@
+// Produces task-flow registry audit summaries for diagnostics and maintenance.
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+/** Severity used by task-flow registry audit findings. */
 export type TaskFlowAuditSeverity = "warn" | "error";
 export type TaskFlowAuditCode =
   | "restore_failed"
@@ -29,7 +31,7 @@ export type TaskFlowAuditSummary = {
   byCode: Record<TaskFlowAuditCode, number>;
 };
 
-export type TaskFlowAuditOptions = {
+type TaskFlowAuditOptions = {
   now?: number;
   flows?: TaskFlowRecord[];
   staleRunningMs?: number;
@@ -118,7 +120,7 @@ function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding 
   return null;
 }
 
-export function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
+function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
   return {
     total: 0,
     warnings: 0,

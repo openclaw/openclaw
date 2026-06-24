@@ -19,7 +19,15 @@ Recommended: use the built-in uninstaller:
 openclaw uninstall
 ```
 
-Non-interactive (automation / npx):
+When using the CLI, state removal preserves configured workspace directories unless you also select `--workspace`.
+
+Preview what will be removed (safe):
+
+```bash
+openclaw uninstall --dry-run --all
+```
+
+Non-interactive (automation / npx). Use with caution and only after confirming scopes:
 
 ```bash
 openclaw uninstall --all --yes --non-interactive
@@ -47,6 +55,7 @@ rm -rf "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 ```
 
 If you set `OPENCLAW_CONFIG_PATH` to a custom location outside the state dir, delete that file too.
+If you want to keep a workspace inside the state dir, such as `~/.openclaw/workspace`, move it aside before running `rm -rf` or delete state contents selectively.
 
 4. Delete your workspace (optional, removes agent files):
 
@@ -101,14 +110,18 @@ systemctl --user daemon-reload
 ### Windows (Scheduled Task)
 
 Default task name is `OpenClaw Gateway` (or `OpenClaw Gateway (<profile>)`).
-The task script lives under your state dir.
+The task script lives under your state dir as `gateway.cmd`; current installs may
+also create a windowless `gateway.vbs` launcher that Task Scheduler runs instead
+of opening `gateway.cmd` directly.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
-Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
+Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd" -ErrorAction SilentlyContinue
+Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.vbs" -ErrorAction SilentlyContinue
 ```
 
-If you used a profile, delete the matching task name and `~\.openclaw-<profile>\gateway.cmd`.
+If you used a profile, delete the matching task name and the `gateway.cmd` /
+`gateway.vbs` files under `~\.openclaw-<profile>`.
 
 ## Normal install vs source checkout
 

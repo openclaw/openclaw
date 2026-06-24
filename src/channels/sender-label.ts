@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Sender display-label helpers shared by channel ingress and audit surfaces.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type SenderLabelParams = {
   name?: string;
@@ -18,6 +19,7 @@ function normalizeSenderLabelParams(params: SenderLabelParams) {
   };
 }
 
+/** Resolves the best one-line sender label from available identity fields. */
 export function resolveSenderLabel(params: SenderLabelParams): string | null {
   const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
 
@@ -27,30 +29,4 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
     return `${display} (${idPart})`;
   }
   return display || idPart || null;
-}
-
-export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
-  const candidates = new Set<string>();
-  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
-
-  if (name) {
-    candidates.add(name);
-  }
-  if (username) {
-    candidates.add(username);
-  }
-  if (tag) {
-    candidates.add(tag);
-  }
-  if (e164) {
-    candidates.add(e164);
-  }
-  if (id) {
-    candidates.add(id);
-  }
-  const resolved = resolveSenderLabel(params);
-  if (resolved) {
-    candidates.add(resolved);
-  }
-  return Array.from(candidates);
 }

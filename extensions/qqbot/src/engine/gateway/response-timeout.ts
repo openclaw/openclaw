@@ -1,3 +1,9 @@
+// Qqbot plugin module implements response timeout behavior.
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+} from "openclaw/plugin-sdk/number-runtime";
+
 /**
  * QQBot outbound response watchdog timeout resolver.
  *
@@ -18,7 +24,7 @@
  *   already configured:
  *     - `agents.defaults.timeoutSeconds`
  *     - `models.providers.<id>.timeoutSeconds` (max across configured providers)
- *   Take the maximum and clamp to `[DEFAULT_RESPONSE_TIMEOUT_MS, MAX_SAFE_TIMEOUT_MS]`.
+ *   Take the maximum and clamp to `[DEFAULT_RESPONSE_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS]`.
  *   The default floor preserves the existing 5-minute guard for users
  *   that have not configured any longer ceiling — i.e. a no-op for
  *   typical cloud-model deployments.
@@ -29,14 +35,7 @@
  * present. Preserves the historical 5-minute guard for unconfigured
  * deployments.
  */
-export const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
-
-/**
- * Upper bound to keep the watchdog inside the safe `setTimeout` range
- * (approximately 24.8 days). Mirrors `MAX_SAFE_TIMEOUT_MS` in
- * `src/agents/embedded-agent-runner/run/llm-idle-timeout.ts`.
- */
-const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
 
 interface AgentsDefaultsLike {
   timeoutSeconds?: unknown;
@@ -59,13 +58,6 @@ interface CfgShape {
   models?: ModelsBlockLike;
 }
 
-function positiveSecondsToMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value * 1000);
-}
-
 /**
  * Resolve the QQBot outbound response watchdog (ms).
  *
@@ -75,7 +67,7 @@ function positiveSecondsToMs(value: unknown): number | undefined {
  *   - the maximum `cfg.models.providers.<id>.timeoutSeconds` across
  *     configured providers, converted to ms
  *
- * Returns at most `MAX_SAFE_TIMEOUT_MS` so the chosen value is always
+ * Returns at most `MAX_TIMER_TIMEOUT_MS` so the chosen value is always
  * a safe `setTimeout` argument.
  */
 export function resolveResponseTimeoutMs(cfg: unknown): number {
@@ -83,7 +75,9 @@ export function resolveResponseTimeoutMs(cfg: unknown): number {
 
   const typed = (cfg ?? {}) as CfgShape;
 
-  const agentDefaultMs = positiveSecondsToMs(typed.agents?.defaults?.timeoutSeconds);
+  const agentDefaultMs = finiteSecondsToTimerSafeMilliseconds(
+    typed.agents?.defaults?.timeoutSeconds,
+  );
   if (agentDefaultMs !== undefined) {
     candidates.push(agentDefaultMs);
   }
@@ -91,7 +85,7 @@ export function resolveResponseTimeoutMs(cfg: unknown): number {
   const providers = typed.models?.providers;
   if (providers && typeof providers === "object") {
     for (const entry of Object.values(providers)) {
-      const providerMs = positiveSecondsToMs(entry?.timeoutSeconds);
+      const providerMs = finiteSecondsToTimerSafeMilliseconds(entry?.timeoutSeconds);
       if (providerMs !== undefined) {
         candidates.push(providerMs);
       }
@@ -99,5 +93,5 @@ export function resolveResponseTimeoutMs(cfg: unknown): number {
   }
 
   const chosen = Math.max(...candidates);
-  return Math.min(chosen, MAX_SAFE_TIMEOUT_MS);
+  return Math.min(chosen, MAX_TIMER_TIMEOUT_MS);
 }

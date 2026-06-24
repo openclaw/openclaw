@@ -1,9 +1,16 @@
+// Gateway Protocol tests cover exec approvals validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateExecApprovalRequestParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "./index.js";
+
+/**
+ * Exec approval validator regressions for gateway and node-scoped policy
+ * writes. The fixtures pin runtime-owned allowlist metadata and command-span
+ * bounds because those contracts are consumed by approval UI and replay logic.
+ */
 
 describe("exec approvals protocol validators", () => {
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
@@ -98,5 +105,28 @@ describe("exec approvals protocol validators", () => {
         commandSpans: [{ startIndex: -1, endIndex: 4 }],
       }),
     ).toBe(false);
+  });
+
+  it("accepts only optional unavailable approval decisions", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        unavailableDecisions: ["allow-always"],
+      }),
+    ).toBe(true);
+
+    for (const unavailableDecisions of [
+      [],
+      ["allow-always", "allow-always"],
+      ["allow-once"],
+      ["deny"],
+    ]) {
+      expect(
+        validateExecApprovalRequestParams({
+          command: "echo hi",
+          unavailableDecisions,
+        }),
+      ).toBe(false);
+    }
   });
 });

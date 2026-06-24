@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native command menu behavior.
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
@@ -586,7 +587,7 @@ export function syncTelegramMenuCommands(params: {
     writeCachedCommandHash(accountId, botIdentity, currentHash);
   };
 
-  void sync().catch((err) => {
+  void sync().catch((err: unknown) => {
     runtime.error?.(`Telegram command sync failed: ${String(err)}`);
   });
 }

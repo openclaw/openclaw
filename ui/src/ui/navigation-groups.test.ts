@@ -1,3 +1,4 @@
+// Control UI tests cover navigation groups behavior.
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_TABS,
@@ -19,6 +20,7 @@ describe("TAB_GROUPS", () => {
     expect(control?.tabs).toEqual([
       "overview",
       "activity",
+      "workboard",
       "instances",
       "sessions",
       "usage",
