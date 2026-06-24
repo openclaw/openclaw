@@ -52,6 +52,7 @@ export function buildGatewaySessionEventFields(params: {
     contextTokens: sessionRow.contextTokens,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,
+    effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     status: sessionRow.status,
