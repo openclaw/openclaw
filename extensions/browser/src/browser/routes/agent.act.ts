@@ -681,21 +681,29 @@ export function registerBrowserAgentActRoutes(
               browserState: result.browserState,
             });
           }
+          const downloads = result.downloads;
           switch (action.kind) {
             case "batch":
               return await jsonOk(
-                { results: result.results ?? [] },
+                { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
                 { resolveCurrentTarget: true },
               );
             case "evaluate":
-              return await jsonOk({ result: result.result }, { resolveCurrentTarget: true });
+              return await jsonOk(
+                { result: result.result, ...(downloads ? { downloads } : {}) },
+                { resolveCurrentTarget: true },
+              );
             case "click":
             case "clickCoords":
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
             case "resize":
               return await jsonOk();
             default:
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
           }
         },
       });

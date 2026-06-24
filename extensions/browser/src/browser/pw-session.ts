@@ -99,9 +99,15 @@ export type BrowserObservedDialogState = {
   recent: BrowserObservedDialogRecord[];
 };
 
+/** Download state that agents can inspect. */
+export type BrowserObservedDownloadState = {
+  recent: RecentPageDownload[];
+};
+
 /** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
+  downloads?: BrowserObservedDownloadState;
 };
 
 /** Raised when an action is blocked by an observed modal dialog. */
@@ -145,6 +151,15 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
+/** A download recorded by the background auto-save handler. */
+export type RecentPageDownload = {
+  suggestedFilename: string;
+  savedPath: string;
+  /** Monotonic sequence number; use as cursor to avoid missing downloads when buffer wraps. */
+  seq: number;
+  timestampMs: number;
+};
+
 type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
@@ -154,6 +169,12 @@ type PageState = {
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
+  /** Downloads auto-saved by the background handler (not waiter-managed). */
+  recentDownloads: RecentPageDownload[];
+  /** Monotonic counter incremented each time a download save completes. */
+  downloadSeq: number;
+  /** Promises tracking in-flight auto-save completions so callers can await them. */
+  downloadSavePromises: Array<Promise<void>>;
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
   recentDialogs: BrowserObservedDialogRecord[];
@@ -194,6 +215,7 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 const MAX_RECENT_DIALOGS = 20;
+const MAX_RECENT_DOWNLOADS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
@@ -299,6 +321,8 @@ function serializeObservedBrowserState(state: PageState): BrowserObservedState {
       pending: state.pendingDialogs.map(serializePendingDialog),
       recent: state.recentDialogs.map(serializeDialogRecord),
     },
+    downloads:
+      state.recentDownloads.length > 0 ? { recent: state.recentDownloads.slice() } : undefined,
   };
 }
 
@@ -603,6 +627,9 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDownload: 0,
     downloadWaiterDepth: 0,
+    recentDownloads: [],
+    downloadSeq: 0,
+    downloadSavePromises: [],
     nextObservedDialogId: 0,
     pendingDialogs: [],
     recentDialogs: [],
@@ -693,6 +720,7 @@ export function ensurePageState(page: Page): PageState {
           "download.bin",
         );
         const managedPath = buildManagedDownloadPath(suggested);
+        const seq = ++state.downloadSeq;
         const managedSave = (async () => {
           await writeViaSiblingTempPath({
             rootDir: DEFAULT_DOWNLOAD_DIR,
@@ -701,9 +729,28 @@ export function ensurePageState(page: Page): PageState {
               await download.saveAs?.(tempPath);
             },
           });
+          state.recentDownloads.push({
+            suggestedFilename: suggested,
+            savedPath: managedPath,
+            seq,
+            timestampMs: Date.now(),
+          });
+          if (state.recentDownloads.length > MAX_RECENT_DOWNLOADS) {
+            state.recentDownloads.shift();
+          }
           return managedPath;
         })();
-        managedSave.catch(() => {});
+        // Track the save promise so callers can drain pending saves
+        // before sampling recentDownloads (avoids the saveAs race).
+        state.downloadSavePromises.push(
+          managedSave.then(
+            () => {},
+            () => {},
+          ),
+        );
+        if (state.downloadSavePromises.length > MAX_RECENT_DOWNLOADS) {
+          state.downloadSavePromises = state.downloadSavePromises.slice(-MAX_RECENT_DOWNLOADS);
+        }
         download.path = async () => await managedSave;
       },
     );
