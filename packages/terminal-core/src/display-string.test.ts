@@ -23,5 +23,8 @@ describe("displayString", () => {
       `path=${path.join("$OPENCLAW_HOME", "project")}`,
     );
     expect(displayString(`${home}ice${path.sep}project`)).toBe(`${home}ice${path.sep}project`);
+    expect(displayString(`${home}+logs`)).toBe(`${home}+logs`);
+    expect(displayString(`${home}@logs`)).toBe(`${home}@logs`);
+    expect(displayString(`${home}:logs`)).toBe(`${home}:logs`);
   });
 });

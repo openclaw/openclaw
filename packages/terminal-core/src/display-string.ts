@@ -81,8 +81,12 @@ function hasPathBoundaryBefore(input: string, index: number): boolean {
   return index === 0 || !isPathSegmentChar(input[index - 1]);
 }
 
+function isPathSeparator(char: string | undefined): boolean {
+  return char === "/" || char === "\\";
+}
+
 function hasPathBoundaryAfter(input: string, index: number): boolean {
-  return index >= input.length || !isPathSegmentChar(input[index]);
+  return index >= input.length || isPathSeparator(input[index]);
 }
 
 function replaceHomePath(input: string, home: string, prefix: string): string {
