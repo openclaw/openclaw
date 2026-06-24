@@ -158,6 +158,31 @@ type ExecuteJobCoreOptions = {
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 };
 
+/**
+ * Carries the already-resolved run attribution from watchdog-visible execution
+ * state into a timer-built error outcome. The wall-clock/cancel paths return
+ * their own outcome (the inner run result loses the Promise.race), so without
+ * this the persisted cron_run_logs row drops provider/model/session for a
+ * post-runner timeout or cancel even though they were already known. Stays
+ * empty before the runner starts, so pre-execution setup timeouts read blank.
+ */
+function cronRunAttributionFromExecution(execution?: CronAgentExecutionStarted): {
+  provider?: string;
+  model?: string;
+  sessionId?: string;
+  sessionKey?: string;
+} {
+  if (!execution) {
+    return {};
+  }
+  return {
+    provider: execution.provider,
+    model: execution.model,
+    sessionId: execution.sessionId,
+    sessionKey: execution.sessionKey,
+  };
+}
+
 /** Executes cron job core logic with the configured wall-clock timeout and watchdog cleanup. */
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
@@ -170,11 +195,12 @@ export async function executeJobCoreWithTimeout(
   const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
     resolveOperatorCancellation = resolve;
   });
-  const createOperatorCancellationOutcome = () => {
+  const createOperatorCancellationOutcome = (execution?: CronAgentExecutionStarted) => {
     const error = abortErrorMessage(runAbortController.signal);
     return {
       status: "error" as const,
       error,
+      ...cronRunAttributionFromExecution(execution),
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
@@ -264,7 +290,7 @@ export async function executeJobCoreWithTimeout(
       const first = await Promise.race([corePromise, timeoutPromise, operatorCancellationPromise]);
       if (first === operatorCancellationMarker) {
         startActiveCronTaskRunSettlementGrace();
-        return createOperatorCancellationOutcome();
+        return createOperatorCancellationOutcome(watchdog.activeExecution());
       }
       if (first !== timeoutMarker) {
         return first;
@@ -285,6 +311,7 @@ export async function executeJobCoreWithTimeout(
       return {
         status: "error",
         error,
+        ...cronRunAttributionFromExecution(activeExecution),
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
           nowMs: state.deps.nowMs,
         }),
