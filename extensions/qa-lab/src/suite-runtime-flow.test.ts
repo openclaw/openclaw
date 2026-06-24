@@ -303,7 +303,7 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });
