@@ -1,3 +1,4 @@
+import type { TlsConnectOptions } from "../../../../src/infra/net/ssrf.ts";
 // Memory Host SDK module implements embeddings remote client behavior.
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
@@ -10,13 +11,6 @@ import { normalizeOptionalString } from "./string-utils.js";
 
 /** Provider id used for remote embedding auth and config lookup. */
 export type RemoteEmbeddingProviderId = string;
-
-/**
- * TLS connect options forwarded to the explicit-proxy dispatcher. Mirrors the
- * ssrf `PinnedDispatcherPolicy.proxyTls` (`Record<string, unknown>`) sink for this
- * value; kept local to avoid a cross-package import into repo-root `src/`.
- */
-export type TlsConnectOptions = Record<string, unknown>;
 
 /** Attribution headers for native OpenAI embedding calls. */
 function resolveOpenClawAttributionHeaders(): Record<string, string> {
@@ -98,5 +92,3 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
 
   return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl), dispatcherPolicy };
 }
-
-export type { TlsConnectOptions } from "./ssrf-policy.js";

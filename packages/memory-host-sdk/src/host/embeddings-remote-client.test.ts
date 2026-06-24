@@ -54,4 +54,48 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       "User-Agent": "openclaw/2026.3.22",
     });
   });
+
+  it("passes through explicit proxy URL and TLS config", async () => {
+    const client = await resolveRemoteEmbeddingBearerClient({
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      options: {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                request: {
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://proxy.example.test:8080",
+                    tls: {
+                      ca: "test-ca",
+                      cert: "test-cert",
+                      key: "test-key",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as never,
+        model: "text-embedding-3-small",
+        remote: {
+          apiKey: "sk-test",
+        },
+      },
+    });
+
+    expect(client.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://proxy.example.test:8080",
+      allowPrivateProxy: true,
+      proxyTls: {
+        ca: "test-ca",
+        cert: "test-cert",
+        key: "test-key",
+      },
+    });
+  });
 });
