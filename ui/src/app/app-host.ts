@@ -1,4 +1,4 @@
-import { ContextProvider } from "@lit/context";
+import { consume, ContextProvider } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { SessionsListResult } from "../api/types.ts";
@@ -160,14 +160,15 @@ export class OpenClawApp extends LitElement {
     }
     return html`
       ${gatewayUrlConfirmation}
-      <openclaw-app-shell .runtime=${runtime} .context=${context}></openclaw-app-shell>
+      <openclaw-app-shell .runtime=${runtime}></openclaw-app-shell>
     `;
   }
 }
 
 class OpenClawShell extends LitElement {
   @property({ attribute: false }) runtime?: ApplicationRuntime;
-  @property({ attribute: false }) context?: ApplicationContext<RouteId>;
+  @consume({ context: applicationContext, subscribe: false })
+  private context?: ApplicationContext<RouteId>;
 
   @state() private navCollapsed = false;
   @state() private navGroupsCollapsed: Record<string, boolean> = {};
