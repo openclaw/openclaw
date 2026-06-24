@@ -20,6 +20,8 @@ export function registerGroupIntroPromptCases(): void {
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const telegramGroupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
+    const channelParticipationNote =
+      "Be a good channel participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
@@ -132,6 +134,26 @@ export function registerGroupIntroPromptCases(): void {
           "Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.",
           groupSilentProseGuard,
         ],
+        defaultActivation: "always",
+      },
+      {
+        name: "mattermost-channel-always-on",
+        message: {
+          Body: "hello channel",
+          From: "mattermost:channel:town-square",
+          To: "+2001",
+          ChatType: "channel",
+          Provider: "mattermost",
+          SenderE164: "+2001",
+          GroupSubject: "Town Square",
+          GroupMembers: "Alice, Bob",
+        },
+        expected: [
+          "You are in a Mattermost channel.",
+          channelParticipationNote,
+          "Activation: always-on (you receive every channel message).",
+        ],
+        forbidden: ["Mattermost group chat", "this group chat", "every group message"],
         defaultActivation: "always",
       },
     ];

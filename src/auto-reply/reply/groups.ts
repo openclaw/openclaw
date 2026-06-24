@@ -348,7 +348,7 @@ export function resolveGroupSilentReplyBehavior(params: {
   };
 }
 
-/** Builds the channel-specific group intro injected into the system prompt. */
+/** Builds the group/channel intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -358,9 +358,10 @@ export function buildGroupIntro(params: {
   silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
+  const messageTypeLabel = params.sessionCtx.ChatType === "channel" ? "channel" : "group";
   const activationLine =
     activation === "always"
-      ? "Activation: always-on (you receive every group message)."
+      ? `Activation: always-on (you receive every ${messageTypeLabel} message).`
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   return `${activationLine} Address the specific sender noted in the message context.`;
 }
