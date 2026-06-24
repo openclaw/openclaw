@@ -640,10 +640,8 @@ describe("GatewayChatClient", () => {
     vi.resetModules();
     vi.doMock("../gateway/client.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("../gateway/client.js")>();
-      class ThrowingGatewayClient {
-        constructor() {
-          throw new Error("device identity failed");
-        }
+      function ThrowingGatewayClient() {
+        throw new Error("device identity failed");
       }
       return { ...actual, GatewayClient: ThrowingGatewayClient };
     });
