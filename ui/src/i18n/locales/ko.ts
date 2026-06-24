@@ -1320,6 +1320,8 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryLabel: "Commentary",
     autoScrollMode: "자동 스크롤 모드",
     autoScrollAlways: "항상",
     autoScrollNearBottom: "하단 근처",

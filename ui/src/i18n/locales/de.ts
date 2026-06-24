@@ -1340,6 +1340,8 @@ export const de: TranslationMap = {
     settings: "Chat-Einstellungen",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
+    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryLabel: "Commentary",
     autoScrollMode: "Automatischer Scrollmodus",
     autoScrollAlways: "Immer",
     autoScrollNearBottom: "Nahe am unteren Rand",
