@@ -172,12 +172,27 @@ function classifySessionEntry(
   };
 }
 
+function readParentSessionKeys(entry: SessionEntry | undefined): string[] {
+  const keys = new Set<string>();
+  for (const value of [entry?.parentSessionKey, entry?.spawnedBy]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+  return [...keys];
+}
+
 function collectCronGeneratedSessionKeys(
   summaries: readonly SessionEntrySummary[],
 ): ReadonlySet<string> {
   const entriesByKey = new Map(summaries.map((summary) => [summary.sessionKey, summary.entry]));
   const cronGeneratedKeys = new Set<string>();
   const cache = new Map<string, boolean>();
+  const resolving = new Set<string>();
 
   const isCronGenerated = (sessionKey: string, entry: SessionEntry | undefined): boolean => {
     if (isCronRunSessionKey(sessionKey)) {
@@ -189,14 +204,16 @@ function collectCronGeneratedSessionKeys(
     if (cached !== undefined) {
       return cached;
     }
+    if (resolving.has(sessionKey)) {
+      return false;
+    }
 
-    // Store a temporary false before following parent links so cyclic
-    // spawnedBy chains terminate without classifying the cycle as cron.
-    cache.set(sessionKey, false);
-    const parentKey = typeof entry?.spawnedBy === "string" ? entry.spawnedBy.trim() : "";
-    const generated =
-      parentKey.length > 0 &&
-      (isCronRunSessionKey(parentKey) || isCronGenerated(parentKey, entriesByKey.get(parentKey)));
+    resolving.add(sessionKey);
+    const generated = readParentSessionKeys(entry).some(
+      (parentKey) =>
+        isCronRunSessionKey(parentKey) || isCronGenerated(parentKey, entriesByKey.get(parentKey)),
+    );
+    resolving.delete(sessionKey);
     cache.set(sessionKey, generated);
     if (generated) {
       cronGeneratedKeys.add(sessionKey);

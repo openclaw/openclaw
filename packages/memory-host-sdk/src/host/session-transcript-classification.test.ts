@@ -91,6 +91,34 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
     expect(result.cronRunTranscriptPaths.size).toBe(3);
   });
 
+  it("classifies parentSessionKey descendants of a cron parent", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronSession = path.join(sessionsDir, "cron-run.jsonl");
+    const childSession = path.join(sessionsDir, "child.jsonl");
+    const grandchildSession = path.join(sessionsDir, "grandchild.jsonl");
+    for (const filePath of [cronSession, childSession, grandchildSession]) {
+      fsSync.writeFileSync(filePath, "");
+    }
+    writeSessionStore(sessionsDir, {
+      "agent:main:cron:job-1:run:run-1": { sessionFile: cronSession },
+      "agent:main:child:one": {
+        parentSessionKey: "agent:main:cron:job-1:run:run-1",
+        sessionFile: childSession,
+      },
+      "agent:main:child:two": {
+        parentSessionKey: "agent:main:child:one",
+        sessionFile: grandchildSession,
+      },
+    });
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+
+    expect(result.cronRunTranscriptPaths).toEqual(
+      new Set([cronSession, childSession, grandchildSession]),
+    );
+  });
+
   it("does not classify a normal subagent with no cron ancestry", () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });

@@ -91,6 +91,8 @@ export type ResolvedSessionTranscriptIdentity = {
 type SessionTranscriptStoreEntry = {
   sessionFile?: unknown;
   sessionId?: unknown;
+  /** Explicit parent session key for current child-session linkage. */
+  parentSessionKey?: unknown;
   /** Parent session key that spawned this session, for cron-parentage chain walks. */
   spawnedBy?: unknown;
 };
@@ -248,6 +250,20 @@ function resolveSessionStoreTranscriptResolvedPath(
   return null;
 }
 
+function readParentSessionKeys(entry: SessionTranscriptStoreEntry | undefined): string[] {
+  const keys = new Set<string>();
+  for (const value of [entry?.parentSessionKey, entry?.spawnedBy]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+  return [...keys];
+}
+
 function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
   const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
   const sessionsIndex = parts.length - 1;
@@ -282,10 +298,11 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
 
-  // Walk the spawnedBy chain to determine if a session is cron-descended.
+  // Walk persisted parent links to determine if a session is cron-descended.
   // Handles transitive parentage: a subagent spawned by another subagent
   // that was spawned by a cron run inherits the cron classification.
   const cronCache = new Map<string, boolean>();
+  const resolvingCronKeys = new Set<string>();
   function isCronSession(sessionKey: string, entry: SessionTranscriptStoreEntry): boolean {
     if (isCronRunSessionKey(sessionKey)) {
       cronCache.set(sessionKey, true);
@@ -295,24 +312,21 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     if (cached !== undefined) {
       return cached;
     }
-    // Mark as not-yet-resolved to guard against cycles.
-    cronCache.set(sessionKey, false);
-    if (typeof entry.spawnedBy === "string" && entry.spawnedBy.trim().length > 0) {
-      // Check the spawnedBy key directly before requiring a parent store entry:
-      // a subagent whose spawnedBy is already a cron-run key is cron-descended
-      // even when the parent row has been pruned or was never in this store.
-      if (isCronRunSessionKey(entry.spawnedBy)) {
-        cronCache.set(sessionKey, true);
+    if (resolvingCronKeys.has(sessionKey)) {
+      return false;
+    }
+    resolvingCronKeys.add(sessionKey);
+    const result = readParentSessionKeys(entry).some((parentKey) => {
+      // Direct cron parent keys are enough even when the parent row was pruned.
+      if (isCronRunSessionKey(parentKey)) {
         return true;
       }
-      const parentEntry = store[entry.spawnedBy];
-      if (parentEntry) {
-        const result = isCronSession(entry.spawnedBy, parentEntry);
-        cronCache.set(sessionKey, result);
-        return result;
-      }
-    }
-    return false;
+      const parentEntry = store[parentKey];
+      return parentEntry ? isCronSession(parentKey, parentEntry) : false;
+    });
+    resolvingCronKeys.delete(sessionKey);
+    cronCache.set(sessionKey, result);
+    return result;
   }
 
   for (const [sessionKey, entry] of Object.entries(store)) {

@@ -162,6 +162,56 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
   });
 
+  it("classifies active entries through parentSessionKey cron ancestry", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronPath = path.join(sessionsDir, "cron-run.jsonl");
+    const childPath = path.join(sessionsDir, "cron-child.jsonl");
+    const grandchildPath = path.join(sessionsDir, "cron-grandchild.jsonl");
+    for (const filePath of [cronPath, childPath, grandchildPath]) {
+      fsSync.writeFileSync(filePath, "");
+    }
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+        "agent:main:child:one": {
+          parentSessionKey: "agent:main:cron:job-1:run:run-1",
+          sessionFile: "cron-child.jsonl",
+          sessionId: "cron-child",
+        },
+        "agent:main:child:two": {
+          parentSessionKey: "agent:main:child:one",
+          sessionFile: "cron-grandchild.jsonl",
+          sessionId: "cron-grandchild",
+        },
+      }),
+    );
+
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([cronPath, childPath, grandchildPath].map((filePath) => path.resolve(filePath))),
+    );
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: childPath,
+          sessionKey: "agent:main:child:one",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: grandchildPath,
+          sessionKey: "agent:main:child:two",
+        }),
+      ]),
+    );
+  });
+
   it("keeps archive classification when the active transcript is missing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
