@@ -55,6 +55,8 @@ export type TelegramDraftStream = {
   forceNewMessage: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
+  /** Append mode: accumulate text instead of replacing on edit */
+  setAppendMode?: (append: boolean) => void;
 };
 
 export type TelegramDraftPreview = {
@@ -188,6 +190,8 @@ export function createTelegramDraftStream(params: {
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
+  /** Append mode: accumulate text instead of replacing on edit (preserves history) */
+  appendMode?: boolean;
 }): TelegramDraftStream {
   const richMessages = params.richMessages === true;
   const transportLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_STREAM_MAX_CHARS;
@@ -218,6 +222,7 @@ export function createTelegramDraftStream(params: {
         }
       : (threadParams ?? {});
 
+  let appendMode = params.appendMode === true;
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
   let suspendedUntilMs = 0;
@@ -231,6 +236,7 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let accumulatedText = ""; // For append mode: stores full text history
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
@@ -267,15 +273,38 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
+
+      // In append mode, accumulate text and edit with full history
+      let textToEdit = preview.text;
+      if (appendMode) {
+        // Add separator between old and new content
+        if (accumulatedText) {
+          accumulatedText = accumulatedText.trimEnd();
+          if (accumulatedText && !accumulatedText.endsWith("\n")) {
+            accumulatedText += "\n";
+          }
+          textToEdit = accumulatedText + preview.text;
+        } else {
+          // First edit in append mode - just use the preview text
+          textToEdit = preview.text;
+        }
+      }
+
       if (richMessages) {
         await getTelegramRichRawApi(params.api).editMessageText({
           chat_id: chatId,
           message_id: streamMessageId,
-          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(textToEdit),
         });
+        if (appendMode) {
+          accumulatedText = textToEdit;
+        }
         return true;
       }
-      const transportPreview = normalizeTelegramDraftTransportPreview(preview);
+      const transportPreview = normalizeTelegramDraftTransportPreview({
+        ...preview,
+        text: textToEdit,
+      });
       if (transportPreview.parseMode === "HTML") {
         try {
           await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
@@ -289,6 +318,9 @@ export function createTelegramDraftStream(params: {
         }
       } else {
         await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
+      }
+      if (appendMode) {
+        accumulatedText = textToEdit;
       }
       return true;
     }
@@ -317,10 +349,18 @@ export function createTelegramDraftStream(params: {
         visibleSinceMs,
         retain: true,
       });
+      // In append mode, track the initial text even for superseded messages
+      if (appendMode && !accumulatedText) {
+        accumulatedText = preview.text;
+      }
       return true;
     }
     streamMessageId = normalizedMessageId;
     streamVisibleSinceMs = visibleSinceMs;
+    // In append mode, initialize accumulatedText on first send
+    if (appendMode && !accumulatedText) {
+      accumulatedText = preview.text;
+    }
     return true;
   };
   const stopOversizedPreview = (payloadLength: number): false => {
@@ -554,12 +594,27 @@ export function createTelegramDraftStream(params: {
     resetStreamToNewMessage();
   };
 
+  const setAppendMode = (append: boolean) => {
+    // When enabling append mode, preserve current text as the starting point
+    if (append && !appendMode) {
+      appendMode = true;
+      accumulatedText = lastDeliveredText || "";
+    } else if (!append && appendMode) {
+      appendMode = false;
+      // When disabling append mode, clear accumulated text
+      accumulatedText = "";
+    }
+    params.log?.(`telegram stream setAppendMode(${append}) called`);
+  };
+
   const materialize = async (): Promise<number | undefined> => {
     await stop();
     return streamMessageId;
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}${appendMode ? ", appendMode=true" : ""})`,
+  );
 
   return {
     update,
@@ -574,6 +629,7 @@ export function createTelegramDraftStream(params: {
     discard,
     materialize,
     forceNewMessage,
+    setAppendMode,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

@@ -1016,4 +1016,139 @@ describe("draft stream initial message debounce", () => {
       expectPreviewSend(api, "Hi");
     });
   });
+
+  describe("appendMode - preserve message history", () => {
+    it("accumulates text in append mode instead of replacing", async () => {
+      const api = createMockDraftApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        appendMode: true,
+        throttleMs: 50, // Fast throttle for testing
+      });
+
+      // First update - should send new message
+      stream.update("Step 1: Starting...");
+      await stream.flush();
+
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expectPreviewSend(api, "Step 1: Starting...");
+
+      // Second update - should edit with accumulated text
+      stream.update("Step 2: Processing...");
+      await stream.flush();
+
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+      // Should contain both steps
+      expect(api.editMessageText).toHaveBeenCalledWith(
+        123,
+        17,
+        "Step 1: Starting...\nStep 2: Processing...",
+      );
+
+      // Third update - should continue accumulating
+      stream.update("Step 3: Done!");
+      await stream.flush();
+
+      expect(api.editMessageText).toHaveBeenCalledTimes(2);
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        17,
+        "Step 1: Starting...\nStep 2: Processing...\nStep 3: Done!",
+      );
+    });
+
+    it("does not accumulate text when appendMode is false (default)", async () => {
+      const api = createMockDraftApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        appendMode: false, // Explicitly disabled
+        throttleMs: 50,
+      });
+
+      stream.update("Step 1");
+      await stream.flush();
+
+      stream.update("Step 2");
+      await stream.flush();
+
+      // Should only have the latest text, not accumulated
+      expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Step 2");
+    });
+
+    it("handles rich messages in append mode", async () => {
+      const api = createMockDraftApi();
+      const renderText = vi.fn((text) => ({
+        text: `<b>${text}</b>`,
+        parseMode: "HTML" as const,
+      }));
+
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        appendMode: true,
+        renderText,
+        throttleMs: 50,
+      });
+
+      stream.update("First");
+      await stream.flush();
+
+      stream.update("Second");
+      await stream.flush();
+
+      // Check that edits were called (not just sends)
+      expect(api.editMessageText).toHaveBeenCalled();
+
+      // Verify the second call contains both texts
+      const secondCallArgs = api.editMessageText.mock.calls[0];
+      const editText = secondCallArgs?.[2];
+      expect(editText).toBeDefined();
+      // The rendered text should contain HTML formatting
+      expect(editText).toMatch(/<b>/);
+    });
+
+    it("respects maxChars limit in append mode", async () => {
+      const api = createMockDraftApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        appendMode: true,
+        maxChars: 50, // Small limit for testing
+        throttleMs: 50,
+      });
+
+      // Send a long message that exceeds limit
+      const longText = "A".repeat(60);
+      stream.update(longText);
+      await stream.flush();
+
+      // Should still send but may be truncated or split
+      expect(api.sendMessage).toHaveBeenCalled();
+    });
+
+    it("clears accumulated text on forceNewMessage()", async () => {
+      const api = createMockDraftApi();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        appendMode: true,
+        throttleMs: 50,
+      });
+
+      stream.update("Part 1");
+      await stream.flush();
+
+      // Force new message - should reset accumulation
+      stream.forceNewMessage();
+
+      stream.update("Fresh start");
+      await stream.flush();
+
+      // Should send a new message, not edit
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expectNthPreviewSend(api, 2, "Fresh start");
+    });
+  });
 });
