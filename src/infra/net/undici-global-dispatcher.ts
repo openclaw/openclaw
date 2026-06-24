@@ -3,8 +3,8 @@
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import {
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
-  shouldUseEnvHttpProxyForUrl,
 } from "./proxy-env.js";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import {
@@ -162,7 +162,11 @@ function createNoProxyAwareEnvDispatcher(envProxyDispatcher: UndiciDispatcher): 
               : options.origin instanceof URL
                 ? options.origin.href
                 : undefined;
-          if (origin && !shouldUseEnvHttpProxyForUrl(origin)) {
+          // Global-dispatcher check: use hasEnvHttpProxyAgentConfigured
+          // (which includes ALL_PROXY) instead of the SSRF-safe
+          // HTTP(S)-only shouldUseEnvHttpProxyForUrl, because the
+          // EnvHttpProxyAgent already resolves ALL_PROXY.
+          if (origin && hasEnvHttpProxyAgentConfigured() && !matchesNoProxy(origin)) {
             return resolveSharedDirectAgent().dispatch(options, handler);
           }
           return target.dispatch(options, handler);
@@ -434,7 +438,9 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
         return;
       }
     }
-    setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
+    setGlobalDispatcher(
+      createNoProxyAwareEnvDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions)),
+    );
     lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   } catch {
     // Best-effort reset only.
