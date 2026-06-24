@@ -102,6 +102,7 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
+import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
 import {
   createMcpLoopbackServerConfig,
   closeMcpLoopbackServer,
@@ -722,6 +723,47 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
+    resetAttachGrantsForTest();
+    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
+    const port = await getFreePortBlockWithPermissionFallback({
+      offsets: [0],
+      fallbackBase: 53_000,
+    });
+    const { port: serverPort } = await startLoopbackServerForTest(port);
+
+    const response = await sendRaw({
+      port: serverPort,
+      token: grant.token,
+      headers: jsonHeaders({
+        // spoof the full delivery/action context, not just the session key
+        "x-session-key": "agent:main:SPOOFED-other-session",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-account-id": "victim-account",
+        "x-openclaw-current-channel-id": "telegram:victim-chat",
+        "x-openclaw-current-thread-ts": "999",
+        "x-openclaw-source-reply-delivery-mode": "automatic",
+        "x-openclaw-inbound-event-kind": "room_event",
+      }),
+      body: mcpToolsListBody(),
+    });
+
+    expect(response.status).toBe(200);
+    const call = getScopedToolsCall(0);
+    // session is grant-bound, NOT the spoofed header
+    expect(call.sessionKey).toBe("agent:main:attach-host");
+    expect(call.senderIsOwner).toBe(false);
+    expect(call.surface).toBe("loopback");
+    // a grant is a lower-trust boundary: every other caller-supplied context header is ignored
+    // (fail-closed), so a grant holder cannot spoof delivery/action context into scoped tools.
+    expect(call.messageProvider).toBeUndefined();
+    expect(call.accountId).toBeUndefined();
+    expect(call.currentChannelId).toBeUndefined();
+    expect(call.currentThreadTs).toBeUndefined();
+    expect(call.sourceReplyDeliveryMode).toBeUndefined();
+    expect(call.inboundEventKind).toBeUndefined();
   });
 
   it("routes sessions_yield to the current CLI capture", async () => {
