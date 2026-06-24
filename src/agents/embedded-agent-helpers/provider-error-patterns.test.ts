@@ -176,6 +176,14 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     "<!doctype html><html><head><title>403 Forbidden</title></head>" +
     "<body>Enable JavaScript and cookies to continue." +
     "<p>Please stand by, while we are checking your browser...</p></body></html>";
+  const cloudflareChallengeCdnCgiHtml =
+    "<!doctype html><html><head><title>403 Forbidden</title></head>" +
+    '<body><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page"></script>' +
+    "<p>Checking your browser...</p></body></html>";
+  const cloudflareChallengeErrorTextHtml =
+    "<!doctype html><html><head><title>403 Forbidden</title></head>" +
+    '<body><span id="challenge-error-text">Enable JavaScript and cookies to continue</span>' +
+    "<p>Please stand by...</p></body></html>";
   const html401 =
     "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
     "<body><h1>Unauthorized</h1></body></html>";
@@ -234,6 +242,22 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     // Cloudflare browser-challenge pages are CDN blocks, not auth failures.
     expect(
       classifyProviderRuntimeFailureKind({ status: 403, message: cloudflareChallengeHtml }),
+    ).toBe("upstream_html");
+  });
+  it("classifies Cloudflare challenge 403 with cdn-cgi/challenge-platform as upstream_html", () => {
+    // Challenge pages with the challenge platform script path are also CDN blocks.
+    expect(
+      classifyProviderRuntimeFailureKind({ status: 403, message: cloudflareChallengeCdnCgiHtml }),
+    ).toBe("upstream_html");
+  });
+
+  it("classifies Cloudflare challenge 403 with challenge-error-text as upstream_html", () => {
+    // Challenge pages with the challenge-error-text element are also CDN blocks.
+    expect(
+      classifyProviderRuntimeFailureKind({
+        status: 403,
+        message: cloudflareChallengeErrorTextHtml,
+      }),
     ).toBe("upstream_html");
   });
 
