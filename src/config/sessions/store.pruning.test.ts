@@ -13,6 +13,7 @@ import {
   resolveMaintenanceConfigFromInput,
   resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
+  shouldRunModelRunPrune,
 } from "./store-maintenance.js";
 import {
   capEntryCount,
