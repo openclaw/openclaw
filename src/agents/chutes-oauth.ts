@@ -3,11 +3,13 @@
  * for agent model authentication.
  */
 import { createHash, randomBytes } from "node:crypto";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
+const CHUTES_OAUTH_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
 export const CHUTES_TOKEN_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/token`;
 export const CHUTES_USERINFO_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/userinfo`;
@@ -103,6 +105,13 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
   }
 }
 
+async function readChutesOAuthJsonResponse<T>(response: Response): Promise<T> {
+  const bytes = await readResponseWithLimit(response, CHUTES_OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`Chutes OAuth response exceeds ${maxBytes} bytes`),
+  });
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
@@ -115,7 +124,7 @@ async function fetchChutesUserInfo(params: {
     await cancelUnreadResponseBody(response);
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = (await readChutesOAuthJsonResponse(response)) as unknown;
   if (!data || typeof data !== "object") {
     return null;
   }
@@ -155,11 +164,11 @@ export async function exchangeChutesCodeForTokens(params: {
     throw new Error(`Chutes token exchange failed: ${text}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readChutesOAuthJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response);
 
   const access = data.access_token?.trim();
   const refresh = data.refresh_token?.trim();
@@ -226,11 +235,11 @@ export async function refreshChutesTokens(params: {
     throw new Error(`Chutes token refresh failed: ${text}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readChutesOAuthJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response);
   const access = data.access_token?.trim();
   const newRefresh = data.refresh_token?.trim();
   const expires = resolveChutesExpiresAt(data.expires_in, now);
