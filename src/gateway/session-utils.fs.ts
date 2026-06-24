@@ -350,6 +350,7 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
     extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const idempotencyKey = extractJsonStringFieldPrefix(prefix, "idempotencyKey");
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
@@ -357,6 +358,7 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     ...(timestamp !== undefined ? { timestamp } : {}),
     message: {
       role,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
       __openclaw: { truncated: true, reason: "oversized" },
     },
