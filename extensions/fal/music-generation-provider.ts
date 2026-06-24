@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -15,6 +16,7 @@ const FAL_ACE_STEP_MODEL = "fal-ai/ace-step/prompt-to-audio";
 const FAL_STABLE_AUDIO_MODEL = "fal-ai/stable-audio-25/text-to-audio";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_GENERATED_MUSIC_MAX_BYTES = 16 * 1024 * 1024;
+const FAL_MUSIC_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 const FAL_MUSIC_MODELS = [
   DEFAULT_FAL_MUSIC_MODEL,
@@ -161,7 +163,11 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "fal music generation failed");
-        const payload = await response.json();
+        const buffer = await readResponseWithLimit(response, FAL_MUSIC_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`fal music JSON response exceeds ${maxBytes} bytes`),
+        });
+        const payload = JSON.parse(buffer.toString("utf8")) as unknown;
         const [candidate] = extractGeneratedMusicFileCandidates(payload);
         if (!candidate) {
           throw new Error("fal music generation response missing audio output");

@@ -92,6 +92,7 @@ const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const FAL_IMAGE_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
 type FalImageModelSchema = {
@@ -645,7 +646,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
 
-        const payload = parseFalImageGenerationResponse(await response.json());
+        const buffer = await readResponseWithLimit(response, FAL_IMAGE_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`fal image JSON response exceeds ${maxBytes} bytes`),
+        });
+        const payload = parseFalImageGenerationResponse(
+          JSON.parse(buffer.toString("utf8")) as unknown,
+        );
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
         for (const entry of payload.images) {

@@ -61,6 +61,7 @@ const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const FAL_VIDEO_MALFORMED_RESPONSE = "fal video generation response malformed";
+const FAL_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const FAL_VIDEO_PENDING_STATUSES = new Set([
   "IN_QUEUE",
   "IN_PROGRESS",
@@ -480,9 +481,16 @@ async function fetchFalJson(params: {
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
     try {
-      return await response.json();
-    } catch {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      const buffer = await readResponseWithLimit(response, FAL_JSON_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`fal video JSON response exceeds ${maxBytes} bytes`),
+      });
+      return JSON.parse(buffer.toString("utf8")) as unknown;
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      }
+      throw err;
     }
   } finally {
     await release();

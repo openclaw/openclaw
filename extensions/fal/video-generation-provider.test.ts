@@ -36,9 +36,14 @@ describe("fal video generation provider", () => {
   }
 
   function releasedJson(value: unknown) {
+    const body = JSON.stringify(value);
+    const buffer = Buffer.from(body, "utf8");
     return {
       response: {
         json: async () => value,
+        body: null,
+        arrayBuffer: async () =>
+          buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
       },
       release: vi.fn(async () => {}),
     };
@@ -255,9 +260,8 @@ describe("fal video generation provider", () => {
     mockFalProviderRuntime();
     fetchGuardMock.mockResolvedValueOnce({
       response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
+        body: null,
+        arrayBuffer: async () => Buffer.from("not json", "utf8").buffer,
       },
       release: vi.fn(async () => {}),
     });
