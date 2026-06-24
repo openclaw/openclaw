@@ -883,10 +883,14 @@ export function resolveTelegramTransport(
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
     forceFallback: (reason: string, err?: unknown) => {
-      if (err !== undefined && !shouldUseTelegramTransportFallback(err)) {
-        return false;
+      if (err !== undefined) {
+        const codes = collectErrorCodes(err);
+        if (isLocalSocketAllocationError(codes)) {
+          return false;
+        }
       }
-      return promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason);
+      promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason);
+      return true;
     },
     close,
   };
