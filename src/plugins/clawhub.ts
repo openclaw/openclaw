@@ -883,11 +883,32 @@ async function resolveCompatiblePackageVersion(params: {
   // compatibility requirements.
   const packageCompatibilityFallback =
     resolvedVersion === latestVersion ? (params.detail.package?.compatibility ?? null) : null;
+  // When the artifact endpoint returns sparse metadata (no compatibility) for a
+  // pinned older version, fetch the version endpoint which may have the real
+  // version-specific compatibility data.
+  let versionEndpointCompatibility: ClawHubPackageCompatibility | null = null;
+  if (!artifactVersion.compatibility && resolvedVersion !== latestVersion) {
+    try {
+      const selectedVersion = await fetchClawHubPackageVersion({
+        name: params.detail.package?.name ?? "",
+        version: resolvedVersion,
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      });
+      versionEndpointCompatibility = selectedVersion.version?.compatibility ?? null;
+    } catch {
+      // Version endpoint unavailable; proceed without version-specific compatibility.
+    }
+  }
   if (params.detail.package?.family === "skill") {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: artifactVersion.compatibility ?? packageCompatibilityFallback,
+      compatibility:
+        artifactVersion.compatibility ??
+        versionEndpointCompatibility ??
+        packageCompatibilityFallback,
       verification: null,
       clawpack:
         artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
@@ -935,7 +956,10 @@ async function resolveCompatiblePackageVersion(params: {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: versionDetail.version?.compatibility ?? packageCompatibilityFallback,
+      compatibility:
+        versionDetail.version?.compatibility ??
+        versionEndpointCompatibility ??
+        packageCompatibilityFallback,
       verification: null,
       clawpack,
     };
@@ -946,7 +970,10 @@ async function resolveCompatiblePackageVersion(params: {
   return {
     ok: true,
     version: resolvedVersion,
-    compatibility: versionDetail.version?.compatibility ?? packageCompatibilityFallback,
+    compatibility:
+      versionDetail.version?.compatibility ??
+      versionEndpointCompatibility ??
+      packageCompatibilityFallback,
     verification: verificationState.verification ?? topLevelLegacyVerification,
     clawpack,
   };
