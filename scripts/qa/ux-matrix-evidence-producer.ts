@@ -84,19 +84,31 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
   let skipVisualProof = false;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      artifactBase = value;
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      repoRoot = value;
       index += 1;
       continue;
     }
     if (arg === "--skip-visual-proof") {
+      recordOnce(arg);
       skipVisualProof = true;
       continue;
     }

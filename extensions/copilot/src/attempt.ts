@@ -44,6 +44,7 @@ import {
   type SessionLike,
 } from "./event-bridge.js";
 import { createHooksBridge, type CopilotHooksConfig } from "./hooks-bridge.js";
+import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import {
   createPermissionBridge,
   rejectAllPolicy,
@@ -228,6 +229,7 @@ function deferBackgroundCompactionCleanup(params: {
   handle: PooledClient;
   pool: CopilotClientPool;
   cleanupToolBridge?: () => void;
+  finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
@@ -250,6 +252,7 @@ function deferBackgroundCompactionCleanup(params: {
         await cancelBackgroundCompactionBeforeTeardown(params.session);
         params.bridge.settleCompactionWait();
       }
+      params.finalizeNativeSubagents?.();
       params.bridge.detach();
       try {
         await params.session.disconnect();
@@ -410,6 +413,11 @@ export async function runCopilotAttempt(
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+  const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
+    agentId: sessionAgentId,
+    now,
+    scope: input.agentHarnessTaskRuntimeScope,
+  });
   let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
   let userInputBridgeRef: ReturnType<typeof createCopilotUserInputBridge> | undefined;
   let cleanupToolBridge: (() => void) | undefined;
@@ -748,6 +756,8 @@ export async function runCopilotAttempt(
     }
     bridge = attachEventBridge(session, {
       onAssistantDelta: input.onAssistantDelta,
+      onAgentEvent: input.onAgentEvent,
+      onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
@@ -813,6 +823,7 @@ export async function runCopilotAttempt(
       }
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
+      await bridge.awaitAgentEventChain();
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
@@ -848,6 +859,7 @@ export async function runCopilotAttempt(
         } catch {
           // delta-flush failure must not mask the timeout state
         }
+        await bridge?.awaitAgentEventChain();
       } else {
         promptError = toError(error);
       }
@@ -878,6 +890,7 @@ export async function runCopilotAttempt(
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         cleanupToolBridge,
+        finalizeNativeSubagents: () => nativeSubagentTaskMirror?.finalizeActiveRuns(),
         handle,
         pool: deps.pool,
         sdkSessionId,
@@ -906,6 +919,8 @@ export async function runCopilotAttempt(
       // defines as no background agents in flight. Timeouts retain the bridge
       // until that event so compaction that starts after the timer still completes.
       await bridge?.awaitCompactionChain();
+      await bridge?.awaitAgentEventChain();
+      nativeSubagentTaskMirror?.finalizeActiveRuns();
       cleanupToolBridge?.();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
@@ -990,8 +1005,9 @@ export async function runCopilotAttempt(
   // extension. Identity-tagged so re-emits dedupe. Errors are
   // swallowed so a mirror failure cannot break the attempt.
   const sessionFileForMirror = readString(input.sessionFile);
-  const sessionIdForScope = sessionIdUsed ?? readString(input.sessionId);
-  if (sessionFileForMirror && messagesSnapshot.length > 0) {
+  const openClawSessionIdForMirror = readString(input.sessionId);
+  const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
+  if (sessionFileForMirror && openClawSessionIdForMirror && messagesSnapshot.length > 0) {
     const taggedMessages = messagesSnapshot.map((message, index) => {
       if (
         message.role !== "user" &&
@@ -1012,15 +1028,16 @@ export async function runCopilotAttempt(
       if (hasMirrorIdentity(message)) {
         return message;
       }
-      const identityScope = sdkSessionId ?? sessionIdForScope ?? "attempt";
+      const identityScope = sdkSessionId ?? mirrorScopeSessionId ?? "attempt";
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
+      sessionId: openClawSessionIdForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
       agentId: readString(input.agentId),
       messages: taggedMessages,
-      idempotencyScope: sessionIdForScope ? `copilot:${sessionIdForScope}` : undefined,
+      idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
       config: (input as { config?: unknown }).config as never,
     }).catch((mirrorError: unknown) => {
       // Defense-in-depth: the best-effort wrapper already swallows

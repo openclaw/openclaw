@@ -313,8 +313,8 @@ importers:
         specifier: 0.15.0
         version: 0.15.0
       acpx:
-        specifier: 0.10.0
-        version: 0.10.0
+        specifier: 0.11.2
+        version: 0.11.2
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1992,6 +1992,11 @@ packages:
 
   '@agentclientprotocol/sdk@0.22.1':
     resolution: {integrity: sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+
+  '@agentclientprotocol/sdk@0.28.1':
+    resolution: {integrity: sha512-Z2Frs6YtPhnZZ+XwFXyQkRDXY0fn8FjCalEs0W4yUhQnY4TztmNq0/RnfzWdFN3vqT3h0jTz5klzYbZHGxCDyQ==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -4606,8 +4611,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.10.0:
-    resolution: {integrity: sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==}
+  acpx@0.11.2:
+    resolution: {integrity: sha512-ksTmfJDVqUAJJXsNDamEno03AMZ/aAZzXk/h5nt61VsLc/jcpoDMfCVpErzuYNJjwCd0V6Zm5o6F8OoqxsjQWA==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -5011,6 +5016,10 @@ packages:
   commander@14.0.3:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
+
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
 
   commander@5.1.0:
     resolution: {integrity: sha512-P0CysNDQ7rtVw4QIQtm+MRxV66vKFSvlsQvGYXZWR3qFU0jlMKHZZZgw8e+8DSah4UDKMqnknRDQz+xuQXQ/Zg==}
@@ -7151,8 +7160,8 @@ packages:
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
 
-  skillflag@0.1.4:
-    resolution: {integrity: sha512-egFg+XCF5sloOWdtzxZivTX7n4UDj5pxQoY33wbT8h+YSDjMQJ76MZUg2rXQIBXmIDtlZhLgirS1g/3R5/qaHA==}
+  skillflag@0.2.0:
+    resolution: {integrity: sha512-7ZmEpBeEoPLc+hqZ/StAnCO/hulgEPANzPyZgOM/CZ5zc3b0ApSp3URavY5POM/OKyi5d9+UC/Q21OoiYC2kJw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -7881,6 +7890,10 @@ snapshots:
       - '@modelcontextprotocol/sdk'
 
   '@agentclientprotocol/sdk@0.22.1(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
+
+  '@agentclientprotocol/sdk@0.28.1(zod@4.4.3)':
     dependencies:
       zod: 4.4.3
 
@@ -10643,11 +10656,11 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.10.0:
+  acpx@0.11.2:
     dependencies:
-      '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
-      commander: 14.0.3
-      skillflag: 0.1.4
+      '@agentclientprotocol/sdk': 0.28.1(zod@4.4.3)
+      commander: 15.0.0
+      skillflag: 0.2.0
       tsx: 4.22.4
       zod: 4.4.3
     transitivePeerDependencies:
@@ -11053,6 +11066,8 @@ snapshots:
     optional: true
 
   commander@14.0.3: {}
+
+  commander@15.0.0: {}
 
   commander@5.1.0: {}
 
@@ -13754,9 +13769,9 @@ snapshots:
 
   sisteransi@1.0.5: {}
 
-  skillflag@0.1.4:
+  skillflag@0.2.0:
     dependencies:
-      '@clack/prompts': 1.5.1
+      '@clack/prompts': 1.4.0
       tar-stream: 3.2.0
     transitivePeerDependencies:
       - bare-abort-controller

@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -19,7 +19,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
@@ -70,6 +70,11 @@ const execFile = vi.fn((...args: unknown[]) => {
 });
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
+const serviceEnvSnapshot = captureEnv([
+  "OPENCLAW_SERVICE_MARKER",
+  "OPENCLAW_SERVICE_KIND",
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+]);
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -716,6 +721,9 @@ describe("update-cli", () => {
   };
 
   beforeEach(() => {
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+    delete process.env.OPENCLAW_SERVICE_KIND;
+    delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     vi.clearAllMocks();
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
@@ -872,6 +880,10 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
+  });
+
+  afterAll(() => {
+    serviceEnvSnapshot.restore();
   });
 
   afterEach(async () => {

@@ -882,6 +882,7 @@ describe("test-projects args", () => {
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
           "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/check-workflows.test.ts",
           "test/scripts/ci-hydrate-testbox-env.test.ts",
           "test/scripts/clawhub-fixture-server.test.ts",
           "test/scripts/codex-install-assertions.test.ts",

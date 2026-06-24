@@ -44,11 +44,17 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   let outputPath = "";
   let positionalMode = false;
+  const setOutputPath = (value: string) => {
+    if (outputPath) {
+      throw new Error("qa:e2e output path was provided more than once");
+    }
+    outputPath = value;
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (positionalMode) {
       if (!outputPath && arg.trim()) {
-        outputPath = arg.trim();
+        setOutputPath(arg.trim());
         continue;
       }
       throw new Error(`Unexpected qa:e2e argument: ${arg}`);
@@ -65,7 +71,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
       if (!inlineOutput) {
         throw new Error("--output requires a value");
       }
-      outputPath = inlineOutput;
+      setOutputPath(inlineOutput);
       continue;
     }
     if (arg === "--output") {
@@ -73,7 +79,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
       if (!value || value.startsWith("-")) {
         throw new Error("--output requires a value");
       }
-      outputPath = value;
+      setOutputPath(value);
       index += 1;
       continue;
     }
@@ -83,7 +89,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
     if (outputPath) {
       throw new Error(`Unexpected qa:e2e argument: ${arg}`);
     }
-    outputPath = arg.trim();
+    setOutputPath(arg.trim());
   }
   return outputPath ? { help: false, outputPath } : { help: false };
 }

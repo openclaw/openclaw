@@ -95,6 +95,23 @@ describe("qa-e2e script", () => {
     expect(() => parseQaE2eArgs(["--output", "--help"])).toThrow("--output requires a value");
   });
 
+  it("rejects duplicate output destinations before loading QA Lab", async () => {
+    const env: NodeJS.ProcessEnv = {};
+    const loadRuntime = vi.fn(async () => {
+      throw new Error("runtime loaded");
+    });
+
+    expect(() =>
+      parseQaE2eArgs(["--output", ".artifacts/first.md", "--output=.artifacts/second.md"]),
+    ).toThrow("qa:e2e output path was provided more than once");
+    await expect(
+      main([".artifacts/first.md", "--output", ".artifacts/second.md"], { env, loadRuntime }),
+    ).rejects.toThrow("qa:e2e output path was provided more than once");
+
+    expect(loadRuntime).not.toHaveBeenCalled();
+    expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBeUndefined();
+  });
+
   it.each([
     { status: "pass" as const, exitCode: 0 },
     { status: "fail" as const, exitCode: 1 },

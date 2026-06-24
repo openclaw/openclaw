@@ -231,6 +231,7 @@ describe("Parallels smoke model selection", () => {
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let duplicateNpmUpdatePlatformResult: ReturnType<typeof spawnNodeEvalSync>;
 
   it("parses macOS dscl user homes with spaces on mounted volumes", () => {
     expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
@@ -305,6 +306,10 @@ describe("Parallels smoke model selection", () => {
     );
     invalidWindowsUpdateTimeoutResult = spawnNodeEvalSync(
       `process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S = "12.5"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    duplicateNpmUpdatePlatformResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.npmUpdate}", "--platform", "macos,macos"]; await import("./${TS_PATHS.npmUpdate}");`,
       { env: process.env, imports: ["tsx"] },
     );
   });
@@ -2088,6 +2093,11 @@ setInterval(() => {}, 1000);
     expect(invalidWindowsUpdateTimeoutResult.status).toBe(1);
     expect(invalidWindowsUpdateTimeoutResult.stderr).toContain(
       "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
+    );
+
+    expect(duplicateNpmUpdatePlatformResult.status).toBe(1);
+    expect(duplicateNpmUpdatePlatformResult.stderr).toContain(
+      "duplicate --platform entry: macos",
     );
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(

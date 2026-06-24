@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -40,13 +39,13 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  getSessionEntry,
   loadSessionStore,
-  resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
-  resolveSessionTranscriptPathInDir,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -201,7 +200,7 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandSessionFile(params: {
+async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
@@ -213,29 +212,23 @@ async function resolveTelegramCommandSessionFile(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const authProfileId = normalizeOptionalString(resolved.existing?.authProfileOverride);
-    const sessionsDir = path.dirname(storePath);
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
-      sessionId,
-      sessionsDir,
-      params.threadId,
-    );
-    const persisted = await resolveAndPersistSessionFile({
-      sessionId,
-      sessionKey: resolved.normalizedKey,
-      sessionStore: store,
-      storePath,
-      sessionEntry: resolved.existing,
+    const entry = getSessionEntry({
       agentId: params.agentId,
-      sessionsDir,
-      fallbackSessionFile,
+      sessionKey,
+      storePath,
+    });
+    const sessionId = entry?.sessionId?.trim() || randomUUID();
+    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
+    const target = await resolveSessionTranscriptLegacyFileTarget({
+      agentId: params.agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
     return {
       sessionId,
-      sessionFile: persisted.sessionFile,
+      sessionFile: target.sessionFile,
       ...(authProfileId ? { authProfileId } : {}),
     };
   } catch {
@@ -1633,7 +1626,7 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const sessionFileContext = await resolveTelegramCommandSessionFile({
+        const transcriptContext = await resolveTelegramCommandTranscriptContext({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: targetSessionKey,
@@ -1650,10 +1643,10 @@ export const registerTelegramNativeCommands = ({
             senderIsOwner,
             agentId: route.agentId,
             sessionKey: targetSessionKey,
-            sessionId: sessionFileContext.sessionId,
-            sessionFile: sessionFileContext.sessionFile,
+            sessionId: transcriptContext.sessionId,
+            sessionFile: transcriptContext.sessionFile,
             authProfileId:
-              sessionFileContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+              transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
             commandBody,
             config: runtimeCfg,
             from,

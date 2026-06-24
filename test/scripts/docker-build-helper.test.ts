@@ -56,6 +56,14 @@ const QR_IMPORT_DOCKER_E2E_PATH = "scripts/e2e/qr-import-docker.sh";
 const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
+const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH =
+  "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
+const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
+const CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/crestodian-first-run-docker.sh";
+const CRESTODIAN_PLANNER_DOCKER_E2E_PATH = "scripts/e2e/crestodian-planner-docker.sh";
+const CRESTODIAN_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/crestodian-rescue-docker.sh";
+const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH =
+  "scripts/e2e/session-runtime-context-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
@@ -3358,6 +3366,31 @@ output="$(cat "$sampler_log")"
       expect(runner, path).not.toContain(`${resourceAssertion} || true`);
       expect(runner, path).not.toContain(`${resourceAssertion}\n\nexit "$run_status"`);
     }
+  });
+
+  it("keeps captured Docker E2E run log replay bounded", () => {
+    for (const path of [
+      AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
+      COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
+      CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH,
+      CRESTODIAN_PLANNER_DOCKER_E2E_PATH,
+      CRESTODIAN_RESCUE_DOCKER_E2E_PATH,
+      PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
+      SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH,
+    ]) {
+      const runner = readFileSync(path, "utf8");
+
+      expect(runner, path).toContain('RUN_LOG="$(mktemp');
+      expect(runner, path).toContain('docker_e2e_print_log "$RUN_LOG"');
+      expect(runner, path).not.toContain('cat "$RUN_LOG"');
+    }
+
+    const pluginBinding = readFileSync(PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH, "utf8");
+    expect(pluginBinding).toContain("const scanBytes = 65536");
+    expect(pluginBinding).toContain("fs.statSync(logPath)");
+    expect(pluginBinding).toContain("fs.readSync(fd, buffer, 0, length, stat.size - length)");
+    expect(pluginBinding).not.toContain("process.env.OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES");
+    expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
   it("keeps Open WebUI Docker E2E resource-guarded", () => {

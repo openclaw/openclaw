@@ -42,6 +42,7 @@ or an explicit manual dispatch.
 | `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes                            |
 | `macos-node`                       | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes                              |
 | `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes                              |
+| `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                 | iOS app, shared app kit, or Swabble changes         |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes                            |
 | `test-performance-agent`           | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch                  |
 | `openclaw-performance`             | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.5 live lanes | Scheduled and manual dispatch                       |
@@ -52,7 +53,7 @@ or an explicit manual dispatch.
 2. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 4. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
@@ -80,7 +81,7 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
-- **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
+- **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** runs in the `checks-node-core-runtime-tui-pty` Linux Node shard for TUI changes. The shard runs `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1`, so it covers both the deterministic `TuiBackend` fixture lane and the slower `tui --local` smoke that mocks only the external model endpoint.
@@ -120,7 +121,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 ## Manual dispatches
 
-Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, and Control UI i18n. Standalone manual CI dispatches run Android only with `include_android=true`; the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Standalone manual CI dispatches run Android only with `include_android=true`; the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref.
 
@@ -140,7 +141,7 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 | `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                                                          |
 | `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                |
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                              |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                             |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                             |
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -162,6 +163,7 @@ pnpm test:channels
 pnpm test:contracts:channels
 pnpm check:docs                               # docs format + lint + broken links
 pnpm build                                    # build dist when CI artifact/smoke checks matter
+pnpm ios:build                                # generate and build the iOS app project
 pnpm ci:timings                               # summarize the latest origin/main push CI run
 pnpm ci:timings:recent                        # compare recent successful main CI runs
 node scripts/ci-run-timings.mjs <run-id>      # summarize wall time, queue time, and slowest jobs
