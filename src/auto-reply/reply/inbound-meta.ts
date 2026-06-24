@@ -526,6 +526,9 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    ...(normalizePromptMetadataString(ctx.AuthUser)
+      ? { user: normalizePromptMetadataString(ctx.AuthUser) }
+      : {}),
     response_format:
       options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
   };
