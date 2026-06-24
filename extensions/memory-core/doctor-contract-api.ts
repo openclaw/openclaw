@@ -513,6 +513,7 @@ function importLegacyMemorySidecarIndex(params: {
   db: DatabaseSync;
   legacySidecarDatabasePath: string | undefined;
   copyVectorRows: boolean;
+  requireVectorRows: boolean;
 }): LegacyMemorySidecarImportResult {
   if (!params.legacySidecarDatabasePath || !fsSync.existsSync(params.legacySidecarDatabasePath)) {
     return {
@@ -554,6 +555,7 @@ function importLegacyMemorySidecarIndex(params: {
         ...counts,
         vectorEntriesImported:
           counts.vectorEntries === 0 ||
+          !params.requireVectorRows ||
           (params.copyVectorRows && counts.vectorEntries !== undefined),
       };
     } catch (err) {
@@ -620,6 +622,14 @@ function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): 
   const raw =
     agentVector?.extensionPath ?? defaultVector?.extensionPath ?? topLevelVector?.extensionPath;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function readMemorySearchVectorEnabled(config: unknown, agentId: string): boolean {
+  const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
+  const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
+  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
+  const raw = agentVector?.enabled ?? defaultVector?.enabled ?? topLevelVector?.enabled;
+  return typeof raw === "boolean" ? raw : true;
 }
 
 function readLegacyMemorySearchStorePath(config: unknown, agentId: string): string | undefined {
@@ -853,22 +863,25 @@ async function migrateLegacyMemorySidecarSource(params: {
     });
     const ftsTokenizer = readMemorySearchFtsTokenizer(params.config, params.source.agentId);
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
-    const vectorExtensionPath = readMemorySearchVectorExtensionPath(
-      params.config,
-      params.source.agentId,
-    );
-    const loadedVector = await loadSqliteVecExtension({
-      db,
-      extensionPath: vectorExtensionPath
-        ? resolveUserPath(vectorExtensionPath, params.env)
-        : undefined,
-    });
+    const vectorEnabled = readMemorySearchVectorEnabled(params.config, params.source.agentId);
+    const vectorExtensionPath = vectorEnabled
+      ? readMemorySearchVectorExtensionPath(params.config, params.source.agentId)
+      : undefined;
+    const loadedVector = vectorEnabled
+      ? await loadSqliteVecExtension({
+          db,
+          extensionPath: vectorExtensionPath
+            ? resolveUserPath(vectorExtensionPath, params.env)
+            : undefined,
+        })
+      : { ok: false as const, error: "vector search is disabled" };
     let result: LegacyMemorySidecarImportResult;
     try {
       result = importLegacyMemorySidecarIndex({
         db,
         legacySidecarDatabasePath: params.source.legacyPath,
-        copyVectorRows: loadedVector.ok,
+        copyVectorRows: vectorEnabled && loadedVector.ok,
+        requireVectorRows: vectorEnabled,
       });
     } catch (err) {
       params.warnings.push(
