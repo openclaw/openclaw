@@ -666,11 +666,19 @@ function createReloaderHarness(
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
+    onHotReload?: (
+      plan: GatewayReloadPlan,
+      nextConfig: OpenClawConfig,
+      signal: AbortSignal,
+    ) => Promise<void>;
   } = {},
 ) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
-  const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
+  const onHotReload = vi.fn(
+    options.onHotReload ??
+      (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig, _signal: AbortSignal) => {}),
+  );
   const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
@@ -723,7 +731,9 @@ function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenC
   return call;
 }
 
-function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
+function getOnlyHotReloadCall(
+  harness: ReloaderHarness,
+): [GatewayReloadPlan, OpenClawConfig, AbortSignal] {
   expect(harness.onHotReload).toHaveBeenCalledTimes(1);
   const call = harness.onHotReload.mock.calls[0];
   if (!call) {
@@ -846,6 +856,38 @@ describe("startGatewayConfigReloader", () => {
       process.off("unhandledRejection", onUnhandled);
       await reloader.stop();
     }
+  });
+
+  it("aborts and drains an active hot reload when stopped", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+          hooks: { enabled: true },
+        },
+        hash: "hot-reload-1",
+      }),
+    );
+    const observedSignals: AbortSignal[] = [];
+    const onHotReload = vi.fn(
+      async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig, signal: AbortSignal) => {
+        observedSignals.push(signal);
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const { watcher, reloader } = createReloaderHarness(readSnapshot, { onHotReload });
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => {
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+    });
+
+    await reloader.stop();
+
+    expect(observedSignals[0]?.aborted).toBe(true);
   });
 
   it("skips invalid external config edits without recovery", async () => {

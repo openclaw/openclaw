@@ -100,6 +100,12 @@ type GatewayConfigReloader = {
   hotReloadStatus: () => GatewayHotReloadStatus;
 };
 
+type GatewayHotReloadHandler = (
+  plan: GatewayReloadPlan,
+  nextConfig: OpenClawConfig,
+  signal: AbortSignal,
+) => Promise<void>;
+
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
@@ -115,7 +121,7 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
-  onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
+  onHotReload: GatewayHotReloadHandler;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   initialPluginInstallRecords?: PluginInstallRecords;
@@ -137,6 +143,8 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let activeReloadAbortController: AbortController | null = null;
+  let activeReload: Promise<void> | null = null;
   let pendingInProcessConfig: {
     config: OpenClawConfig;
     compareConfig: OpenClawConfig;
@@ -159,7 +167,7 @@ export function startGatewayConfigReloader(opts: {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
-      void runReload();
+      triggerReload();
     }, wait);
   };
   const schedule = () => {
@@ -211,6 +219,7 @@ export function startGatewayConfigReloader(opts: {
   const applySnapshot = async (
     nextConfig: OpenClawConfig,
     nextCompareConfig: OpenClawConfig,
+    signal: AbortSignal,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
     const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
@@ -301,6 +310,9 @@ export function startGatewayConfigReloader(opts: {
       queueRestart(plan, nextConfig);
       return;
     }
+    if (signal.aborted) {
+      return;
+    }
     if (plan.restartGateway) {
       if (settings.mode === "hot") {
         opts.log.warn(
@@ -314,7 +326,11 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    await opts.onHotReload(plan, nextConfig);
+    if (signal.aborted) {
+      return;
+    }
+
+    await opts.onHotReload(plan, nextConfig, signal);
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -352,6 +368,8 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     running = true;
+    const abortController = new AbortController();
+    activeReloadAbortController = abortController;
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
@@ -364,8 +382,12 @@ export function startGatewayConfigReloader(opts: {
         await applySnapshot(
           pendingWrite.config,
           pendingWrite.compareConfig,
+          abortController.signal,
           pendingWrite.afterWrite,
         );
+        if (abortController.signal.aborted) {
+          return;
+        }
         await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
@@ -383,17 +405,39 @@ export function startGatewayConfigReloader(opts: {
         handleInvalidSnapshot(snapshot);
         return;
       }
-      await applySnapshot(snapshot.config, snapshot.sourceConfig);
+      await applySnapshot(snapshot.config, snapshot.sourceConfig, abortController.signal);
+      if (abortController.signal.aborted) {
+        return;
+      }
       await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
       running = false;
+      if (activeReloadAbortController === abortController) {
+        activeReloadAbortController = null;
+      }
       if (pending) {
         pending = false;
-        schedule();
+        if (!stopped) {
+          schedule();
+        }
       }
     }
+  };
+
+  const triggerReload = () => {
+    const wasRunning = running;
+    const run = runReload();
+    if (wasRunning) {
+      return;
+    }
+    activeReload = run;
+    void run.finally(() => {
+      if (activeReload === run) {
+        activeReload = null;
+      }
+    });
   };
 
   const scheduleFromWatcher = () => {
@@ -494,6 +538,8 @@ export function startGatewayConfigReloader(opts: {
   return {
     stop: async () => {
       stopped = true;
+      activeReloadAbortController?.abort();
+      pending = false;
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
@@ -506,6 +552,7 @@ export function startGatewayConfigReloader(opts: {
       const active = watcher;
       watcher = null;
       await active?.close().catch(() => {});
+      await activeReload?.catch(() => {});
     },
     hotReloadStatus: () => hotReloadStatus,
   };

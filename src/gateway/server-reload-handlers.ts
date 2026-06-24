@@ -93,6 +93,56 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+type GatewayHotReloadOptions = {
+  signal?: AbortSignal;
+};
+
+class GatewayHotReloadCancelledError extends Error {
+  constructor() {
+    super("gateway hot reload cancelled");
+  }
+}
+
+function isGatewayHotReloadCancelledError(err: unknown): boolean {
+  return err instanceof GatewayHotReloadCancelledError;
+}
+
+function throwIfHotReloadCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new GatewayHotReloadCancelledError();
+  }
+}
+
+function waitForChannelReloadPoll(signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(new GatewayHotReloadCancelledError());
+  }
+  return new Promise<void>((resolve, reject) => {
+    let onAbort: (() => void) | undefined;
+    const cleanup = () => {
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
+    timer.unref?.();
+    onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new GatewayHotReloadCancelledError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function logHotReloadCancelled(log: GatewayReloadLog): false {
+  log.info("config hot reload cancelled by gateway shutdown/restart");
+  return false;
+}
+
 function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
@@ -282,7 +332,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
+    signal?: AbortSignal,
   ) => {
+    throwIfHotReloadCancelled(signal);
     const initial = getActiveCounts();
     if (initial.totalActive <= 0) {
       return;
@@ -300,10 +352,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
-        timer.unref?.();
-      });
+      await waitForChannelReloadPoll(signal);
       const current = getActiveCounts();
       if (current.totalActive <= 0) {
         params.logReload.info("active operations and replies completed; reloading channels now");
@@ -329,7 +378,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
   };
 
-  const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+  const applyHotReload = async (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    options: GatewayHotReloadOptions = {},
+  ): Promise<boolean> => {
+    const signal = options.signal;
+    if (signal?.aborted === true) {
+      return logHotReloadCancelled(params.logReload);
+    }
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
@@ -365,7 +422,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
           return;
         }
-        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig, signal);
+        throwIfHotReloadCancelled(signal);
         const stoppedChannels: ChannelKind[] = [];
         const stopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
@@ -411,11 +469,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           );
         }
       };
-      const pluginReloadResult = await params.reloadPlugins({
-        nextConfig,
-        changedPaths: plan.changedPaths,
-        beforeReplace: stopChannelsBeforePluginReplace,
-      });
+      let pluginReloadResult: GatewayPluginReloadResult;
+      try {
+        pluginReloadResult = await params.reloadPlugins({
+          nextConfig,
+          changedPaths: plan.changedPaths,
+          beforeReplace: stopChannelsBeforePluginReplace,
+        });
+      } catch (err) {
+        if (isGatewayHotReloadCancelledError(err)) {
+          return logHotReloadCancelled(params.logReload);
+        }
+        throw err;
+      }
       for (const channel of pluginReloadResult.restartChannels) {
         channelsToRestart.add(channel);
       }
@@ -490,8 +556,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        if (!plan.reloadPlugins) {
-          await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        try {
+          if (!plan.reloadPlugins) {
+            await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig, signal);
+          }
+          throwIfHotReloadCancelled(signal);
+        } catch (err) {
+          if (isGatewayHotReloadCancelledError(err)) {
+            return logHotReloadCancelled(params.logReload);
+          }
+          throw err;
         }
         const restartChannel = async (name: ChannelKind) => {
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
@@ -536,6 +610,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     params.setState(nextState);
+    return true;
   };
 
   let restartPending = false;
@@ -682,7 +757,8 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
-    onHotReload: async (plan, nextConfig) => {
+    onHotReload: async (plan, nextConfig, signal) => {
+      throwIfHotReloadCancelled(signal);
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;
       const previousSnapshot = getActiveSecretsRuntimeSnapshot();
@@ -702,7 +778,17 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         });
       }
       try {
-        await applyHotReload(plan, prepared.config);
+        const applied = await applyHotReload(plan, prepared.config, { signal });
+        if (!applied) {
+          if (previousSnapshot) {
+            await activateSecretsRuntimeSnapshot(previousSnapshot);
+          } else {
+            clearSecretsRuntimeSnapshot();
+          }
+          params.sharedGatewaySessionGenerationState.current =
+            previousSharedGatewaySessionGeneration;
+          return;
+        }
       } catch (err) {
         if (previousSnapshot) {
           await activateSecretsRuntimeSnapshot(previousSnapshot);

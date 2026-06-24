@@ -736,6 +736,9 @@ export function createGatewayCloseHandler(
           ),
         );
       }
+      await measureCloseStep("config-reloader", () =>
+        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
+      );
       if (restartExpectedMs !== null && params.getPendingReplyCount) {
         const drainTimeoutMs =
           typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
@@ -827,9 +830,6 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
-      await measureCloseStep("config-reloader", () =>
-        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
-      );
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );

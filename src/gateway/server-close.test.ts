@@ -206,6 +206,58 @@ describe("createGatewayCloseHandler", () => {
     expect(stopChannel).toHaveBeenCalledWith("discord");
   });
 
+  it("stops the config reloader before channel runtimes", async () => {
+    const events: string[] = [];
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("config-reloader");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram"],
+        configReloader,
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 100 });
+
+    expect(events).toEqual(["config-reloader", "channel:telegram"]);
+    expect(configReloader.stop).toHaveBeenCalledTimes(1);
+    expect(stopChannel).toHaveBeenCalledWith("telegram");
+  });
+
+  it("stops the config reloader before restart drains active sessions", async () => {
+    const events: string[] = [];
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("config-reloader");
+      }),
+    };
+    const drainActiveSessionsForShutdown = vi.fn(async () => {
+      events.push("session-end-drain");
+      return { emittedSessionIds: [], timedOut: false };
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        configReloader,
+        drainActiveSessionsForShutdown,
+      }),
+    );
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 100 });
+
+    expect(events).toEqual(["config-reloader", "session-end-drain"]);
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledWith({
+      reason: "restart",
+      totalTimeoutMs: 5_000,
+    });
+  });
+
   it("awaits post-ready sidecars before plugin services and channels", async () => {
     const events: string[] = [];
     let releaseSidecar!: () => void;

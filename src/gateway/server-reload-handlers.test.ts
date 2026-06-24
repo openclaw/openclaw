@@ -449,6 +449,76 @@ describe("gateway restart deferral preflight", () => {
     expect(startChannel).toHaveBeenCalledWith("discord");
   });
 
+  it("cancels deferred channel hot reload when shutdown aborts the reload", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload, {
+      start: startChannel,
+      stop: stopChannel,
+    });
+    hoisted.activeEmbeddedRunCount.value = 1;
+    const abortController = new AbortController();
+    vi.useFakeTimers();
+    const reloadPromise = applyHotReload(
+      {
+        changedPaths: ["channels.telegram.botToken"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["channels.telegram.botToken"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(["telegram"]),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      {
+        gateway: { reload: { deferralTimeoutMs: 60_000 } },
+        channels: { telegram: { botToken: "token" } },
+      },
+      { signal: abortController.signal },
+    );
+    try {
+      await Promise.resolve();
+      await vi.waitFor(() => {
+        expect(logReload.warn).toHaveBeenCalledWith(
+          "config change requires channel reload (telegram) — deferring until 1 embedded run(s) complete",
+        );
+      });
+
+      abortController.abort();
+      await expect(reloadPromise).resolves.toBe(false);
+    } finally {
+      hoisted.activeEmbeddedRunCount.value = 0;
+      vi.useRealTimers();
+      await reloadPromise.catch(() => {});
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(logReload.info).toHaveBeenCalledWith(
+      "config hot reload cancelled by gateway shutdown/restart",
+    );
+  });
+
   it("forces channel hot reload after the configured deferral timeout", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -879,7 +949,7 @@ describe("gateway channel hot reload handlers", () => {
     };
   }
 
-  async function withChannelReloadsEnabled(run: () => Promise<void>) {
+  async function withChannelReloadsEnabled(run: () => Promise<unknown>) {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
