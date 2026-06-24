@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+
+## Unreleased
+
+### New
+
+- **Plugins/Amazon:** unified Amazon AWS services plugin with Polly TTS, Transcribe STT, and Nova Sonic realtime voice. All services authenticate via the standard AWS IAM credential chain. (#90792) Thanks @wirjo.
+
 ## 2026.6.10
 
 ### Highlights

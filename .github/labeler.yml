@@ -609,3 +609,9 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/zai/**"
+
+"plugin: amazon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amazon/**"
+          - "docs/providers/amazon.md"
