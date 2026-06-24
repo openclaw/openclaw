@@ -7,6 +7,7 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { peekMattermostChannelKind } from "./mattermost/channel-kind-store.js";
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "mattermost");
@@ -20,7 +21,6 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     (resolvedKind !== "channel" &&
       resolvedKind !== "group" &&
       (lower.startsWith("user:") || trimmed.startsWith("@")));
-  const isGroup = resolvedKind === "group";
   if (trimmed.startsWith("@")) {
     trimmed = trimmed.slice(1).trim();
   }
@@ -28,6 +28,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
+  // Prefer the monitor-backed cache kind over the potentially lossy resolvedTarget.kind
+  // so that public channels that happen to carry a "group" resolved kind are not pulled
+  // into the group session namespace.
+  const cachedKind = peekMattermostChannelKind(rawId);
+  const effectiveKind = cachedKind ?? resolvedKind;
+  const isGroup = !isUser && effectiveKind === "group";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
