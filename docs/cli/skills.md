@@ -38,11 +38,11 @@ openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
-openclaw skills verify <slug>
-openclaw skills verify <slug> --version <version>
-openclaw skills verify <slug> --tag <tag>
-openclaw skills verify <slug> --card
-openclaw skills verify <slug> --global
+openclaw skills verify @owner/<slug>
+openclaw skills verify @owner/<slug> --version <version>
+openclaw skills verify @owner/<slug> --tag <tag>
+openclaw skills verify @owner/<slug> --card
+openclaw skills verify @owner/<slug> --global
 openclaw skills list
 openclaw skills list --eligible
 openclaw skills list --json
@@ -105,8 +105,11 @@ Notes:
   target the shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
-- `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
-  default. There is no `--json` flag because JSON is already the default.
+- `verify @owner/<slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON
+  envelope by default. There is no `--json` flag because JSON is already the
+  default. Bare slugs remain accepted for compatibility when the skill is
+  already installed or unambiguous, but owner-qualified refs avoid publisher
+  ambiguity.
 - When ClawHub returns server-resolved source provenance, verify JSON also
   includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
   self-declared source URLs stay only in the raw provenance envelope and are not

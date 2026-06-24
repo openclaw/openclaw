@@ -31,6 +31,8 @@ const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
+  testState.sessionConfig = undefined;
+  testState.agentsConfig = undefined;
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -518,6 +520,8 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
+    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     const dir = path.dirname(storePath);
     const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
@@ -543,12 +547,12 @@ describe("session history HTTP endpoints", () => {
       "utf-8",
     );
     await writeSessionStoreForTestAsync(storePath, {
-      "agent:main:main": {
+      "agent:main:work": {
         sessionId: "sess-stale-main",
         sessionFile: staleTranscriptPath,
         updatedAt: 1,
       },
-      "agent:main:MAIN": {
+      "agent:main:main": {
         sessionId: "sess-fresh-main",
         sessionFile: freshTranscriptPath,
         updatedAt: 2,
@@ -556,7 +560,7 @@ describe("session history HTTP endpoints", () => {
     });
 
     await expectSessionHistoryText({
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:main:work",
       expectedText: "fresh history",
     });
   });

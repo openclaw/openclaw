@@ -515,6 +515,9 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+  if (legacyState.warnings.length > 0) {
+    note(legacyState.warnings.join("\n"), "Doctor warnings");
+  }
   if (legacyState.preview.length === 0) {
     return;
   }
@@ -1289,6 +1292,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({

@@ -743,8 +743,13 @@ describe("whatsapp inbound dispatch", () => {
       expectedReplyToId: "trigger-message",
     },
     {
-      name: "blocks durable fallback without a final payload reply target",
+      name: "quotes the current user follow-up without falling back to the quoted bot message",
       payload: { text: "final payload" },
+      expectedReplyToId: "trigger-message",
+    },
+    {
+      name: "preserves explicit null reply targets",
+      payload: { text: "final payload", replyToId: null },
       expectedReplyToId: null,
     },
   ] satisfies Array<{
