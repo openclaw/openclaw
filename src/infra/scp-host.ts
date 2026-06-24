@@ -8,10 +8,14 @@ const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
 const SCP_REMOTE_PATH_UNSAFE_CHARS = new Set(["\\", "'", '"', "`", "$", ";", "|", "&", "<", ">"]);
 
+function isControlCharacter(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+}
+
 function hasControlOrWhitespace(value: string): boolean {
   for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || WHITESPACE.test(char)) {
+    if (isControlCharacter(char) || WHITESPACE.test(char)) {
       return true;
     }
   }
@@ -74,8 +78,7 @@ export function normalizeScpRemotePath(value: string | null | undefined): string
   }
 
   for (const char of trimmed) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || SCP_REMOTE_PATH_UNSAFE_CHARS.has(char)) {
+    if (isControlCharacter(char) || SCP_REMOTE_PATH_UNSAFE_CHARS.has(char)) {
       return undefined;
     }
   }
