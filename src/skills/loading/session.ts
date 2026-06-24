@@ -1,5 +1,5 @@
 // Session skill helpers resolve skills attached to a session and its transcript state.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
@@ -144,10 +144,16 @@ function loadSkillsFromDirInternal(
   const ig = ignoreMatcher ?? ignore();
   addIgnoreRules(ig, dir, root);
 
+  let entries: Dirent[];
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { skills, diagnostics };
+  }
 
-    for (const entry of entries) {
+  // First pass: check for SKILL.md at this directory level
+  for (const entry of entries) {
+    try {
       if (entry.name !== "SKILL.md") {
         continue;
       }
@@ -174,9 +180,19 @@ function loadSkillsFromDirInternal(
       }
       diagnostics.push(...result.diagnostics);
       return { skills, diagnostics };
+    } catch (err) {
+      diagnostics.push({
+        type: "warning",
+        message: `Failed to load skill from ${entry.name}: ${err instanceof Error ? err.message : String(err)}`,
+        path: join(dir, entry.name),
+      });
+      continue;
     }
+  }
 
-    for (const entry of entries) {
+  // Second pass: recurse into subdirectories and load root .md files
+  for (const entry of entries) {
+    try {
       if (entry.name.startsWith(".")) {
         continue;
       }
@@ -224,8 +240,15 @@ function loadSkillsFromDirInternal(
         skills.push(result.skill);
       }
       diagnostics.push(...result.diagnostics);
+    } catch (err) {
+      diagnostics.push({
+        type: "warning",
+        message: `Failed to load skill from ${entry.name}: ${err instanceof Error ? err.message : String(err)}`,
+        path: join(dir, entry.name),
+      });
+      continue;
     }
-  } catch {}
+  }
 
   return { skills, diagnostics };
 }
