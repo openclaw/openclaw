@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
+import { getContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -144,5 +145,54 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     expect(factories).toContain(contextPruningExtension);
+  });
+
+  it("enables cache-ttl pruning for OpenAI with default TTL", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      model: { contextWindow: 200_000 } as Model,
+    });
+
+    expect(factories).toContain(contextPruningExtension);
+    const runtime = getContextPruningRuntime(sessionManager);
+    // Default TTL for unconfigured pruning is 5 min
+    expect(runtime?.settings.ttlMs).toBe(5 * 60 * 1000);
+  });
+
+  it("preserves explicit short TTL for OpenAI (no silent clamp)", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+              ttl: "5m",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      model: { contextWindow: 200_000 } as Model,
+    });
+
+    expect(factories).toContain(contextPruningExtension);
+    const runtime = getContextPruningRuntime(sessionManager);
+    // Explicit "5m" must be preserved; only unconfigured TTLs get the default.
+    expect(runtime?.settings.ttlMs).toBe(5 * 60 * 1000);
   });
 });

@@ -53,8 +53,12 @@ describe("isCacheTtlEligibleProvider", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
   });
 
+  it("allows OpenAI providers", () => {
+    expect(isCacheTtlEligibleProvider("openai", "gpt-5.5")).toBe(true);
+    expect(isCacheTtlEligibleProvider("openai", "gpt-5.5-codex")).toBe(true);
+  });
+
   it("rejects unsupported providers and models", () => {
-    expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });
 
