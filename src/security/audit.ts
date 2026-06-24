@@ -1191,11 +1191,27 @@ async function maybeProbeGateway(params: {
     config: params.cfg,
     allowConfiguredSshTransport: true,
   });
-  const ssh = await startGatewayRemoteSshTunnel({
-    config: params.cfg,
-    url: connection.url,
-    urlSource: connection.urlSource,
-  });
+  let ssh: Awaited<ReturnType<typeof startGatewayRemoteSshTunnel>>;
+  try {
+    ssh = await startGatewayRemoteSshTunnel({
+      config: params.cfg,
+      url: connection.url,
+      urlSource: connection.urlSource,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      deep: {
+        gateway: {
+          attempted: true,
+          url: connection.url,
+          ok: false,
+          error: `ssh tunnel failed: ${detail}`,
+          close: null,
+        },
+      },
+    };
+  }
   const url = ssh?.url ?? connection.url;
   const probeTarget = resolveGatewayProbeTarget(params.cfg);
 
