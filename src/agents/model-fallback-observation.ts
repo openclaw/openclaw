@@ -10,6 +10,8 @@ import type { FailoverReason } from "./embedded-agent-helpers.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
+const AUTH_DECISION_LOG_COALESCE_WINDOW_MS = 30_000;
+const AUTH_DECISION_LOG_COALESCE_MAX_ENTRIES = 100;
 
 /** Return whether fallback decision logging is enabled for warn-level events. */
 export function isModelFallbackDecisionLogEnabled(): boolean {
@@ -35,6 +37,18 @@ function buildErrorObservationFields(error?: string): {
     providerErrorMessagePreview: observed.providerErrorMessagePreview,
     requestIdHash: observed.requestIdHash,
   };
+}
+
+type ErrorObservationFields = ReturnType<typeof buildErrorObservationFields>;
+type AuthDecisionLogCoalesceEntry = {
+  lastLoggedAt: number;
+  suppressed: number;
+};
+
+const authDecisionLogCoalesceEntries = new Map<string, AuthDecisionLogCoalesceEntry>();
+
+export function resetModelFallbackDecisionLogCoalescingForTest(): void {
+  authDecisionLogCoalesceEntries.clear();
 }
 
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
@@ -80,6 +94,104 @@ export type ModelFallbackDecisionParams = {
 
 function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
+}
+
+function isAuthDecisionLogCoalescingEligible(params: ModelFallbackDecisionParams): boolean {
+  return (
+    (params.decision === "candidate_failed" || params.decision === "skip_candidate") &&
+    (params.reason === "auth" || params.reason === "auth_permanent")
+  );
+}
+
+function buildAuthDecisionLogCoalesceKey(
+  params: ModelFallbackDecisionParams,
+  observedError: ErrorObservationFields,
+): string {
+  return JSON.stringify([
+    params.sessionId ?? params.runId,
+    params.lane,
+    params.requestedProvider,
+    params.requestedModel,
+    params.decision,
+    params.candidate.provider,
+    params.candidate.model,
+    params.attempt,
+    params.total,
+    params.reason,
+    params.status,
+    params.code,
+    observedError.httpCode,
+    observedError.providerErrorType,
+    observedError.errorFingerprint ?? observedError.errorHash,
+    params.nextCandidate ? formatModelRef(params.nextCandidate) : null,
+    params.isPrimary,
+    params.requestedModelMatched,
+    params.fallbackConfigured,
+  ]);
+}
+
+function pruneAuthDecisionLogCoalesceEntries(now: number): void {
+  const staleBefore = now - AUTH_DECISION_LOG_COALESCE_WINDOW_MS * 2;
+  for (const [key, entry] of authDecisionLogCoalesceEntries) {
+    if (entry.lastLoggedAt < staleBefore) {
+      authDecisionLogCoalesceEntries.delete(key);
+    }
+  }
+}
+
+function evictOldestAuthDecisionLogCoalesceEntry(): void {
+  let oldestKey: string | undefined;
+  let oldestLoggedAt = Infinity;
+  for (const [key, entry] of authDecisionLogCoalesceEntries) {
+    if (entry.lastLoggedAt < oldestLoggedAt) {
+      oldestLoggedAt = entry.lastLoggedAt;
+      oldestKey = key;
+    }
+  }
+  if (oldestKey !== undefined) {
+    authDecisionLogCoalesceEntries.delete(oldestKey);
+  }
+}
+
+function rememberAuthDecisionLogCoalesceEntry(key: string, now: number): void {
+  if (!authDecisionLogCoalesceEntries.has(key)) {
+    pruneAuthDecisionLogCoalesceEntries(now);
+    if (authDecisionLogCoalesceEntries.size >= AUTH_DECISION_LOG_COALESCE_MAX_ENTRIES) {
+      evictOldestAuthDecisionLogCoalesceEntry();
+    }
+  }
+  authDecisionLogCoalesceEntries.set(key, { lastLoggedAt: now, suppressed: 0 });
+}
+
+function resolveAuthDecisionLogCoalescing(
+  params: ModelFallbackDecisionParams,
+  observedError: ErrorObservationFields,
+): { shouldLog: boolean; suppressedDuplicateCount?: number } {
+  if (!isAuthDecisionLogCoalescingEligible(params)) {
+    return { shouldLog: true };
+  }
+
+  const now = Date.now();
+  const key = buildAuthDecisionLogCoalesceKey(params, observedError);
+  const recent = authDecisionLogCoalesceEntries.get(key);
+  const recentAgeMs = recent ? now - recent.lastLoggedAt : undefined;
+  if (
+    recent &&
+    recentAgeMs !== undefined &&
+    recentAgeMs >= AUTH_DECISION_LOG_COALESCE_WINDOW_MS * 2
+  ) {
+    authDecisionLogCoalesceEntries.delete(key);
+    rememberAuthDecisionLogCoalesceEntry(key, now);
+    return { shouldLog: true };
+  }
+  if (recent && recentAgeMs !== undefined && recentAgeMs < AUTH_DECISION_LOG_COALESCE_WINDOW_MS) {
+    recent.suppressed += 1;
+    return { shouldLog: false };
+  }
+
+  const suppressedDuplicateCount = recent?.suppressed;
+  rememberAuthDecisionLogCoalesceEntry(key, now);
+  return { shouldLog: true, suppressedDuplicateCount };
 }
 
 function buildFallbackStepFields(params: {
@@ -158,6 +270,17 @@ export function logModelFallbackDecision(
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
   const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
+  const logCoalescing = resolveAuthDecisionLogCoalescing(params, observedError);
+  if (!logCoalescing.shouldLog) {
+    return fallbackStepFields;
+  }
+  const suppressedDuplicateCount = logCoalescing.suppressedDuplicateCount ?? 0;
+  const suppressedSuffix =
+    suppressedDuplicateCount > 0
+      ? ` (${suppressedDuplicateCount} duplicates suppressed in last ${
+          AUTH_DECISION_LOG_COALESCE_WINDOW_MS / 1000
+        }s)`
+      : "";
   decisionLog.warn("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
@@ -183,6 +306,7 @@ export function logModelFallbackDecision(
     fallbackConfigured: params.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     profileCount: params.profileCount,
+    ...(suppressedDuplicateCount > 0 ? { suppressedDuplicateCount } : {}),
     previousAttempts: params.previousAttempts?.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,
@@ -193,7 +317,7 @@ export function logModelFallbackDecision(
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}${suppressedSuffix}`,
   });
   return fallbackStepFields;
 }

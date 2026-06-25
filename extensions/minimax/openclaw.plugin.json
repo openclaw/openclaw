@@ -1,5 +1,6 @@
 {
   "id": "minimax",
+  "icon": "https://cdn.simpleicons.org/minimax",
   "activation": {
     "onStartup": false
   },

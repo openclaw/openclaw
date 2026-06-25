@@ -1,6 +1,6 @@
 // Control UI tests cover chat responsive behavior.
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -22,7 +22,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-let browser: Browser;
+const pageBrowsers = new WeakMap<Page, Browser>();
 
 type ControlRect = {
   x: number;
@@ -262,11 +262,37 @@ async function openFixture(
   height: number,
   opts: { sideResult?: boolean; singleAgent?: boolean } = {},
 ) {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
-  );
-  return page;
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
+
+async function openBrowserPage(width: number, height: number): Promise<Page> {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  let page: Page | undefined;
+  try {
+    page = await browser.newPage({ viewport: { width, height } });
+    pageBrowsers.set(page, browser);
+    return page;
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeBrowserPage(page: Page): Promise<void> {
+  const browser = pageBrowsers.get(page);
+  pageBrowsers.delete(page);
+  await page.close().catch(() => {});
+  await browser?.close().catch(() => {});
 }
 
 async function getRect(page: Page, selector: string) {
@@ -317,11 +343,16 @@ function rectsOverlap(
 }
 
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
-  );
-  return page;
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -333,14 +364,6 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.html).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
-
-beforeAll(async () => {
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
-
-afterAll(async () => {
-  await browser.close();
-});
 
 describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
@@ -378,7 +401,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(session.width / agent.width).toBeGreaterThan(1.25);
       expect(session.width / agent.width).toBeLessThan(1.55);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -399,7 +422,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(hiddenState.opacity).toBe("0");
       expect(hiddenState.pointerEvents).toBe("none");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -410,7 +433,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const code = await getBoundingBox(page, ".chat-text pre");
       expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -420,7 +443,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
   ] as const)(
     "keeps short assistant text clear of bubble actions at %sx%s",
     async (width, height) => {
-      const page = await browser.newPage({ viewport: { width, height } });
+      const page = await openBrowserPage(width, height);
       try {
         await page.setContent(
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -445,7 +468,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const actions = await getRect(page, ".chat-bubble-actions");
         expect(text.right).toBeLessThanOrEqual(actions.left - 1);
       } finally {
-        await page.close();
+        await closeBrowserPage(page);
       }
     },
   );
@@ -454,7 +477,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
-    const page = await browser.newPage({ viewport: { width, height } });
+    const page = await openBrowserPage(width, height);
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -480,7 +503,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const inlineCode = await getRect(page, ".chat-text p code");
       expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -546,7 +569,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
           expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         }
       } finally {
-        await page.close();
+        await closeBrowserPage(page);
       }
     },
   );
@@ -568,7 +591,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -625,7 +648,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(settingsLabel.display).toBe("none");
       } finally {
-        await page.close();
+        await closeBrowserPage(page);
       }
     },
   );
@@ -640,7 +663,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(model.y).toBeGreaterThan(session.y);
       expect(model.width).toBe(session.width);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -653,7 +676,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         .evaluate((node) => getComputedStyle(node).position);
       expect(position).toBe("fixed");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 });

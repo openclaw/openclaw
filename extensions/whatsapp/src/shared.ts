@@ -181,7 +181,7 @@ export function createWhatsAppPluginBase(params: {
     // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
     // hot no-op and leaves the account connected until a full restart.
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
     },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],

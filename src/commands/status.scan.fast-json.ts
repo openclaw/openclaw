@@ -7,7 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
-  resolveDefaultMemoryStorePath,
+  resolveDefaultMemoryDatabasePath,
   resolveStatusMemoryStatusSnapshot,
 } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
@@ -144,7 +144,7 @@ export async function scanStatusJsonFast(
             cfg,
             agentStatus,
             memoryPlugin,
-            requireDefaultStore: resolveDefaultMemoryStorePath,
+            requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
           })
         : null,
   });

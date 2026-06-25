@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   prepareBundleProbeCliConfig,
@@ -116,17 +116,30 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {
-    const prepared = await prepareBundleProbeCliConfig({
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            },
+    const additionalConfig = {
+      mcpServers: {
+        openclaw: {
+          type: "http",
+          url: "http://127.0.0.1:23119/mcp",
+          headers: {
+            Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
           },
         },
+      },
+    };
+    const prepared = await prepareBundleProbeCliConfig({
+      additionalConfig,
+      env: {
+        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      },
+    });
+    const otherEnvPrepared = await prepareBundleProbeCliConfig({
+      additionalConfig,
+      env: {
+        OPENCLAW_MCP_TOKEN: "other-loopback-token",
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
     });
 
@@ -136,9 +149,28 @@ describe("prepareCliBundleMcpConfig", () => {
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer ${OPENCLAW_MCP_TOKEN}");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
+    await prepareCliBundleMcpCaptureAttempt({
+      mode: "claude-config-file",
+      backend: prepared.backend,
+      env: prepared.env,
+      captureKey: "attempt-123",
+    });
+    const attemptRaw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    };
+    expect(attemptRaw.mcpServers?.openclaw?.headers?.Authorization).toBe(
+      "Bearer loopback-token-123",
+    );
+    expect(attemptRaw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
+      "attempt-123",
+    );
+    expect(prepared.mcpConfigHash).toBe(otherEnvPrepared.mcpConfigHash);
+    expect(prepared.mcpResumeHash).toBe(otherEnvPrepared.mcpResumeHash);
 
     await prepared.cleanup?.();
+    await otherEnvPrepared.cleanup?.();
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {

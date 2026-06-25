@@ -392,6 +392,14 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
+vi.mock("../../workspace.js", async () => {
+  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
+  return {
+    ...actual,
+    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+  };
+});
+
 vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
@@ -824,6 +832,13 @@ vi.mock("../utils.js", () => ({
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
+  hasActiveCompactionRetryWork: ({
+    isCompactionInFlight,
+    isSessionStreaming,
+  }: {
+    isCompactionInFlight: boolean;
+    isSessionStreaming: boolean;
+  }) => isCompactionInFlight || isSessionStreaming,
   waitForCompactionRetryWithAggregateTimeout: async () => ({
     timedOut: false,
     aborted: false,

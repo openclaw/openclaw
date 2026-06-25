@@ -2,7 +2,6 @@
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -61,6 +60,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -85,7 +85,7 @@ import {
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
-  forkCompactionCheckpointTranscriptAsync,
+  createFileBackedCompactionCheckpointStore,
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
@@ -134,6 +134,8 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -186,7 +188,7 @@ function inheritSessionRuntimeSelection(
       ? { contextTokens: parentEntry.contextTokens }
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(typeof parentEntry.fastMode === "boolean" ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
@@ -347,74 +349,6 @@ function rejectWebchatSessionMutation(params: {
 
 function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
-}
-
-function cloneCheckpointSessionEntry(params: {
-  currentEntry: SessionEntry;
-  nextSessionId: string;
-  nextSessionFile: string;
-  label?: string;
-  parentSessionKey?: string;
-  totalTokens?: number;
-  preserveCompactionCheckpoints?: boolean;
-}): SessionEntry {
-  return {
-    ...params.currentEntry,
-    sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
-    updatedAt: Date.now(),
-    systemSent: false,
-    abortedLastRun: false,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
-    totalTokens:
-      typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens)
-        ? params.totalTokens
-        : undefined,
-    totalTokensFresh:
-      typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens)
-        ? true
-        : undefined,
-    label: params.label ?? params.currentEntry.label,
-    parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
-    compactionCheckpoints: params.preserveCompactionCheckpoints
-      ? params.currentEntry.compactionCheckpoints
-      : undefined,
-  };
-}
-
-function resolveCheckpointForkSource(
-  checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
-): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
-  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
-  if (preCompactionFile) {
-    return {
-      sourceFile: preCompactionFile,
-      sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
-    };
-  }
-  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
-  if (!postCompactionFile) {
-    return null;
-  }
-  const postCompactionLeafId =
-    checkpoint.postCompaction.entryId ?? checkpoint.postCompaction.leafId;
-  if (!postCompactionLeafId) {
-    return null;
-  }
-  return {
-    sourceFile: postCompactionFile,
-    sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
-  };
 }
 
 function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
@@ -830,8 +764,9 @@ async function handleSessionSend(params: {
   const messageSeq =
     (await readSessionMessageCountAsync({
       agentId: requestedAgentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     })) + 1;
   let sendAcked = false;
@@ -1156,7 +1091,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
-          scanLegacyKeys: false,
         });
         const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
         storeCache.set(cachedStoreTarget.storePath, store);
@@ -1173,8 +1107,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const items = readSessionPreviewItemsFromTranscript(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           limit,
@@ -1532,8 +1467,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messageSeq = initialMessage
       ? (await readSessionMessageCountAsync({
           agentId: target.agentId,
-          sessionFile: createdEntry.sessionFile,
+          sessionEntry: createdEntry,
           sessionId: createdEntry.sessionId,
+          sessionKey: target.canonicalKey,
           storePath: target.storePath,
         })) + 1
       : undefined;
@@ -1659,7 +1595,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { cfg: loadedCfg, entry, canonicalKey } = loaded;
+    const { cfg: loadedCfg, entry, canonicalKey, legacyKey } = loaded;
     const target = resolveGatewaySessionStoreTarget({
       cfg: loadedCfg,
       key: canonicalKey,
@@ -1674,8 +1610,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
-    if (!checkpoint || !forkSource) {
+    if (!checkpoint) {
       respond(
         false,
         undefined,
@@ -1683,12 +1618,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const branchedSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: forkSource.sourceFile,
-      sourceLeafId: forkSource.sourceLeafId,
-      sessionDir: path.dirname(forkSource.sourceFile),
+    const nextKey = buildDashboardSessionKey(target.agentId);
+    const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
+      storePath: target.storePath,
+      sourceKey: canonicalKey,
+      sourceStoreKey: legacyKey,
+      nextKey,
+      checkpointId,
     });
-    if (!branchedSession?.sessionFile) {
+    if (
+      branchedSession.status === "missing-checkpoint" ||
+      branchedSession.status === "missing-boundary"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
+      );
+      return;
+    }
+    if (branchedSession.status === "missing-session") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      );
+      return;
+    }
+    if (branchedSession.status === "failed") {
       respond(
         false,
         undefined,
@@ -1696,30 +1653,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const nextKey = buildDashboardSessionKey(target.agentId);
-    const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
-    const nextEntry = cloneCheckpointSessionEntry({
-      currentEntry: entry,
-      nextSessionId: branchedSession.sessionId,
-      nextSessionFile: branchedSession.sessionFile,
-      label,
-      parentSessionKey: canonicalKey,
-      totalTokens: forkSource.totalTokens,
-    });
-
-    await updateSessionStore(target.storePath, (store) => {
-      store[nextKey] = nextEntry;
-    });
 
     respond(
       true,
       {
         ok: true,
         sourceKey: canonicalKey,
-        key: nextKey,
-        sessionId: nextEntry.sessionId,
-        checkpoint,
-        entry: nextEntry,
+        key: branchedSession.key,
+        sessionId: branchedSession.entry.sessionId,
+        checkpoint: branchedSession.checkpoint,
+        entry: branchedSession.entry,
       },
       undefined,
     );
@@ -1731,7 +1674,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "checkpoint-branch",
     });
     emitSessionsChanged(context, {
-      sessionKey: nextKey,
+      sessionKey: branchedSession.key,
       reason: "checkpoint-branch",
     });
   },
@@ -1774,7 +1717,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { entry, canonicalKey, storePath } = loaded;
+    const { entry, canonicalKey, legacyKey, storePath } = loaded;
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1784,8 +1727,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
-    if (!checkpoint || !forkSource) {
+    if (!checkpoint) {
       respond(
         false,
         undefined,
@@ -1808,12 +1750,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const restoredSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: forkSource.sourceFile,
-      sourceLeafId: forkSource.sourceLeafId,
-      sessionDir: path.dirname(forkSource.sourceFile),
+    const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
+      storePath,
+      sessionKey: canonicalKey,
+      sessionStoreKey: legacyKey,
+      checkpointId,
     });
-    if (!restoredSession?.sessionFile) {
+    if (
+      restoredSession.status === "missing-checkpoint" ||
+      restoredSession.status === "missing-boundary"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
+      );
+      return;
+    }
+    if (restoredSession.status === "missing-session") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      );
+      return;
+    }
+    if (restoredSession.status === "failed") {
       respond(
         false,
         undefined,
@@ -1821,26 +1783,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const nextEntry = cloneCheckpointSessionEntry({
-      currentEntry: entry,
-      nextSessionId: restoredSession.sessionId,
-      nextSessionFile: restoredSession.sessionFile,
-      totalTokens: forkSource.totalTokens,
-      preserveCompactionCheckpoints: true,
-    });
-
-    await updateSessionStore(storePath, (store) => {
-      store[canonicalKey] = nextEntry;
-    });
 
     respond(
       true,
       {
         ok: true,
-        key: canonicalKey,
-        sessionId: nextEntry.sessionId,
-        checkpoint,
-        entry: nextEntry,
+        key: restoredSession.key,
+        sessionId: restoredSession.entry.sessionId,
+        checkpoint: restoredSession.checkpoint,
+        entry: restoredSession.entry,
       },
       undefined,
     );
@@ -2398,8 +2349,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
-        sessionFile: entry.sessionFile,
+        sessionEntry: entry,
         sessionId: entry.sessionId,
+        sessionKey: key,
         storePath,
       },
       {
@@ -2613,6 +2565,63 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           compacted: result.compacted,
         });
       }
+      return;
+    }
+
+    const trimPreflight = await preflightSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimPreflight.compacted) {
+      if ("kept" in trimPreflight) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimPreflight.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
+      return;
+    }
+
+    // Active-run safety parity with the LLM-summarize branch above. The maxLines
+    // truncate path archives and overwrites the transcript, so once preflight
+    // proves a destructive trim is needed, interrupt before rereading and writing.
+    const truncateInterrupt = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      agentId: requestedAgentId,
+      sessionId,
+    });
+    if (truncateInterrupt.error) {
+      respond(false, undefined, truncateInterrupt.error);
       return;
     }
 

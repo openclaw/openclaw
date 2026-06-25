@@ -24,6 +24,7 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 export type { ChannelRuntimeSnapshot };
@@ -104,14 +105,6 @@ function createRuntimeStore(): ChannelRuntimeStore {
     tasks: new Map(),
     runtimes: new Map(),
   };
-}
-
-function isAccountEnabled(account: unknown): boolean {
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
 }
 
 function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {

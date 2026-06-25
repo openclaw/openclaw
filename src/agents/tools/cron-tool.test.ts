@@ -643,6 +643,18 @@ describe("cron tool", () => {
     );
   });
 
+  it("documents due-by-default cron run mode", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const runMode = parameters.properties?.runMode;
+
+    expect(tool.description).toContain(
+      'run: run only if due by default; needs jobId; pass runMode="force" to trigger now',
+    );
+    expect(runMode?.description).toContain('omitted defaults to "due"');
+    expect(runMode?.description).toContain('use "force" to trigger now');
+  });
+
   it("advertises delivery threadId in the tool schema", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;
@@ -710,8 +722,8 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
-    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
-    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "due" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "due" }],
     ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
     ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
@@ -732,7 +744,7 @@ describe("cron tool", () => {
       id: "job-legacy",
     });
 
-    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "force" });
+    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "due" });
   });
 
   it("supports due-only run mode", async () => {
@@ -744,6 +756,17 @@ describe("cron tool", () => {
     });
 
     expect(readGatewayCall().params).toEqual({ id: "job-due", mode: "due" });
+  });
+
+  it("supports force run mode", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-force", {
+      action: "run",
+      jobId: "job-force",
+      runMode: "force",
+    });
+
+    expect(readGatewayCall().params).toEqual({ id: "job-force", mode: "force" });
   });
 
   it("normalizes cron.add job payloads", async () => {
@@ -2144,6 +2167,7 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     });
   });
 
@@ -2179,6 +2203,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
           },
         },
       },
@@ -2255,6 +2280,51 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves the default toolsAllow flag across an update that omits toolsAllow", async () => {
+    // Regression guard: a routine update (here, toggling enabled) of an
+    // agentTurn job whose cap was an auto-stamped default must keep
+    // toolsAllowIsDefault set. Otherwise the run-time CLI drop (which keys off
+    // the flag) stops applying and the job fails closed again after a restart —
+    // re-breaking the exact #91499 regression this change fixes.
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-13",
+        payload: {
+          kind: "agentTurn",
+          message: "hi",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+    await tool.execute("call-update-preserve-default-flag", {
+      action: "update",
+      id: "job-13",
+      patch: { enabled: false },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-13",
+        patch: {
+          enabled: false,
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      },
+    });
+  });
+
   it("adds the creator tool surface when converting an existing job to agentTurn", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -2287,6 +2357,7 @@ describe("cron tool", () => {
             kind: "agentTurn",
             message: "run later",
             toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
           },
         },
       },

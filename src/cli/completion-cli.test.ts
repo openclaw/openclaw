@@ -12,6 +12,10 @@ function createCompletionProgram(): Command {
   program.name("openclaw");
   program.description("CLI root");
   program.option("-v, --verbose", "Verbose output");
+  program.option(
+    "--status-json",
+    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
+  );
 
   const gateway = program.command("gateway").description("Gateway commands");
   gateway.option("--force", "Force the action");
@@ -38,6 +42,21 @@ describe("completion-cli", () => {
     expect(script).toContain("(status) _openclaw_gateway_status ;;");
     expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
+    expect(script).toContain("\\`models status --json\\`");
+    expect(script).toContain("\\$OPENCLAW_STATE_DIR");
+  });
+
+  it("escapes zsh option descriptions for double-quoted arguments specs", () => {
+    const program = new Command()
+      .name("openclaw")
+      .option("--literal", "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile");
+
+    const script = getCompletionScript("zsh", program);
+
+    expect(script).toContain(
+      "--literal[Use \\$OPENCLAW_STATE_DIR with \\`model/list\\` and John's profile]",
+    );
+    expect(script).not.toContain("John'\\''s");
   });
 
   it("defers zsh registration until compinit is available", async () => {

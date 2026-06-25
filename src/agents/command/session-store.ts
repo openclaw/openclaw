@@ -1,21 +1,17 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  canonicalizeAbsoluteSessionFilePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  resolveCompactionSessionFile,
   setSessionRuntimeModel,
   type SessionEntry,
-  rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -32,10 +28,6 @@ async function getUsageFormatModule() {
 
 async function getContextModule() {
   return await contextModuleLoader.load();
-}
-
-function resolveNonNegativeNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function resolvePositiveInteger(value: number | undefined): number | undefined {
@@ -442,31 +434,4 @@ export async function recordCliCompactionInStore(params: {
     sessionStore[sessionKey] = persisted;
   }
   return persisted ?? undefined;
-}
-
-function resolveCompactionSessionFile(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath?: string;
-  newSessionId: string;
-}): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const pathOpts = resolveSessionFilePathOptions({
-    agentId,
-    storePath: params.storePath,
-  });
-  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-    sessionFile: params.entry.sessionFile,
-    previousSessionId: params.entry.sessionId,
-    nextSessionId: params.newSessionId,
-  });
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  return resolveSessionFilePath(
-    params.newSessionId,
-    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
-    pathOpts,
-  );
 }

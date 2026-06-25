@@ -498,6 +498,23 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "direct",
       },
     },
+    {
+      name: "uses resolved direct-only channel user targets to avoid phantom group sessions",
+      target: "wxid_abc123@im.wechat",
+      channel: "openclaw-weixin",
+      resolvedTarget: {
+        to: "wxid_abc123@im.wechat",
+        kind: "user" as const,
+        source: "normalized" as const,
+        resolutionSource: "normalized" as const,
+      },
+      expected: {
+        sessionKey: "agent:main:openclaw-weixin:direct:wxid_abc123@im.wechat",
+        from: "openclaw-weixin:wxid_abc123@im.wechat",
+        to: "user:wxid_abc123@im.wechat",
+        chatType: "direct",
+      },
+    },
   ])("$name", async ({ channel = "guildchat", target, threadId, resolvedTarget, expected }) => {
     const route = await resolveOutboundSessionRoute({
       cfg: perChannelPeerSessionCfg,

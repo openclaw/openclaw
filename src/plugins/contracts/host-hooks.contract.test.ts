@@ -7,11 +7,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  validatePluginsUiDescriptorsResult,
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -1892,6 +1894,84 @@ describe("host-hook fixture plugin contract", () => {
     ).toBe(false);
     expect(validatePluginsUiDescriptorsParams({})).toBe(true);
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
+    expect(
+      validatePluginsUiDescriptorsResult({
+        ok: true,
+        descriptors: [
+          {
+            id: "approval-panel",
+            pluginId: "host-hook-fixture",
+            surface: "session",
+            label: "Approval panel",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsUiDescriptorsResult({
+        ok: true,
+        descriptors: [
+          {
+            id: "approval-panel",
+            pluginId: "host-hook-fixture",
+            surface: "session",
+            label: "Approval panel",
+            leakedRegistryField: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("projects plugin UI descriptors through the strict gateway result shape", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "approval-panel",
+          surface: "session",
+          label: "Approval panel",
+        });
+      },
+    });
+    const descriptorEntry = registry.registry.controlUiDescriptors?.[0];
+    if (!descriptorEntry) {
+      throw new Error("expected control UI descriptor registration");
+    }
+    Object.assign(descriptorEntry.descriptor, { leakedRegistryField: true });
+    setActivePluginRegistry(registry.registry);
+
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    void pluginHostHookHandlers["plugins.uiDescriptors"]({
+      params: {},
+      respond: (ok: boolean, payload: unknown, error: unknown) => {
+        calls.push([ok, payload, error]);
+      },
+    } as never);
+
+    expect(calls).toHaveLength(1);
+    const [ok, payload, error] = calls[0] ?? [];
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(validatePluginsUiDescriptorsResult(payload)).toBe(true);
+    expect(payload).toEqual({
+      ok: true,
+      descriptors: [
+        {
+          id: "approval-panel",
+          pluginId: "host-hook-fixture",
+          pluginName: "Host Hook Fixture",
+          surface: "session",
+          label: "Approval panel",
+        },
+      ],
+    });
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {

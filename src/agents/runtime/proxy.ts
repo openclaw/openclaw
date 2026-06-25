@@ -256,6 +256,9 @@ export function streamProxy(
       });
       stream.end();
     } finally {
+      try {
+        reader?.releaseLock();
+      } catch {}
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }
