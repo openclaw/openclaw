@@ -97,6 +97,23 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+## Issue, PR, and Contact Routing
+
+Start from this routing map before creating GitHub items:
+
+| Situation                                                | Use                                                                                                                                                                                  | Required evidence                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Product bug, regression, crash, or behavior defect       | [Bug report](https://github.com/openclaw/openclaw/issues/new?template=bug_report.yml)                                                                                                | Repro steps, expected vs actual behavior, version, OS, model/provider route when relevant, logs/screenshots, impact |
+| Documentation bug or missing/contradictory docs          | [Docs bug report](https://github.com/openclaw/openclaw/issues/new?template=docs_bug_report.yml)                                                                                      | Affected docs path or URL, verification steps, expected docs content, actual docs content, impact, evidence         |
+| New feature, architecture change, or product improvement | [Feature request](https://github.com/openclaw/openclaw/issues/new?template=feature_request.yml) or Discord first                                                                     | Problem, proposed solution, alternatives, impact, examples or prior art                                             |
+| Onboarding, setup help, or general support question      | Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828) | Do not open a GitHub issue unless there is a concrete product defect or docs gap                                    |
+| Security vulnerability                                   | See [Report a Vulnerability](#report-a-vulnerability) below                                                                                                                          | Do not file public issues for private security reports                                                              |
+| PR for an existing or newly filed issue                  | Use the [PR template](.github/pull_request_template.md)                                                                                                                              | Visible `Closes #<issue>` or `Related: #<issue>`, problem, shipped solution, user impact, validation evidence       |
+
+For agent-authored or otherwise non-trivial work, create or reuse the issue first, then open the PR against it. Bugs and very small fixes may go straight to PR, but still link existing context when it exists and fill out the PR template.
+
+Do not guess who to tag. Let issue forms, labels/automation, `CODEOWNERS`, and the maintainer areas above route the work. Mention a maintainer only when their listed area or owned path is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
+
 ## PR Limits
 
 We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.

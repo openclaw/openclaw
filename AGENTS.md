@@ -143,6 +143,12 @@ Skills own workflows; root owns hard policy and routing.
 
 ## GitHub / PRs
 
+- Fresh issue/PR routing: read `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/config.yml`, the relevant `.github/ISSUE_TEMPLATE/*.yml`, `.github/pull_request_template.md`, and `CODEOWNERS` before creating a GitHub item. Blank issues are disabled; do not invent ad hoc issue shapes.
+- Issue forms: product bugs/regressions/crashes use `bug_report.yml`; docs defects use `docs_bug_report.yml`; features/architecture/product improvements use `feature_request.yml` or Discord first when speculative. Support/onboarding/questions go to Discord, not GitHub, unless there is a concrete product defect or docs gap. Security reports go through `SECURITY.md`/`CONTRIBUTING.md`, not public issues.
+- Issue content: preserve form intent. Include repro/verification steps, expected vs actual behavior, affected version/docs path, environment, model/provider route when relevant, logs/screenshots, impact, and evidence. If required evidence is unknown, say so plainly instead of inventing it.
+- Agent-authored or non-trivial work should create/reuse the issue first, then open the PR with a visible `Closes #...` or `Related: #...`. Tiny bugs/small fixes may go straight to PR per `CONTRIBUTING.md`, but still link existing context when present.
+- PR creation: read `.github/pull_request_template.md` and fill `What Problem This Solves`, `Why This Change Was Made`, `User Impact`, and `Evidence`. Keep the PR body durable; when bots or maintainers ask for context, update the body instead of leaving only a comment.
+- Contacts/tags: do not guess mentions. Use `CODEOWNERS` for owned/restricted paths, maintainer areas in `CONTRIBUTING.md` for decisions, Discord `#help` for support, `#clawtributors` for coordinated large sets, and security email for vulnerabilities. Mention a person or team only when that owner/contact is directly relevant.
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
