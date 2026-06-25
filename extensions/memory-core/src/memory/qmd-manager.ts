@@ -45,7 +45,8 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
-  type MemorySearchRuntimeDebug,
+  type MemorySearchOptions,
+  type MemorySearchOutcomeResult,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncParams,
@@ -1292,27 +1293,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
-  async search(
+  async search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
+    return (await this.searchWithOutcome(query, opts)).hits;
+  }
+
+  async searchWithOutcome(
     query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      /**
-       * Caller-owned cancellation. When the caller stops waiting (e.g. the
-       * memory_search tool deadline fires), abort kills the in-flight qmd
-       * subprocess instead of leaving it running orphaned for the full qmd
-       * timeout.
-       */
-      signal?: AbortSignal;
-    },
-  ): Promise<MemorySearchResult[]> {
+    opts?: MemorySearchOptions,
+  ): Promise<MemorySearchOutcomeResult> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
-      return [];
+      return { outcome: "scope-denied", hits: [], reason: "qmd-scope-denied" };
     }
     const searchSignal = opts?.signal;
     if (searchSignal?.aborted) {
@@ -1320,7 +1311,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const trimmed = query.trim();
     if (!trimmed) {
-      return [];
+      return { outcome: "empty-query", hits: [], reason: "empty-query" };
     }
     await this.maybeWarmSession(opts?.sessionKey);
     await this.maybeSyncDirtySearchState();
@@ -1334,7 +1325,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const limit = resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
-      return [];
+      return { outcome: "no-collections", hits: [], reason: "no-managed-collections" };
     }
     const qmdSearchCommand = opts?.qmdSearchModeOverride ?? this.qmd.searchMode;
     let effectiveSearchMode: "query" | "search" | "vsearch" = qmdSearchCommand;
@@ -1518,7 +1509,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       const allow = new Set(opts.sources);
       ranked = results.filter((r) => allow.has(r.source));
     }
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
+    return {
+      outcome: "ok",
+      hits: this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit)),
+    };
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {

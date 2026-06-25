@@ -11,6 +11,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type {
+  MemorySearchOutcomeResult,
   MemorySearchResult,
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -86,6 +87,24 @@ function isActiveMemoryManagerContext(
   context: MemoryManagerContext | null,
 ): context is ActiveMemoryManagerContext {
   return context !== null && "manager" in context;
+}
+
+type ActiveMemoryManager = ActiveMemoryManagerContext["manager"];
+
+async function searchActiveMemoryManager(
+  manager: ActiveMemoryManager,
+  query: string,
+  searchOptions: Parameters<ActiveMemoryManager["search"]>[1],
+): Promise<MemorySearchOutcomeResult & { detailed: boolean }> {
+  if (typeof manager.searchWithOutcome === "function") {
+    const result = await manager.searchWithOutcome(query, searchOptions);
+    return { ...result, detailed: true };
+  }
+  return {
+    outcome: "ok",
+    hits: await manager.search(query, searchOptions),
+    detailed: false,
+  };
 }
 
 async function closeMemoryManagers(
@@ -506,8 +525,14 @@ export function createMemorySearchTool(options: {
                     },
                     ...(searchSources ? { sources: searchSources } : {}),
                   };
+                  let searchResult: MemorySearchOutcomeResult & { detailed: boolean };
                   try {
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                   } catch (error) {
                     if (!isClosedMemoryStoreError(error)) {
                       throw error;
@@ -523,7 +548,12 @@ export function createMemorySearchTool(options: {
                       throw error;
                     }
                     activeMemory = refreshed;
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                   }
                   const statusBeforeRetry = activeMemory.manager.status();
                   pausedIndexIdentityReason =
@@ -531,9 +561,21 @@ export function createMemorySearchTool(options: {
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  if (rawResults.length === 0 && activeMemory.manager.sync) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                  const syncAfterZeroResults = activeMemory.manager.sync;
+                  const shouldSyncAfterZeroResults =
+                    rawResults.length === 0 &&
+                    !!syncAfterZeroResults &&
+                    (searchResult.detailed
+                      ? searchResult.outcome === "ok" && statusBeforeRetry.dirty === true
+                      : true);
+                  if (shouldSyncAfterZeroResults) {
+                    await syncAfterZeroResults({ reason: "search", force: true });
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                     pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
                       activeMemory.manager.status(),
                     );

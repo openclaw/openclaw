@@ -1,15 +1,8 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
-import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type { MemorySearchOptions } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
-type SearchImpl = (opts?: {
-  maxResults?: number;
-  minScore?: number;
-  sessionKey?: string;
-  qmdSearchModeOverride?: "query" | "search" | "vsearch";
-  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-  signal?: AbortSignal;
-}) => Promise<unknown[]>;
+type SearchImpl = (opts?: MemorySearchOptions) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryReadResult = {
   text: string;

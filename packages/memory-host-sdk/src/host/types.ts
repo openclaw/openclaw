@@ -62,6 +62,25 @@ export type MemorySearchRuntimeDebug = {
   fallback?: string;
 };
 
+export type MemorySearchOptions = {
+  maxResults?: number;
+  minScore?: number;
+  sessionKey?: string;
+  qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+  sources?: MemorySource[];
+  /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
+  signal?: AbortSignal;
+};
+
+export type MemorySearchOutcome = "ok" | "scope-denied" | "empty-query" | "no-collections";
+
+export type MemorySearchOutcomeResult = {
+  outcome: MemorySearchOutcome;
+  hits: MemorySearchResult[];
+  reason?: string;
+};
+
 /** Result of reading a memory file, optionally paginated/truncated. */
 export type MemoryReadResult = {
   text: string;
@@ -114,19 +133,8 @@ export type MemoryProviderStatus = {
 
 /** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
-  search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
-      signal?: AbortSignal;
-    },
-  ): Promise<MemorySearchResult[]>;
+  search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]>;
+  searchWithOutcome?(query: string, opts?: MemorySearchOptions): Promise<MemorySearchOutcomeResult>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;

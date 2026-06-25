@@ -5392,10 +5392,34 @@ describe("QmdMemoryManager", () => {
     await expect(
       manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
     ).resolves.toStrictEqual([]);
+    await expect(
+      manager.searchWithOutcome("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
+    ).resolves.toStrictEqual({
+      outcome: "scope-denied",
+      hits: [],
+      reason: "qmd-scope-denied",
+    });
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
     expectMockMessageContains(logWarnMock, "qmd search denied by scope");
     expectMockMessageContains(logWarnMock, "chatType=channel");
+
+    await manager.close();
+  });
+
+  it("reports empty query as a detailed qmd search outcome", async () => {
+    const { manager } = await createManager();
+
+    const beforeCalls = spawnMock.mock.calls.length;
+    await expect(
+      manager.searchWithOutcome("   ", { sessionKey: "agent:main:webchat:direct:u123" }),
+    ).resolves.toStrictEqual({
+      outcome: "empty-query",
+      hits: [],
+      reason: "empty-query",
+    });
+
+    expect(spawnMock.mock.calls.length).toBe(beforeCalls);
 
     await manager.close();
   });
