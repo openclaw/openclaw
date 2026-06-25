@@ -131,7 +131,9 @@ async function sendSlackOutboundMessage(params: {
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
-  assertSlackThreadDeliveryResult({ result, to: params.to, threadTs });
+  if (!params.mediaUrl) {
+    assertSlackThreadDeliveryResult({ result, to: params.to, threadTs });
+  }
   return result;
 }
 

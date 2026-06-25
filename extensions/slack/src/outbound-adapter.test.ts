@@ -278,4 +278,35 @@ describe("slackOutbound", () => {
       confirmedThreadTs: "1712345678.123456",
     });
   });
+
+  it("preserves threaded media delivery when upload results only echo the requested thread", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "1712349999.000001",
+      threadTs: "1712345678.123456",
+    });
+
+    const result = await slackOutbound.sendMedia!({
+      cfg,
+      to: "C123",
+      text: "caption",
+      mediaUrl: "https://example.com/threaded.png",
+      threadId: "1712345678.123456",
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "caption", {
+      cfg,
+      threadTs: "1712345678.123456",
+      accountId: "default",
+      mediaUrl: "https://example.com/threaded.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+    });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "1712349999.000001",
+      threadTs: "1712345678.123456",
+    });
+  });
 });
