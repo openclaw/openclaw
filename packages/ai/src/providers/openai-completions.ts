@@ -305,7 +305,19 @@ export const streamOpenAICompletions: StreamFunction<
           partial: output,
         });
       };
-      const appendThinkingDelta = (thinkingSignature: string, delta: string) => {
+      const appendThinkingDelta = (
+        thinkingSignature: string,
+        delta: string,
+        hasConcurrentContent: boolean,
+      ) => {
+        if (
+          !hasConcurrentContent &&
+          reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() &&
+          !reasoningTagTextPartitioner.isInsideReasoning()
+        ) {
+          appendTextDelta(delta);
+          return;
+        }
         const block = ensureThinkingBlock(thinkingSignature);
         block.thinking += delta;
         stream.push({
@@ -453,7 +465,9 @@ export const streamOpenAICompletions: StreamFunction<
                 model.provider === "opencode-go" && foundReasoningField === "reasoning"
                   ? "reasoning_content"
                   : foundReasoningField;
-              appendThinkingDelta(thinkingSignature, delta);
+              const hasConcurrentContent =
+                typeof choiceDelta.content === "string" && choiceDelta.content.length > 0;
+              appendThinkingDelta(thinkingSignature, delta, hasConcurrentContent);
             }
           }
           if (
