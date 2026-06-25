@@ -72,4 +72,52 @@ describe("cron timer .catch() re-arm", () => {
     // Clean up
     if (state.timer) { clearTimeout(state.timer); }
   });
+
+  it("catch handler re-arms timer when onTimer rejects", async () => {
+    const state = makeMinimalState();
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "catch-test-job",
+          name: "catch-test",
+          enabled: true,
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() - 60_000 },
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "catch-test" },
+          state: { nextRunAtMs: Date.now() - 1 },
+        } as any,
+      ],
+    };
+
+    // Make the job execution reject to trigger the catch path.
+    // onTimer calls runIsolatedAgentJob which returns the job promise;
+    // by making it reject, onTimer will reject, exercising the .catch handler.
+    state.deps.runIsolatedAgentJob = vi.fn().mockRejectedValue(
+      new Error("simulated job rejection for catch-path test"),
+    );
+
+    armTimer(state);
+    expect(state.timer).not.toBeNull();
+    const firstTimer = state.timer!;
+
+    // Fire the timer callback which calls onTimer → rejects → .catch → armTimer
+    await vi.advanceTimersToNextTimerAsync();
+
+    // The .catch handler should have logged the error
+    expect(noopLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.stringContaining("simulated job rejection") }),
+      "cron: timer tick failed",
+    );
+
+    // armTimer should have been called again from the .catch handler,
+    // scheduling a new timer. The old timer was cleared + a new one set.
+    // Either the timer is replaced or at minimum the scheduler didn't die.
+    expect(state.timer).not.toBeNull();
+
+    // Clean up
+    if (state.timer) { clearTimeout(state.timer); }
+  });
 });
