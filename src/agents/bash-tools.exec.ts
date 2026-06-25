@@ -1667,6 +1667,7 @@ export function createExecTool(
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
+      await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;
       let scriptPreflightCwd: string | null = null;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -1709,7 +1710,6 @@ export function createExecTool(
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
         }
-        await rejectUnsafeExecControlShellCommand(params.command);
         if (!resolveExecEnvPrepared) {
           params = await prepareParamsWithResolvedExecEnv(params);
         }

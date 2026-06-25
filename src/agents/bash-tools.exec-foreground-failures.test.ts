@@ -364,7 +364,7 @@ describe("exec foreground failures", () => {
     }
   });
 
-  it("discards backend-validated sandbox workdirs when command validation aborts", async () => {
+  it("rejects unsafe commands before backend workdir validation", async () => {
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-workdir-"));
     const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
       async (params) => ({
@@ -403,8 +403,8 @@ describe("exec foreground failures", () => {
         }),
       ).rejects.toThrow("exec cannot run /approve commands");
 
-      expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
-      expect(discardPreparedWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
+      expect(validateWorkdir).not.toHaveBeenCalled();
+      expect(discardPreparedWorkdir).not.toHaveBeenCalled();
       expect(buildExecSpec).not.toHaveBeenCalled();
       expect(supervisorMock.spawn).not.toHaveBeenCalled();
     } finally {
