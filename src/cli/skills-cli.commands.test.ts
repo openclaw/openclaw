@@ -91,6 +91,8 @@ const mocks = vi.hoisted(() => {
     readClawHubSkillsLockfileStatusSyncMock: vi.fn((..._args: unknown[]) => ({ kind: "missing" })),
     resolveClawHubSkillStatusLinkSyncMock: vi.fn(),
     resolveLocalSkillCardStatusSyncMock: vi.fn(),
+    planSkillUninstallMock: vi.fn(),
+    executeSkillUninstallMock: vi.fn(),
     fetchClawHubSkillVerificationMock: vi.fn(),
     fetchClawHubSkillCardMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
@@ -118,6 +120,8 @@ const {
   readClawHubSkillsLockfileStatusSyncMock,
   resolveClawHubSkillStatusLinkSyncMock,
   resolveLocalSkillCardStatusSyncMock,
+  planSkillUninstallMock,
+  executeSkillUninstallMock,
   fetchClawHubSkillVerificationMock,
   fetchClawHubSkillCardMock,
   buildWorkspaceSkillStatusMock,
@@ -209,6 +213,8 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
     mocks.resolveClawHubSkillStatusLinkSyncMock(...args),
   resolveLocalSkillCardStatusSync: (...args: unknown[]) =>
     mocks.resolveLocalSkillCardStatusSyncMock(...args),
+  planSkillUninstall: (...args: unknown[]) => mocks.planSkillUninstallMock(...args),
+  executeSkillUninstall: (...args: unknown[]) => mocks.executeSkillUninstallMock(...args),
 }));
 
 vi.mock("../infra/clawhub.js", () => ({
@@ -271,6 +277,8 @@ describe("skills cli commands", () => {
     readClawHubSkillsLockfileStatusSyncMock.mockReset();
     resolveClawHubSkillStatusLinkSyncMock.mockReset();
     resolveLocalSkillCardStatusSyncMock.mockReset();
+    planSkillUninstallMock.mockReset();
+    executeSkillUninstallMock.mockReset();
     fetchClawHubSkillVerificationMock.mockReset();
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
@@ -1465,5 +1473,108 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout.at(-1)).toContain("calendar");
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
+  });
+
+  describe("skills uninstall", () => {
+    it("returns error for not-installed skill", async () => {
+      planSkillUninstallMock.mockResolvedValue({
+        slug: "nonexistent",
+        workspaceDir: "/tmp/workspace",
+        skillDir: "/tmp/workspace/skills/nonexistent",
+        skillDirExists: false,
+        lockfileEntryExists: false,
+        isClawHubInstall: false,
+      });
+
+      await runCommand(["skills", "uninstall", "nonexistent", "--json"]);
+
+      expect(planSkillUninstallMock).toHaveBeenCalledWith("/tmp/workspace", "nonexistent");
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        error: "Skill 'nonexistent' is not installed in /tmp/workspace",
+      });
+    });
+
+    it("returns dry-run plan in JSON", async () => {
+      planSkillUninstallMock.mockResolvedValue({
+        slug: "test-skill",
+        workspaceDir: "/tmp/workspace",
+        skillDir: "/tmp/workspace/skills/test-skill",
+        skillDirExists: true,
+        lockfileEntryExists: true,
+        isClawHubInstall: true,
+      });
+
+      await runCommand(["skills", "uninstall", "test-skill", "--dry-run", "--json"]);
+
+      expect(planSkillUninstallMock).toHaveBeenCalledWith("/tmp/workspace", "test-skill");
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        plan: {
+          slug: "test-skill",
+          workspaceDir: "/tmp/workspace",
+          skillDir: "/tmp/workspace/skills/test-skill",
+          skillDirExists: true,
+          lockfileEntryExists: true,
+          isClawHubInstall: true,
+        },
+        dryRun: true,
+      });
+    });
+
+    it("returns error for owner mismatch", async () => {
+      planSkillUninstallMock.mockResolvedValue({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        workspaceDir: "/tmp/workspace",
+        skillDir: "/tmp/workspace/skills/weather",
+        skillDirExists: true,
+        lockfileEntryExists: true,
+        isClawHubInstall: true,
+        ownerMismatch: true,
+      });
+
+      await runCommand(["skills", "uninstall", "@demo-owner/weather", "--json"]);
+
+      expect(planSkillUninstallMock).toHaveBeenCalledWith("/tmp/workspace", "@demo-owner/weather");
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        error: "Owner mismatch: skill '@demo-owner/weather' is tracked under a different owner",
+      });
+    });
+
+    it("returns result after successful uninstall", async () => {
+      planSkillUninstallMock.mockResolvedValue({
+        slug: "test-skill",
+        workspaceDir: "/tmp/workspace",
+        skillDir: "/tmp/workspace/skills/test-skill",
+        skillDirExists: true,
+        lockfileEntryExists: true,
+        isClawHubInstall: true,
+      });
+
+      executeSkillUninstallMock.mockResolvedValue({
+        plan: {
+          slug: "test-skill",
+          workspaceDir: "/tmp/workspace",
+          skillDir: "/tmp/workspace/skills/test-skill",
+          skillDirExists: true,
+          lockfileEntryExists: true,
+          isClawHubInstall: true,
+        },
+        removedSkillDir: true,
+        removedLockfileEntry: true,
+        warnings: [],
+      });
+
+      await runCommand(["skills", "uninstall", "test-skill", "--yes", "--json"]);
+
+      expect(executeSkillUninstallMock).toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        result: {
+          plan: expect.any(Object),
+          removedSkillDir: true,
+          removedLockfileEntry: true,
+          warnings: [],
+        },
+      });
+    });
   });
 });

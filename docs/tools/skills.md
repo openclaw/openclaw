@@ -148,7 +148,9 @@ publish and sync.
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
-| Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
+| Install for all local agents       | `openclaw skills install <slug> --global`              |
+| Uninstall a workspace ClawHub skill | `openclaw skills uninstall <slug>`                       |
+| Preview uninstall (no changes)      | `openclaw skills uninstall <slug> --dry-run`             |
 | Update all workspace skills        | `openclaw skills update --all`                         |
 | Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |

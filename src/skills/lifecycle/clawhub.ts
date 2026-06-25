@@ -1684,3 +1684,142 @@ export async function untrackClawHubSkill(workspaceDir: string, slug: string): P
   delete lock.skills[trackedSlug];
   await writeClawHubSkillsLockfile(workspaceDir, lock);
 }
+
+export type SkillUninstallPlan = {
+  slug: string;
+  ownerHandle?: string;
+  workspaceDir: string;
+  skillDir: string;
+  skillDirExists: boolean;
+  lockfileEntryExists: boolean;
+  isClawHubInstall: boolean;
+  ownerMismatch?: boolean;
+  ownerRequiredButMissing?: boolean;
+};
+
+export type SkillUninstallResult = {
+  plan: SkillUninstallPlan;
+  removedSkillDir: boolean;
+  removedLockfileEntry: boolean;
+  warnings: string[];
+};
+
+export async function planSkillUninstall(
+  workspaceDir: string,
+  slug: string,
+): Promise<SkillUninstallPlan> {
+  const requested = slug.trim();
+  const requestedRef = requested.startsWith("@")
+    ? parseRequestedClawHubSkillRef(requested)
+    : { slug: normalizeTrackedSkillSlug(requested) };
+  const requestedOwnerHandle = requestedRef.ownerHandle;
+  const candidateSlug = requestedRef.slug;
+  const skillDir = resolveWorkspaceSkillInstallDir(workspaceDir, candidateSlug);
+  const lock = await readClawHubSkillsLockfile(workspaceDir);
+
+  // Resolve the actual tracked slug: read origin metadata first
+  // (matches resolveRequestedUpdateSlug behavior), then check lockfile.
+  const trackedOrigin = await readClawHubSkillOrigin(skillDir);
+  const trackedLockEntry = lock.skills[candidateSlug];
+  const isTracked = Boolean(trackedOrigin || trackedLockEntry);
+
+  // For tracked slugs accept legacy names; for untracked validate strictly.
+  const resolvedSlug = isTracked ? candidateSlug : validateRequestedSkillSlug(candidateSlug);
+  const resolvedSkillDir = isTracked
+    ? skillDir
+    : resolveWorkspaceSkillInstallDir(workspaceDir, resolvedSlug);
+  const resolvedLockEntry = isTracked ? trackedLockEntry : lock.skills[resolvedSlug];
+
+  const lockfileEntryExists = Boolean(resolvedLockEntry);
+  const skillDirExists = await pathExists(resolvedSkillDir);
+
+  // Only normalized ClawHub origin metadata authorizes recursive directory removal.
+  // readClawHubSkillOrigin() returns null on missing, malformed, or invalid-marker
+  // origin.json files; we must NOT fall back to mere file existence, otherwise a
+  // stray or attacker-written .clawhub/origin.json could authorize deleting a
+  // non-ClawHub or corrupt skill directory.
+  // Origin-only installs (origin.json valid but no lockfile entry) are still
+  // recognized as ClawHub installs and can be uninstalled.
+  // Stale lock-only entries (lock exists, no valid origin) have isClawHubInstall=false
+  // and executeSkillUninstall will remove only the lockfile entry.
+  const isClawHubInstall = Boolean(trackedOrigin);
+
+  // Derive owner from origin metadata first, fall back to lockfile
+  // (matches resolveRequestedUpdateSlug owner comparison).
+  const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? resolvedLockEntry?.ownerHandle;
+  const ownerMismatch =
+    requestedOwnerHandle && trackedOwnerHandle && requestedOwnerHandle !== trackedOwnerHandle;
+  const ownerRequiredButMissing = Boolean(requestedOwnerHandle) && !trackedOwnerHandle;
+
+  return {
+    slug: resolvedSlug,
+    ownerHandle: requestedOwnerHandle,
+    workspaceDir,
+    skillDir: resolvedSkillDir,
+    skillDirExists,
+    lockfileEntryExists,
+    isClawHubInstall,
+    ownerMismatch,
+    ownerRequiredButMissing,
+  };
+}
+
+export async function executeSkillUninstall(
+  plan: SkillUninstallPlan,
+  logger: { info: (msg: string) => void; warn: (msg: string) => void },
+): Promise<SkillUninstallResult> {
+  const warnings: string[] = [];
+  let removedSkillDir = false;
+  let removedLockfileEntry = false;
+  if (plan.ownerMismatch) {
+    warnings.push(
+      `Owner mismatch: requested @${plan.ownerHandle}/${plan.slug} but tracked owner is different. Skipping removal.`,
+    );
+    logger.warn(
+      `Owner mismatch: skill is tracked as @${plan.ownerHandle}/${plan.slug} but lockfile shows different owner. Use "openclaw skills uninstall ${plan.slug}" to remove without owner prefix.`,
+    );
+  } else if (plan.ownerRequiredButMissing) {
+    warnings.push(
+      `Owner mismatch: requested @${plan.ownerHandle}/${plan.slug} but lockfile has no owner record. Skipping removal.`,
+    );
+    logger.warn(
+      `Owner mismatch: skill '${plan.slug}' has no owner record in lockfile. Use "openclaw skills uninstall ${plan.slug}" to remove without owner prefix.`,
+    );
+  } else if (plan.skillDirExists && plan.isClawHubInstall) {
+    try {
+      await fs.rm(plan.skillDir, { recursive: true, force: true });
+      removedSkillDir = true;
+      logger.info(`Removed skill directory: ${plan.skillDir}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Failed to remove skill directory: ${msg}`);
+      logger.warn(`Failed to remove skill directory: ${msg}`);
+    }
+  } else if (plan.skillDirExists && !plan.isClawHubInstall) {
+    warnings.push(
+      `Skill directory exists but is not a ClawHub install (.clawhub/origin.json missing). Skipping directory removal.`,
+    );
+    logger.warn(
+      `Skill directory exists but is not a ClawHub install. Use "rm -rf" to remove manually.`,
+    );
+  }
+  if (plan.ownerMismatch || plan.ownerRequiredButMissing) {
+    // Already warned above, skip all removals
+  } else if (plan.lockfileEntryExists) {
+    try {
+      await untrackClawHubSkill(plan.workspaceDir, plan.slug);
+      removedLockfileEntry = true;
+      logger.info(`Removed lockfile entry: .clawhub/lock.json#${plan.slug}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`Failed to remove lockfile entry: ${msg}`);
+      logger.warn(`Failed to remove lockfile entry: ${msg}`);
+    }
+  }
+  return {
+    plan,
+    removedSkillDir,
+    removedLockfileEntry,
+    warnings,
+  };
+}

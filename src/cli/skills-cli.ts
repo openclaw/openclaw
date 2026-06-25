@@ -21,7 +21,9 @@ import {
 } from "../infra/clawhub.js";
 import { defaultRuntime } from "../runtime.js";
 import {
+  executeSkillUninstall,
   installSkillFromClawHub,
+  planSkillUninstall,
   readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
@@ -447,6 +449,112 @@ export function registerSkillsCli(program: Command) {
             return;
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  skills
+    .command("uninstall")
+    .description("Uninstall a ClawHub-installed skill from the workspace")
+    .argument("<slug>", "Skill slug to uninstall")
+    .option("--dry-run", "Show what would be removed, no changes", false)
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--json", "Output as JSON", false)
+    .option("--global", "Uninstall from the shared managed skills directory", false)
+    .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .action(
+      async (
+        slug: string,
+        opts: { dryRun?: boolean; yes?: boolean; json?: boolean; global?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        try {
+          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
+          if (!workspaceDir) {
+            return;
+          }
+          const plan = await planSkillUninstall(workspaceDir, slug);
+          if (plan.ownerMismatch) {
+            if (opts.json) {
+              defaultRuntime.writeJson({
+                error: `Owner mismatch: skill '${slug}' is tracked under a different owner`,
+              });
+              return;
+            }
+            defaultRuntime.log(
+              `Owner mismatch: skill '${slug}' is tracked under a different owner. Use the slug without @owner prefix to remove.`,
+            );
+            return;
+          }
+          if (plan.ownerRequiredButMissing) {
+            if (opts.json) {
+              defaultRuntime.writeJson({
+                error: `Owner mismatch: skill '${slug}' has no owner record in lockfile`,
+              });
+              return;
+            }
+            defaultRuntime.log(
+              `Owner mismatch: skill '${slug}' has no owner record in lockfile. Use the slug without @owner prefix to remove.`,
+            );
+            return;
+          }
+          if (!plan.skillDirExists && !plan.lockfileEntryExists) {
+            if (opts.json) {
+              defaultRuntime.writeJson({
+                error: `Skill '${slug}' is not installed in ${workspaceDir}`,
+              });
+              return;
+            }
+            defaultRuntime.log(`Skill '${slug}' is not installed in ${workspaceDir}`);
+            return;
+          }
+          if (opts.dryRun) {
+            if (opts.json) {
+              defaultRuntime.writeJson({ plan, dryRun: true });
+              return;
+            }
+            defaultRuntime.log(
+              `The following would be removed:\n` +
+                `  - workspace directory:  ${plan.skillDir}\n` +
+                `  - lockfile entry:       .clawhub/lock.json#${plan.slug}\n` +
+                `(dry-run: no changes will be made)`,
+            );
+            return;
+          }
+          if (!opts.yes) {
+            // JSON mode requires --yes to confirm destructive actions
+            if (opts.json) {
+              defaultRuntime.writeJson({
+                error: `Skill '${slug}' uninstall requires --yes to confirm when using --json`,
+              });
+              return;
+            }
+            const { promptYesNo } = await import("./prompt.js");
+            const confirmed = await promptYesNo(`Proceed with uninstall?`, undefined);
+            if (!confirmed) {
+              defaultRuntime.log("Uninstall cancelled.");
+              return;
+            }
+          }
+          const result = await executeSkillUninstall(plan, {
+            info: opts.json ? () => {} : (msg) => defaultRuntime.log(msg),
+            warn: opts.json ? () => {} : (msg) => defaultRuntime.log(theme.warn(msg)),
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson({ result });
+            return;
+          }
+          defaultRuntime.log(`Uninstalled ${slug}:`);
+          defaultRuntime.log(`  ${result.removedSkillDir ? "✓" : "✗"} removed workspace directory`);
+          defaultRuntime.log(`  ${result.removedLockfileEntry ? "✓" : "✗"} removed lockfile entry`);
+          if (result.warnings.length > 0) {
+            for (const warning of result.warnings) {
+              defaultRuntime.log(theme.warn(warning));
+            }
+          }
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);

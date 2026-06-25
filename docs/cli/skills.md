@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
+summary: "CLI reference for `openclaw skills` (search/install/uninstall/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
+  - You want to uninstall a ClawHub-installed skill from your workspace
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
@@ -11,7 +12,8 @@ title: "Skills"
 # `openclaw skills`
 
 Inspect local skills, search ClawHub, install skills from ClawHub/Git/local
-directories, verify ClawHub skills, and update ClawHub-tracked installs.
+directories, uninstall ClawHub-installed skills, verify ClawHub skills, and
+update ClawHub-tracked installs.
 
 Related:
 
@@ -66,8 +68,23 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-`search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
-installs a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
+### Uninstall
+
+`openclaw skills uninstall <slug>` removes a ClawHub-installed skill from the
+active workspace. It deletes the skill directory under `skills/` only when
+valid ClawHub origin metadata (`.clawhub/origin.json`) is present, and removes
+the corresponding entry from `.clawhub/lock.json`. Non-ClawHub skill
+directories are left untouched.
+
+- Default target: the current workspace's `skills/` directory.
+- `--global`: target the shared managed skills directory instead.
+- `--agent <id>`: target a specific agent's workspace.
+- `--dry-run`: show what would be removed without changing anything.
+- `--yes`: skip the confirmation prompt (required when combined with `--json`).
+- `--json`: emit machine-readable JSON output.
+
+`search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
+a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
 `install ./path` copies a local skill directory. By default, `install`, `update`,
 and `verify` target the active workspace `skills/` directory; with `--global`,
 they target the shared managed skills directory. `list`/`info`/`check` still
