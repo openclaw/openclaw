@@ -570,4 +570,67 @@ describe("sandboxed workspace paths", () => {
       });
     });
   });
+
+  it("honors sandbox .gitignore rules for grep and find discovery", async () => {
+    await withTempDir("openclaw-sandbox-gitignore-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-gitignore-", async (workspaceDir) => {
+        await fs.mkdir(path.join(sandboxDir, "nested"), { recursive: true });
+        await fs.mkdir(path.join(sandboxDir, "other"), { recursive: true });
+        await fs.writeFile(
+          path.join(sandboxDir, ".gitignore"),
+          ["ignored.txt", "nested/*.log", "!nested/keep.log"].join("\n"),
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "nested", ".gitignore"), "local.txt\n", "utf8");
+        await fs.writeFile(path.join(sandboxDir, "visible.txt"), "visible needle", "utf8");
+        await fs.writeFile(path.join(sandboxDir, "ignored.txt"), "ignored needle", "utf8");
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "ignored.log"),
+          "nested ignored needle",
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "nested", "keep.log"), "kept needle", "utf8");
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "local.txt"),
+          "nested local needle",
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "other", "local.txt"), "other needle", "utf8");
+
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceAccess: "rw" as const,
+          fsBridge: createHostSandboxFsBridge(sandboxDir),
+          tools: { allow: [], deny: [] },
+        });
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+
+        const findText = getTextContent(
+          await expectTool(tools, "find").execute("sbx-find-gitignore", {
+            pattern: "**/*",
+          }),
+        );
+        expect(findText).toContain("visible.txt");
+        expect(findText).toContain("nested/keep.log");
+        expect(findText).toContain("other/local.txt");
+        expect(findText).not.toContain("ignored.txt");
+        expect(findText).not.toContain("nested/ignored.log");
+        expect(findText).not.toContain("nested/local.txt");
+
+        const grepText = getTextContent(
+          await expectTool(tools, "grep").execute("sbx-grep-gitignore", {
+            pattern: "needle",
+            literal: true,
+          }),
+        );
+        expect(grepText).toContain("visible.txt");
+        expect(grepText).toContain("nested/keep.log");
+        expect(grepText).toContain("other/local.txt");
+        expect(grepText).not.toContain("ignored.txt");
+        expect(grepText).not.toContain("nested/ignored.log");
+        expect(grepText).not.toContain("nested/local.txt");
+      });
+    });
+  });
 });

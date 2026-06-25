@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import ignore from "ignore";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -1106,12 +1107,15 @@ type SandboxFileEntry = {
   relativePath: string;
 };
 
+type SandboxIgnoreMatcher = ReturnType<typeof ignore>;
+
 async function collectSandboxFiles(
   params: SandboxToolParams,
   startPath: string,
   options: { ignore?: string[]; limit: number; signal?: AbortSignal },
 ): Promise<SandboxFileEntry[]> {
   const results: SandboxFileEntry[] = [];
+  const ignoreMatcher = ignore();
   const startStat = await params.bridge.stat({
     filePath: startPath,
     cwd: params.root,
@@ -1140,12 +1144,19 @@ async function collectSandboxFiles(
       return;
     }
     if (stat.type === "file") {
+      if (shouldIgnoreDiscoveryPath(relativePath, options.ignore, ignoreMatcher)) {
+        return;
+      }
       results.push({ absolutePath, relativePath });
       return;
     }
-    if (stat.type !== "directory" || shouldIgnoreDiscoveryPath(relativePath, options.ignore)) {
+    if (
+      stat.type !== "directory" ||
+      shouldIgnoreDiscoveryPath(relativePath, options.ignore, ignoreMatcher)
+    ) {
       return;
     }
+    await addSandboxGitignoreRules(params, absolutePath, relativePath, ignoreMatcher, options);
     const entries = await params.bridge.readdir({
       filePath: absolutePath,
       cwd: params.root,
@@ -1164,7 +1175,61 @@ async function collectSandboxFiles(
   return results;
 }
 
-function shouldIgnoreDiscoveryPath(relativePath: string, ignore?: string[]): boolean {
+async function addSandboxGitignoreRules(
+  params: SandboxToolParams,
+  absolutePath: string,
+  relativePath: string,
+  ignoreMatcher: SandboxIgnoreMatcher,
+  options: { signal?: AbortSignal },
+): Promise<void> {
+  let buffer: Buffer;
+  try {
+    buffer = await params.bridge.readFile({
+      filePath: path.join(absolutePath, ".gitignore"),
+      cwd: params.root,
+      signal: options.signal,
+    });
+  } catch {
+    return;
+  }
+  const prefix = relativePath ? `${relativePath}/` : "";
+  const patterns = buffer
+    .toString("utf8")
+    .split(/\r?\n/)
+    .map((line) => prefixIgnorePattern(line, prefix))
+    .filter((line): line is string => Boolean(line));
+  if (patterns.length > 0) {
+    ignoreMatcher.add(patterns);
+  }
+}
+
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) {
+    return null;
+  }
+
+  let pattern = line;
+  let negated = false;
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
+  }
+  if (pattern.startsWith("/")) {
+    pattern = pattern.slice(1);
+  }
+
+  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+function shouldIgnoreDiscoveryPath(
+  relativePath: string,
+  ignorePatterns?: string[],
+  ignoreMatcher?: SandboxIgnoreMatcher,
+): boolean {
   if (!relativePath) {
     return false;
   }
@@ -1172,10 +1237,13 @@ function shouldIgnoreDiscoveryPath(relativePath: string, ignore?: string[]): boo
   if (parts.includes(".git") || parts.includes("node_modules")) {
     return true;
   }
-  if (!ignore || ignore.length === 0) {
+  if (ignoreMatcher?.ignores(relativePath)) {
+    return true;
+  }
+  if (!ignorePatterns || ignorePatterns.length === 0) {
     return false;
   }
-  return ignore.some((pattern) => createGlobMatcher(pattern)(relativePath));
+  return ignorePatterns.some((pattern) => createGlobMatcher(pattern)(relativePath));
 }
 
 function createGlobMatcher(pattern: string): (relativePath: string) => boolean {

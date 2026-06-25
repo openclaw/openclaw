@@ -705,6 +705,29 @@ describe("openshell fs bridges", () => {
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
+  it("lists mirror directories through the local pinned root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "nested", "alpha.txt"), "alpha", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "nested", "beta.txt"), "beta", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const entries = await bridge.readdir({ filePath: "nested" });
+
+    expect(entries.toSorted((a, b) => a.localeCompare(b))).toEqual(["alpha.txt", "beta.txt"]);
+    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
+  });
+
   it("renames remote mirror paths through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     await fs.writeFile(path.join(workspaceDir, "source.txt"), "payload", "utf8");
