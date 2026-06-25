@@ -75,6 +75,7 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const FALLBACK_RECOVERY_COOLDOWN_MS = 60_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
@@ -240,6 +241,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
   protected override fallbackFrom?: EmbeddingProviderId;
+  protected override fallbackActivatedAtMs?: number;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
@@ -659,6 +661,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return false;
       });
       if (activatedFallback) {
+        this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        });
+      }
+    }
+    // Attempt to recover primary provider if we're in fallback and cooldown has passed
+    if (this.providerLifecycle.mode === "fallback-active") {
+      const recovered = await this.attemptPrimaryProviderRecovery(
+        FALLBACK_RECOVERY_COOLDOWN_MS,
+      ).catch((err: unknown) => {
+        log.debug(
+          `memory search: primary provider recovery check failed: ${formatErrorMessage(err)}`,
+        );
+        return false;
+      });
+      if (recovered) {
         this.refreshIndexIdentityDirty({
           providerKeyKnown: this.providerInitialized,
         });

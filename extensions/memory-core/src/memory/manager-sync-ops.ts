@@ -298,6 +298,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
+  protected fallbackActivatedAtMs?: number;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
@@ -2654,6 +2655,7 @@ export abstract class MemoryManagerSyncOps {
     });
     this.fallbackFrom = fallbackState.fallbackFrom;
     this.fallbackReason = fallbackState.fallbackReason;
+    this.fallbackActivatedAtMs = Date.now();
     this.provider = fallbackState.provider;
     this.providerRuntime = fallbackState.providerRuntime;
     this.providerUnavailableReason = fallbackState.providerUnavailableReason;
@@ -2664,6 +2666,60 @@ export abstract class MemoryManagerSyncOps {
       reason,
     });
     return true;
+  }
+
+  /**
+   * Attempt to recover from fallback to primary provider after cooldown.
+   * Returns true if recovery succeeded and primary provider is restored.
+   */
+  protected async attemptPrimaryProviderRecovery(cooldownMs: number): Promise<boolean> {
+    if (!this.fallbackFrom || !this.fallbackActivatedAtMs) {
+      return false;
+    }
+    const elapsed = Date.now() - this.fallbackActivatedAtMs;
+    if (elapsed < cooldownMs) {
+      return false;
+    }
+    const primaryRequest = resolveMemoryPrimaryProviderRequest({ settings: this.settings });
+    try {
+      const primaryResult = await createEmbeddingProvider({
+        config: this.cfg,
+        agentDir: resolveAgentDir(this.cfg, this.agentId),
+        ...primaryRequest,
+      });
+      if (!primaryResult.provider) {
+        // Primary still unavailable, reset cooldown timer
+        this.fallbackActivatedAtMs = Date.now();
+        return false;
+      }
+      // Primary is back — close fallback provider and restore primary
+      const previousProvider = this.provider;
+      this.provider = primaryResult.provider;
+      this.providerRuntime = primaryResult.runtime;
+      this.fallbackFrom = undefined;
+      this.fallbackReason = undefined;
+      this.fallbackActivatedAtMs = undefined;
+      this.providerUnavailableReason = undefined;
+      this.providerLifecycle = { mode: "active", providerId: primaryResult.provider.id };
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      log.warn(
+        `memory embeddings: recovered primary provider (${primaryResult.provider.id}); releasing fallback`,
+      );
+      // Close old fallback provider asynchronously
+      if (previousProvider?.close) {
+        void Promise.resolve(previousProvider.close()).catch((err: unknown) => {
+          log.debug(
+            `memory embeddings: failed to close fallback provider after recovery: ${String(err)}`,
+          );
+        });
+      }
+      return true;
+    } catch {
+      // Primary still failing, reset cooldown timer for next attempt
+      this.fallbackActivatedAtMs = Date.now();
+      return false;
+    }
   }
 
   private async runInPlaceReindex(params: {
