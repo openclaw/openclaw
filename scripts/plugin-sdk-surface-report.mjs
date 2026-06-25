@@ -332,6 +332,7 @@ function collectExportStats(entrypoints) {
     }
     const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
     const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    let exports = 0;
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -340,6 +341,7 @@ function collectExportStats(entrypoints) {
       if (!hasSourceBackedDeclaration(checker, symbol)) {
         continue;
       }
+      exports += 1;
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
@@ -359,7 +361,7 @@ function collectExportStats(entrypoints) {
       }
     }
     byEntrypoint.set(entrypoint, {
-      exports: symbols.length,
+      exports,
       callableExports,
       deprecatedExports,
       deprecatedCallableExports,
