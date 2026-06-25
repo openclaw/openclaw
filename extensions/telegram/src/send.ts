@@ -86,6 +86,15 @@ type TelegramThreadScopedParams = {
   message_thread_id?: number;
 };
 const InputFileCtor = grammy.InputFile;
+
+/** Strips internal media-store cache UUID suffix (---uuid) from a filename. */
+function originalFilename(fileName: string): string {
+  // Pattern: name---xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.ext
+  const match = fileName.match(
+    /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(\.\w+)$/i,
+  );
+  return match ? `${match[1]}${match[2]}` : fileName;
+}
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 
@@ -981,8 +990,9 @@ export async function sendMessageTelegram(
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
-    const fileName =
+    const rawFileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
+    const fileName = originalFilename(rawFileName);
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
