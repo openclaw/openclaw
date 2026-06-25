@@ -967,6 +967,25 @@ export function handleMessageEnd(
         buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
       );
     }
+    // A commentary-tagged tool turn can also carry a native thinking block. Under
+    // /reasoning on the thinking must still surface as its own durable 🧠 message —
+    // the window-stream path only runs when reasoning is NOT "on", so without this
+    // the first thought of a tool turn is silently dropped in reasoning+verbose mode.
+    const suppressedTrimmedReasoning = ctx.state.includeReasoning
+      ? extractAssistantThinking(assistantMessage).trim()
+      : "";
+    if (
+      !ctx.params.silentExpected &&
+      !suppressDeterministicApprovalOutput &&
+      !suppressMessageToolOnlySourceReplyOutput &&
+      ctx.state.includeReasoning &&
+      suppressedTrimmedReasoning &&
+      ctx.params.onBlockReply &&
+      suppressedTrimmedReasoning !== ctx.state.lastReasoningSent
+    ) {
+      ctx.state.lastReasoningSent = suppressedTrimmedReasoning;
+      ctx.emitBlockReply({ text: suppressedTrimmedReasoning, isReasoning: true });
+    }
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
