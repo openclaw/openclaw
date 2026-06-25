@@ -255,6 +255,12 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+/** Session entry read by the exact persisted session key, without alias resolution. */
+export type ExactSessionEntry = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
 
@@ -917,6 +923,25 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
   }
   return getSessionEntry(scope);
+}
+
+/**
+ * Returns only the row persisted under the exact key provided.
+ * Use this for authorization-sensitive routing where alias canonicalization
+ * could cross an account or agent boundary.
+ */
+export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const store = loadSessionStore(resolveAccessStorePath(scope), {
+    ...(scope.clone === false ? { clone: false } : {}),
+    ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  const entry = Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined;
+  return entry ? { sessionKey, entry } : undefined;
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
@@ -1836,6 +1861,18 @@ export async function appendTranscriptEvent(
     event,
     transcriptPath: transcript.sessionFile,
   });
+}
+
+/** Reads parsed transcript records from an explicit or derived transcript target. */
+export async function loadTranscriptEvents(
+  scope: SessionTranscriptReadScope,
+): Promise<TranscriptEvent[]> {
+  const transcript = await resolveTranscriptAccess(scope);
+  const events: TranscriptEvent[] = [];
+  for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
+    events.push(JSON.parse(line) as TranscriptEvent);
+  }
+  return events;
 }
 
 function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
