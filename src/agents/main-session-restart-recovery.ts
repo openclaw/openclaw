@@ -46,6 +46,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -628,6 +629,124 @@ function isApprovalPendingToolResult(message: unknown): boolean {
   return (details as { status?: unknown }).status === "approval-pending";
 }
 
+function hasInspectableContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as {
+    content?: unknown;
+    tool_calls?: unknown;
+    __openclaw?: unknown;
+  };
+  // Oversized transcript messages carry __openclaw.truncated metadata and
+  // a placeholder content block — they must stay fail-closed.
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- upstream metadata key
+  if (msg.__openclaw != null && typeof msg.__openclaw === "object") {
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- upstream metadata key
+    const meta = msg.__openclaw as { truncated?: unknown };
+    if (meta.truncated === true) {
+      return false;
+    }
+  }
+  const content = msg.content;
+  // Content present, non-empty, and not an oversized-message placeholder.
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (trimmed.length > 0 && !trimmed.startsWith("[chat.history omitted")) {
+      return true;
+    }
+    // Empty or placeholder string — fall through to tool_calls check below.
+  } else if (Array.isArray(content) && content.length > 0) {
+    // A single text block with the oversized placeholder is not inspectable.
+    if (
+      content.length === 1 &&
+      content[0] != null &&
+      typeof content[0] === "object" &&
+      (content[0] as { type?: unknown }).type === "text"
+    ) {
+      const text = (content[0] as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim().startsWith("[chat.history omitted")) {
+        return false;
+      }
+    }
+    return true;
+  }
+  // Tool calls stored outside content (raw OpenAI format) are inspectable
+  // even when content is empty.
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function findLastUserMessage(messages: unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "user") {
+      continue;
+    }
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content;
+    }
+    // User content can be an array of content blocks (e.g. multi-modal messages
+    // with text + image_url blocks). Extract text from text blocks.
+    if (Array.isArray(content)) {
+      const textParts = collectTextContentBlocks(content);
+      if (textParts.length > 0) {
+        return textParts.join("\n");
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Canonical OpenClaw-normalized tool-call content-block types (see agents/tool-call-id.ts TOOL_CALL_TYPES).
+ *  Includes snake_case variants (tool_use, tool_call, function_call) that appear in
+ *  Anthropic API response blocks and ACP events before normalization. */
+const CONTENT_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_use",
+  "tool_call",
+  "function_call",
+]);
+
+function hasAssistantToolCalls(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as {
+    role?: unknown;
+    tool_calls?: unknown;
+    content?: unknown;
+  };
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  // OpenAI raw format: top-level tool_calls array
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    return true;
+  }
+  // OpenClaw canonical format: content blocks with toolCall/toolUse/functionCall type.
+  // After normalization, tool calls are represented as content array blocks
+  // rather than top-level tool_calls (see agents/tool-call-id.ts).
+  if (Array.isArray(msg.content)) {
+    return msg.content.some(
+      (block: unknown) =>
+        block != null &&
+        typeof block === "object" &&
+        CONTENT_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? ""),
+    );
+  }
+  return false;
+}
+
 function resolveMainSessionResumePolicy(
   messages: unknown[],
   forceRestartSafeTools = false,
@@ -1068,6 +1187,63 @@ async function recoverStore(params: {
         transcriptResumePolicy.forceRestartSafeTools,
     };
     if (resumePolicy.blockReason) {
+      // Non-resumable assistant tails (text-only) can auto-recover by
+      // re-presenting the last user message instead of failing the session
+      // (#95609). Tool-call and approval-pending tails stay fail-closed.
+      const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
+      const isNonResumableAssistantTail =
+        resumePolicy.blockReason === "transcript tail is not resumable" &&
+        !isApprovalPendingToolResult(lastMeaningful) &&
+        hasInspectableContent(lastMeaningful);
+      if (isNonResumableAssistantTail) {
+        let lastUserMessage = findLastUserMessage(messages);
+        // The initial 20-message window may not contain a user message in
+        // long tool-loop transcripts. Try a larger window before giving up.
+        if (!lastUserMessage) {
+          try {
+            messages = await readSessionMessagesAsync(
+              {
+                agentId: resolveAgentIdFromSessionKey(sessionKey),
+                sessionEntry: entry,
+                sessionId: entry.sessionId,
+                sessionKey,
+                storePath: params.storePath,
+              },
+              {
+                mode: "recent",
+                maxMessages: 200,
+                maxBytes: 1024 * 1024,
+              },
+            );
+            lastUserMessage = findLastUserMessage(messages);
+          } catch {
+            // Keep the original 20-message slice; recovery falls through
+            // to the unresumable notice below.
+          }
+        }
+        if (lastUserMessage) {
+          // Gate side-effecting recovery: when the assistant tail has pending
+          // tool calls, automatic resume could re-execute completed side
+          // effects. Fall through so the user can confirm before continuing.
+          if (!hasAssistantToolCalls(lastMeaningful)) {
+            const resumed = await resumeMainSession({
+              canonicalSessionKey: dispatchSessionKey,
+              cfg: params.cfg,
+              entry,
+              storePath: params.storePath,
+              sessionKey,
+              recoveredUserMessage: lastUserMessage,
+              hasPendingAssistantToolCalls: false,
+              sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+            });
+            if (resumed) {
+              params.resumedSessionKeys.add(resumeDedupeKey);
+              result.recovered++;
+              continue;
+            }
+          }
+        }
+      }
       const deliveryContext = resolveRestartRecoveryDeliveryContext({
         cfg: params.cfg,
         entry,

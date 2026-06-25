@@ -15,6 +15,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =
@@ -28,7 +29,40 @@ function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+function buildResumeMessage(
+  pendingFinalDeliveryText?: string | null,
+  recoveredUserMessage?: string,
+  hasPendingToolCalls?: boolean,
+): string {
+  if (recoveredUserMessage) {
+    const truncated =
+      recoveredUserMessage.length > 500
+        ? `${recoveredUserMessage.slice(0, 500)}...`
+        : recoveredUserMessage;
+    // Delimit the recovered user text clearly so it cannot blend with
+    // the system recovery instruction or the idempotency guard (#95609).
+    // Sanitize to strip control characters and injected markers.
+    const sanitized = sanitizePendingFinalDeliveryText(truncated);
+    const untrustedBlock = wrapUntrustedPromptDataBlock({
+      label: "The user's original request",
+      text: sanitized,
+    });
+    const recoveredBase =
+      "[System] I was interrupted mid-action by a gateway restart. " +
+      "The user's original request is shown below.\n\n" +
+      untrustedBlock +
+      "\n\n";
+    const idempotencyGuard = hasPendingToolCalls
+      ? "IMPORTANT: Before taking any action, review the transcript to determine " +
+        "which tool calls from the interrupted turn were already completed. " +
+        "Do not re-execute completed side effects. "
+      : "";
+    return (
+      recoveredBase +
+      idempotencyGuard +
+      "Continue from the existing transcript. Do not ask the user to repeat themselves."
+    );
+  }
   const sanitizedPendingText =
     typeof pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
@@ -187,6 +221,9 @@ export async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
+  recoveredUserMessage?: string;
+  /** When true, the assistant tail had pending tool_calls — add idempotency guard. */
+  hasPendingAssistantToolCalls?: boolean;
   forceRestartSafeTools?: boolean;
   sessionWorkAdmissionHandoffId?: string;
 }): Promise<boolean> {
@@ -239,7 +276,11 @@ export async function resumeMainSession(params: {
       throw new Error("restart recovery session ownership changed before dispatch");
     }
     const agentParams: Record<string, unknown> = {
-      message: buildResumeMessage(sanitizedPendingText),
+      message: buildResumeMessage(
+        sanitizedPendingText,
+        params.recoveredUserMessage,
+        params.hasPendingAssistantToolCalls,
+      ),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,
       ...(params.sessionWorkAdmissionHandoffId
