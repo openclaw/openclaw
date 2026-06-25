@@ -7,8 +7,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
-import { collectTextContentBlocks } from "./content-blocks.js";
-import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type RestartRecoveryRun,
@@ -42,10 +40,12 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
+import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -437,10 +437,7 @@ function hasInspectableContent(message: unknown): boolean {
       (content[0] as { type?: unknown }).type === "text"
     ) {
       const text = (content[0] as { text?: unknown }).text;
-      if (
-        typeof text === "string" &&
-        text.trim().startsWith("[chat.history omitted")
-      ) {
+      if (typeof text === "string" && text.trim().startsWith("[chat.history omitted")) {
         return false;
       }
     }
@@ -527,9 +524,7 @@ function hasAssistantToolCalls(message: unknown): boolean {
       (block: unknown) =>
         block != null &&
         typeof block === "object" &&
-        CONTENT_TOOL_CALL_BLOCK_TYPES.has(
-          (block as { type?: string }).type ?? "",
-        ),
+        CONTENT_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? ""),
     );
   }
   return false;
@@ -558,22 +553,22 @@ function buildResumeMessage(
   hasPendingToolCalls?: boolean,
 ): string {
   if (recoveredUserMessage) {
-    const truncated =
-      recoveredUserMessage.length > 500
-        ? `${recoveredUserMessage.slice(0, 500)}...`
-        : recoveredUserMessage;
-    // Delimit the recovered user text clearly so it cannot blend with
-    // the system recovery instruction or the idempotency guard (#95609).
-    // Sanitize to strip control characters and injected markers.
-    const sanitized = sanitizePendingFinalDeliveryText(truncated);
+    // Delimit the recovered user text inside an untrusted prompt-data
+    // block so it cannot blend with the system recovery instruction or
+    // the idempotency guard.  wrapUntrustedPromptDataBlock applies the
+    // input-safe sanitizeForPromptLiteral internally and accepts a
+    // maxChars cap; do NOT apply the agent-output display sanitizer
+    // (sanitizePendingFinalDeliveryText) to user-authored text (#95609).
     const untrustedBlock = wrapUntrustedPromptDataBlock({
       label: "The user's original request",
-      text: sanitized,
+      text: recoveredUserMessage,
+      maxChars: 500,
     });
     const base =
       "[System] I was interrupted mid-action by a gateway restart. " +
       "The user's original request is shown below.\n\n" +
-      untrustedBlock + "\n\n";
+      untrustedBlock +
+      "\n\n";
     const idempotencyGuard = hasPendingToolCalls
       ? "IMPORTANT: Before taking any action, review the transcript to determine " +
         "which tool calls from the interrupted turn were already completed. " +
