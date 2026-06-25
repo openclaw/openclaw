@@ -341,7 +341,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const toolSchemaTokens = estimateToolSchemaTokenPressure(params.tools);
   const sharedMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
@@ -350,6 +349,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     params.contextMode === "lightweight" &&
     params.messages.length === 0 &&
     (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
+  const toolSchemaTokens = lightweightPromptBudgetEligible
+    ? estimateToolSchemaTokenPressure(params.tools)
+    : 0;
   const lightweightMinPromptBudget = lightweightPromptBudgetEligible
     ? Math.max(
         sharedMinPromptBudget,

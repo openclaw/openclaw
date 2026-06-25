@@ -413,12 +413,14 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight",
       contextTokenBudget: 4_096,
       reserveTokens: 20_000,
+      tools: [makeToolSchema(1_200)],
       llmBoundaryTokenPressure: {
         estimatedPromptTokens: 3_544,
         source: "reported_shared_heartbeat",
       },
     });
 
+    expect(result.toolSchemaTokens).toBe(0);
     expect(result.promptBudgetBeforeReserve).toBe(2_048);
     expect(result.shouldCompact).toBe(true);
     expect(result.route).toBe("compact_only");
