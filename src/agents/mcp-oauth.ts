@@ -16,6 +16,7 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { OAuthTokensSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
@@ -92,6 +93,18 @@ async function writeStore(filePath: string, store: McpOAuthStore): Promise<void>
   await fsPromises.chmod(tempPath, 0o600).catch(() => {});
   await fsPromises.rename(tempPath, filePath);
   await fsPromises.chmod(filePath, 0o600).catch(() => {});
+}
+
+async function updateStore(
+  filePath: string,
+  update: (store: McpOAuthStore) => McpOAuthStore,
+): Promise<void> {
+  const lock = await acquireStoreLock(filePath);
+  try {
+    await writeStore(filePath, update(await readStore(filePath)));
+  } finally {
+    await lock.release();
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -175,8 +188,10 @@ async function parseRefreshResponseTokens(
   response: Response,
   refreshToken: string,
 ): Promise<OAuthTokens> {
-  const payload = (await response.clone().json()) as OAuthTokens;
-  return { refresh_token: refreshToken, ...payload };
+  return OAuthTokensSchema.parse({
+    refresh_token: refreshToken,
+    ...(await response.clone().json()),
+  });
 }
 
 async function fetchRefreshTokenWithDeadline(
@@ -275,35 +290,33 @@ export function createMcpOAuthClientProvider(params: {
     },
     async state() {
       assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
       const state = randomUUID();
-      await writeStore(filePath, { ...store, state });
+      await updateStore(filePath, (store) => ({ ...store, state }));
       return state;
     },
     async clientInformation() {
       return (await readStore(filePath)).clientInformation;
     },
     async saveClientInformation(clientInformation) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, clientInformation });
+      await updateStore(filePath, (store) => ({ ...store, clientInformation }));
     },
     async tokens() {
       return (await readStore(filePath)).tokens;
     },
     async saveTokens(tokens) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, tokens });
+      await updateStore(filePath, (store) => ({ ...store, tokens }));
     },
     async redirectToAuthorization(authorizationUrl) {
       assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, lastAuthorizationUrl: authorizationUrl.toString() });
+      await updateStore(filePath, (store) => ({
+        ...store,
+        lastAuthorizationUrl: authorizationUrl.toString(),
+      }));
       await params.onAuthorizationUrl?.(authorizationUrl);
     },
     async saveCodeVerifier(codeVerifier) {
       assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, codeVerifier });
+      await updateStore(filePath, (store) => ({ ...store, codeVerifier }));
     },
     async codeVerifier() {
       const codeVerifier = (await readStore(filePath)).codeVerifier;
@@ -313,25 +326,25 @@ export function createMcpOAuthClientProvider(params: {
       return codeVerifier;
     },
     async invalidateCredentials(scope) {
-      const store = await readStore(filePath);
-      const next: McpOAuthStore = { ...store };
-      if (scope === "all" || scope === "client") {
-        delete next.clientInformation;
-      }
-      if (scope === "all" || scope === "tokens") {
-        delete next.tokens;
-      }
-      if (scope === "all" || scope === "verifier") {
-        delete next.codeVerifier;
-      }
-      if (scope === "all" || scope === "discovery") {
-        delete next.discoveryState;
-      }
-      await writeStore(filePath, next);
+      await updateStore(filePath, (store) => {
+        const next: McpOAuthStore = { ...store };
+        if (scope === "all" || scope === "client") {
+          delete next.clientInformation;
+        }
+        if (scope === "all" || scope === "tokens") {
+          delete next.tokens;
+        }
+        if (scope === "all" || scope === "verifier") {
+          delete next.codeVerifier;
+        }
+        if (scope === "all" || scope === "discovery") {
+          delete next.discoveryState;
+        }
+        return next;
+      });
     },
     async saveDiscoveryState(discoveryState) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, discoveryState });
+      await updateStore(filePath, (store) => ({ ...store, discoveryState }));
     },
     async discoveryState() {
       return (await readStore(filePath)).discoveryState;

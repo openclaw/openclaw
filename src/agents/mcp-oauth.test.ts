@@ -236,14 +236,16 @@ describe("MCP OAuth provider", () => {
           expect(fetchFn).toHaveBeenCalledOnce();
         });
 
-        expect(provider.saveClientInformation).toBeDefined();
-        await provider.saveClientInformation?.({ client_id: "client-after-refresh-started" });
+        const pendingClientInformationSave = provider.saveClientInformation?.({
+          client_id: "client-after-refresh-started",
+        });
         expect(resolveRefresh).toBeDefined();
         resolveRefresh?.();
         await expect(pendingRefresh.then((response) => response.json())).resolves.toMatchObject({
           access_token: "new-access",
           refresh_token: "new-refresh",
         });
+        await pendingClientInformationSave;
 
         expect(await provider.clientInformation()).toMatchObject({
           client_id: "client-after-refresh-started",
@@ -255,6 +257,117 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-refresh-store-merge-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("does not persist invalid 200 refresh token responses before SDK validation", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+          token_type: "Bearer",
+        });
+
+        const fetchFn = vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              refresh_token: "new-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+
+        await expect(
+          provider.wrapFetchForTokenRefresh(fetchFn)(new URL("https://auth.example.com/token"), {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          }),
+        ).rejects.toThrow();
+
+        await expect(provider.tokens()).resolves.toMatchObject({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-invalid-refresh-response-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("merges the SDK follow-up refresh save with concurrent OAuth metadata writes", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+          token_type: "Bearer",
+        });
+
+        const fetchFn = vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              access_token: "new-access",
+              refresh_token: "new-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+
+        const response = await provider.wrapFetchForTokenRefresh(fetchFn)(
+          new URL("https://auth.example.com/token"),
+          {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          },
+        );
+
+        await Promise.all([
+          provider.saveClientInformation?.({ client_id: "client-after-refresh" }),
+          response
+            .clone()
+            .json()
+            .then((tokens) => provider.saveTokens(tokens)),
+        ]);
+
+        expect(await provider.clientInformation()).toMatchObject({
+          client_id: "client-after-refresh",
+        });
+        await expect(provider.tokens()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-sdk-follow-up-save-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,
