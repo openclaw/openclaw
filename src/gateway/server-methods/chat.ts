@@ -606,6 +606,19 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
+function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
+  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey;
+  const parts = scoped
+    .split(":", 3)
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  const sessionScopeHead = parts[0];
+  if (!sessionScopeHead || CHANNEL_AGNOSTIC_SESSION_SCOPES.has(sessionScopeHead)) {
+    return false;
+  }
+  return parts.slice(1).some((part) => CHANNEL_SCOPED_SESSION_SHAPES.has(part));
+}
+
 type ChatSendDeliveryEntry = {
   route?: ChannelRouteRef;
   deliveryContext?: {
@@ -2238,6 +2251,7 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
 function readPreRegisteredAgentRun(params: {
   key: string;
   entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  includeHidden?: boolean;
 }): PreRegisteredAgentRun | undefined {
   if (!params.key.startsWith("agent:") || !params.entry?.ok) {
     return undefined;
@@ -2246,7 +2260,7 @@ function readPreRegisteredAgentRun(params: {
   if (payload?.status !== "accepted") {
     return undefined;
   }
-  if (payload.controlUiVisible === false) {
+  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
@@ -2343,10 +2357,15 @@ function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
+  const includeHiddenChannelScopedRuns = [...sessionKeys].some(isExplicitChannelScopedSessionKey);
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
   let matchedSessionRuns = 0;
   for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredAgentRun({ key, entry });
+    const run = readPreRegisteredAgentRun({
+      key,
+      entry,
+      includeHidden: includeHiddenChannelScopedRuns,
+    });
     if (!run || !sessionKeys.has(run.sessionKey)) {
       continue;
     }
@@ -2394,10 +2413,11 @@ function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+  const includeHiddenChannelScopedRuns = [...sessionKeys].some(isExplicitChannelScopedSessionKey);
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.controlUiVisible === false) {
+    if (active.controlUiVisible === false && !includeHiddenChannelScopedRuns) {
       continue;
     }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {

@@ -127,6 +127,30 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
   });
 
+  it("aborts hidden channel runs by explicit channel session key", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-wechat", createActiveRun(sessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+      },
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-wechat"] });
+    expect(context.chatAbortControllers.has("run-wechat")).toBe(false);
+  });
+
   it("clears agent text throttle state through the real abort caller", async () => {
     const context = createChatAbortContext({
       chatAbortControllers: new Map([

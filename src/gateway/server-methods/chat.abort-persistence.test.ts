@@ -886,6 +886,46 @@ describe("chat abort transcript persistence", () => {
     );
   });
 
+  it("aborts hidden pending channel agent runs by explicit channel session key", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-wechat-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-wechat-hidden",
+        sessionKey,
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-hidden",
+      },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: {
+        sessionKey,
+      },
+      client: { connId: "conn-hidden" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-wechat-hidden"] });
+    expect(context.dedupe.get("agent:run-wechat-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: "timeout",
+          controlUiVisible: false,
+          stopReason: "rpc",
+        }),
+      }),
+    );
+  });
+
   it("aborts hidden pending internal agent runs by explicit owner run id", async () => {
     const respond = vi.fn();
     const context = createChatAbortContext();
