@@ -2692,6 +2692,15 @@ export abstract class MemoryManagerSyncOps {
         this.fallbackActivatedAtMs = Date.now();
         return false;
       }
+      if (primaryResult.fallbackFrom) {
+        // createEmbeddingProvider returned a fallback provider, not the real primary.
+        // Treat as failed recovery — primary is still unavailable.
+        if (primaryResult.provider.close) {
+          void Promise.resolve(primaryResult.provider.close()).catch(() => {});
+        }
+        this.fallbackActivatedAtMs = Date.now();
+        return false;
+      }
       // Primary is back — close fallback provider and restore primary
       const previousProvider = this.provider;
       this.provider = primaryResult.provider;

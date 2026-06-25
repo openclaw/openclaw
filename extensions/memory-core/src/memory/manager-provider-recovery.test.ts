@@ -54,7 +54,7 @@ class RecoveryTestHarness extends MemoryManagerSyncOps {
   protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
-  protected providerLifecycle: MemoryProviderLifecycleState =
+  protected override providerLifecycle: MemoryProviderLifecycleState =
     { mode: "active", providerId: "openai" };
   protected db = {} as DatabaseSync;
 
@@ -111,7 +111,7 @@ class RecoveryTestHarness extends MemoryManagerSyncOps {
     return "test-key";
   }
 
-  protected resolveProviderIndexIdentities() {
+  protected override resolveProviderIndexIdentities() {
     return [];
   }
 
@@ -272,5 +272,38 @@ describe("fallback provider recovery", () => {
     expect(harness.getFallbackActivatedAtMs()).toBeGreaterThanOrEqual(beforeActivation);
     expect(harness.getFallbackActivatedAtMs()).toBeLessThanOrEqual(afterActivation);
     expect(harness.getFallbackFrom()).toBe("openai");
+  });
+
+  it("treats recovery probe returning fallbackFrom provider as failed recovery", async () => {
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const mockCreate = vi.mocked(createEmbeddingProvider);
+    const fallbackProviderFromProbe = createMockProvider("local", "local-model");
+
+    // Recovery probe returns a provider, but with fallbackFrom set — meaning
+    // createEmbeddingProvider fell back again instead of returning the real primary.
+    mockCreate.mockResolvedValueOnce({
+      provider: fallbackProviderFromProbe,
+      requestedProvider: "openai",
+      fallbackFrom: "openai",
+      fallbackReason: "still unavailable",
+      runtime: undefined,
+    });
+
+    // Simulate being in fallback state
+    harness.setProvider(createMockProvider("local"));
+    (harness as unknown as { fallbackFrom: string }).fallbackFrom = "openai";
+    const originalTimestamp = Date.now();
+    harness.setFallbackActivatedAtMs(originalTimestamp);
+
+    // Advance time past cooldown
+    vi.advanceTimersByTime(61_000);
+
+    const result = await harness.testAttemptPrimaryProviderRecovery(60_000);
+    expect(result).toBe(false);
+    // Should still be in fallback state with the original local provider
+    expect(harness.getProvider()?.id).toBe("local");
+    expect(harness.getFallbackFrom()).toBe("openai");
+    // Cooldown timer should be reset for next retry
+    expect(harness.getFallbackActivatedAtMs()).toBeGreaterThan(originalTimestamp);
   });
 });
