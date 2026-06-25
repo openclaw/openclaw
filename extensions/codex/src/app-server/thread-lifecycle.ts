@@ -1,4 +1,5 @@
 // Codex plugin module implements thread lifecycle behavior.
+import crypto from "node:crypto";
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,
@@ -1601,7 +1602,9 @@ function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
       next[key] = Object.fromEntries(
         Object.entries(entry).map(([header, headerValue]) => [
           header,
-          header.toLowerCase() === "authorization" ? "<redacted>" : headerValue,
+          header.toLowerCase() === "authorization"
+            ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
+            : headerValue,
         ]),
       ) as JsonObject;
       continue;
@@ -1609,6 +1612,12 @@ function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
     next[key] = redactUserMcpServersFingerprintSecrets(entry);
   }
   return next;
+}
+
+function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
+  return typeof value === "string" && value.length > 0
+    ? `<redacted:sha256:${crypto.createHash("sha256").update(value).digest("hex")}>`
+    : "<redacted>";
 }
 
 function fingerprintJsonObject(value: JsonObject): string {

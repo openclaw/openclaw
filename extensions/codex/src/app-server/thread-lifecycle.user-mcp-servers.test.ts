@@ -471,6 +471,70 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
+  it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const createConfig = (authorization: string) =>
+      ({
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url: "https://agents.ducktape.xyz/mcp",
+              headers: {
+                Authorization: authorization,
+                "x-tenant": "keep",
+              },
+            },
+          },
+        },
+      }) as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-with-current-bearer");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-with-stale-bearer");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
+
+    request.mockClear();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-two")),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, { http_headers?: Record<string, string> }> };
+    };
+    expect(startParams?.config?.mcp_servers?.ducktape?.http_headers?.Authorization).toBe(
+      "Bearer access-token-two",
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
+    expect(secondBinding?.userMcpServersFingerprint).not.toBe(
+      firstBinding?.userMcpServersFingerprint,
+    );
+  });
+
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
