@@ -62,6 +62,7 @@ export {
 } from "./embedded-agent-helpers/openai.js";
 export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 export {
+  isMessagingToolAck,
   isMessagingToolDuplicate,
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,

@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import {
+  isMessagingToolAck,
+  isMessagingToolDuplicate,
+} from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
@@ -31,7 +34,8 @@ export function filterMessagingToolDuplicates(params: {
     if (payload.mediaUrl || payload.mediaUrls?.length) {
       return true;
     }
-    return !isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+    const text = payload.text ?? "";
+    return !isMessagingToolDuplicate(text, sentTexts) && !isMessagingToolAck(text, sentTexts);
   });
 }
 
