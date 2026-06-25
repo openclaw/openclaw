@@ -163,6 +163,7 @@ import {
   resetOpenClawCodingToolsFactoryForTests,
   setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldEnableUserMcpServersForCodexAppServer,
   shouldForceMessageTool,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
@@ -676,6 +677,11 @@ export async function runCodexAppServerAttempt(
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
+    agentId: sessionAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandboxExecServerEnabled,
+  });
+  const userMcpServersEnabled = shouldEnableUserMcpServersForCodexAppServer(params, sandbox, {
     agentId: sessionAgentId,
     runtimeSessionKey: sandboxSessionKey,
     sandboxExecServerEnabled,
@@ -1490,6 +1496,7 @@ export async function runCodexAppServerAttempt(
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      userMcpServersEnabled,
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
       sandbox,

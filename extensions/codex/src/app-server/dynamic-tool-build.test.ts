@@ -22,6 +22,7 @@ import {
   resolveCodexMessageToolProvider,
   setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldEnableUserMcpServersForCodexAppServer,
   shouldForceMessageTool,
 } from "./dynamic-tool-build.js";
 import {
@@ -1209,6 +1210,40 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
     expect(hasWildcardCodexToolsAllow([" * "])).toBe(true);
+  });
+
+  it("decouples user MCP server attachment from the native code-mode surface", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    // The native shell/file surface stays fail-closed on a literal "*"; MCP server
+    // attachment is gated only on memory-flush + sandbox, leaving the actual
+    // per-server decision to the allowlist-aware projection (covered separately).
+    for (const toolsAllow of [["*"], ["opik__*"], ["opik__list"], ["message"], []] as string[][]) {
+      params.toolsAllow = toolsAllow;
+      expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(true);
+    }
+    // Native surface remains wildcard-only regardless of MCP gate.
+    params.toolsAllow = ["opik__*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    params.toolsAllow = ["*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    // Undefined (no restriction) keeps both available.
+    params.toolsAllow = undefined;
+    expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+  });
+
+  it("does not attach user MCP servers on memory-flush runs", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.trigger = "memory";
+    params.memoryFlushWritePath = path.join(tempDir, "flush.md");
+    params.toolsAllow = ["opik__*"];
+    expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(false);
   });
 
   it("disables Codex native tool surfaces for restricted runtime allowlists", () => {

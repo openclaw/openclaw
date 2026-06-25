@@ -26,8 +26,36 @@ When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled while leaving code-mode-only off by default.
 That keeps Codex native workspace and code capabilities available while
 OpenClaw dynamic tools continue through the app-server `item/tool/call` bridge.
-Active OpenClaw sandboxing and restricted tool policies disable native code mode
-entirely unless you opt into the experimental sandbox exec-server path.
+Active OpenClaw sandboxing disables native code mode entirely unless you opt into
+the experimental sandbox exec-server path.
+
+A restricted tool policy (`tools.allow` / `tools.alsoAllow` without a `*`) keeps
+native code mode off, but it no longer blocks user MCP servers wholesale. MCP
+server attachment is now driven by the same allowlist: a server is attached to
+the Codex thread only when the allowlist references at least one of its tools,
+using OpenClaw's `<server>__<tool>` tool-naming convention:
+
+- `*`, `bundle-mcp`, or `group:plugins` — attach every configured MCP server with
+  all of its tools (`*` also enables native code mode).
+- `<server>__*` — attach that server (e.g. `opik__*`) with all of its tools,
+  without enabling the native shell/file surface.
+- `<server>__<tool>` — attach the server scoped to the named tool(s) (e.g.
+  `opik__list`). The scoped tools are projected into Codex's per-server
+  `enabled_tools` filter, so other tools from that same server are **not**
+  registered.
+- no MCP-referencing entry — no user MCP servers are attached (unchanged).
+
+Server names and tool fragments are matched against the provider-safe model-facing
+tool ids OpenClaw exposes (sanitized via the bundle-MCP naming rules), not the raw
+`mcp.servers` config key — so a server keyed `Outlook Graph` is referenced as
+`outlook-graph__*`.
+
+This lets a least-privilege Codex agent reach a specific MCP server, or specific
+tools within it, without being forced to grant the full native code-mode surface.
+Per-tool scoping via `enabled_tools` is exact for provider-safe tool names; for
+tool names that require sanitization it fails closed (the tool is simply not
+enabled). You can further constrain an attached server with an approval mode
+(`codex.defaultToolsApprovalMode`).
 
 This Codex-native feature is separate from
 [OpenClaw code mode](/reference/code-mode), which is an opt-in QuickJS-WASI

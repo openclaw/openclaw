@@ -344,6 +344,11 @@ export async function startOrResumeThread(params: {
       ? undefined
       : buildCodexUserMcpServersThreadConfigPatch(params.params.config, {
           agentId: params.agentId ?? params.params.agentId,
+          // Allowlist-aware projection: only servers the effective allowlist
+          // references are attached. The patch (and therefore its fingerprint)
+          // changes when the allowlist changes which servers are in scope, so an
+          // existing thread rebinds correctly.
+          toolsAllow: params.params.toolsAllow,
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
