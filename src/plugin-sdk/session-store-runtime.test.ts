@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../infra/json-files.js";
 import {
+  cleanupSessionLifecycleArtifacts,
   getSessionEntry,
   listSessionEntries,
   patchSessionEntry,
@@ -144,6 +145,7 @@ describe("session-store-runtime compatibility surface", () => {
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 7 * DAY_MS,
+          modelRunPruneAfterMs: DAY_MS,
           maxEntries: 1,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
@@ -161,6 +163,51 @@ describe("session-store-runtime compatibility surface", () => {
       sessionId: "session-active",
     });
     expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+  });
+
+  it("accepts pre-model-run maintenance configs through entry patches", async () => {
+    const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const activeSessionKey = "agent:main:active";
+    const now = Date.now();
+    await saveSessionStore(
+      storePath,
+      {
+        [staleModelRunKey]: {
+          sessionId: "session-probe",
+          updatedAt: now - 2 * DAY_MS,
+        },
+        [activeSessionKey]: {
+          sessionId: "session-active",
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const legacyMaintenanceConfig = {
+      mode: "enforce" as const,
+      pruneAfterMs: 7 * DAY_MS,
+      maxEntries: 500,
+      resetArchiveRetentionMs: 7 * DAY_MS,
+      maxDiskBytes: null,
+      highWaterBytes: null,
+    };
+
+    await expect(
+      patchSessionEntry({
+        sessionKey: activeSessionKey,
+        storePath,
+        maintenanceConfig: legacyMaintenanceConfig,
+        update: () => ({ model: "gpt-5.5" }),
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-active",
+    });
+
+    expect(getSessionEntry({ sessionKey: staleModelRunKey, storePath })).toMatchObject({
+      sessionId: "session-probe",
+    });
   });
 
   it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {
@@ -250,5 +297,48 @@ describe("session-store-runtime compatibility surface", () => {
     } finally {
       writeSpy.mockRestore();
     }
+  });
+
+  it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {
+    const sessionKey = "agent:main:lifecycle-owned-old";
+    const transcriptPath = path.join(tempDir, "lifecycle-owned-old.jsonl");
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          sessionFile: transcriptPath,
+          sessionId: "lifecycle-owned-old",
+          updatedAt: 10,
+        },
+        "agent:main:regular": {
+          sessionId: "regular",
+          updatedAt: 20,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(transcriptPath, '{"runId":"lifecycle-owned-old"}\n', "utf-8");
+    const oldDate = new Date(Date.now() - 600_000);
+    fs.utimesSync(transcriptPath, oldDate, oldDate);
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        sessionKeySegmentPrefix: "lifecycle-owned-",
+        transcriptContentMarker: '"runId":"lifecycle-owned-',
+        orphanTranscriptMinAgeMs: 300_000,
+      }),
+    ).resolves.toEqual({
+      archivedTranscriptArtifacts: 1,
+      removedEntries: 1,
+    });
+
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(getSessionEntry({ sessionKey: "agent:main:regular", storePath })).toMatchObject({
+      sessionId: "regular",
+    });
+    expect(
+      fs.readdirSync(tempDir).filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
+    ).toHaveLength(1);
   });
 });

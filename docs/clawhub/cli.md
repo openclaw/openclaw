@@ -25,7 +25,7 @@ OpenClaw agent or Gateway.
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
 openclaw skills update @owner/<slug>
-openclaw skills verify <slug>
+openclaw skills verify @owner/<slug>
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>

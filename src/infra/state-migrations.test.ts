@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
@@ -18,11 +19,73 @@ import {
 } from "./kysely-sync.js";
 import {
   autoMigrateLegacyState,
+  autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations,
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
+
+const pluginDoctorStateMigrationEntries = vi.hoisted(
+  () =>
+    ({
+      entries: [] as Array<{
+        pluginId: string;
+        migration: {
+          id: string;
+          label: string;
+          detectLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
+          migrateLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) =>
+            | Promise<{ changes: string[]; warnings: string[] }>
+            | {
+                changes: string[];
+                warnings: string[];
+              };
+        };
+      }>,
+    }) satisfies {
+      entries: Array<{
+        pluginId: string;
+        migration: {
+          id: string;
+          label: string;
+          detectLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
+          migrateLegacyState: (params: {
+            config: OpenClawConfig;
+            env: NodeJS.ProcessEnv;
+            stateDir: string;
+            oauthDir: string;
+            context: unknown;
+          }) =>
+            | Promise<{ changes: string[]; warnings: string[] }>
+            | {
+                changes: string[];
+                warnings: string[];
+              };
+        };
+      }>;
+    },
+);
 
 vi.mock("../channels/plugins/bundled.js", () => {
   function fileExists(filePath: string): boolean {
@@ -91,6 +154,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
           : [];
       },
     ]),
+  };
+});
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorStateMigrationEntries: vi.fn(() => pluginDoctorStateMigrationEntries.entries),
   };
 });
 
@@ -328,6 +399,9 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 
 afterEach(async () => {
   vi.useRealTimers();
+  pluginDoctorStateMigrationEntries.entries = [];
+  resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
@@ -666,6 +740,261 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({ triggers: ["wake"] });
     await expectMissingPath(path.join(settingsDir, "voicewake.json"));
+  });
+
+  it("runs plugin doctor migrations after repairing shared state schema", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`
+        CREATE TABLE agent_databases (
+          agent_id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
+      `);
+    } finally {
+      db.close();
+    }
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-test",
+          label: "Memory Core test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated shared state agent database registry primary key → agent_id,path",
+    );
+    expect(result.changes).toContain("plugin state migrated");
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec("PRAGMA user_version = 2;");
+    } finally {
+      db.close();
+    }
+    const detectLegacyState = vi.fn(() => ({ preview: ["plugin state"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-schema-failure-test",
+          label: "Memory Core schema failure test migration",
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
+  it("reports plugin detector failures in read-only legacy state detection", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "msteams",
+        migration: {
+          id: "msteams-readonly-malformed-config-test",
+          label: "Microsoft Teams readonly malformed config test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+
+    expect(detected.pluginPlans?.hasLegacy).toBe(false);
+    expect(detected.warnings).toStrictEqual([
+      "Failed detecting Microsoft Teams readonly malformed config test migration: TypeError: config.agents.list is not iterable",
+    ]);
+  });
+
+  it("continues plugin doctor migrations when one detector rejects malformed config", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["healthy plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "msteams",
+        migration: {
+          id: "msteams-malformed-config-test",
+          label: "Microsoft Teams malformed config test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+        },
+      },
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-healthy-config-test",
+          label: "Memory Core healthy config test migration",
+          detectLegacyState: () => ({ preview: ["healthy plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([
+      "Failed detecting Microsoft Teams malformed config test migration: TypeError: config.agents.list is not iterable",
+    ]);
+    expect(result.changes).toContain("healthy plugin state migrated");
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("skips stale plugin doctor plans when refresh detection fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["stale plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-stale-plan-test",
+          label: "Memory Core stale plan test migration",
+          detectLegacyState: () => ({ preview: ["stale plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.pluginPlans?.hasLegacy).toBe(true);
+
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-stale-plan-test",
+          label: "Memory Core stale plan test migration",
+          detectLegacyState: () => {
+            throw new TypeError("config.agents.list is not iterable");
+          },
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toContain(
+      "Failed detecting Memory Core stale plan test migration: TypeError: config.agents.list is not iterable",
+    );
+    expect(result.changes).not.toContain("stale plugin state migrated");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
+  it("runs plugin doctor migrations against the canonical state dir after state-dir repair", async () => {
+    const root = await createTempDir();
+    const legacyStateDir = path.join(root, ".clawdbot");
+    const canonicalStateDir = path.join(root, ".openclaw");
+    await fs.mkdir(legacyStateDir, { recursive: true });
+    await fs.writeFile(path.join(legacyStateDir, "legacy.txt"), "legacy", "utf8");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: root };
+    delete env.OPENCLAW_STATE_DIR;
+    const cfg = createConfig();
+    const detectedStateDirs: string[] = [];
+    const migratedStateDirs: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-state-dir-test",
+          label: "Memory Core state dir test migration",
+          detectLegacyState: ({ stateDir }) => {
+            detectedStateDirs.push(stateDir);
+            return { preview: ["plugin state"] };
+          },
+          migrateLegacyState: ({ stateDir }) => {
+            migratedStateDirs.push(stateDir);
+            return { changes: ["plugin state migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("plugin state migrated");
+    expect(detectedStateDirs).toStrictEqual([canonicalStateDir]);
+    expect(migratedStateDirs).toStrictEqual([canonicalStateDir]);
+    await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
