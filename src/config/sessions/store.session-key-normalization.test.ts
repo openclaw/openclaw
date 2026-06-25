@@ -78,6 +78,30 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
 
+  it("records a thread label as the display name for grouped inbound metadata", async () => {
+    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:42";
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-1001234567890:topic:42",
+        To: "telegram:-1001234567890:topic:42",
+        SessionKey: sessionKey,
+        OriginatingTo: "telegram:-1001234567890:topic:42",
+        GroupSubject: "Test Forum",
+        MessageThreadId: 42,
+        ThreadLabel: "Deployments",
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.displayName).toBe("Deployments");
+    expect(store[sessionKey]?.subject).toBe("Test Forum");
+  });
+
   it("does not create a duplicate mixed-case key when last route is updated", async () => {
     await recordSessionMetaFromInbound({
       storePath,

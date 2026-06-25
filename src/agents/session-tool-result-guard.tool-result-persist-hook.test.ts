@@ -260,9 +260,10 @@ describe("tool_result_persist hook", () => {
   it("keeps sensitive parent keys when custom value patterns match the key probe", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
     tempDirs.push(tempDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     fs.writeFileSync(
-      process.env.OPENCLAW_CONFIG_PATH,
+      configPath,
       JSON.stringify({ logging: { redactPatterns: ["/[a-z0-9]{30,}/g"] } }),
       "utf-8",
     );

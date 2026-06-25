@@ -791,6 +791,26 @@ describe("gateway session utils", () => {
     expect(row.displayName).not.toBe("openclaw-tui");
   });
 
+  test("buildGatewaySessionRow displayName prefers stored topic labels for group sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const key = "agent:main:telegram:group:-1001234567890:topic:42";
+    const entry = {
+      chatType: "group",
+      channel: "telegram",
+      subject: "Engineering",
+      displayName: "Deployments",
+      origin: { label: "telegram:-1001234567890:topic:42" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { [key]: entry },
+      key,
+      entry,
+    });
+    expect(row.displayName).toBe("Deployments");
+  });
+
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {

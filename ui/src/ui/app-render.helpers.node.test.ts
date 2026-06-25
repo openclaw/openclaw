@@ -398,6 +398,13 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("My Chat");
   });
 
+  it("uses stored displayName for Telegram topic sessions", () => {
+    const key = "agent:main:telegram:group:-1001234567890:topic:42";
+    expect(resolveSessionDisplayName(key, row({ key, displayName: "Deployments" }))).toBe(
+      "Deployments",
+    );
+  });
+
   it("prefers label over displayName when both are present", () => {
     expect(
       resolveSessionDisplayName(

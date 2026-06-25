@@ -198,6 +198,7 @@ export function deriveGroupSessionPatch(params: {
     patch.space = space;
   }
 
+  const threadLabel = normalizeOptionalString(params.ctx.ThreadLabel);
   const displayName = buildGroupDisplayName({
     provider: channel,
     subject: nextSubject ?? params.existing?.subject,
@@ -206,8 +207,8 @@ export function deriveGroupSessionPatch(params: {
     id: resolution.id,
     key: params.sessionKey,
   });
-  if (displayName) {
-    patch.displayName = displayName;
+  if (threadLabel || displayName) {
+    patch.displayName = threadLabel ?? displayName;
   }
 
   return patch;

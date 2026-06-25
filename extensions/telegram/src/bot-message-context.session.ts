@@ -591,6 +591,7 @@ export async function buildTelegramInboundContextPayload(params: {
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
+      ThreadLabel: isForum && topicName ? topicName : undefined,
       TopicName: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);

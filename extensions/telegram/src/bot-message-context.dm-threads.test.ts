@@ -263,6 +263,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     });
 
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    expect(ctx?.ctxPayload?.ThreadLabel).toBe("Deployments");
   });
 
   it("handles forum messages without session runtime overrides", async () => {
@@ -285,6 +286,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     });
 
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    expect(ctx?.ctxPayload?.ThreadLabel).toBe("Deployments");
   });
 
   it("reloads topic name from disk after cache reset", async () => {
@@ -326,6 +328,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       });
 
       expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+      expect(ctx?.ctxPayload?.ThreadLabel).toBe("Deployments");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
       resetTopicNameCacheForTest();
@@ -373,6 +376,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       });
 
       expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+      expect(ctx?.ctxPayload?.ThreadLabel).toBe("Deployments");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
       resetTopicNameCacheForTest();
