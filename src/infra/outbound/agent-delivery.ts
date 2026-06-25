@@ -146,20 +146,21 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
-  const plugin =
-    params.wantsDelivery && plan.resolvedTo && isDeliverableMessageChannel(plan.resolvedChannel)
-      ? resolveOutboundChannelPlugin({
-          channel: plan.resolvedChannel,
-          cfg: params.cfg,
-          allowBootstrap: true,
-        })
-      : undefined;
+  const { resolvedChannel, resolvedTo } = plan;
+  if (!params.wantsDelivery || !resolvedTo || !isDeliverableMessageChannel(resolvedChannel)) {
+    return plan;
+  }
+  const plugin = resolveOutboundChannelPlugin({
+    channel: resolvedChannel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
   if (!plugin?.messaging?.resolveOutboundSessionRoute) {
     return plan;
   }
   const normalizedTarget = resolveOutboundTarget({
-    channel: plan.resolvedChannel,
-    to: plan.resolvedTo,
+    channel: resolvedChannel,
+    to: resolvedTo,
     cfg: params.cfg,
     accountId: plan.resolvedAccountId,
     mode: plan.deliveryTargetMode ?? "explicit",
@@ -174,8 +175,8 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     }
     const resolvedTarget = await resolveChannelTarget({
       cfg: params.cfg,
-      channel: plan.resolvedChannel as ChannelId,
-      input: plan.resolvedTo,
+      channel: resolvedChannel as ChannelId,
+      input: resolvedTo,
       accountId: plan.resolvedAccountId,
       unknownTargetMode: "normalized",
       plugin,
@@ -194,7 +195,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     try {
       return await resolveOutboundSessionRoute({
         cfg: params.cfg,
-        channel: plan.resolvedChannel as ChannelId,
+        channel: resolvedChannel as ChannelId,
         agentId: params.agentId,
         accountId: plan.resolvedAccountId,
         target: sessionRouteTarget,
