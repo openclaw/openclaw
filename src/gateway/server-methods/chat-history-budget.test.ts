@@ -35,7 +35,20 @@ describe("enforceChatHistoryFinalBudget", () => {
     const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
     const result = enforceChatHistoryFinalBudget({ messages: [big, last], maxBytes: 2_000 });
     expect(result.messages).toEqual([last]);
-    expect(result.placeholderCount).toBe(0);
+    expect(result.placeholderCount).toBe(1);
+  });
+
+  it("reports correct drop count when multiple messages are discarded", () => {
+    const big1 = { role: "user", content: [{ type: "text", text: "a".repeat(3000) }] };
+    const big2 = { role: "assistant", content: [{ type: "text", text: "b".repeat(3000) }] };
+    const big3 = { role: "user", content: [{ type: "text", text: "c".repeat(3000) }] };
+    const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
+    const result = enforceChatHistoryFinalBudget({
+      messages: [big1, big2, big3, last],
+      maxBytes: 2_000,
+    });
+    expect(result.messages).toEqual([last]);
+    expect(result.placeholderCount).toBe(3);
   });
 
   it("falls back to a small placeholder when even the last message is too large", () => {

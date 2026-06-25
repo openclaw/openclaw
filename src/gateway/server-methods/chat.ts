@@ -1685,7 +1685,7 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   }
   const last = messages.at(-1);
   if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    return { messages: [last], placeholderCount: 0 };
+    return { messages: [last], placeholderCount: messages.length - 1 };
   }
   const placeholder = buildOversizedHistoryPlaceholder(last);
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
