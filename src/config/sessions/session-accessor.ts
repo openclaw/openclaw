@@ -52,6 +52,7 @@ import {
   publishSqliteTranscriptUpdate,
   purgeSqliteDeletedAgentSessionEntries,
   readSqliteSessionUpdatedAt,
+  replaceSqliteTranscriptEvents,
   replaceSqliteSessionEntry,
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
@@ -816,7 +817,9 @@ export function resolveSessionEntryCandidateTarget(
     agentId: scope.agentId,
     env: scope.env,
   });
-  const store = loadSessionStore(storePath);
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {
       continue;
@@ -1025,36 +1028,33 @@ export async function canonicalizeSessionEntryAliases(params: {
     entry: SessionEntry | undefined,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 }): Promise<CanonicalizeSessionEntryAliasesResult> {
-  return await updateSessionStore(params.storePath, async (store) => {
-    const targetKeys = normalizeTargetStoreKeys(params.target);
-    const freshest = resolveFreshestTargetEntry(store, targetKeys);
-    if (freshest) {
-      const current = store[params.target.canonicalKey];
-      if (!current || (freshest.entry.updatedAt ?? 0) > (current.updatedAt ?? 0)) {
-        store[params.target.canonicalKey] = freshest.entry;
-      }
-    }
-
-    const currentEntry = store[params.target.canonicalKey];
-    const patch = params.update ? await params.update(cloneOptionalEntry(currentEntry)) : null;
-    if (patch) {
-      store[params.target.canonicalKey] = {
-        ...currentEntry,
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
+  const targetKeys = normalizeTargetStoreKeys(params.target);
+  const freshest = resolveFreshestTargetEntry(store, targetKeys);
+  const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
+  const entry = patch
+    ? ({
+        ...freshest?.entry,
         ...patch,
-      } as SessionEntry;
-    }
-
-    for (const key of targetKeys) {
-      if (key !== params.target.canonicalKey) {
-        delete store[key];
-      }
-    }
-    const entry = cloneOptionalEntry(store[params.target.canonicalKey]);
-    return {
-      canonicalKey: params.target.canonicalKey,
-      ...(entry ? { entry } : {}),
-    };
+      } as SessionEntry)
+    : cloneOptionalEntry(freshest?.entry);
+  await applySessionEntryLifecycleMutation({
+    storePath: params.storePath,
+    removals: targetKeys
+      .filter((key) => key !== params.target.canonicalKey)
+      .map((sessionKey) => ({ sessionKey })),
+    upserts: entry ? [{ sessionKey: params.target.canonicalKey, entry }] : undefined,
+    skipMaintenance: true,
   });
+  return {
+    canonicalKey: params.target.canonicalKey,
+    ...(entry ? { entry: cloneOptionalEntry(entry) } : {}),
+  };
 }
 
 // Normalizes caller-supplied alias sets while always preserving the canonical key.
@@ -1970,71 +1970,54 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
-  if (!transcript) {
+  const events = await loadTranscriptEvents(scope).catch(() => []);
+  if (events.length === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  let totalLines = 0;
-  try {
-    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-      if (!line) {
-        continue;
-      }
-      totalLines += 1;
-      if (totalLines > maxLines) {
-        return { compacted: true };
-      }
-    }
-  } catch {
-    return { compacted: false, kept: 0 };
-  }
-  return { compacted: false, kept: totalLines };
+  return events.length > maxLines ? { compacted: true } : { compacted: false, kept: events.length };
 }
 
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimResult> {
-  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
-  if (!transcript) {
+  const events = await loadTranscriptEvents(scope).catch(() => []);
+  if (events.length === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  let headerLine: string | undefined;
-  const tailLines: string[] = [];
+  const headerLine = JSON.stringify(events[0]);
+  const tailLines = events.slice(1).map((event) => JSON.stringify(event));
   const maxTailLines = Math.max(0, maxLines - 1);
-  let totalLines = 0;
-  try {
-    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-      totalLines += 1;
-      if (totalLines === 1) {
-        headerLine = line;
-        continue;
-      }
-      tailLines.push(line);
-      if (tailLines.length > maxTailLines) {
-        tailLines.shift();
-      }
-    }
-  } catch {
-    return { compacted: false, kept: 0 };
-  }
-  if (totalLines <= maxLines) {
-    return { compacted: false, kept: totalLines };
+  if (events.length <= maxLines) {
+    return { compacted: false, kept: events.length };
   }
 
-  const lines = normalizeManualCompactTranscriptLines(headerLine, tailLines);
+  const lines = normalizeManualCompactTranscriptLines(
+    headerLine,
+    maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
+  );
   if (!lines) {
     return { compacted: false, kept: 0 };
   }
-  const archived = await replaceTranscriptForManualCompact(transcript.sessionFile, lines);
+  const retainedEvents = lines.map((line) => JSON.parse(line) as TranscriptEvent);
+  await replaceSqliteTranscriptEvents(scope, retainedEvents);
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve manual compact transcript scope: ${scope.sessionKey}`);
+  }
+  const archived = `${formatSqliteSessionFileTarget({
+    agentId,
+    sessionId: scope.sessionId,
+    storePath: scope.storePath ?? "",
+  })}.bak.${formatSessionArchiveTimestamp()}`;
   await patchSessionEntry(
     {
       ...scope,
-      sessionKey: transcript.sessionKey,
+      sessionKey: scope.sessionKey,
       storePath: scope.storePath,
     },
     (entry) => {
@@ -2504,49 +2487,20 @@ export async function resolveSessionTranscriptRuntimeTarget(
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
-      sessionFile: path.resolve(scope.sessionFile),
+      sessionFile: scope.sessionFile,
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  if (sessionStore && scope.storePath) {
-    const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
-    const shouldUseDerivedSessionFile =
-      !sessionEntry?.sessionFile || sessionEntry.sessionId !== scope.sessionId;
-    const fallbackSessionFile =
-      shouldUseDerivedSessionFile && threadId !== undefined
-        ? resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId)
-        : undefined;
-    const resolved = await resolveAndPersistSessionFile({
-      agentId,
-      fallbackSessionFile,
-      sessionEntry,
-      sessionId: scope.sessionId,
-      sessionKey,
-      sessionStore,
-      sessionsDir,
-      storePath: scope.storePath,
-    });
-    return {
-      agentId,
-      sessionFile: resolved.sessionFile,
-      sessionId: scope.sessionId,
-      sessionKey,
-    };
-  }
-  const resolved = await resolveSessionTranscriptFile({
-    agentId,
-    sessionEntry,
-    sessionId: scope.sessionId,
-    sessionKey: scope.sessionKey,
-    ...(sessionStore ? { sessionStore } : {}),
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
-  });
+  void sessionEntry;
+  void sessionStore;
   return {
     agentId,
-    sessionFile: resolved.sessionFile,
+    sessionFile: formatSqliteSessionFileTarget({
+      agentId,
+      sessionId: scope.sessionId,
+      storePath: scope.storePath ?? "",
+    }),
     sessionId: scope.sessionId,
     sessionKey,
   };
@@ -2563,33 +2517,19 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
-      sessionFile: path.resolve(scope.sessionFile),
+      sessionFile: scope.sessionFile,
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  const matchingSessionEntry =
-    sessionEntry?.sessionId === scope.sessionId ? sessionEntry : undefined;
-  if (scope.storePath) {
-    const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
-    const sessionFile = matchingSessionEntry?.sessionFile
-      ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId, sessionsDir })
-      : resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId);
-    return {
-      agentId,
-      sessionFile,
-      sessionId: scope.sessionId,
-      sessionKey,
-    };
-  }
-  const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
-  const sessionFile = matchingSessionEntry?.sessionFile
-    ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId })
-    : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
+  void sessionEntry;
   return {
     agentId,
-    sessionFile,
+    sessionFile: formatSqliteSessionFileTarget({
+      agentId,
+      sessionId: scope.sessionId,
+      storePath: scope.storePath ?? "",
+    }),
     sessionId: scope.sessionId,
     sessionKey,
   };
@@ -2610,7 +2550,12 @@ function resolveSessionTranscriptRuntimeContext(
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
   const sessionStore = scope.storePath
-    ? loadSessionStore(scope.storePath, { skipCache: true })
+    ? Object.fromEntries(
+        listSessionEntries({ storePath: scope.storePath }).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry,
+        ]),
+      )
     : undefined;
   const resolvedStoreEntry = sessionStore
     ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
@@ -2652,7 +2597,9 @@ export function resolveSessionTranscriptReadTarget(
       ? undefined
       : storePath
         ? resolveSessionStoreEntry({
-            store: loadSessionStore(storePath, { skipCache: true }),
+            store: Object.fromEntries(
+              listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+            ),
             sessionKey: scope.sessionKey,
           })
         : undefined;
@@ -2665,26 +2612,12 @@ export function resolveSessionTranscriptReadTarget(
     sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
       ? sessionEntry
       : undefined;
-  const threadId =
-    scope.threadId ?? (sessionKey ? parseSessionThreadInfo(sessionKey).threadId : undefined);
-  const sessionFile = matchingSessionEntry?.sessionFile
-    ? resolveSessionFilePath(
-        scope.sessionId,
-        matchingSessionEntry,
-        resolveSessionFilePathOptions({
-          agentId,
-          ...(storePath ? { storePath } : {}),
-        }),
-      )
-    : storePath
-      ? resolveSessionTranscriptPathInDir(
-          // File-backed readers derive beside sessions.json only for the JSON-store
-          // deprecation window; the SQLite flip resolves from canonical metadata.
-          scope.sessionId,
-          path.dirname(path.resolve(storePath)),
-          threadId,
-        )
-      : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
+  void matchingSessionEntry;
+  const sessionFile = formatSqliteSessionFileTarget({
+    agentId,
+    sessionId: scope.sessionId,
+    storePath: storePath ?? "",
+  });
   return {
     agentId,
     sessionFile,
