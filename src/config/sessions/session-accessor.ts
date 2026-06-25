@@ -31,8 +31,11 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import {
-  cleanupPluginHostSessionStore as cleanupFilePluginHostSessionStore,
+  clearPluginHostCleanupTarget,
   clearPluginOwnedSessionState,
+  hasPluginHostCleanupTarget,
+  matchesPluginHostCleanupSession,
+  shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import {
@@ -1565,7 +1568,41 @@ export async function purgeDeletedAgentSessionEntries(
 export async function cleanupPluginHostSessionStore(
   params: PluginHostSessionCleanupStoreParams,
 ): Promise<number> {
-  return await cleanupFilePluginHostSessionStore(params);
+  if (
+    shouldSkipPluginHostCleanupStore(params) ||
+    (params.shouldCleanup && !params.shouldCleanup())
+  ) {
+    return 0;
+  }
+  const now = Date.now();
+  let cleared = 0;
+  for (const { entry, sessionKey } of listSessionEntries({ storePath: params.storePath })) {
+    if (
+      !matchesPluginHostCleanupSession(sessionKey, entry, params.sessionKey) ||
+      !hasPluginHostCleanupTarget(entry, params)
+    ) {
+      continue;
+    }
+    const updated = await patchSessionEntry(
+      { sessionKey, storePath: params.storePath },
+      (currentEntry) => {
+        if (!hasPluginHostCleanupTarget(currentEntry, params)) {
+          return null;
+        }
+        clearPluginHostCleanupTarget(currentEntry, params);
+        currentEntry.updatedAt = now;
+        return currentEntry;
+      },
+      {
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    if (updated) {
+      cleared += 1;
+    }
+  }
+  return cleared;
 }
 
 /**

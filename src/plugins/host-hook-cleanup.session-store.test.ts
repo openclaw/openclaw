@@ -2,14 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-} from "../config/sessions/store.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -19,7 +17,8 @@ describe("plugin host cleanup session stores", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
   afterEach(async () => {
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -33,16 +32,10 @@ describe("plugin host cleanup session stores", () => {
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:main": {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } satisfies SessionEntry,
-      },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
+      sessionId: "session-id",
+      updatedAt: Date.now(),
+    } satisfies SessionEntry);
     const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
 
     const result = await runPluginHostCleanup({
@@ -62,21 +55,15 @@ describe("plugin host cleanup session stores", () => {
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:main": {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-          pluginExtensions: {
-            test: {
-              state: { active: true },
-            },
-          },
-        } satisfies SessionEntry,
+    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
+      sessionId: "session-id",
+      updatedAt: Date.now(),
+      pluginExtensions: {
+        test: {
+          state: { active: true },
+        },
       },
-      { skipMaintenance: true },
-    );
+    } satisfies SessionEntry);
 
     const result = await runPluginHostCleanup({
       cfg: { session: { store: storePath } },
@@ -88,7 +75,7 @@ describe("plugin host cleanup session stores", () => {
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
     expect(
-      loadSessionStore(storePath, { skipCache: true })["agent:main:main"]?.pluginExtensions,
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.pluginExtensions,
     ).toEqual({
       test: {
         state: { active: true },
@@ -101,8 +88,8 @@ describe("plugin host cleanup session stores", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-multistore-"),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const firstStorePath = path.join(stateDir, "agent-a", "sessions.json");
-    const secondStorePath = path.join(stateDir, "agent-b", "sessions.json");
+    const firstStorePath = path.join(stateDir, "agents", "a", "sessions", "sessions.json");
+    const secondStorePath = path.join(stateDir, "agents", "b", "sessions", "sessions.json");
     const beforeUpdatedAt = 100;
     const unrelatedUpdatedAt = Date.now();
     const firstEntry: SessionEntry = {
@@ -138,20 +125,17 @@ describe("plugin host cleanup session stores", () => {
         cleanup: { state: { keep: true } },
       },
     };
-    await saveSessionStore(
-      firstStorePath,
-      {
-        "agent:a:main": firstEntry,
-        "agent:a:unrelated": unrelatedEntry,
-      },
-      { skipMaintenance: true },
+    await replaceSessionEntry(
+      { sessionKey: "agent:a:telegram:group:shared-room", storePath: firstStorePath },
+      firstEntry,
     );
-    await saveSessionStore(
-      secondStorePath,
-      {
-        "agent:b:other": secondEntry,
-      },
-      { skipMaintenance: true },
+    await replaceSessionEntry(
+      { sessionKey: "agent:a:telegram:group:unrelated-room", storePath: firstStorePath },
+      unrelatedEntry,
+    );
+    await replaceSessionEntry(
+      { sessionKey: "agent:b:telegram:group:shared-room", storePath: secondStorePath },
+      secondEntry,
     );
 
     const result = await runPluginHostCleanup({
@@ -164,15 +148,25 @@ describe("plugin host cleanup session stores", () => {
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const firstStore = loadSessionStore(firstStorePath, { skipCache: true });
-    const secondStore = loadSessionStore(secondStorePath, { skipCache: true });
-    expect(firstStore["agent:a:main"]?.pluginExtensions).toEqual({
+    const firstMain = loadSessionEntry({
+      sessionKey: "agent:a:telegram:group:shared-room",
+      storePath: firstStorePath,
+    });
+    const firstUnrelated = loadSessionEntry({
+      sessionKey: "agent:a:telegram:group:unrelated-room",
+      storePath: firstStorePath,
+    });
+    const secondOther = loadSessionEntry({
+      sessionKey: "agent:b:telegram:group:shared-room",
+      storePath: secondStorePath,
+    });
+    expect(firstMain?.pluginExtensions).toEqual({
       other: { state: { preserved: true } },
     });
-    expect(firstStore["agent:a:main"]?.pluginNextTurnInjections).toBeUndefined();
-    expect(firstStore["agent:a:main"]?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
-    expect(firstStore["agent:a:unrelated"]).toEqual(unrelatedEntry);
-    expect(secondStore["agent:b:other"]?.pluginExtensions).toBeUndefined();
-    expect(secondStore["agent:b:other"]?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
+    expect(firstMain?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    expect(firstUnrelated).toEqual(unrelatedEntry);
+    expect(secondOther?.pluginExtensions).toBeUndefined();
+    expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
   });
 });
