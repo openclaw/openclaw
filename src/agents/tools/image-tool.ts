@@ -45,7 +45,7 @@ import {
   bundledStaticCatalogProviderUsesRuntimeAugment,
   resolveBundledStaticCatalogModel,
 } from "../embedded-agent-runner/model.static-catalog.js";
-import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { isMinimaxMultimodalModel, isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
   resolveImageFallbackDefaultProvider,
@@ -265,7 +265,12 @@ export function resolveImageModelConfigForTool(params: {
     if (providerDefault) {
       return [`${primary.provider}/${providerDefault}`];
     }
-    if (isMinimaxVlmProvider(primary.provider)) {
+    // Non-multimodal MiniMax models fall back to VL-01; multimodal models (e.g. M3)
+    // support image natively and should use the primary model directly.
+    if (
+      isMinimaxVlmProvider(primary.provider) &&
+      !isMinimaxMultimodalModel(primary.model)
+    ) {
       return [`${primary.provider}/MiniMax-VL-01`];
     }
     return [];

@@ -15,7 +15,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
+import { isMinimaxMultimodalModel, isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -139,8 +139,14 @@ function resolveConfiguredKeyProviderOrder(params: {
 function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  modelId?: string;
 }): string | undefined {
-  if (isMinimaxVlmProvider(params.providerId)) {
+  // MiniMax multimodal models can use their configured image model directly.
+  // Only non-multimodal MiniMax models should skip this resolution (they need VL-01 fallback).
+  if (
+    isMinimaxVlmProvider(params.providerId) &&
+    !(params.modelId && isMinimaxMultimodalModel(params.modelId))
+  ) {
     return undefined;
   }
   const configured = resolveConfiguredImageModel(params);
@@ -233,9 +239,12 @@ async function explicitImageModelVisionStatus(params: {
 }): Promise<"supported" | "unsupported" | "unknown"> {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
+  // MiniMax multimodal models (e.g. M3) support image input natively via
+  // chat completion, so they should not be rejected here.
   if (
     isMinimaxVlmProvider(params.providerId) &&
-    !isMinimaxVlmModel(params.providerId, params.model)
+    !isMinimaxVlmModel(params.providerId, params.model) &&
+    !isMinimaxMultimodalModel(params.model)
   ) {
     return "unsupported";
   }
@@ -270,10 +279,16 @@ async function resolveAutoImageModelId(params: {
       return explicit;
     }
   }
-  if (isMinimaxVlmProvider(params.providerId)) {
+  // Non-multimodal MiniMax models (e.g. M2.7) fall back to VL-01 for image understanding.
+  // Multimodal MiniMax models (e.g. M3) are already handled by explicitImageModelVisionStatus
+  // above — if they reach here, the explicit model was unsupported and should still try VL-01.
+  if (isMinimaxVlmProvider(params.providerId) && !isMinimaxMultimodalModel(explicit ?? "")) {
     return "MiniMax-VL-01";
   }
-  const configuredModel = resolveConfiguredImageModelId(params);
+  const configuredModel = resolveConfiguredImageModelId({
+    ...params,
+    modelId: explicit,
+  });
   if (configuredModel) {
     return configuredModel;
   }
@@ -1036,11 +1051,15 @@ export async function runCapability(params: {
 
   // Skip image understanding when the primary model supports vision natively.
   // The image will be injected directly into the model context instead.
+  // MiniMax multimodal models (e.g. M3) also benefit from this optimization.
   const activeProvider = params.activeModel?.provider?.trim();
+  const activeModelId = params.activeModel?.model?.trim();
+  const activeProviderIsMinimaxNonMultimodal =
+    activeProvider && isMinimaxVlmProvider(activeProvider) && !isMinimaxMultimodalModel(activeModelId ?? "");
   if (
     capability === "image" &&
     activeProvider &&
-    !isMinimaxVlmProvider(activeProvider) &&
+    !activeProviderIsMinimaxNonMultimodal &&
     !hasExplicitImageUnderstandingConfig({
       cfg,
       config,

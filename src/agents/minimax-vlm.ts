@@ -79,6 +79,20 @@ export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
+/**
+ * MiniMax multimodal models that natively support image input via chat completion.
+ * These models do NOT need the VL-01 fallback path; they can process images
+ * directly through the standard OpenAI-compatible chat endpoint.
+ */
+const MINIMAX_MULTIMODAL_MODEL_IDS = new Set([
+  "minimax-m3",
+]);
+
+export function isMinimaxMultimodalModel(modelId: string): boolean {
+  return MINIMAX_MULTIMODAL_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+
 function isMinimaxCnProvider(provider: string | undefined): boolean {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
