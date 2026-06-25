@@ -2,6 +2,8 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
@@ -42,13 +44,16 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   registerNodesScreenCommands(nodes);
   registerNodesLocationCommands(nodes);
 
-  const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
-  await withConsoleLogsRoutedToStderrForJson(
-    argv,
-    async () =>
-      await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-        mode: "lazy",
-        primary: "nodes",
-      }),
-  );
+  const invocation = resolveCliArgvInvocation(argv as string[]);
+  if (resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never") {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    await withConsoleLogsRoutedToStderrForJson(
+      argv,
+      async () =>
+        await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+          mode: "lazy",
+          primary: "nodes",
+        }),
+    );
+  }
 }

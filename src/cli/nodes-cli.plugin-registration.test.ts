@@ -50,35 +50,21 @@ describe("registerNodesCli plugin registration", () => {
     return program;
   }
 
-  it("routes plugin registration logs to stderr for nodes --json commands", async () => {
-    let forceStderrDuringRegistration = false;
-    registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {
-      forceStderrDuringRegistration = loggingState.forceConsoleToStderr;
-      return {};
-    });
+  it("skips plugin CLI registration for nodes commands with loadPlugins never policy (#96697)", async () => {
+    await registerWithArgv(["node", "openclaw", "nodes", "list", "--json"]);
 
-    const program = await registerWithArgv(["node", "openclaw", "nodes", "list", "--json"]);
-
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
-      program,
-      undefined,
-      undefined,
-      { mode: "lazy", primary: "nodes" },
-    );
-    expect(forceStderrDuringRegistration).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 
-  it("does not route pass-through --json after the terminator", async () => {
-    let forceStderrDuringRegistration = true;
-    registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {
-      forceStderrDuringRegistration = loggingState.forceConsoleToStderr;
-      return {};
-    });
+  it("skips plugin CLI registration for nodes help invocations", async () => {
+    await registerWithArgv(["node", "openclaw", "nodes", "--help"]);
 
-    await registerWithArgv(["node", "openclaw", "nodes", "invoke", "--", "--json"]);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
+  });
 
-    expect(forceStderrDuringRegistration).toBe(false);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+  it("skips plugin CLI registration for nodes status without --json", async () => {
+    await registerWithArgv(["node", "openclaw", "nodes", "status"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 });
