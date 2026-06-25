@@ -1066,7 +1066,7 @@ export type PluginHookBeforeAgentRunEvent = {
   senderIsOwner?: boolean;
 };
 
-/** Result type for before_agent_run. Returns pass/block or void (= pass). */
+/** Result type for before_agent_run. Returns pass/transform/block or void (= pass). */
 export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
 
 export type PluginHookResolveExecEnvEvent = {

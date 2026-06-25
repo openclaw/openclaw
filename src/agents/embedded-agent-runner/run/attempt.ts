@@ -4222,6 +4222,8 @@ export async function runEmbeddedAttempt(
             context: params.currentInboundContext,
             prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
           });
+          let modelBoundPrompt = promptForModel;
+          let beforeAgentRunTransformedPrompt = false;
           currentUserTimestampOverride =
             !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
               ? {
@@ -4260,7 +4262,7 @@ export async function runEmbeddedAttempt(
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
               ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
-              promptChars: promptForModel.length,
+              promptChars: modelBoundPrompt.length,
               runtimeContextChars: promptSubmission.runtimeOnly
                 ? (runtimeSystemContext?.length ?? 0)
                 : (runtimeContextForHook?.length ?? 0),
@@ -4363,7 +4365,13 @@ export async function runEmbeddedAttempt(
               promptError = new Error(blockReplacementMsg);
               promptErrorSource = "hook:before_agent_run";
               skipPromptSubmission = true;
+            } else if (beforeRunDecision?.outcome === "transform") {
+              modelBoundPrompt = beforeRunDecision.prompt;
+              beforeAgentRunTransformedPrompt = true;
             }
+          }
+          if (systemPromptReport?.currentTurn) {
+            systemPromptReport.currentTurn.promptChars = modelBoundPrompt.length;
           }
 
           if (!skipPromptSubmission) {
@@ -4409,8 +4417,10 @@ export async function runEmbeddedAttempt(
             });
           }
 
-          // Detect and load images referenced in the visible prompt for vision-capable models.
-          // Images are prompt-local only.
+          const imageDetectionPrompt =
+            modelBoundPrompt === promptForModel ? promptSubmission.prompt : modelBoundPrompt;
+          // Images are prompt-local. A transform replaces the model-bound prompt,
+          // so image refs must follow the transformed text instead of the transcript.
           const imageResult = skipPromptSubmission
             ? {
                 images: [],
@@ -4419,7 +4429,7 @@ export async function runEmbeddedAttempt(
                 skippedCount: 0,
               }
             : await detectAndLoadPromptImages({
-                prompt: promptSubmission.prompt,
+                prompt: imageDetectionPrompt,
                 workspaceDir: effectiveWorkspace,
                 model: params.model,
                 existingImages: params.images,
@@ -4436,18 +4446,18 @@ export async function runEmbeddedAttempt(
 
           if (!skipPromptSubmission) {
             cacheTrace?.recordStage("prompt:before", {
-              prompt: promptForModel,
+              prompt: modelBoundPrompt,
               messages: activeSession.messages,
             });
             cacheTrace?.recordStage("prompt:images", {
-              prompt: promptForModel,
+              prompt: modelBoundPrompt,
               messages: activeSession.messages,
               note: `images: prompt=${imageResult.images.length}`,
             });
             const trajectoryProviderVisibleTools = toTrajectoryToolDefinitions(effectiveTools);
             trajectoryRecorder?.recordEvent("context.compiled", {
               systemPrompt: systemPromptForHook,
-              prompt: promptForModel,
+              prompt: modelBoundPrompt,
               messages: activeSession.messages,
               tools: toTrajectoryToolDefinitions(
                 toolSearch.compacted ? uncompactedEffectiveTools : effectiveTools,
@@ -4465,7 +4475,7 @@ export async function runEmbeddedAttempt(
           const promptSkipReason = skipPromptSubmission
             ? null
             : resolvePromptSubmissionSkipReason({
-                prompt: promptForModel,
+                prompt: modelBoundPrompt,
                 messages: activeSession.messages,
                 runtimeOnly: promptSubmission.runtimeOnly,
                 imageCount: imageResult.images.length,
@@ -4482,7 +4492,7 @@ export async function runEmbeddedAttempt(
             }
             trajectoryRecorder?.recordEvent("prompt.skipped", {
               reason: promptSkipReason,
-              prompt: promptForModel,
+              prompt: modelBoundPrompt,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -4490,7 +4500,9 @@ export async function runEmbeddedAttempt(
 
           const msgCount = activeSession.messages.length;
           const systemLen = systemPromptText?.length ?? 0;
-          const promptLen = effectivePrompt.length;
+          const promptLen = beforeAgentRunTransformedPrompt
+            ? modelBoundPrompt.length
+            : effectivePrompt.length;
           const sessionSummary = summarizeSessionContext(activeSession.messages);
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           emitTrustedDiagnosticEvent({
@@ -4536,7 +4548,7 @@ export async function runEmbeddedAttempt(
           }
 
           const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
-            prompt: promptForModel,
+            prompt: modelBoundPrompt,
             ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
             ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
             ...(typeof preparedUserTurnMessage?.timestamp === "number"
@@ -4751,9 +4763,9 @@ export async function runEmbeddedAttempt(
                 }
               };
             };
-            finalPromptText = promptForSession;
+            finalPromptText = beforeAgentRunTransformedPrompt ? modelBoundPrompt : promptForSession;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: promptForModel,
+              prompt: modelBoundPrompt,
               systemPrompt: systemPromptForHook,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
@@ -4768,7 +4780,7 @@ export async function runEmbeddedAttempt(
             const cleanupModelPromptTransform = installModelPromptTransform({
               session: activeSession,
               transcriptPrompt: promptForSession,
-              modelPrompt: promptForModel,
+              modelPrompt: modelBoundPrompt,
               prependContext: promptBuildPrependContext,
               appendContext: promptBuildAppendContext,
               shouldCapturePrompt: () => captureCurrentPromptForModel,

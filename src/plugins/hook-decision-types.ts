@@ -3,7 +3,7 @@
  * Core is outcome-agnostic — it handles the mechanics of each outcome
  * without knowing *why* the decision was made.
  */
-export type HookDecision = HookDecisionPass | HookDecisionBlock;
+export type HookDecision = HookDecisionPass | HookDecisionTransform | HookDecisionBlock;
 
 /** Content is fine. Proceed normally. */
 export type HookDecisionPass = {
@@ -29,6 +29,21 @@ export type HookDecisionBlock = {
   metadata?: Record<string, unknown>;
 };
 
+/**
+ * Content can proceed after replacing the current model-bound prompt. The
+ * replacement is sent to the model and model-input observers; it does not
+ * rewrite the stored transcript prompt.
+ */
+export type HookDecisionTransform = {
+  outcome: "transform";
+  /** Replacement text for the current model-bound user prompt. */
+  prompt: string;
+  /** Internal plugin-local reason. Do not expose verbatim. */
+  reason?: string;
+  /** Opaque metadata for the plugin's own use. Core does not interpret it. */
+  metadata?: Record<string, unknown>;
+};
+
 export function resolveBlockMessage(
   decision: HookDecisionBlock,
   params: { blockedBy?: string } = {},
@@ -48,12 +63,13 @@ export function resolveBlockMessage(
 /** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */
 export const HOOK_DECISION_SEVERITY: Record<HookDecision["outcome"], number> = {
   pass: 0,
+  transform: 1,
   block: 2,
 };
 
 /**
  * Merge two HookDecisions using most-restrictive-wins semantics.
- * `block > pass`
+ * `block > transform > pass`
  */
 export function mergeHookDecisions(a: HookDecision | undefined, b: HookDecision): HookDecision {
   if (!a) {
@@ -73,6 +89,25 @@ export function isHookDecision(value: unknown): value is HookDecision {
   const keys = Object.keys(v);
   if (v.outcome === "pass") {
     return keys.length === 1;
+  }
+  if (v.outcome === "transform") {
+    const allowedTransformKeys = new Set(["outcome", "prompt", "reason", "metadata"]);
+    if (keys.some((key) => !allowedTransformKeys.has(key))) {
+      return false;
+    }
+    if (typeof v.prompt !== "string" || !v.prompt.trim()) {
+      return false;
+    }
+    if ("reason" in v && (typeof v.reason !== "string" || !v.reason.trim())) {
+      return false;
+    }
+    if (
+      "metadata" in v &&
+      (typeof v.metadata !== "object" || v.metadata === null || Array.isArray(v.metadata))
+    ) {
+      return false;
+    }
+    return true;
   }
   if (v.outcome !== "block") {
     return false;
@@ -100,7 +135,7 @@ export function isHookDecision(value: unknown): value is HookDecision {
 }
 
 /** Outcomes valid for input gates (before_agent_run). */
-export type InputGateDecision = HookDecisionPass | HookDecisionBlock;
+export type InputGateDecision = HookDecisionPass | HookDecisionTransform | HookDecisionBlock;
 
 /**
  * A gate hook decision paired with the pluginId that produced it.
