@@ -272,3 +272,5 @@ extensions/diffs-language-pack/assets/viewer-runtime.js
 
 # virtual env
 venv/
+
+idx_exchange/
