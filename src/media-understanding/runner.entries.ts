@@ -680,9 +680,10 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
  * provider id like `feishu` (an official channel, not a media provider)
  * never emits a misleading install hint from a media-provider error.
  *
- * Tier 1: provider id is owned by an official external provider entry
- *   (the catalog has a `providers[]` block listing it) — emit the
- *   catalog-backed install + registry refresh + doctor fix commands.
+ * Tier 1: provider id is owned by an official external provider entry that
+ *   declares a `contracts.mediaUnderstandingProviders` block listing the
+ *   id — emit the catalog-backed install + registry refresh + doctor fix
+ *   commands.
  * Tier 2: empty string — keeps the legacy message verbatim for ids that
  *   are not in the provider catalog (channel ids, plugin ids, unknown
  *   ids, internal ids, etc.). Newly externalized media providers must
