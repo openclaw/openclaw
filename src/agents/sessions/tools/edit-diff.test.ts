@@ -226,13 +226,14 @@ describe("applyEditsToNormalizedContent", () => {
     // Length check: 6 === 6 → old fast path would incorrectly return offset 2.
     // New fast path: "fi X é" !== "ﬁ X e\u0301" → runs the mapper correctly.
 
-    // Fuzzy-match X (it's the same in both original and normalized form).
+    // Fuzzy-match using the NFKC-normalized form (fi) which differs from original (ﬁ).
+    // This forces the normalized-to-original offset mapper to run.
     const result = applyEditsToNormalizedContent(
       normalizeToLF(line),
-      [{ oldText: "X", newText: "Y" }],
+      [{ oldText: "fi X", newText: "FI Y" }],
       "test.ts",
     );
-    // X at orig cp 2 should be replaced, leaving ﬁ and e+acute intact.
+    // After mapping the NFKC match back to original offsets, ﬁ and e+acute must be preserved.
     expect(result.newContent).toBe("\uFB01 Y e\u0301");
   });
 
