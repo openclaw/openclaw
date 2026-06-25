@@ -120,7 +120,9 @@ vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
 }));
 
-const resolveBundledPluginsDirMock = vi.hoisted(() => vi.fn(() => undefined));
+const resolveBundledPluginsDirMock = vi.hoisted(() =>
+  vi.fn<() => string | undefined>(() => undefined),
+);
 vi.mock("../plugins/bundled-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/bundled-dir.js")>()),
   resolveBundledPluginsDir: resolveBundledPluginsDirMock,
