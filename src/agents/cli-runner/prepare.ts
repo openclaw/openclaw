@@ -613,10 +613,11 @@ export async function prepareCliRunContext(
   // FIX #96564: Skip transcript check for warm-stdin sessions that never write native transcript.
   // The headless warm-stdin claude-cli backend (liveSession: "claude-stdio") never writes native transcript,
   // so the transcript check would always fail and invalidate the session every turn.
+  // Use backendResolved.config which has the full CliBackendConfig type with liveSession.
   const isWarmStdin =
-    preparedBackendFinal.backend.liveSession === "claude-stdio" &&
-    preparedBackendFinal.backend.output === "jsonl" &&
-    preparedBackendFinal.backend.input === "stdin";
+    backendResolved.config.liveSession === "claude-stdio" &&
+    backendResolved.config.output === "jsonl" &&
+    backendResolved.config.input === "stdin";
   const claudeCliTranscriptMissing =
     hasClaudeCliCandidate &&
     !isWarmStdin &&
