@@ -28,8 +28,8 @@ const targets = [
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 const sourcePattern = "**/*.{ts,tsx,js,mjs,cjs}";
 const testPattern = "**/*.{test,e2e.test,live.test}.{ts,tsx,js,mjs,cjs}";
-// Keep local agent support trees and vendored snapshots classified but outside jscpd.
-const intentionallyUnscannedPrefixes = [".agents/", "vendor/"];
+// Keep local agent support trees, vendored snapshots, and standalone examples outside jscpd.
+const intentionallyUnscannedPrefixes = [".agents/", "vendor/", "examples/"];
 
 const generatedIgnores = [
   "extensions/qa-matrix/src/shared/**",
