@@ -4,6 +4,11 @@ import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
+// Sentinel apiKey for native providers (e.g. google-vertex) that authenticate
+// via an SDK/ADC credential chain rather than a plain API key. Persisted so
+// pi's ModelRegistry accepts custom models for these providers; the real
+// credentials are resolved by the provider at request time.
+export const SDK_AUTH_API_KEY_MARKER = "sdk-auth";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -71,6 +76,7 @@ export function isNonSecretApiKeyMarker(
     trimmed === MINIMAX_OAUTH_MARKER ||
     trimmed === QWEN_OAUTH_MARKER ||
     trimmed === OLLAMA_LOCAL_AUTH_MARKER ||
+    trimmed === SDK_AUTH_API_KEY_MARKER ||
     trimmed === NON_ENV_SECRETREF_MARKER ||
     isAwsSdkAuthMarker(trimmed);
   if (isKnownMarker) {

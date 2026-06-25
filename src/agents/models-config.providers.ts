@@ -1,3 +1,4 @@
+import { getModels, getProviders, type KnownProvider } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import {
@@ -60,6 +61,7 @@ import {
   MINIMAX_OAUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
+  SDK_AUTH_API_KEY_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
@@ -72,6 +74,39 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+let cachedKnownProviders: Set<string> | undefined;
+
+function getKnownProviderSet(): Set<string> {
+  if (!cachedKnownProviders) {
+    try {
+      cachedKnownProviders = new Set(getProviders());
+    } catch {
+      cachedKnownProviders = new Set();
+    }
+  }
+  return cachedKnownProviders;
+}
+
+// Resolve the canonical baseUrl that pi-ai uses for a built-in provider so that
+// custom models defined for that provider inherit the same endpoint. Returns
+// undefined for unknown/custom providers (which must declare their own baseUrl).
+function resolveBuiltInProviderBaseUrl(provider: string): string | undefined {
+  if (!getKnownProviderSet().has(provider)) {
+    return undefined;
+  }
+  try {
+    for (const model of getModels(provider as KnownProvider)) {
+      const baseUrl = model.baseUrl?.trim();
+      if (baseUrl) {
+        return baseUrl;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -400,6 +435,37 @@ export function normalizeProviders(params: {
           mutated = true;
           normalizedProvider = { ...normalizedProvider, apiKey };
         }
+      }
+    }
+
+    // pi's ModelRegistry rejects a provider that defines custom models without
+    // BOTH a baseUrl and an apiKey, and a single rejected provider drops ALL
+    // custom models from models.json. Native providers like google-vertex
+    // authenticate via an SDK/ADC credential chain (no plain API key) and may
+    // have no user-supplied baseUrl, so for known built-in providers backfill
+    // the catalog baseUrl and a sentinel apiKey when none could be resolved.
+    // The real credentials are still resolved by the provider at request time.
+    // Without this, custom/newer google-vertex models silently disappear from
+    // the model list (see issue #96600). Scoped to known providers so arbitrary
+    // custom endpoints keep requiring an explicit baseUrl/apiKey.
+    if (hasModels && getKnownProviderSet().has(normalizedKey)) {
+      const hasBaseUrl =
+        typeof normalizedProvider.baseUrl === "string" && normalizedProvider.baseUrl.trim() !== "";
+      if (!hasBaseUrl) {
+        const builtInBaseUrl = resolveBuiltInProviderBaseUrl(normalizedKey);
+        if (builtInBaseUrl) {
+          mutated = true;
+          normalizedProvider = { ...normalizedProvider, baseUrl: builtInBaseUrl };
+        }
+      }
+      const stillMissingApiKey = !(
+        normalizeOptionalSecretInput(normalizedProvider.apiKey) || normalizedProvider.apiKey
+      );
+      const baseUrlNowPresent =
+        typeof normalizedProvider.baseUrl === "string" && normalizedProvider.baseUrl.trim() !== "";
+      if (stillMissingApiKey && baseUrlNowPresent) {
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: SDK_AUTH_API_KEY_MARKER };
       }
     }
 
