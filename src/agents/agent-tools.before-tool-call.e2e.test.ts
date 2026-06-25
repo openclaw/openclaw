@@ -1053,7 +1053,7 @@ describe("before_tool_call requireApproval handling", () => {
             ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
             approvalCapability: {
               native: {},
-              getActionAvailabilityState: () => ({ kind: "disabled" as const }),
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
               getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
               describeExecApprovalSetup: () =>
                 "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",

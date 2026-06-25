@@ -661,15 +661,27 @@ function buildPluginApprovalFailureReason(params: {
     cfg: params.ctx?.config,
     approvalKind: "plugin",
   });
-  if (nativePluginSurface.kind !== "disabled") {
-    return params.fallbackReason;
-  }
   const setupText = describeNativePluginApprovalClientSetup({
     channel: nativePluginSurface.channel,
     channelLabel: nativePluginSurface.channelLabel,
     accountId: nativePluginSurface.accountId,
   });
-  return setupText ? `${params.fallbackReason}\n\n${setupText}` : params.fallbackReason;
+  if (!setupText) {
+    return params.fallbackReason;
+  }
+  const nativeDeliverySurface =
+    nativePluginSurface.kind === "disabled"
+      ? nativePluginSurface
+      : resolveApprovalInitiatingSurfaceState({
+          channel: turnSourceChannel,
+          accountId: params.ctx?.turnSourceAccountId,
+          cfg: params.ctx?.config,
+          approvalKind: "exec",
+        });
+  if (nativeDeliverySurface.kind !== "disabled") {
+    return params.fallbackReason;
+  }
+  return `${params.fallbackReason}\n\n${setupText}`;
 }
 
 async function requestPluginToolApproval(params: {
