@@ -177,7 +177,7 @@ function hasPluginOwnedSessionState(
   );
 }
 
-function matchesCleanupSession(
+export function matchesPluginHostCleanupSession(
   entryKey: string,
   entry: SessionEntry,
   sessionKey?: string,
@@ -192,14 +192,16 @@ function matchesCleanupSession(
   );
 }
 
-function shouldSkipCleanupStore(params: PluginHostSessionCleanupStoreParams): boolean {
+export function shouldSkipPluginHostCleanupStore(
+  params: PluginHostSessionCleanupStoreParams,
+): boolean {
   if (!params.pluginId && !params.sessionKey) {
     return true;
   }
   return params.mode === "promoted-slots" && (params.sessionEntrySlotKeys?.size ?? 0) === 0;
 }
 
-function hasCleanupTarget(
+export function hasPluginHostCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
 ): boolean {
@@ -209,7 +211,7 @@ function hasCleanupTarget(
   return hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
 }
 
-function clearCleanupTarget(
+export function clearPluginHostCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
 ): void {
@@ -227,7 +229,10 @@ function clearCleanupTarget(
 export async function cleanupPluginHostSessionStore(
   params: PluginHostSessionCleanupStoreParams,
 ): Promise<number> {
-  if (shouldSkipCleanupStore(params) || (params.shouldCleanup && !params.shouldCleanup())) {
+  if (
+    shouldSkipPluginHostCleanupStore(params) ||
+    (params.shouldCleanup && !params.shouldCleanup())
+  ) {
     return 0;
   }
   return await updateSessionStore(
@@ -240,12 +245,12 @@ export async function cleanupPluginHostSessionStore(
       const now = Date.now();
       for (const [entryKey, entry] of Object.entries(store)) {
         if (
-          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-          !hasCleanupTarget(entry, params)
+          !matchesPluginHostCleanupSession(entryKey, entry, params.sessionKey) ||
+          !hasPluginHostCleanupTarget(entry, params)
         ) {
           continue;
         }
-        clearCleanupTarget(entry, params);
+        clearPluginHostCleanupTarget(entry, params);
         entry.updatedAt = now;
         clearedInStore += 1;
       }
