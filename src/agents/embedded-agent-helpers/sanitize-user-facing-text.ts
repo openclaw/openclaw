@@ -25,7 +25,10 @@ import {
 } from "../../shared/text/assistant-visible-text.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import {
+  OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
+  stripInternalRuntimeContext,
+} from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
   isBillingErrorMessage,
@@ -446,6 +449,12 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {
+    return "";
+  }
+  // Runtime-only maintenance turns use this placeholder to trigger the agent
+  // loop. It is internal scaffolding, not user input — strip it before delivery
+  // so it never leaks into user-visible surfaces.
+  if (trimmed === OPENCLAW_RUNTIME_EVENT_USER_PROMPT) {
     return "";
   }
 
