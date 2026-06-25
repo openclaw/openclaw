@@ -28,14 +28,30 @@ vi.mock("../model-selection.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions/store.js", () => ({
-  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
-  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
-}));
+// Spread the real modules and override only the I/O entry points: the
+// compaction-runtime-context import graph also pulls other store/paths exports
+// (e.g. the re-exported resolveSessionStoreEntry), and a partial mock that
+// drops them throws under the full CI shard's eager module evaluation.
+vi.mock("../../config/sessions/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/store.js")>(
+    "../../config/sessions/store.js",
+  );
+  return {
+    ...actual,
+    loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
+    updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+  };
+});
 
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
-}));
+vi.mock("../../config/sessions/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/paths.js")>(
+    "../../config/sessions/paths.js",
+  );
+  return {
+    ...actual,
+    resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+  };
+});
 
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { shouldSwitchToLiveModel } from "../live-model-switch.js";
