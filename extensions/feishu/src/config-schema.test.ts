@@ -61,6 +61,7 @@ describe("FeishuConfigSchema webhook validation", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       verificationToken: "token_top",
+      encryptKey: "",
       appId: "cli_top",
       appSecret: "secret_top", // pragma: allowlist secret
     });
@@ -101,6 +102,7 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           verificationToken: "token_main",
+          encryptKey: "",
           appId: "cli_main",
           appSecret: "secret_main", // pragma: allowlist secret
         },

@@ -297,7 +297,6 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    let sendRes;
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     const sendInitialCard = async () => {
@@ -342,7 +341,7 @@ export class FeishuStreamingSession {
         "Send card failed",
       );
     };
-    sendRes = await runWithFeishuSendRateLimit(
+    const sendRes = await runWithFeishuSendRateLimit(
       {
         accountId: sendOptions.sendRateLimit?.accountId ?? "",
         receiveId,

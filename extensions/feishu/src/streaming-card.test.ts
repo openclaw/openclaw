@@ -465,7 +465,7 @@ describe("FeishuStreamingSession", () => {
     await Promise.all([first, second]);
 
     expect(reply).toHaveBeenCalledTimes(2);
-    expect(sendTimes[1]! - sendTimes[0]!).toBeGreaterThanOrEqual(50);
+    expect(sendTimes[1] - sendTimes[0]).toBeGreaterThanOrEqual(50);
   });
 
   it("paces initial streaming-card creates for the same Feishu target", async () => {
@@ -509,7 +509,7 @@ describe("FeishuStreamingSession", () => {
     await Promise.all([first, second]);
 
     expect(create).toHaveBeenCalledTimes(2);
-    expect(sendTimes[1]! - sendTimes[0]!).toBeGreaterThanOrEqual(50);
+    expect(sendTimes[1] - sendTimes[0]).toBeGreaterThanOrEqual(50);
   });
 
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
