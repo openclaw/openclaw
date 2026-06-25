@@ -17,6 +17,7 @@ import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundPayloadHint,
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
@@ -574,6 +575,7 @@ function createChannelOutboundContextBase(
   return {
     cfg: params.cfg,
     to: params.to,
+    hint: params.hint,
     accountId: params.accountId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
@@ -637,6 +639,7 @@ type DeliverOutboundPayloadsCoreParams = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  hint?: ChannelOutboundPayloadHint;
   payloads: ReplyPayload[];
   replyToId?: string | null;
   replyToMode?: ReplyToMode;

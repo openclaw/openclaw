@@ -36,6 +36,7 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  approvalReactionBinding?: boolean;
 };
 
 export type SignalSendResult = {
@@ -184,13 +185,16 @@ export async function sendMessageSignal(
   });
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
-  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    text: text ?? "",
-    targetAuthor: account,
-  });
+  const rawText = text ?? "";
+  const outboundText = opts.approvalReactionBinding
+    ? appendSignalApprovalReactionHintForOutboundMessage({
+        cfg,
+        accountId: accountInfo.accountId,
+        to,
+        text: rawText,
+        targetAuthor: account,
+      })
+    : rawText;
   let message = outboundText;
   let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
@@ -273,14 +277,16 @@ export async function sendMessageSignal(
   });
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
-  registerSignalApprovalReactionTargetForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    messageId,
-    text: outboundText,
-    targetAuthor: account,
-  });
+  if (opts.approvalReactionBinding) {
+    registerSignalApprovalReactionTargetForOutboundMessage({
+      cfg,
+      accountId: accountInfo.accountId,
+      to,
+      messageId,
+      text: outboundText,
+      targetAuthor: account,
+    });
+  }
   return {
     messageId,
     timestamp,

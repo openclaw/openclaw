@@ -6,6 +6,7 @@ import {
   getLoadedChannelPlugin,
   resolveChannelApprovalAdapter,
 } from "../channels/plugins/index.js";
+import type { ChannelOutboundPayloadHint } from "../channels/plugins/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type {
   ExecApprovalForwardingConfig,
@@ -367,6 +368,7 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
   deliver: DeliverApprovalPayloads;
+  hint?: ChannelOutboundPayloadHint;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
@@ -387,6 +389,7 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
+        hint: params.hint,
         payloads: [payload],
       });
       if (send.status === "failed" || send.status === "partial_failed") {
@@ -604,6 +607,11 @@ function createApprovalHandlers<
       return false;
     }
 
+    const pendingHint = {
+      kind: "approval-pending",
+      approvalKind: params.strategy.kind,
+    } satisfies ChannelOutboundPayloadHint;
+
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
@@ -624,13 +632,11 @@ function createApprovalHandlers<
           cfg,
           target,
           payload,
-          hint: {
-            kind: "approval-pending",
-            approvalKind: params.strategy.kind,
-          },
+          hint: pendingHint,
         });
       },
       deliver: params.deliver,
+      hint: pendingHint,
       shouldSend: () => pending.get(requestId) === pendingEntry,
     }).catch((err: unknown) => {
       log.error(

@@ -1,6 +1,7 @@
 // Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -190,6 +191,7 @@ async function sendFormattedSignalText(ctx: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
   text: string;
+  hint?: ChannelOutboundPayloadHint;
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
   abortSignal?: AbortSignal;
@@ -223,6 +225,7 @@ async function sendFormattedSignalText(ctx: {
       accountId: ctx.accountId ?? undefined,
       textMode: "plain",
       textStyles: chunk.styles,
+      approvalReactionBinding: ctx.hint?.kind === "approval-pending",
     });
     results.push(result);
   }
@@ -233,6 +236,7 @@ async function sendFormattedSignalMedia(ctx: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
   text: string;
+  hint?: ChannelOutboundPayloadHint;
   mediaUrl: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -266,6 +270,7 @@ async function sendFormattedSignalMedia(ctx: {
     accountId: ctx.accountId ?? undefined,
     textMode: "plain",
     textStyles: formatted.styles,
+    approvalReactionBinding: ctx.hint?.kind === "approval-pending",
   });
   return attachChannelToResult("signal", result);
 }
@@ -404,11 +409,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             payload,
             hint,
           }),
-        sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
+        sendFormattedText: async ({ cfg, to, text, hint, accountId, deps, abortSignal }) =>
           await sendFormattedSignalText({
             cfg,
             to,
             text,
+            hint,
             accountId,
             deps,
             abortSignal,
@@ -420,6 +426,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           mediaUrl,
           mediaLocalRoots,
           mediaReadFile,
+          hint,
           accountId,
           deps,
           abortSignal,
@@ -428,6 +435,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             cfg,
             to,
             text,
+            hint,
             mediaUrl,
             mediaLocalRoots,
             mediaReadFile,

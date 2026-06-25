@@ -124,7 +124,8 @@ describe("sendMessageSignal approval reaction behavior", () => {
     });
     closeServer = server.close;
     const cfg = buildCfg(server.baseUrl);
-    const text = "Use this command later:\nReply with: /approve plugin:abc allow-once|deny";
+    const text =
+      "Use this command later:\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
 
     await sendMessageSignal("+15551230000", text, { cfg });
 
@@ -147,7 +148,7 @@ describe("sendMessageSignal approval reaction behavior", () => {
     expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
   });
 
-  it("sends canonical approval prompts with reaction hints and resolves authorized reactions", async () => {
+  it("sends approval-owned prompts with reaction hints and resolves authorized reactions", async () => {
     const calls: RpcCall[] = [];
     const server = await withSignalRpcServer(async (req, res) => {
       expect(req.method).toBe("POST");
@@ -164,7 +165,10 @@ describe("sendMessageSignal approval reaction behavior", () => {
     const text =
       "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
 
-    await sendMessageSignal("+15551230000", text, { cfg });
+    await sendMessageSignal("+15551230000", text, {
+      cfg,
+      approvalReactionBinding: true,
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("send");
@@ -229,7 +233,10 @@ describe("sendMessageSignal approval reaction behavior", () => {
     expect(text).toContain("/approve exec-1 allow-once");
     expect(text).not.toContain("React with:");
 
-    await sendMessageSignal("+15551230000", text, { cfg });
+    await sendMessageSignal("+15551230000", text, {
+      cfg,
+      approvalReactionBinding: true,
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("send");
