@@ -47,6 +47,8 @@ import type {
   SessionEntryUpdateOptions,
   SessionTranscriptAccessScope,
   SessionTranscriptReadScope,
+  SessionTranscriptTurnMessageAppend,
+  SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -169,6 +171,13 @@ export type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
   transcriptEvents: number;
+};
+
+export type SqliteExpectedSessionTranscriptTurnResult = {
+  appendedMessages: TranscriptMessageAppendResult<unknown>[];
+  rejectedReason?: "session-rebound";
+  sessionEntry: SessionEntry | undefined;
+  sessionFile: string;
 };
 
 export type SqliteTranscriptWriteLockContext = {
@@ -746,6 +755,117 @@ export async function appendSqliteTranscriptEvents(
       }
     }, toDatabaseOptions(resolved));
   });
+}
+
+/** Appends a guarded transcript turn and touches its session row in one queued write. */
+export async function appendSqliteExpectedSessionTranscriptTurn(
+  scope: SessionTranscriptWriteScope,
+  options: {
+    config?: import("../types.openclaw.js").OpenClawConfig;
+    cwd?: string;
+    expectedSessionId: string;
+    messages: readonly SessionTranscriptTurnMessageAppend[];
+    sessionFile: string;
+    touchSessionEntry?: boolean;
+  },
+): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  const resolved = resolveSqliteTranscriptScope({
+    ...scope,
+    sessionId: options.expectedSessionId,
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const initialResult: SqliteExpectedSessionTranscriptTurnResult = {
+      appendedMessages: [],
+      rejectedReason: "session-rebound",
+      sessionEntry: undefined,
+      sessionFile: options.sessionFile,
+    };
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const freshBeforeAppend = readSessionEntryRow(database, resolved.sessionKey);
+    if (!freshBeforeAppend || freshBeforeAppend.entry.sessionId !== options.expectedSessionId) {
+      return {
+        ...initialResult,
+        sessionEntry: freshBeforeAppend?.entry,
+      };
+    }
+    const messages = await selectAppendableSqliteTranscriptTurnMessages(
+      {
+        agentId: resolved.agentId,
+        sessionFile: options.sessionFile,
+        sessionId: options.expectedSessionId,
+        sessionKey: resolved.sessionKey,
+        ...(scope.storePath ? { storePath: scope.storePath } : {}),
+      },
+      options.messages,
+    );
+
+    let result = initialResult;
+    runOpenClawAgentWriteTransaction((database) => {
+      const fresh = readSessionEntryRow(database, resolved.sessionKey);
+      if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
+        result = {
+          appendedMessages: [],
+          rejectedReason: "session-rebound",
+          sessionEntry: fresh?.entry,
+          sessionFile: options.sessionFile,
+        };
+        return;
+      }
+
+      const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+      for (const append of messages) {
+        const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+        const appended = appendSqliteTranscriptMessageInTransaction(database, resolved, {
+          ...appendOptions,
+          ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
+          ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
+        });
+        if (appended) {
+          appendedMessages.push(appended);
+        }
+      }
+
+      const appendedCount = appendedMessages.filter((message) => message.appended).length;
+      const touchUpdatedAt =
+        options.touchSessionEntry === true && appendedCount > 0 ? Date.now() : undefined;
+      const sessionPatch: Partial<SessionEntry> = {
+        ...(fresh.entry.sessionFile === options.sessionFile
+          ? {}
+          : { sessionFile: options.sessionFile }),
+        ...(touchUpdatedAt !== undefined
+          ? { updatedAt: Math.max(fresh.entry.updatedAt ?? 0, touchUpdatedAt) }
+          : {}),
+      };
+      const next =
+        Object.keys(sessionPatch).length > 0
+          ? mergeSessionEntry(fresh.entry, sessionPatch)
+          : fresh.entry;
+      if (next !== fresh.entry) {
+        writeSessionEntry(database, resolved.sessionKey, next);
+        deleteLegacySessionEntryRows(database, fresh.legacyKeys, resolved.sessionKey);
+      }
+      result = {
+        appendedMessages,
+        sessionEntry: cloneSessionEntry(next),
+        sessionFile: options.sessionFile,
+      };
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+async function selectAppendableSqliteTranscriptTurnMessages(
+  context: SessionTranscriptTurnWriteContext,
+  messages: readonly SessionTranscriptTurnMessageAppend[],
+): Promise<SessionTranscriptTurnMessageAppend[]> {
+  const selected: SessionTranscriptTurnMessageAppend[] = [];
+  for (const append of messages) {
+    const shouldAppend = append.shouldAppend ? await append.shouldAppend(context) : true;
+    if (shouldAppend) {
+      selected.push(append);
+    }
+  }
+  return selected;
 }
 
 /** Appends one transcript message to the additive SQLite transcript store. */
