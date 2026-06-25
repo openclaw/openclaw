@@ -1,5 +1,5 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
-import type { MemorySearchOptions } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type { MemorySearchOptions } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { vi } from "vitest";
 
 type SearchImpl = (opts?: MemorySearchOptions) => Promise<unknown[]>;
