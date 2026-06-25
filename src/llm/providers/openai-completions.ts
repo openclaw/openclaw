@@ -1081,7 +1081,7 @@ export function convertMessages(
           type: "function" as const,
           function: {
             name: tc.name,
-            arguments: JSON.stringify(tc.arguments),
+            arguments: typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments),
           },
         }));
         const reasoningDetails = toolCalls
