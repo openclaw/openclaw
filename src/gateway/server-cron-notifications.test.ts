@@ -123,6 +123,8 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("redacts command action-required summaries before webhook completion delivery", async () => {
     const logger = { warn: vi.fn() };
+    const sensitiveSummary =
+      "action-required output preserved:\nVisit www.example.com/device and enter code 123456\nLog in with token=opaque-secret-value";
     const job = {
       id: "cron-command-webhook-redact",
       name: "command webhook redact",
@@ -137,7 +139,20 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         mode: "webhook",
         to: "https://example.invalid/cron",
       },
-      state: {},
+      state: {
+        lastDiagnosticSummary: sensitiveSummary,
+        lastDiagnostics: {
+          summary: sensitiveSummary,
+          entries: [
+            {
+              ts: 1,
+              source: "exec",
+              severity: "warn",
+              message: sensitiveSummary,
+            },
+          ],
+        },
+      },
     } satisfies CronJob;
 
     dispatchGatewayCronFinishedNotifications({
@@ -145,11 +160,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         jobId: job.id,
         action: "finished",
         status: "ok",
-        summary:
-          "action-required output preserved:\nVisit www.example.com/device and enter code 123456\nLog in with token=opaque-secret-value",
+        summary: sensitiveSummary,
         diagnostics: {
-          summary:
-            "action-required output preserved:\nVisit www.example.com/device and enter code 123456\nLog in with token=opaque-secret-value",
+          summary: sensitiveSummary,
           entries: [
             {
               ts: 1,
@@ -160,6 +173,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
             },
           ],
         },
+        job,
       },
       job,
       deps: {} as CliDeps,
@@ -185,6 +199,8 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(body.diagnostics.entries[0].message).not.toContain("www.example.com/device");
     expect(body.diagnostics.entries[0].message).not.toContain("123456");
     expect(body.diagnostics.entries[0].message).not.toContain("opaque-secret-value");
+    expect(body.job.state).not.toHaveProperty("lastDiagnosticSummary");
+    expect(body.job.state).not.toHaveProperty("lastDiagnostics");
   });
 
   it("omits failed command summaries and diagnostics from completion webhook delivery", async () => {
