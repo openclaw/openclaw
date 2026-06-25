@@ -3,7 +3,6 @@
   "channel-contract-testing",
   "channel-target-testing",
   "channel-test-helpers",
-  "codex-mcp-projection",
   "codex-native-task-runtime",
   "plugin-test-api",
   "plugin-test-contracts",
