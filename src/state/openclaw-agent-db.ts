@@ -92,6 +92,22 @@ function migratedSessionColumn(
   return columns.has(columnName) ? columnName : fallback;
 }
 
+function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(memory_index_sources)").all() as Array<{
+    name?: unknown;
+  }>;
+  const hasLegacySourceColumns = columns.some((row) => row.name === "source_kind");
+  if (!hasLegacySourceColumns) {
+    return;
+  }
+  // Memory indexes are derived cache data; v1 used a different key shape.
+  db.exec(`
+    DROP TABLE IF EXISTS memory_index_chunks_fts;
+    DROP TABLE IF EXISTS memory_index_chunks;
+    DROP TABLE IF EXISTS memory_index_sources;
+  `);
+}
+
 function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -188,6 +204,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
       DROP TABLE sessions;
       ALTER TABLE sessions_new RENAME TO sessions;
     `);
+    dropLegacyMemoryIndexSchema(db);
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
   }

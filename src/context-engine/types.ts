@@ -258,6 +258,17 @@ export type ContextEnginePromptCacheInfo = {
   expiresAt?: number;
 };
 
+export type ContextEngineTranscriptStorageInfo = {
+  /**
+   * Authoritative transcript backend for this runtime turn.
+   *
+   * Hosts may still pass legacy locator fields such as `sessionFile` for older
+   * plugin contracts, but context engines should use this field to decide
+   * whether that locator is a live transcript source.
+   */
+  kind: "sqlite";
+};
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -274,6 +285,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
+  /** Authoritative transcript backend for this turn. */
+  transcriptStorage?: ContextEngineTranscriptStorageInfo;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *

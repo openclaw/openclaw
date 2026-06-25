@@ -3295,6 +3295,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
         false,
       );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
     } finally {
       resetProcessRegistryForTests();
     }
