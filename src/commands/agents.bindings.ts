@@ -303,7 +303,7 @@ export function buildChannelBindings(params: {
       channel,
       config: params.config,
       agentId,
-      explicitAccountId: peerBinding ? undefined : explicitAccountId,
+      explicitAccountId,
     });
     if (peerBinding) {
       match.peer = peerBinding;
