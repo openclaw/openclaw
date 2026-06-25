@@ -189,14 +189,6 @@ function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
 }
 
-/** Strip the media-store cache suffix (\`---<uuid>\`) from a filename.
- *  \`buildSavedMediaId\` stores files as \`originalName---uuid.ext\` on
- *  disk; when loading the file back for outbound delivery the basename
- *  should reflect the original filename without the internal UUID. */
-function stripMediaStoreCacheSuffix(filename: string): string {
-  return filename.replace(/---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "");
-}
-
 function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
     return { printableRatio: 0 };
@@ -1082,7 +1074,8 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
-  let fileName = stripMediaStoreCacheSuffix(basenameFromAnyPath(mediaUrl) || "") || undefined;
+  const { extractOriginalFilename } = await import("./store.js");
+  let fileName = extractOriginalFilename(mediaUrl) || undefined;
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
