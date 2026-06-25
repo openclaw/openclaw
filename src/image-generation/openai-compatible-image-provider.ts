@@ -7,6 +7,7 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -269,7 +270,11 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const parsedBody = await readProviderJsonResponse(
+          response,
+          `${options.label} image generation`,
+        );
+        const images = parseOpenAiCompatibleImageResponse(parsedBody, {
           ...options.response,
           malformedResponseError:
             mode === "edit"

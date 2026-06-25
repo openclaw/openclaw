@@ -11,6 +11,7 @@ const {
   isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
+  readProviderJsonResponseMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
   resolveProviderOperationTimeoutMsMock,
@@ -24,6 +25,9 @@ const {
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
+  readProviderJsonResponseMock: vi.fn(async (response: { json: () => Promise<unknown> }) =>
+    response.json(),
+  ),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const request =
@@ -56,6 +60,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   createProviderOperationDeadline: createProviderOperationDeadlineMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
+  readProviderJsonResponse: readProviderJsonResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
