@@ -31,6 +31,7 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const extractDocumentContentMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -39,6 +40,7 @@ const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
+const mockedExtractDocumentContent = extractDocumentContentMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 let suiteTempMediaRootDir = "";
@@ -301,6 +303,9 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("../media/document-extractors.runtime.js", () => ({
+      extractDocumentContent: extractDocumentContentMock,
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -352,6 +357,8 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
+    mockedExtractDocumentContent.mockReset();
+    mockedExtractDocumentContent.mockResolvedValue({ text: "", images: [] });
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -1757,6 +1764,37 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("carries rendered PDF page images into current-turn image payloads", async () => {
+    const extractedImage = {
+      type: "image" as const,
+      data: Buffer.from("scanned-page").toString("base64"),
+      mimeType: "image/png",
+    };
+    mockedExtractDocumentContent.mockResolvedValueOnce({
+      text: "",
+      images: [extractedImage],
+    });
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "receipt-scan.pdf",
+      content: pseudoPdf,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("[PDF content rendered to images]");
+    expect(ctx.Body).not.toContain("images not forwarded");
+    expect(ctx.CurrentTurnImages).toEqual([extractedImage]);
+    expect(ctx.CurrentTurnImageOrder).toEqual(["inline"]);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
+    expect((ctx as unknown as { BodyForCommands?: string }).BodyForCommands).toBe(ctx.Body);
   });
 
   it("escapes XML special characters in filenames to prevent injection", async () => {

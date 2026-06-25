@@ -89,6 +89,41 @@ function createUndescribedImageContext(
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
+export function takeCurrentTurnImages(ctx: MsgContext): {
+  images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+} {
+  const images = ctx.CurrentTurnImages;
+  if (images && images.length > 0) {
+    const imageOrder = ctx.CurrentTurnImageOrder;
+    delete ctx.CurrentTurnImages;
+    delete ctx.CurrentTurnImageOrder;
+    return { images, imageOrder };
+  }
+  return {};
+}
+
+function mergeImagePayloads(params: {
+  baseImages?: ImageContent[];
+  baseImageOrder?: PromptImageOrderEntry[];
+  nextImages?: ImageContent[];
+  nextImageOrder?: PromptImageOrderEntry[];
+}): { images?: ImageContent[]; imageOrder?: PromptImageOrderEntry[] } {
+  const nextImages = params.nextImages ?? [];
+  if (nextImages.length === 0) {
+    return { images: params.baseImages, imageOrder: params.baseImageOrder };
+  }
+  const images = [...(params.baseImages ?? []), ...nextImages];
+  const nextOrder =
+    params.nextImageOrder && params.nextImageOrder.length === nextImages.length
+      ? params.nextImageOrder
+      : nextImages.map((): PromptImageOrderEntry => "inline");
+  return {
+    images,
+    imageOrder: [...(params.baseImageOrder ?? []), ...nextOrder],
+  };
+}
+
 export async function resolveCurrentTurnImages(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -98,30 +133,37 @@ export async function resolveCurrentTurnImages(params: {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
 }> {
+  const extracted = takeCurrentTurnImages(params.ctx);
+  let merged = mergeImagePayloads({
+    baseImages: params.images,
+    baseImageOrder: params.imageOrder,
+    nextImages: extracted.images,
+    nextImageOrder: extracted.imageOrder,
+  });
   if (Array.isArray(params.images) && params.images.length > 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+    return merged;
   }
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
   if (currentImageAttachments.length === 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+    return merged;
   }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
-    return { images: params.images, imageOrder: params.imageOrder };
+    return merged;
   }
 
   try {
     // Only send undescribed current images natively; described images already exist as text context.
-    const resolved = await resolveAgentTurnAttachments({
+    const attachmentResult = await resolveAgentTurnAttachments({
       ctx: createUndescribedImageContext(params.ctx, undescribedImageAttachments),
       cfg: params.cfg,
       includeRecentHistoryImages: false,
     });
-    const images = resolved.attachments.map(
+    const images = attachmentResult.attachments.map(
       (attachment): ImageContent => ({
         type: "image",
         data: attachment.data,
@@ -132,15 +174,22 @@ export async function resolveCurrentTurnImages(params: {
       logVerbose(
         `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
-      return { images: params.images, imageOrder: params.imageOrder };
+      return merged;
     }
-    return images.length > 0
-      ? { images, imageOrder: images.map(() => "inline" as const) }
-      : { images: params.images, imageOrder: params.imageOrder };
+    if (images.length === 0) {
+      return merged;
+    }
+    merged = mergeImagePayloads({
+      baseImages: merged.images,
+      baseImageOrder: merged.imageOrder,
+      nextImages: images,
+      nextImageOrder: images.map((): PromptImageOrderEntry => "inline"),
+    });
+    return merged;
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    return { images: params.images, imageOrder: params.imageOrder };
+    return merged;
   }
 }

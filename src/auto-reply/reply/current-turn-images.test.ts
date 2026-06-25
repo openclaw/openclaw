@@ -59,4 +59,65 @@ describe("resolveCurrentTurnImages", () => {
       });
     });
   });
+
+  it("merges current-turn extracted images with existing inline images", async () => {
+    const existingImage = {
+      type: "image" as const,
+      data: Buffer.from("existing-image").toString("base64"),
+      mimeType: "image/jpeg",
+    };
+    const extractedPdfPage = {
+      type: "image" as const,
+      data: Buffer.from("pdf-page").toString("base64"),
+      mimeType: "image/png",
+    };
+
+    const result = await resolveCurrentTurnImages({
+      ctx: {
+        Body: "<media:document>",
+        CurrentTurnImages: [extractedPdfPage],
+        CurrentTurnImageOrder: ["inline"],
+      } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [existingImage],
+      imageOrder: ["inline"],
+    });
+
+    expect(result).toStrictEqual({
+      images: [existingImage, extractedPdfPage],
+      imageOrder: ["inline", "inline"],
+    });
+  });
+
+  it("does not merge extracted images twice across the prepare and run passes", async () => {
+    const extractedPdfPage = {
+      type: "image" as const,
+      data: Buffer.from("pdf-page").toString("base64"),
+      mimeType: "image/png",
+    };
+    const ctx = {
+      Body: "<media:document>",
+      CurrentTurnImages: [extractedPdfPage],
+      CurrentTurnImageOrder: ["inline"],
+    } satisfies MsgContext;
+
+    const prepared = await resolveCurrentTurnImages({
+      ctx,
+      cfg: {} as OpenClawConfig,
+    });
+    const runPass = await resolveCurrentTurnImages({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      images: prepared.images,
+      imageOrder: prepared.imageOrder,
+    });
+
+    expect(prepared).toStrictEqual({
+      images: [extractedPdfPage],
+      imageOrder: ["inline"],
+    });
+    expect(runPass).toStrictEqual(prepared);
+    expect(ctx.CurrentTurnImages).toBeUndefined();
+    expect(ctx.CurrentTurnImageOrder).toBeUndefined();
+  });
 });

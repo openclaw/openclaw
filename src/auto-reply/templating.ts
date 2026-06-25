@@ -1,5 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ImageContent } from "../llm/types.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -219,6 +221,9 @@ export type MsgContext = {
   Transcript?: string;
   MediaUnderstanding?: MediaUnderstandingOutput[];
   MediaUnderstandingDecisions?: MediaUnderstandingDecision[];
+  /** Page images extracted from scanned/image-only PDFs during media understanding, forwarded to vision models. */
+  CurrentTurnImages?: ImageContent[];
+  CurrentTurnImageOrder?: PromptImageOrderEntry[];
   LinkUnderstanding?: string[];
   Prompt?: string;
   MaxChars?: number;
