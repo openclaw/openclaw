@@ -2624,6 +2624,8 @@ export async function runAgentTurnWithFallback(params: {
                             });
                           }
                         : undefined,
+                    streamReasoningInNonStreamModes:
+                      params.opts?.streamReasoningInNonStreamModes,
                     onReasoningEnd: params.opts?.onReasoningEnd,
                     onAgentEvent: (() => {
                       // Commentary arrives as snapshots (replace), deltas, or both

@@ -1170,6 +1170,7 @@ async function processDiscordMessageInner(
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
+        streamReasoningInNonStreamModes: true,
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;

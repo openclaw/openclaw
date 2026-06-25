@@ -232,6 +232,7 @@ export type RunEmbeddedAgentParams = {
     mediaUrls?: string[];
     isReasoningSnapshot?: boolean;
   }) => void | Promise<void>;
+  streamReasoningInNonStreamModes?: boolean;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */

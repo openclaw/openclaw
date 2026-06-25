@@ -180,12 +180,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    // Window thinking is presentation: any mode except "on" feeds the channel
-    // rendering hook, and the channel's streaming.progress.thinking flag gates
-    // display. "on" hands the lane to durable 🧠 persistence instead, so the
-    // ephemeral window yields and thoughts never render twice.
+    // Window thinking is presentation: sibling channels keep main's stream-only
+    // behavior; Discord explicitly opts into non-"on" modes and then gates
+    // display with its progress.thinking config. "on" remains durable reasoning.
     streamReasoning:
-      reasoningMode !== "on" &&
+      (params.streamReasoningInNonStreamModes === true
+        ? reasoningMode !== "on"
+        : reasoningMode === "stream") &&
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",

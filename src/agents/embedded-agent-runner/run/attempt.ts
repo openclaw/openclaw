@@ -3573,6 +3573,7 @@ export async function runEmbeddedAttempt(
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
+          streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,
           onBlockReplyFlush,
