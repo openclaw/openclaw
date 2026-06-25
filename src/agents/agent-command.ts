@@ -15,6 +15,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -596,6 +597,22 @@ function createAgentCommandSessionWorkingCopy(params: {
   return result;
 }
 
+function resolveInternalSessionEffectsSource(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath?: string;
+}): string | undefined {
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
+}
+
 function resolveExplicitAgentCommandSessionKey(params: {
   rawExplicitSessionKey?: string;
   agentIdOverride?: string;
@@ -1079,17 +1096,24 @@ async function agentCommandInternal(
           loadTranscriptResolveRuntime(),
         ]);
         const internalSource = suppressVisibleSessionEffects
-          ? await resolveSessionTranscriptFile({
-              sessionId,
-              sessionKey,
-              sessionEntry,
+          ? resolveInternalSessionEffectsSource({
               agentId: sessionAgentId,
-              threadId: opts.threadId,
+              sessionId,
+              sessionFile: (
+                await resolveSessionTranscriptFile({
+                  sessionId,
+                  sessionKey,
+                  sessionEntry,
+                  agentId: sessionAgentId,
+                  threadId: opts.threadId,
+                })
+              ).sessionFile,
+              storePath,
             })
           : undefined;
         const internalSessionFile = suppressVisibleSessionEffects
           ? await prepareInternalSessionEffectsTranscript({
-              sessionFile: internalSource?.sessionFile,
+              sessionFile: internalSource,
               runId,
             })
           : undefined;
@@ -1679,7 +1703,15 @@ async function agentCommandInternal(
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
     const attemptSessionFile = suppressVisibleSessionEffects
-      ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
+      ? await prepareInternalSessionEffectsTranscript({
+          sessionFile: resolveInternalSessionEffectsSource({
+            agentId: sessionAgentId,
+            sessionId,
+            sessionFile,
+            storePath,
+          }),
+          runId,
+        })
       : sessionFile;
 
     const startedAt = Date.now();
@@ -1820,7 +1852,7 @@ async function agentCommandInternal(
       runId,
       sessionId,
       sessionKey,
-      sessionFile,
+      sessionFile: suppressVisibleSessionEffects ? attemptSessionFile : sessionFile,
       provider,
       modelId: model,
       workspaceDir,
