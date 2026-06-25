@@ -156,6 +156,22 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunker.flushPendingText(160)).toEqual(["5 reportbuilder.ts generatemonthly_sales"]);
   });
 
+  it("preserves an empty cell when flushing a partial table row so columns stay aligned", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    chunker.chunkText(
+      ["| Id | Status | Note |", "|---|---|---|", "| 1 | ok | first |"].join("\n"),
+      160,
+    );
+    // Streamed incomplete row with an empty middle (Status) cell and no trailing pipe; the empty
+    // cell must be kept so "needs review" stays in the Note column rather than shifting into Status.
+    expect(chunker.chunkText("| 2 |  | needs review", 160)).toEqual([]);
+
+    expect(chunker.flushPendingText(160)).toEqual([
+      ["Id: 2", "Status: ", "Note: needs review"].join("\n"),
+    ]);
+  });
+
   it("keeps fenced code blocks self-contained across streaming block flushes", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 

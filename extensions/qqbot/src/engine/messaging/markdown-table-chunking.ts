@@ -448,12 +448,13 @@ function splitTableCells(line: string): string[] {
 }
 
 function splitPartialTableCells(line: string): string[] {
+  // Keep empty cells: renderTableRowAsFields maps cells to headers positionally, so dropping a
+  // blank cell would shift every later value into the wrong column. Mirrors splitTableCells.
   const trimmed = line.trim();
   return trimmed
     .replace(/^\|/, "")
     .split("|")
-    .map((cell) => cell.trim())
-    .filter((cell) => cell.length > 0);
+    .map((cell) => cell.trim());
 }
 
 function mergeRowFragments(pending: string | null, next: string): string {
