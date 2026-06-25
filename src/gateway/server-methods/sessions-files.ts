@@ -604,8 +604,9 @@ async function loadSessionFiles(params: {
   await visitSessionMessagesAsync(
     {
       agentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     },
     (message) => collectTouchedFilesFromMessage(message, files),

@@ -23,10 +23,37 @@ function fail(message) {
   process.exit(1);
 }
 
-const tarball = process.argv[2];
-if (!tarball || process.argv.length > 3) {
-  fail(usage());
+function parseArgs(argv) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const tarball = args[0]?.trim() ?? "";
+  if (tarball === "--help" || tarball === "-h") {
+    return { help: true, tarball: "" };
+  }
+  if (!tarball) {
+    throw new Error(usage());
+  }
+  if (tarball.startsWith("-")) {
+    throw new Error(`Unknown OpenClaw package tarball check option: ${tarball}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected OpenClaw package tarball check argument: ${extraArg}`);
+  }
+  return { help: false, tarball };
 }
+
+let cliArgs;
+try {
+  cliArgs = parseArgs(process.argv.slice(2));
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+if (cliArgs.help) {
+  console.log(usage());
+  process.exit(0);
+}
+
+const { tarball } = cliArgs;
 if (!fs.existsSync(tarball)) {
   fail(`OpenClaw package tarball does not exist: ${tarball}`);
 }

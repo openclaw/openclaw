@@ -16,6 +16,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../infra/session-cost-usage-totals.js";
 import type {
   CostUsageSummary,
   CostUsageTotals,
@@ -76,36 +80,6 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
-
-function createEmptyCostUsageTotals(): CostUsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-}
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
@@ -522,32 +496,12 @@ function maybeMergeFamilyEntry(params: {
 
 function createEmptySessionCostSummary(): SessionCostSummary {
   return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
+    ...createEmptyCostUsageTotals(),
   };
 }
 
 function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSummary): void {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
+  addCostUsageTotals(target, source);
   target.firstActivity =
     target.firstActivity === undefined
       ? source.firstActivity
@@ -687,19 +641,6 @@ function mergeModelUsage(
   right: SessionCostSummary["modelUsage"],
 ): SessionCostSummary["modelUsage"] {
   const map = new Map<string, SessionModelUsage>();
-  const mergeTotals = (target: CostUsageSummary["totals"], source: CostUsageSummary["totals"]) => {
-    target.input += source.input;
-    target.output += source.output;
-    target.cacheRead += source.cacheRead;
-    target.cacheWrite += source.cacheWrite;
-    target.totalTokens += source.totalTokens;
-    target.totalCost += source.totalCost;
-    target.inputCost += source.inputCost;
-    target.outputCost += source.outputCost;
-    target.cacheReadCost += source.cacheReadCost;
-    target.cacheWriteCost += source.cacheWriteCost;
-    target.missingCostEntries += source.missingCostEntries;
-  };
   for (const entry of [...(left ?? []), ...(right ?? [])]) {
     const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
     const existing =
@@ -711,7 +652,7 @@ function mergeModelUsage(
         totals: createEmptySessionCostSummary(),
       } as SessionModelUsage);
     existing.count += entry.count;
-    mergeTotals(existing.totals, entry.totals);
+    addCostUsageTotals(existing.totals, entry.totals);
     map.set(key, existing);
   }
   return map.size > 0 ? Array.from(map.values()) : undefined;
@@ -1210,19 +1151,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
-    const aggregateTotals = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
+    const aggregateTotals = createEmptyCostUsageTotals();
     const aggregateMessages: SessionMessageCounts = {
       total: 0,
       user: 0,
@@ -1260,36 +1189,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     >();
     const modelDailyMap = new Map<string, SessionDailyModelUsage>();
     let cacheStatus: UsageCacheStatus | undefined;
-
-    const emptyTotals = (): CostUsageSummary["totals"] => ({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    });
-    const mergeTotals = (
-      target: CostUsageSummary["totals"],
-      source: CostUsageSummary["totals"],
-    ) => {
-      target.input += source.input;
-      target.output += source.output;
-      target.cacheRead += source.cacheRead;
-      target.cacheWrite += source.cacheWrite;
-      target.totalTokens += source.totalTokens;
-      target.totalCost += source.totalCost;
-      target.inputCost += source.inputCost;
-      target.outputCost += source.outputCost;
-      target.cacheReadCost += source.cacheReadCost;
-      target.cacheWriteCost += source.cacheWriteCost;
-      target.missingCostEntries += source.missingCostEntries;
-    };
 
     const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
       { length: mergedEntries.length },
@@ -1409,17 +1308,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       const usage = usageByEntryIndex[entryIndex];
 
       if (usage) {
-        aggregateTotals.input += usage.input;
-        aggregateTotals.output += usage.output;
-        aggregateTotals.cacheRead += usage.cacheRead;
-        aggregateTotals.cacheWrite += usage.cacheWrite;
-        aggregateTotals.totalTokens += usage.totalTokens;
-        aggregateTotals.totalCost += usage.totalCost;
-        aggregateTotals.inputCost += usage.inputCost;
-        aggregateTotals.outputCost += usage.outputCost;
-        aggregateTotals.cacheReadCost += usage.cacheReadCost;
-        aggregateTotals.cacheWriteCost += usage.cacheWriteCost;
-        aggregateTotals.missingCostEntries += usage.missingCostEntries;
+        addCostUsageTotals(aggregateTotals, usage);
       }
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
@@ -1450,10 +1339,10 @@ export const usageHandlers: GatewayRequestHandlers = {
                 provider: entry.provider,
                 model: entry.model,
                 count: 0,
-                totals: emptyTotals(),
+                totals: createEmptyCostUsageTotals(),
               } as SessionModelUsage);
             modelExisting.count += entry.count;
-            mergeTotals(modelExisting.totals, entry.totals);
+            addCostUsageTotals(modelExisting.totals, entry.totals);
             byModelMap.set(modelKey, modelExisting);
 
             const providerKey = entry.provider ?? "unknown";
@@ -1463,10 +1352,10 @@ export const usageHandlers: GatewayRequestHandlers = {
                 provider: entry.provider,
                 model: undefined,
                 count: 0,
-                totals: emptyTotals(),
+                totals: createEmptyCostUsageTotals(),
               } as SessionModelUsage);
             providerExisting.count += entry.count;
-            mergeTotals(providerExisting.totals, entry.totals);
+            addCostUsageTotals(providerExisting.totals, entry.totals);
             byProviderMap.set(providerKey, providerExisting);
           }
         }
@@ -1495,14 +1384,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
 
         if (agentId) {
-          const agentTotals = byAgentMap.get(agentId) ?? emptyTotals();
-          mergeTotals(agentTotals, usage);
+          const agentTotals = byAgentMap.get(agentId) ?? createEmptyCostUsageTotals();
+          addCostUsageTotals(agentTotals, usage);
           byAgentMap.set(agentId, agentTotals);
         }
 
         if (channel) {
-          const channelTotals = byChannelMap.get(channel) ?? emptyTotals();
-          mergeTotals(channelTotals, usage);
+          const channelTotals = byChannelMap.get(channel) ?? createEmptyCostUsageTotals();
+          addCostUsageTotals(channelTotals, usage);
           byChannelMap.set(channel, channelTotals);
         }
 

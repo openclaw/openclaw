@@ -94,7 +94,7 @@ function parsePositiveIntegerArg(raw, label) {
 
 function readRequiredValue(argv, index, label) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${label} requires a value`);
   }
   return value;
@@ -116,7 +116,10 @@ export function parseArgs(argv) {
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = parsePositiveIntegerArg(argv[index + 1], "--max-errors");
+      maxErrors = parsePositiveIntegerArg(
+        readRequiredValue(argv, index, "--max-errors"),
+        "--max-errors",
+      );
       index += 1;
       continue;
     }

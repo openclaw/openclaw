@@ -7,8 +7,8 @@ scenario:
     primary:
       - plugins.lifecycle
     secondary:
-      - plugin-validation-and-repair
-      - plugin-setup
+      - cli.plugin-validation-repair
+      - plugins.setup-flows
   objective: Exercise strict plugin load/uninstall proof parsing through QA Lab evidence.
   successCriteria:
     - Enabled loaded plugin inspect JSON is accepted as proof.

@@ -1,5 +1,6 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -43,7 +44,7 @@ data class VoiceConversationEntry(
 )
 
 /** Coordinates live mic transcription, queued sends, and assistant audio replies. */
-class MicCaptureManager(
+internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val createTranscriptionSession: suspend () -> String,
@@ -54,11 +55,12 @@ class MicCaptureManager(
   ) -> Unit,
   private val closeTranscriptionSession: suspend (sessionId: String) -> Unit,
   /**
-   * Send [message] to the gateway and return the run ID.
+   * Send [message] to the gateway and return the full chat.send ACK.
    * [onRunIdKnown] is called with the idempotency key *before* the network
    * round-trip so [pendingRunId] is set before any chat events can arrive.
    */
-  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> String?,
+  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> ChatSendAck,
+  private val refreshAfterTerminalSuccess: suspend () -> Unit = {},
   private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
@@ -483,24 +485,30 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId =
+        val ack =
           sendToGateway(next) { earlyRunId ->
             // Called with the idempotency key before chat.send fires so that
             // pendingRunId is populated before any chat events can arrive.
             pendingRunId = earlyRunId
           }
+        val runId = ack.runId
         // Update to the real runId if the gateway returned a different one.
         if (runId != null && runId != pendingRunId) pendingRunId = runId
-        if (runId == null) {
-          pendingRunTimeoutJob?.cancel()
-          pendingRunTimeoutJob = null
-          removeFirstQueuedMessage()
-          publishQueue()
-          _isSending.value = false
-          pendingAssistantEntryId = null
-          sendQueuedIfIdle()
-        } else {
-          armPendingRunTimeout(runId)
+        when {
+          ack.isTerminalSuccess -> {
+            completePendingTurn()
+            refreshAfterTerminalSuccess()
+          }
+          ack.isTerminalFailure -> {
+            completePendingTurn()
+            _statusText.value = "Send failed: Chat failed before the run started; try again."
+          }
+          runId == null -> {
+            completePendingTurn()
+          }
+          else -> {
+            armPendingRunTimeout(runId)
+          }
         }
       } catch (err: Throwable) {
         pendingRunTimeoutJob?.cancel()

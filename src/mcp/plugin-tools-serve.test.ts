@@ -85,6 +85,8 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 describe("plugin tools MCP server", () => {
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+    const runtimeRegistry = createMockPluginRegistry([]);
+    ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
     resolvePluginToolsMock.mockReturnValue([
       {
         name: "memory_recall",
@@ -102,6 +104,9 @@ describe("plugin tools MCP server", () => {
       context: { config: { plugins: { enabled: true } } },
     });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeRegistry }),
+    );
     expect(ensureStandalonePluginToolRegistryLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );

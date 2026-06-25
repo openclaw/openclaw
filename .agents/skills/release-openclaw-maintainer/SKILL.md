@@ -249,12 +249,20 @@ Stable publication is not complete until `main` carries the actual shipped relea
   section from history, not existing notes. Use the last reachable stable or
   beta release tag as the base, then inspect every commit through the target
   release SHA.
+- Generate `$openclaw-changelog-update`'s full contribution manifest before
+  the editorial rewrite. It is the required source for `### Highlights`,
+  `### Changes`, and `### Fixes`; do not preserve old grouped prose without
+  comparing it to the manifest's PRs, contributors, direct commits, and
+  unlinked commits.
 - The changelog rewrite is not optional for beta reruns: any `beta.N` after a
   rebase or backport must refresh the same stable-base `## YYYY.M.PATCH` section
   before the new version/tag commit.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
+- Keep direct commits in the generated manifest and use them to shape grouped
+  user outcomes, but never dump them into `CHANGELOG.md` or GitHub release
+  bodies. The public complete record is PR-first and exhaustive for PRs.
 - Prefer PR bodies, issue links, review proof, and commit bodies over commit
   subjects alone. If a commit fixed an issue directly, the commit body should
   name the user-visible behavior, affected surface, issue ref, and credited
@@ -270,11 +278,31 @@ Stable publication is not complete until `main` carries the actual shipped relea
   `#issue`, `(#PR)`, `Fixes #...`, and every human `Thanks @...` handle.
   Multiple thanks in one bullet are expected when multiple contributor PRs are
   grouped.
+- Highlights earn their place only when they are a visible capability/workflow
+  unlock, a material reliability or safety repair, a broad user-facing
+  improvement, or a release-defining integration/compatibility change. Keep
+  five to eight user-outcome bullets; omit tests, CI, refactors, docs, and
+  implementation trivia unless their outcome materially affects users.
+- Do not give `docs`, `test`, `refactor`, `ci`, `build`, `chore`, or `style`
+  PRs/direct commits their own Highlights, Changes, or Fixes entry. They remain
+  accounted for in the PR record or manifest, but are not product release
+  content. Treat explicit internal title signals such as `QA`, `lint`, or
+  `testing` the same way even when the PR has no conventional prefix.
+- Use the generated `### Complete contribution record` as PR-first accounting:
+  every merged source PR appears once with author/co-author credit, including
+  PRs identified only by an explicit active-commit `#NNN` reference after a
+  cherry-pick or squash. Keep issues inline as `#NNN` in titles and grouped
+  prose; do not create a linked-issues inventory or a direct-commit listing.
+  When grouped prose names a PR, keep every contributor and linked-reporter
+  credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.PATCH` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- GitHub limits release bodies to 125,000 characters. If a historical
+  `### Release verification` tail would exceed that cap, omit the tail and keep
+  the complete changelog section; do not truncate the contribution record.
 - Before publishing or closing a release, run
   `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
   and beta release tag in the train. Do not publish or leave a page live when

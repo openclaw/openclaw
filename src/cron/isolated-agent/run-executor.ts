@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
@@ -160,8 +161,19 @@ function buildCronDeliveryTargetRuntimeContext(params: {
   ].join("\n");
 }
 
-function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
-  return toolsAllow?.some((toolName) => normalizeToolName(toolName) === "*")
+function resolveCliRuntimeToolsAllow(
+  toolsAllow?: string[],
+  toolsAllowIsDefault?: boolean,
+): string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  // CLI runners reject runtime toolsAllow. Drop only the auto-stamped default;
+  // explicit per-cron restrictions stay fail-closed in prepareCliRunContext.
+  if (toolsAllowIsDefault) {
+    return undefined;
+  }
+  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }
@@ -239,6 +251,11 @@ export function createCronPromptExecutor(params: {
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
+  const fastModeStartedAtMs = Date.now();
+  const fastModeAutoProgressState: FastModeAutoProgressState = {
+    offAnnounced: false,
+    resetAnnounced: false,
+  };
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
@@ -320,7 +337,10 @@ export function createCronPromptExecutor(params: {
             messageChannel,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-            toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
+            toolsAllow: resolveCliRuntimeToolsAllow(
+              params.agentPayload?.toolsAllow,
+              params.agentPayload?.toolsAllowIsDefault,
+            ),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
@@ -328,6 +348,9 @@ export function createCronPromptExecutor(params: {
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            fastModeStartedAtMs,
+            fastModeAutoProgressState,
+            isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -382,13 +405,22 @@ export function createCronPromptExecutor(params: {
           // still sharing real credential/account failures across auth profiles.
           authProfileFailurePolicy: "local_transient",
           thinkLevel: params.thinkLevel,
-          fastMode: resolveFastModeState({
-            cfg: params.cfgWithAgentDefaults,
-            provider: providerOverride,
-            model: modelOverride,
-            agentId: params.agentId,
-            sessionEntry: params.cronSession.sessionEntry,
-          }).enabled,
+          ...(() => {
+            const fastModeState = resolveFastModeState({
+              cfg: params.cfgWithAgentDefaults,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: params.agentId,
+              sessionEntry: params.cronSession.sessionEntry,
+            });
+            return {
+              fastMode: fastModeState.mode,
+              fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+              fastModeStartedAtMs,
+              fastModeAutoProgressState,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+            };
+          })(),
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
