@@ -24,6 +24,7 @@ const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
+const GOOGLE_MEDIA_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 async function generateGeminiInlineDataText(params: {
   buffer: Buffer;

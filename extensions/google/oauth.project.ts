@@ -11,6 +11,8 @@ import {
   USERINFO_URL,
 } from "./oauth.shared.js";
 
+const GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+
 const LOAD_CODE_ASSIST_METADATA = {
   ideType: "IDE_UNSPECIFIED",
   platform: "PLATFORM_UNSPECIFIED",
