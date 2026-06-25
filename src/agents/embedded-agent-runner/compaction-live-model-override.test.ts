@@ -37,6 +37,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { shouldSwitchToLiveModel } from "../live-model-switch.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 
@@ -46,9 +47,10 @@ const RUN_START_PROVIDER = "anthropic";
 const RUN_START_MODEL = "sonnet-4.6";
 
 // Mirror the run loop's auto-compaction wiring (run.ts): reuse the live-switch
-// selection as the compaction provider/model, falling back to the run-start
-// values when no switch is pending.
-function buildCompactionTarget() {
+// selection as the compaction provider/model/auth profile, falling back to the
+// run-start values when no switch is pending, and dropping a run-start auth
+// profile that belongs to a different provider after a cross-provider switch.
+function buildCompactionTarget(lastProfileId?: string) {
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: CFG,
     sessionKey: SESSION_KEY,
@@ -59,12 +61,21 @@ function buildCompactionTarget() {
   });
   const compactionProvider = requestedSelection?.provider ?? RUN_START_PROVIDER;
   const compactionModelId = requestedSelection?.model ?? RUN_START_MODEL;
+  const compactionAuthProfileId =
+    requestedSelection == null
+      ? lastProfileId
+      : (requestedSelection.authProfileId ??
+        (normalizeProviderId(requestedSelection.provider) ===
+        normalizeProviderId(RUN_START_PROVIDER)
+          ? lastProfileId
+          : undefined));
   return buildEmbeddedCompactionRuntimeContext({
     sessionKey: SESSION_KEY,
     workspaceDir: "/tmp/ws",
     agentDir: "/tmp/agent",
     provider: compactionProvider,
     modelId: compactionModelId,
+    authProfileId: compactionAuthProfileId,
   });
 }
 
@@ -96,12 +107,46 @@ describe("compaction respects the live session model override (#95696)", () => {
     expect(ctx.model).toBe("gpt-5.5");
   });
 
-  it("keeps the run-start model when no override is persisted", () => {
+  it("keeps the run-start model and auth profile when no override is persisted", () => {
     state.loadSessionStoreMock.mockReturnValue({});
 
-    const ctx = buildCompactionTarget();
+    const ctx = buildCompactionTarget("anthropic:default");
 
     expect(ctx.provider).toBe(RUN_START_PROVIDER);
     expect(ctx.model).toBe(RUN_START_MODEL);
+    expect(ctx.authProfileId).toBe("anthropic:default");
+  });
+
+  it("uses the switch-pinned auth profile after a cross-provider override", () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      [SESSION_KEY]: {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        authProfileOverride: "openai:p1",
+      },
+    });
+
+    const ctx = buildCompactionTarget("anthropic:default");
+
+    expect(ctx.provider).toBe("openai");
+    expect(ctx.authProfileId).toBe("openai:p1");
+  });
+
+  it("drops the stale run-start profile when a cross-provider switch pins none", () => {
+    // The run-start profile authenticates the old provider; pairing it with the
+    // newly selected provider would send the wrong credentials (#95696).
+    state.loadSessionStoreMock.mockReturnValue({
+      [SESSION_KEY]: {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      },
+    });
+
+    const ctx = buildCompactionTarget("anthropic:default");
+
+    expect(ctx.provider).toBe("openai");
+    expect(ctx.authProfileId).not.toBe("anthropic:default");
   });
 });
