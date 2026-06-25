@@ -1209,6 +1209,57 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
+  it("keeps normalized explicit source routes terminal", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sms",
+          plugin: {
+            id: "sms",
+            messaging: {
+              normalizeTarget: (raw: string) => {
+                const digits = raw.replace(/\D/gu, "");
+                return digits.length === 11 && digits.startsWith("1") ? `+${digits}` : raw.trim();
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { ok: true, messageId: "sms-853" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "sms",
+        currentChannelId: "sms:+12069106512",
+        currentMessagingTarget: "+12069106512",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "sms",
+      target: "+1 (206) 910-6512",
+      messageId: "853",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "sms",
+        to: "+12069106512",
+        text: "visible reply",
+      }),
+    ]);
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
   it("keeps message-tool-only source replies terminal when the reply receipt matches the current message id", async () => {
     const bridge = createBridgeWithToolResult(
       "message",

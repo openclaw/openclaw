@@ -311,6 +311,9 @@ function hasExplicitNonSourceMessageRoute(
   ) {
     return true;
   }
+  if (messagingTarget?.to !== undefined) {
+    return false;
+  }
   if (targetValues.length === 0) {
     return false;
   }
