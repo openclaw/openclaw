@@ -638,6 +638,40 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     }
   });
 
+  it("treats block-boundary SSE events as liveness that resets the idle timer", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    let abortCalled = false;
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) options.signal.addEventListener("abort", () => { abortCalled = true; });
+      return baseStream;
+    });
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, { provider: "opencode-go", idleTimeoutMs: 5_000 });
+    const downstream = await Promise.resolve(wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any));
+    expect(downstream).toBeDefined();
+    if (!downstream) return;
+    const consumer = (async () => { for await (const e of downstream) void e; })();
+    const partial = { role: "assistant", content: [{ type: "text", text: "hi" }], stopReason: undefined };
+    controller.emit({ type: "start", partial } as any);
+    controller.emit({ type: "text_delta", contentIndex: 0, delta: "hi", partial } as any);
+    const boundaryEvents = [
+      { type: "text_end", contentIndex: 0, partial } as any,
+      { type: "thinking_end", contentIndex: 0, partial } as any,
+      { type: "toolcall_start", contentIndex: 0, partial } as any,
+      { type: "toolcall_end", contentIndex: 0, partial } as any,
+    ];
+    for (const ev of boundaryEvents) {
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(abortCalled).toBe(false);
+      controller.emit(ev);
+    }
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(abortCalled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(abortCalled).toBe(true);
+    controller.end();
+    await consumer;
+  }, 15_000);
+
   it("preserves normal delayed usage-only completion without aborting", async () => {
     // Arrange: a fake base stream that streams a normal completion, including
     // a long quiet gap before the final usage-only delta — but well within the
