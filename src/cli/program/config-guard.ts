@@ -112,6 +112,13 @@ function hasLegacyExecApprovalsMigrationInput(stateDir: string): boolean {
   );
 }
 
+function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
+  return (
+    fileOrDirExists(`${sourcePath}.migrated`) &&
+    ["-shm", "-wal", "-journal"].some((suffix) => fileOrDirExists(`${sourcePath}${suffix}`))
+  );
+}
+
 function hasLegacyStateMigrationInputs(): boolean {
   // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
@@ -124,16 +131,21 @@ function hasLegacyStateMigrationInputs(): boolean {
   ) {
     return true;
   }
+  const sqliteSidecarPaths = [
+    path.join(stateDir, "flows", "registry.sqlite"),
+    path.join(stateDir, "plugin-state", "state.sqlite"),
+    path.join(stateDir, "tasks", "runs.sqlite"),
+  ];
   return (
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
-      path.join(stateDir, "flows", "registry.sqlite"),
-      path.join(stateDir, "plugin-state", "state.sqlite"),
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
-      path.join(stateDir, "tasks", "runs.sqlite"),
     ].some(fileOrDirExists) ||
+    sqliteSidecarPaths.some(
+      (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
+    ) ||
     hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
     hasLegacyExecApprovalsMigrationInput(stateDir)
   );

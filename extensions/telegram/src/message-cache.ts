@@ -7,7 +7,10 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
+import {
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessagePlaceholder,
+} from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -19,7 +22,8 @@ import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
-export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
+  messageId: string;
   sourceMessage: Message;
 };
 
@@ -151,7 +155,9 @@ function resolveMessageBody(msg: Message): string | undefined {
   if (location) {
     return formatLocationText(location);
   }
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
+  return (
+    resolveTelegramRichMessagePlaceholder(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder
+  );
 }
 
 function resolveMediaType(placeholder?: string): string | undefined {
@@ -772,11 +778,15 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
-function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
-  const body = node.body?.trim();
+export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
+  const body = text?.trim();
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
   );
+}
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  return isTelegramSessionBoundaryCommandText(node.body);
 }
 
 function isAfterSessionBoundary(

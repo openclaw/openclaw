@@ -185,8 +185,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
     expect(typeof lifecycleStart?.data.startedAt).toBe("number");
-    const assistantEvent = agentEvents.find((event) => event.stream === "assistant");
-    expect(assistantEvent?.data).toEqual({ text: "hello back" });
+    const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
+    expect(assistantEvents).toHaveLength(2);
+    expect(assistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
     const lifecycleEnd = agentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
@@ -202,10 +208,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(assistantIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(assistantIndex);
-    const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");
-    expect(globalAssistantEvent?.runId).toBe("run-1");
-    expect(globalAssistantEvent?.sessionKey).toBe("agent:main:session-1");
-    expect(globalAssistantEvent?.data).toEqual({ text: "hello back" });
+    const globalAssistantEvents = globalAgentEvents.filter((event) => event.stream === "assistant");
+    expect(globalAssistantEvents).toHaveLength(2);
+    expect(globalAssistantEvents[0]?.runId).toBe("run-1");
+    expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
+    expect(globalAssistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
     const globalEndEvent = globalAgentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );

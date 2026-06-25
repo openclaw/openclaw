@@ -2,18 +2,23 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
-import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
+import {
+  normalizeGeneratedHelpCommandArgv,
+  normalizeRootHelpTargetArgv,
+  normalizeRootLogLevelArgv,
+  normalizeRootNoColorArgv,
+} from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -28,6 +33,7 @@ import {
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
@@ -44,6 +50,7 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
@@ -59,8 +66,6 @@ export {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-
-type Awaitable<T> = T | Promise<T>;
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -80,40 +85,6 @@ const loadManifestCommandAliasesRuntimeModule = async () =>
 const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
 const loadProgressModule = async () => await import("./progress.js");
-
-function createGatewayCliMainStartupTrace(argv: string[]) {
-  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
-  const enabled =
-    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
-    argv.slice(2).includes("gateway");
-  const started = performance.now();
-  let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
-    if (!enabled) {
-      return;
-    }
-    process.stderr.write(
-      `[gateway] startup trace: cli.main.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
-  };
-  return {
-    mark(name: string) {
-      const now = performance.now();
-      emit(name, now - last, now - started);
-      last = now;
-    },
-    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
-      const before = performance.now();
-      try {
-        return await run();
-      } finally {
-        const now = performance.now();
-        emit(name, now - before, now - started);
-        last = now;
-      }
-    },
-  };
-}
 
 function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
@@ -171,7 +142,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -282,9 +253,9 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
-    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
-    if (listAgentHarnessIds().length === 0) {
+    if (listRegisteredAgentHarnesses().length === 0) {
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -361,6 +332,111 @@ function isCommanderParseExit(error: unknown): error is { exitCode: number } {
     typeof candidate.code === "string" &&
     candidate.code.startsWith("commander.")
   );
+}
+
+function findCommandOption(command: CommanderCommand, token: string): CommanderOption | undefined {
+  const equalsIndex = token.indexOf("=");
+  const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+  return command.options.find((option) => option.long === flag || option.short === flag);
+}
+
+function findSubcommand(command: CommanderCommand, name: string): CommanderCommand | undefined {
+  return command.commands.find(
+    (subcommand) => subcommand.name() === name || subcommand.aliases().includes(name),
+  );
+}
+
+function shouldOptionConsumeFollowingToken(
+  option: CommanderOption | undefined,
+  token: string,
+  next: string | undefined,
+): boolean {
+  if (!option || token.includes("=")) {
+    return false;
+  }
+  if (option.required) {
+    return true;
+  }
+  return option.optional && isValueToken(next);
+}
+
+function isNoColorConsumedAsCommandOptionValue(
+  program: CommanderCommand,
+  remainingArgs: readonly string[],
+  noColorIndex: number,
+): boolean {
+  let command = program;
+  let pendingValue = false;
+  for (let index = 0; index < noColorIndex; index += 1) {
+    const arg = remainingArgs[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const option = findCommandOption(command, arg);
+      if (!option && index === noColorIndex - 1 && !arg.includes("=")) {
+        // Unknown option surfaces may allow arbitrary flags; keep the value-safe behavior there.
+        return true;
+      }
+      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      continue;
+    }
+    command = findSubcommand(command, arg) ?? command;
+  }
+  return pendingValue;
+}
+
+function isLogLevelConsumedAsCommandOption(
+  program: CommanderCommand,
+  remainingArgs: readonly string[],
+  logLevelIndex: number,
+): boolean {
+  let command = program;
+  let pendingValue = false;
+  for (let index = 0; index < logLevelIndex; index += 1) {
+    const arg = remainingArgs[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const option = findCommandOption(command, arg);
+      if (!option && index === logLevelIndex - 1 && !arg.includes("=")) {
+        return true;
+      }
+      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      continue;
+    }
+    command = findSubcommand(command, arg) ?? command;
+  }
+
+  if (pendingValue) {
+    return true;
+  }
+
+  const arg = remainingArgs[logLevelIndex];
+  return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined;
+}
+
+function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCommand): string[] {
+  return normalizeRootNoColorArgv(argv, {
+    shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
+      isNoColorConsumedAsCommandOptionValue(program, remainingArgs, noColorIndex),
+  });
+}
+
+function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
+  return normalizeRootLogLevelArgv(argv, {
+    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+      isLogLevelConsumedAsCommandOption(program, remainingArgs, logLevelIndex),
+  });
 }
 
 async function ensureCliEnvProxyDispatcher(): Promise<void> {
@@ -490,18 +566,29 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
-  return (
-    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+  const pluginPolicyMessage = resolveMissingPluginCommandMessageFromPolicy(
+    params.primary,
+    params.config,
+    {
       resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
       resolveToolOwner: resolveManifestToolOwner,
       resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
-    }) ??
-    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+    },
   );
+  if (pluginPolicyMessage) {
+    return pluginPolicyMessage;
+  }
+  const suggestion = formatCliCommandSuggestions(params.primary);
+  return [
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
+    suggestion,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -522,7 +609,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
-  const startupTrace = createGatewayCliMainStartupTrace(originalArgv);
+  const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
     throw new Error(parsedContainer.error);
@@ -547,7 +634,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  const normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
+  const normalizedArgv = normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv));
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
@@ -840,7 +927,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    let parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
     const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
@@ -982,6 +1069,10 @@ export async function runCli(argv: string[] = process.argv) {
         }
       }
 
+      parseArgv = normalizeRootLogLevelArgvForProgram(
+        normalizeRootNoColorArgvForProgram(parseArgv, program),
+        program,
+      );
       stopStartupProgress();
 
       try {
@@ -1002,8 +1093,4 @@ export async function runCli(argv: string[] = process.argv) {
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }
-}
-
-export function isCliMainModule(): boolean {
-  return isMainModule({ currentFile: fileURLToPath(import.meta.url) });
 }

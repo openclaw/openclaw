@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
@@ -38,7 +39,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
+import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -53,7 +54,10 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
+import {
+  stageSandboxMedia,
+  type StageSandboxMediaResult,
+} from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -78,7 +82,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { resolveInboundMediaReference } from "../../media/media-reference.js";
+import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,
@@ -147,9 +151,10 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import type { ChatRunTiming } from "../server-chat-state.js";
+import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
@@ -277,6 +282,26 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   mode?: string | null;
 }): boolean {
   return isOperatorUiClient(client);
+}
+
+const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function resolveControlUiReconnectResumeParams(
+  params: unknown,
+  clientInfo?: { id?: string | null; mode?: string | null },
+): { params: unknown; resumeRequested: boolean } {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { params, resumeRequested: false };
+  }
+  const record = params as Record<string, unknown>;
+  const resumeRequested =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+  if (!resumeRequested) {
+    return { params, resumeRequested: false };
+  }
+  const validatedParams = { ...record };
+  delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
+  return { params: validatedParams, resumeRequested: true };
 }
 
 function emitOperatorChatSendServerTiming(params: {
@@ -534,6 +559,22 @@ export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
+  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+
+/**
+ * A minimal, metadata-free notice returned when even a single oversized
+ * placeholder cannot fit the chat-history byte budget. Returning this instead
+ * of an empty array guarantees the dashboard never renders a blank transcript,
+ * which otherwise reads to the operator as total history loss.
+ */
+function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    timestamp: Date.now(),
+    content: [{ type: "text", text: CHAT_HISTORY_UNAVAILABLE_SENTINEL }],
+  };
+}
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -1336,43 +1377,54 @@ function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[
   return lines.join("\n").trimEnd();
 }
 
+function isPdfOffloadedRef(ref: OffloadedRef): boolean {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
+    return true;
+  }
+  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
+}
+
+// A managed inbound PDF saved to the media store is safe to hand the agent as its
+// media path without sandbox staging: host-side media-understanding extracts its
+// text (see resolveFileExtractionLimits) by reading the media-store root, so even
+// locked-down agents receive the document. This gates both the up-front bypass for
+// oversized PDFs and the fallback to the managed path when sandbox staging fails
+// for an already-managed PDF. #90097
+function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  if (!isPdfOffloadedRef(ref)) {
+    return false;
+  }
+  try {
+    return parseInboundMediaUri(ref.mediaRef) !== null;
+  } catch {
+    return false;
+  }
+}
+
+// Oversized managed PDFs skip sandbox staging up front: copying a large PDF into
+// every sandbox is wasteful, and files above the 5MB staging cap would otherwise
+// be rejected as a 4xx (see prestageMediaPathOffloads).
+function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
+}
+
 // Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError on any staging
-// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
-// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
-// offloaded refs are cleaned up from the media store before rethrow.
+// can surface 5xx before respond(). Throws MediaOffloadError when staging fails
+// for a ref that cannot fall back (ENOSPC / EPERM / partial-stage of a non-PDF or
+// unmanaged ref) so the outer chat.send handler maps it to UNAVAILABLE (5xx);
+// plain Error would be misclassified as 4xx. Already-managed inbound PDFs instead
+// fall back to their managed media path on staging failure (#90097), since
+// host-side media-understanding reads them from the media-store root. Offloaded
+// refs are cleaned up from the media store before rethrow.
 // Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
 // pipeline skips its own stageSandboxMedia pass.
 //
-// Returned paths are absolute media-store paths when no sandbox is active, or
-// sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
-// media-understanding uses MediaWorkspaceDir to resolve those relative paths.
-// Optional sandbox staging is a convenience copy into the container; a managed
-// inbound media-store PDF is already host-readable (the managed media dir is a
-// default media-understanding local root, resolved via the absolute path when
-// MediaWorkspaceDir is unset). When staging is unavailable/incomplete we can
-// therefore pass those absolute managed paths through instead of deleting the
-// buffers and failing the send (#90097). Gated all-or-nothing to managed-inbound
-// PDFs so a single non-managed or non-PDF ref cannot bypass staging; reuses the
-// same resolveInboundMediaReference allow-check stageSandboxMedia applies.
-async function resolveManagedInboundPdfFallback(
-  refs: readonly OffloadedRef[],
-): Promise<{ paths: string[]; types: string[] } | null> {
-  for (const ref of refs) {
-    if (ref.mimeType !== "application/pdf") {
-      return null;
-    }
-    const managed = await resolveInboundMediaReference(ref.path).catch(() => null);
-    if (!managed) {
-      return null;
-    }
-  }
-  return {
-    paths: refs.map((ref) => ref.path),
-    types: refs.map((ref) => ref.mimeType),
-  };
-}
-
+// Returned paths are absolute media-store paths when no sandbox is active, for
+// oversized managed PDFs that bypass staging, or for already-managed PDFs that
+// fall back when staging fails (#90097); files staged into the sandbox use
+// sandbox-relative paths plus `workspaceDir`. Host-side media-understanding
+// resolves both via MediaWorkspaceDir and the media-store root.
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
@@ -1386,6 +1438,21 @@ async function prestageMediaPathOffloads(params: {
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
+  const refsByManagedPath = (refs: OffloadedRef[]) => ({
+    paths: refs.map((ref) => ref.path),
+    types: refs.map((ref) => ref.mimeType),
+  });
+
+  // Oversized managed PDFs bypass sandbox staging and are read host-side, so they
+  // do not need a workspace copy or the staging-cap check below.
+  const passThroughRefs: OffloadedRef[] = [];
+  const refsToStage: OffloadedRef[] = [];
+  for (const ref of mediaPathRefs) {
+    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
+  }
+  if (refsToStage.length === 0) {
+    return refsByManagedPath(mediaPathRefs);
+  }
 
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -1395,25 +1462,18 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir,
     });
     if (!sandbox) {
-      return {
-        paths: mediaPathRefs.map((ref) => ref.path),
-        types: mediaPathRefs.map((ref) => ref.mimeType),
-      };
+      return refsByManagedPath(mediaPathRefs);
     }
 
     // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
     // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
     // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a file between the two caps would otherwise
+    // session receiving a non-PDF file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Managed inbound PDFs are already host-readable, so
-    // let the managed-PDF fallback handle them before rejecting everything else.
-    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
+    // PDFs in that range pass through above instead of being rejected.
+    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
-      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
-      if (managedPdfFallback) {
-        return managedPdfFallback;
-      }
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
@@ -1424,12 +1484,12 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: mediaPathRefs[0].path,
-      MediaPaths: mediaPathRefs.map((ref) => ref.path),
-      MediaType: mediaPathRefs[0].mimeType,
-      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
+      MediaPath: refsToStage[0].path,
+      MediaPaths: refsToStage.map((ref) => ref.path),
+      MediaType: refsToStage[0].mimeType,
+      MediaTypes: refsToStage.map((ref) => ref.mimeType),
     };
-    let stageResult: Awaited<ReturnType<typeof stageSandboxMedia>>;
+    let stageResult: StageSandboxMediaResult;
     try {
       stageResult = await stageSandboxMedia({
         ctx: stagingCtx,
@@ -1439,41 +1499,60 @@ async function prestageMediaPathOffloads(params: {
         workspaceDir,
       });
     } catch (stageErr) {
-      // Staging is optional; pass managed-inbound PDFs through rather than
-      // deleting buffers + failing the send. Rethrow otherwise (#90097).
-      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
-      if (managedPdfFallback) {
-        return managedPdfFallback;
+      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
+      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
+      // PDFs still reach the agent via their managed media path (host-side
+      // media-understanding reads the media-store root); fail the send only when a
+      // ref cannot fall back. #90097
+      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+        throw stageErr;
       }
-      throw stageErr;
+      return refsByManagedPath(mediaPathRefs);
     }
 
     // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity with `nonImage` does not prove every
-    // file landed in the sandbox. The RPC max (20MB via
-    // resolveChatAttachmentMaxBytes) admits files above the staging cap
-    // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
-    // missing source becomes a 5xx MediaOffloadError the client can retry.
+    // absolute path, so length parity does not prove every file landed in the
+    // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
+    // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
+    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
+    // their absolute managed path (host-side media-understanding reads the
+    // media-store root); any other missing source is a 5xx MediaOffloadError the
+    // client can retry. #90097
     const stagedSources = stageResult.staged;
-    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
-    if (missing.length > 0) {
-      // Incomplete staging: pass managed-inbound PDFs through (host-readable)
-      // rather than failing the send. Fail otherwise as before (#90097).
-      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
-      if (managedPdfFallback) {
-        return managedPdfFallback;
-      }
+    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
+    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
+    if (unstageable.length > 0) {
       throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
       );
     }
     const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
+    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
 
-    // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
-    // agent inside the container can read them. Host-side media-understanding
-    // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
-    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+    // Map each ref to its post-staging path. Staged files become sandbox-relative
+    // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
+    // them; pass-through PDFs and managed PDFs that fell back from staging keep
+    // their absolute managed path (stagedPaths preserves the absolute path for any
+    // unstaged entry). Host-side media-understanding resolves both via
+    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
+    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
+    refsToStage.forEach((ref, index) => {
+      resolvedByRef.set(ref, {
+        path: stagedPaths[index] ?? ref.path,
+        mimeType: stagedTypes[index] ?? ref.mimeType,
+      });
+    });
+    for (const ref of passThroughRefs) {
+      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
+    }
+    const ordered = mediaPathRefs.map(
+      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
+    );
+    return {
+      paths: ordered.map((entry) => entry.path),
+      types: ordered.map((entry) => entry.mimeType),
+      workspaceDir: sandbox.workspaceDir,
+    };
   } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
@@ -1612,7 +1691,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
     return { messages: [placeholder], placeholderCount: 1 };
   }
-  return { messages: [], placeholderCount: 0 };
+  // The oversized placeholder still does not fit (e.g. the source message
+  // carried very large metadata). Never return an empty history — that renders
+  // as a blank transcript and reads as data loss even though the on-disk
+  // transcript is intact. Fall back to a small metadata-free sentinel.
+  return { messages: [buildChatHistoryUnavailableSentinel()], placeholderCount: 1 };
 }
 
 function resolveTranscriptPath(params: {
@@ -1671,7 +1754,7 @@ async function findAssistantTranscriptMessageByIdempotencyKey(
   if (!trimmedIdempotencyKey) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(transcriptPath);
+  const index = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
     return message?.role === "assistant" && message.idempotencyKey === trimmedIdempotencyKey;
@@ -1736,7 +1819,7 @@ async function findSourceReplyTranscriptMirrorByMetadata(params: {
   if (!expectedText) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(params.transcriptPath);
+  const index = await readSessionTranscriptIndex(params.transcriptPath, { view: "all" });
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
     return (
@@ -2490,7 +2573,8 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionFile: string | undefined;
+  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionKey: string;
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
@@ -2502,8 +2586,9 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   const messages = await readSessionMessagesAsync(
     {
       agentId: params.agentId,
-      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     {
@@ -2622,8 +2707,9 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile,
+            sessionEntry: entry,
             sessionId,
+            sessionKey: canonicalKey,
             storePath,
           },
           {
@@ -2815,8 +2901,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
-        sessionFile: entry?.sessionFile,
+        sessionEntry: entry,
         sessionId,
+        sessionKey,
         storePath,
       },
       messageId,
@@ -2829,7 +2916,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const visible = await isChatMessageIdVisibleAfterHistoryFilters({
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
+      sessionKey,
       agentId: sessionAgentId,
       messageId,
       sessionStartedAt:
@@ -3043,7 +3131,9 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
-    if (!validateChatSendParams(params)) {
+    const clientInfo = client?.connect?.client;
+    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
+    if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
         false,
         undefined,
@@ -3054,13 +3144,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = controlUiReconnectResume.params as {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
       message: string;
       thinking?: string;
-      fastMode?: boolean;
+      fastMode?: FastMode;
+      fastAutoOnSeconds?: number;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -3265,8 +3356,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const abortedAt = context.chatAbortedRuns.get(clientRunId);
-    if (abortedAt !== undefined) {
+    const abortMarker = context.chatAbortedRuns.get(clientRunId);
+    if (abortMarker !== undefined) {
+      const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
       const payload = buildAbortedChatSendPayload({
         runId: clientRunId,
         endedAt: abortedAt,
@@ -3295,7 +3387,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3614,6 +3705,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               body: commandBody,
             },
         MessageSid: clientRunId,
+        ApprovalReviewerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         ...(!isOperatorUiClient(clientInfo)
           ? {
               SenderId: clientInfo?.id,
@@ -3655,14 +3747,23 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let pendingDispatchLifecycleError:
+        | {
+            endedAt: number;
+            error: string;
+            sessionId: string;
+            startedAt: number;
+          }
+        | undefined;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
         target: () => {
-          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-            sessionKey,
-            sessionLoadOptions,
-          );
+          const {
+            storePath: latestStorePath,
+            store: latestStore,
+            entry: latestEntry,
+          } = loadSessionEntry(sessionKey, sessionLoadOptions);
           const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return undefined;
@@ -3671,6 +3772,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionId: resolvedSessionId,
             sessionKey,
             sessionEntry: latestEntry ?? entry,
+            sessionStore: latestStore,
             storePath: latestStorePath,
             agentId,
             config: cfg,
@@ -3885,12 +3987,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+              requestedSessionId,
+              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
+              fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(
@@ -4700,8 +4805,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                         const rewriteTargetIds = new Set(
                           rewriteTargets.map((target) => target.messageId),
                         );
-                        const rewriteIndex =
-                          await readSessionTranscriptIndex(resolvedTranscriptPath);
+                        const rewriteIndex = await readSessionTranscriptIndex(
+                          resolvedTranscriptPath,
+                          { view: "all" },
+                        );
                         const firstRewriteEntryIndex =
                           rewriteIndex?.entries.findIndex(
                             (entryValue) =>
@@ -4718,11 +4825,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 allowedSourceReplyMirrorIds.has(entryLocal.id),
                             ) === true;
                         if (canRewriteSourceReplyMirrors) {
-                          const result = await rewriteTranscriptEntriesInSessionFile({
-                            sessionFile: resolvedTranscriptPath,
-                            sessionKey,
-                            agentId,
-                            config: cfg,
+                          const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+                            scope: {
+                              sessionId,
+                              sessionKey,
+                              sessionFile: resolvedTranscriptPath,
+                              agentId,
+                              ...(latestStorePath ? { storePath: latestStorePath } : {}),
+                            },
                             request: {
                               allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
                               replacements: rewriteTargets.map((target) => ({
@@ -4734,6 +4844,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 } as unknown as AgentMessage,
                               })),
                             },
+                            config: cfg,
                           });
                           if (result.changed) {
                             await advanceSessionTranscriptMarker({
@@ -4855,6 +4966,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err: unknown) => {
+          const errorMessage = String(err);
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
@@ -4864,7 +4976,19 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          if (
+            !agentRunStarted &&
+            !activeRunAbort.controller.signal.aborted &&
+            !context.chatAbortedRuns.has(clientRunId)
+          ) {
+            pendingDispatchLifecycleError = {
+              endedAt: Date.now(),
+              error: errorMessage,
+              sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
+              startedAt: activeRunAbort.entry?.startedAtMs ?? now,
+            };
+          }
+          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -4874,7 +4998,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               payload: {
                 runId: clientRunId,
                 status: "error" as const,
-                summary: String(err),
+                summary: errorMessage,
               },
               error,
             },
@@ -4884,7 +5008,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             runId: clientRunId,
             sessionKey,
             agentId,
-            errorMessage: String(err),
+            errorMessage,
           });
         })
         .finally(() => {
@@ -4892,6 +5016,53 @@ export const chatHandlers: GatewayRequestHandlers = {
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          if (!pendingDispatchLifecycleError) {
+            return;
+          }
+          const persistDispatchLifecycleError = async () => {
+            const dispatchError = pendingDispatchLifecycleError;
+            if (!dispatchError) {
+              return;
+            }
+            const hasActiveRun = hasTrackedActiveSessionRun({
+              context,
+              requestedKey: rawSessionKey,
+              canonicalKey: sessionKey,
+              ...(sessionKey === "global" && agentId ? { agentId } : {}),
+              defaultAgentId: resolveDefaultAgentId(cfg),
+            });
+            if (hasActiveRun) {
+              return;
+            }
+            try {
+              await persistGatewaySessionLifecycleEvent({
+                sessionKey,
+                ...(sessionKey === "global" && agentId ? { agentId } : {}),
+                event: {
+                  runId: clientRunId,
+                  sessionId: dispatchError.sessionId,
+                  lifecycleGeneration,
+                  ts: dispatchError.endedAt,
+                  data: {
+                    phase: "error",
+                    startedAt: dispatchError.startedAt,
+                    endedAt: dispatchError.endedAt,
+                    error: dispatchError.error,
+                  },
+                },
+              });
+              emitSessionsChanged(context, {
+                sessionKey,
+                ...(agentId ? { agentId } : {}),
+                reason: "chat.dispatch-error",
+              });
+            } catch (persistErr: unknown) {
+              context.logGateway.warn(
+                `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+              );
+            }
+          };
+          void persistDispatchLifecycleError();
         });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });

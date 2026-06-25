@@ -129,6 +129,7 @@ export type ChannelSetupInput = {
   deviceName?: string;
   avatarUrl?: string;
   initialSyncLimit?: number;
+  profile?: string;
   ship?: string;
   url?: string;
   baseUrl?: string;
@@ -692,6 +693,8 @@ export type ChannelMessageActionContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
+  /** Trusted originating account id paired with requesterSenderId. */
+  requesterAccountId?: string | null;
   /**
    * Trusted sender id from inbound context. This is server-injected and must
    * never be sourced from tool/model-controlled params.
@@ -758,6 +761,8 @@ export type ChannelMessageActionAdapter = {
       ChannelMessageActionName,
       {
         aliases: string[];
+        /** Alias fields that identify the destination conversation, not an existing message. */
+        deliveryTargetAliases?: string[];
       }
     >
   >;

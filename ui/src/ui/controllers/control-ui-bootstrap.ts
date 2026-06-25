@@ -46,7 +46,7 @@ function resolveBootstrapAgentId(value: string | null | undefined): string | nul
 }
 
 function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
-  const localAvatar = loadLocalAssistantIdentity().avatar;
+  const localAvatar = loadLocalAssistantIdentity({ agentId: resolveActiveAgentId(state) }).avatar;
   if (!localAvatar) {
     return;
   }
@@ -119,7 +119,6 @@ export async function loadControlUiBootstrapConfig(
         state.assistantAvatarReason = normalized.avatarReason ?? null;
         state.assistantAgentId = normalized.agentId ?? null;
       }
-      // Local override always wins — same pattern as the user avatar.
       applyLocalAssistantAvatarOverride(state);
     }
     state.serverVersion = parsed.serverVersion ?? null;

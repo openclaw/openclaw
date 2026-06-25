@@ -59,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -98,7 +99,7 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
-export function createSubscriptionMock(): SubscriptionMock {
+function createSubscriptionMock(): SubscriptionMock {
   // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
   // override only the lifecycle method they need.
   return {
@@ -208,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -387,6 +389,14 @@ vi.mock("../../bootstrap-files.js", async () => {
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
     hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+  };
+});
+
+vi.mock("../../workspace.js", async () => {
+  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
+  return {
+    ...actual,
+    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
   };
 });
 
@@ -822,6 +832,13 @@ vi.mock("../utils.js", () => ({
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
+  hasActiveCompactionRetryWork: ({
+    isCompactionInFlight,
+    isSessionStreaming,
+  }: {
+    isCompactionInFlight: boolean;
+    isSessionStreaming: boolean;
+  }) => isCompactionInFlight || isSessionStreaming,
   waitForCompactionRetryWithAggregateTimeout: async () => ({
     timedOut: false,
     aborted: false,
@@ -830,13 +847,6 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
 
 vi.mock("./compaction-timeout.js", () => ({
   resolveRunTimeoutDuringCompaction: () => "abort",
-  resolveRunTimeoutWithCompactionGraceMs: ({
-    runTimeoutMs,
-    compactionTimeoutMs,
-  }: {
-    runTimeoutMs: number;
-    compactionTimeoutMs: number;
-  }) => runTimeoutMs + compactionTimeoutMs,
   selectCompactionTimeoutSnapshot: ({
     currentSnapshot,
     currentSessionId,
@@ -856,7 +866,7 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: () => null,
 }));
 
-export type MutableSession = {
+type MutableSession = {
   sessionId: string;
   messages: unknown[];
   isCompacting: boolean;
@@ -1141,7 +1151,7 @@ export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessi
   expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
-export const testModel = {
+const testModel = {
   api: "openai-completions",
   provider: "openai",
   compat: {},

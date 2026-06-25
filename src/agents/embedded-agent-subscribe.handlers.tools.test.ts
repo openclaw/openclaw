@@ -334,6 +334,50 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
+
+  it("keeps processing tool start when progress callbacks throw", async () => {
+    const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
+    onExecutionPhase.mockImplementation(() => {
+      throw new Error("phase exploded");
+    });
+    onAgentEvent.mockImplementation(() => {
+      throw new Error("event exploded");
+    });
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-throws",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.toolMetaById.has("tool-callback-throws")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tool execution phase callback failed"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
+
+  it("does not leak unhandled rejections when tool start progress rejects", async () => {
+    const { ctx, warn, onAgentEvent } = createTestContext();
+    onAgentEvent.mockRejectedValue(new Error("progress failed"));
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-rejects",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+    await Promise.resolve();
+
+    expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {
@@ -984,6 +1028,121 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         mediaUrls: ["/tmp/rewritten.png"],
       },
     ]);
+  });
+
+  it("records reply target evidence without treating it as terminal send evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-reply-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-reply",
+      }),
+    ]);
+  });
+
+  it("records conversation creation target evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-thread-create-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "thread-create",
+          provider: "telegram",
+          target: "chat-thread",
+          message: "new thread",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true, thread: { id: "thread-1" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-thread",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "dry-run", result: { ok: true, dryRun: true } },
+    { name: "suppressed", result: { ok: true, status: "suppressed" } },
+  ])("does not record target evidence for $name reply results", async ({ result }) => {
+    const { ctx } = createTestContext();
+    const toolCallId = `tool-message-reply-${result.status ?? "dry-run"}`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
   });
 
   it("does not treat text or media arguments on non-messaging tools as delivery", async () => {
@@ -2208,6 +2367,7 @@ describe("messaging tool media URL tracking", () => {
           {
             type: "text",
             text: JSON.stringify({
+              ok: true,
               mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
             }),
           },

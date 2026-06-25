@@ -9,7 +9,7 @@ const GATEWAY_SERVICE_KIND = "gateway";
 
 // Doctor/startup warning shape for shells where OPENCLAW_GATEWAY_TOKEN would
 // make direct clients use a different token than the managed gateway service.
-export type GatewayAuthTokenSourceConflict = {
+type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
   title: string;
   detail: string;

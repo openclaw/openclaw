@@ -25,6 +25,7 @@ import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
+import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -48,7 +49,8 @@ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
-  getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalProviderContractPluginIds,
+  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
@@ -56,9 +58,13 @@ import {
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
-import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import {
+  resolveWebSearchInstallCatalogEntriesForEnv,
+  resolveWebSearchInstallCatalogEntry,
+} from "../../../plugins/web-search-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
+import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import {
   collectConfiguredRuntimePluginIds,
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
@@ -143,28 +149,59 @@ function addConfiguredMemoryEmbeddingProviderPluginIds(
   if (configuredProviderIds.size === 0) {
     return;
   }
-  for (const entry of listOfficialExternalPluginCatalogEntries()) {
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    if (!pluginId) {
-      continue;
-    }
-    const ownedProviderIds = [
-      ...(manifest?.contracts?.embeddingProviders ?? []),
-      ...(manifest?.contracts?.memoryEmbeddingProviders ?? []),
-    ];
-    if (
-      ownedProviderIds.some((providerId) => {
-        const normalized = normalizeOptionalLowercaseString(providerId);
-        return normalized ? configuredProviderIds.has(normalized) : false;
-      })
-    ) {
+  for (const contract of ["embeddingProviders", "memoryEmbeddingProviders"] as const) {
+    for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+      contract,
+      providerIds: configuredProviderIds,
+    })) {
       ids.add(pluginId);
     }
   }
 }
 
-function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
+function addConfiguredSpeechProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "speechProviders",
+    providerIds: collectConfiguredSpeechProviderIds(cfg),
+  })) {
+    ids.add(pluginId);
+  }
+}
+
+function addConfiguredWebFetchProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
+  const webFetch = cfg.tools?.web?.fetch;
+  if (webFetch?.enabled === false) {
+    return;
+  }
+  const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
+  if (!providerId) {
+    return;
+  }
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "webFetchProviders",
+    providerIds: new Set([providerId]),
+  })) {
+    ids.add(pluginId);
+  }
+}
+
+function addEnvWebFetchProviderPluginIds(
+  ids: Set<string>,
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): void {
+  if (cfg.tools?.web?.fetch?.enabled === false) {
+    return;
+  }
+  for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+    contract: "webFetchProviders",
+    env: env ?? process.env,
+  })) {
+    ids.add(pluginId);
+  }
+}
+
+function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
   if (plugins?.enabled === false) {
@@ -184,8 +221,20 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
       ids.add(installEntry.pluginId);
     }
   }
+  if (cfg.tools?.web?.search?.enabled !== false) {
+    // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
+    for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
+      ids.add(entry.pluginId);
+    }
+  }
   addConfiguredAgentRuntimePluginIds(ids, cfg);
+  for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
+    ids.add(pluginId);
+  }
   addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
+  addConfiguredSpeechProviderPluginIds(ids, cfg);
+  addConfiguredWebFetchProviderPluginIds(ids, cfg);
+  addEnvWebFetchProviderPluginIds(ids, cfg, env);
   return ids;
 }
 
@@ -1190,6 +1239,8 @@ export type RepairMissingPluginInstallsResult = {
   changes: string[];
   /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** Plugin ids successfully repaired from current configuration. */
+  repairedPluginIds?: string[];
   /** User-facing details for repairs explicitly deferred until post-core convergence. */
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
@@ -1222,7 +1273,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
     env: params.env,
-    pluginIds: collectConfiguredPluginIds(params.cfg),
+    pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
@@ -1341,6 +1392,7 @@ async function repairMissingPluginInstalls(params: {
   const warnings: string[] = [];
   const deferredRepairDetails: string[] = [];
   const failedPluginIds = new Set<string>();
+  const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
@@ -1421,6 +1473,7 @@ async function repairMissingPluginInstalls(params: {
     });
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
+        repairedPluginIds.add(outcome.pluginId);
         changes.push(
           installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
             ? `Refreshed stale configured plugin "${outcome.pluginId}".`
@@ -1531,6 +1584,9 @@ async function repairMissingPluginInstalls(params: {
     nextRecords = installed.records;
     changes.push(...installed.changes);
     warnings.push(...installed.warnings);
+    if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
+      repairedPluginIds.add(candidate.pluginId);
+    }
     if (installed.failedPluginId) {
       failedPluginIds.add(installed.failedPluginId);
     }
@@ -1550,6 +1606,13 @@ async function repairMissingPluginInstalls(params: {
     changes,
     warnings,
     ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
+    ...(repairedPluginIds.size > 0
+      ? {
+          repairedPluginIds: [...repairedPluginIds].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        }
+      : {}),
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>

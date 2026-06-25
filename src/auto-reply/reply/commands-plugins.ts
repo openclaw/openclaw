@@ -215,6 +215,7 @@ function findTrustedCatalogPackageInstall(packageName: string):
 
 async function installPluginFromPluginsCommand(params: {
   raw: string;
+  config: OpenClawConfig;
   snapshot: ConfigSnapshotForInstallPersist;
 }): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
@@ -227,6 +228,7 @@ async function installPluginFromPluginsCommand(params: {
   if (fs.existsSync(resolved)) {
     const result = await installPluginFromPath({
       path: resolved,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -258,6 +260,7 @@ async function installPluginFromPluginsCommand(params: {
   if (gitSpec) {
     const result = await installPluginFromGitSpec({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -284,6 +287,7 @@ async function installPluginFromPluginsCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -314,6 +318,7 @@ async function installPluginFromPluginsCommand(params: {
   });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    config: params.config,
     ...(officialNpmTrust
       ? {
           expectedPluginId: officialNpmTrust.pluginId,
@@ -469,6 +474,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     }
     const installed = await installPluginFromPluginsCommand({
       raw: pluginsCommand.spec,
+      config: loadedConfig.snapshot.config,
       snapshot: loadedConfig.snapshot,
     });
     if (!installed.ok) {

@@ -1,6 +1,7 @@
 // ChatGPT Responses provider tests cover stream handling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 import {
   extractOpenAICodexAccountId,
@@ -401,6 +402,60 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(sendMock).not.toHaveBeenCalled();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Request timed out after 5ms");
+  });
+
+  it("strips the internal cache boundary marker from request instructions", async () => {
+    let capturedPayload: { instructions?: string } | undefined;
+    const stream = streamOpenAICodexResponses(
+      model,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as typeof capturedPayload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.instructions).toBe("Stable\nDynamic");
+    expect(JSON.stringify(capturedPayload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
+
+  it("falls back to the default instructions when no system prompt is set", async () => {
+    let capturedPayload: { instructions?: string } | undefined;
+    const stream = streamOpenAICodexResponses(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as typeof capturedPayload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.instructions).toBe("You are a helpful assistant.");
   });
 
   it("prefers promptCacheKey over sessionId for request cache affinity", async () => {

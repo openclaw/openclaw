@@ -591,29 +591,21 @@ function collectToolSchemaFindings(params: {
   );
 }
 
-function collectBundleMcpRuntimeToolSchemaFindings(params: {
-  bundleRuntime: BundleMcpToolRuntime;
-  cfg: OpenClawConfig;
+function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
+  tools: AnyAgentTool[];
+  cfg: OpenClawConfig;
   workspaceDir: string;
   modelRef: { provider: string; model: string };
   model: ProviderRuntimeModel;
+  normalizationFailureFinding: (error: unknown) => HealthFinding;
 }): readonly HealthFinding[] {
-  const activeBundleTools = applyFinalEffectiveToolPolicy({
-    bundledTools: params.bundleRuntime.tools,
-    config: params.cfg,
-    agentId: params.agentId,
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
-    warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
-  });
   const preNormalizationFindings: HealthFinding[] = [];
 
   let normalizedTools: AnyAgentTool[];
   try {
     normalizedTools = normalizeAgentRuntimeTools({
-      tools: activeBundleTools,
+      tools: params.tools,
       provider: params.modelRef.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -634,7 +626,7 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       },
     });
   } catch (error) {
-    return [...preNormalizationFindings, bundleMcpRuntimeNormalizationFailureFinding(error)];
+    return [...preNormalizationFindings, params.normalizationFailureFinding(error)];
   }
 
   return [
@@ -644,6 +636,34 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       tools: normalizedTools,
     }),
   ];
+}
+
+function collectBundleMcpRuntimeToolSchemaFindings(params: {
+  bundleRuntime: BundleMcpToolRuntime;
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+  modelRef: { provider: string; model: string };
+  model: ProviderRuntimeModel;
+}): readonly HealthFinding[] {
+  const activeBundleTools = applyFinalEffectiveToolPolicy({
+    bundledTools: params.bundleRuntime.tools,
+    config: params.cfg,
+    agentId: params.agentId,
+    modelProvider: params.modelRef.provider,
+    modelId: params.modelRef.model,
+    warn: () => {},
+    toolPolicyAuditLogLevel: "debug",
+  });
+  return collectNormalizedToolSchemaFindings({
+    agentId: params.agentId,
+    tools: activeBundleTools,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    modelRef: params.modelRef,
+    model: params.model,
+    normalizationFailureFinding: bundleMcpRuntimeNormalizationFailureFinding,
+  });
 }
 
 function agentRuntimeToolLoadFailureFinding(params: {
@@ -702,45 +722,19 @@ function collectAgentRuntimeToolSchemaFindings(params: {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
   }
 
-  const preNormalizationFindings: HealthFinding[] = [];
-
-  let normalizedTools: AnyAgentTool[];
-  try {
-    normalizedTools = normalizeAgentRuntimeTools({
-      tools,
-      provider: params.modelRef.provider,
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      modelId: params.modelRef.model,
-      modelApi: params.model.api,
-      model: params.model,
-      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
-        preNormalizationFindings.push(
-          ...diagnostics.map((diagnostic) =>
-            toolSchemaDiagnosticToFinding({
-              agentId: params.agentId,
-              tools: sourceTools,
-              diagnostic,
-            }),
-          ),
-        );
-      },
-    });
-  } catch (error) {
-    return [
-      ...preNormalizationFindings,
-      agentRuntimeToolNormalizationFailureFinding({ agentId: params.agentId, error }),
-    ];
-  }
-
-  return [
-    ...preNormalizationFindings,
-    ...collectToolSchemaFindings({
-      agentId: params.agentId,
-      tools: normalizedTools,
-    }),
-  ];
+  return collectNormalizedToolSchemaFindings({
+    agentId: params.agentId,
+    tools,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    modelRef: params.modelRef,
+    model: params.model,
+    normalizationFailureFinding: (error) =>
+      agentRuntimeToolNormalizationFailureFinding({
+        agentId: params.agentId,
+        error,
+      }),
+  });
 }
 
 function bundleMcpRuntimeNormalizationFailureFinding(error: unknown): HealthFinding {

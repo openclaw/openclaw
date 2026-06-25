@@ -41,7 +41,7 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
 }) => Promise<Record<string, ProviderConfig>>;
 
 /** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
-export type ModelsJsonPlan =
+type ModelsJsonPlan =
   | {
       action: "skip";
       pluginCatalogWrites?: Record<string, string>;

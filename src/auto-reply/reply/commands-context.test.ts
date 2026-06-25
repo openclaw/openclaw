@@ -52,6 +52,30 @@ describe("buildCommandContext", () => {
     expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
   });
 
+  it("preserves multiline slash skill payloads after structural normalization", () => {
+    const body = "/skill demo_skill first line\nsecond line";
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForCommands: body,
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: stripStructuralPrefixes(body),
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
+  });
+
   it("maps explicit gateway origin into command context", () => {
     const ctx = buildTestCtx({
       Provider: "internal",

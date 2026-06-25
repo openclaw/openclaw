@@ -163,6 +163,7 @@ Example:
 | `minHostVersion`             | `string`                            | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
 | `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
 | `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
+| `requiredPlatformPackages`   | `string[]`                          | Required platform-specific npm aliases verified during npm install.               |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">

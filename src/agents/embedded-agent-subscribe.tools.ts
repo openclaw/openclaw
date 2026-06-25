@@ -10,13 +10,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
+import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -460,7 +461,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -672,10 +673,6 @@ export function extractToolResultMediaArtifact(
   return undefined;
 }
 
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
-}
-
 export function extractToolErrorCode(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -732,12 +729,32 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return text ? normalizeToolErrorText(text) : undefined;
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalString(args.target) ??
-    normalizeOptionalString(args.to) ??
-    normalizeOptionalString(args.channelId)
-  );
+function resolveMessageToolTarget(params: {
+  action: string;
+  args: Record<string, unknown>;
+  providerId: string | null;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const directTarget =
+    normalizeOptionalString(params.args.target) ??
+    normalizeOptionalString(params.args.to) ??
+    normalizeOptionalString(params.args.channelId);
+  if (directTarget) {
+    return directTarget;
+  }
+  const aliases = params.providerId
+    ? getChannelPlugin(params.providerId)?.actions?.messageActionTargetAliases?.[
+        params.action as ChannelMessageActionName
+      ]?.deliveryTargetAliases
+    : undefined;
+  for (const alias of aliases ?? []) {
+    const aliasTarget = normalizeOptionalStringifiedId(params.args[alias]);
+    if (aliasTarget) {
+      return aliasTarget;
+    }
+  }
+  return params.currentMessagingTarget ?? params.currentChannelId;
 }
 
 function resolveMessagingToolThreadEvidence(params: {
@@ -831,17 +848,23 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (!isMessageToolSendActionName(action)) {
-      return undefined;
-    }
-    const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
+    if (!isMessagingToolTargetEvidenceAction(toolName, args)) {
       return undefined;
     }
     const providerRaw = normalizeOptionalString(args.provider) ?? "";
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const toRaw = resolveMessageToolTarget({
+      action,
+      args,
+      providerId,
+      currentChannelId: options?.currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+    });
+    if (!toRaw) {
+      return undefined;
+    }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     const pluginExtractionArgs = { ...args, to: toRaw };
@@ -945,13 +968,21 @@ export function extractMessagingToolSendResult(
   if (!extracted?.to) {
     return pending;
   }
+  const extractedThreadId = normalizeOptionalString(extracted.threadId);
+  const providerReportedThread =
+    extractedThreadId != null ||
+    extracted.threadImplicit === true ||
+    extracted.threadSuppressed === true;
+  // Thread route fields are one state. Mixing provider and pending values can
+  // create contradictory implicit and suppressed evidence.
+  const threadEvidence = providerReportedThread ? extracted : pending;
   return {
     ...pending,
     ...extracted,
     accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
     to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
-    threadId: normalizeOptionalString(extracted.threadId),
-    threadImplicit: extracted.threadImplicit === true ? true : undefined,
-    threadSuppressed: extracted.threadSuppressed === true ? true : undefined,
+    threadId: normalizeOptionalString(threadEvidence.threadId),
+    threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
+    threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }

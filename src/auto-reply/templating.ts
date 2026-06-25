@@ -4,6 +4,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
@@ -20,6 +21,8 @@ export type MentionSource =
   | "implicit_thread"
   | "command_bypass"
   | "none";
+
+export type InboundSourceModality = "text" | "voice" | "audio" | "image" | "video" | "document";
 
 type StickerContextMetadata = {
   cachedDescription?: string;
@@ -69,6 +72,8 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
 };
 
 /** Raw inbound message context accepted from channels before finalization. */
@@ -190,6 +195,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Original message modality before transcription or other media normalization. */
+  SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
   MediaTranscribedIndexes?: number[];
@@ -281,12 +288,18 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Gateway device id allowed to review approvals initiated by this turn. */
+  ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
+  ChannelContext?: PluginHookChannelContext;
+  /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
+  ChatId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
   NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */

@@ -15,6 +15,8 @@ export type McpLoopbackToolCallResult = {
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
 type McpLoopbackToolCallCapture = {
+  generation: number;
+  onYield?: (message: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
@@ -44,6 +46,7 @@ export type McpLoopbackToolCallCaptureHandle = {
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
+let nextToolCallCaptureGeneration = 0;
 const toolCallCaptures = new Map<string, McpLoopbackToolCallCapture>();
 
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
@@ -69,6 +72,7 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
 export function beginMcpLoopbackToolCallCapture(params: {
   captureKey: string;
+  onYield?: (message: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
@@ -84,7 +88,10 @@ export function beginMcpLoopbackToolCallCapture(params: {
   if (!captureKey) {
     return;
   }
+  nextToolCallCaptureGeneration += 1;
   toolCallCaptures.set(captureKey, {
+    generation: nextToolCallCaptureGeneration,
+    onYield: params.onYield,
     onRequestStart: params.onRequestStart,
     onRequestClassified: params.onRequestClassified,
     onRequestFinish: params.onRequestFinish,
@@ -96,6 +103,22 @@ export function beginMcpLoopbackToolCallCapture(params: {
     activityVersion: 0,
     activityWaiters: new Set(),
   });
+}
+
+/** Resolve yield state bound to the request's admitted CLI capture generation. */
+export function resolveMcpLoopbackYieldContext(
+  captureHandle: McpLoopbackRequestCaptureHandle | undefined,
+): { cacheKey: string; onYield: (message: string) => Promise<void> } | undefined {
+  const capture = captureHandle?.capture;
+  if (!capture?.onYield) {
+    return undefined;
+  }
+  return {
+    cacheKey: String(capture.generation),
+    onYield: async (message: string) => {
+      await capture.onYield?.(message);
+    },
+  };
 }
 
 /** Bind an authenticated HTTP request to the active capture generation before reading its body. */
@@ -315,6 +338,7 @@ export function clearMcpLoopbackToolCallCapturesForTest(): void {
   for (const captureKey of toolCallCaptures.keys()) {
     deleteMcpLoopbackToolCallCapture(captureKey);
   }
+  nextToolCallCaptureGeneration = 0;
 }
 
 /** Return a copy of the active loopback runtime, if one has been installed. */
@@ -349,9 +373,11 @@ export function createMcpLoopbackServerConfig(port: number) {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
+        alwaysLoad: true,
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
           "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+          "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",

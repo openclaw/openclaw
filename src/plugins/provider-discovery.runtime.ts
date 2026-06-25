@@ -217,7 +217,7 @@ function resolveManifestModelCatalogProviders(
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
     for (const entry of plan.entries) {
-      if (entry.rows.length === 0 || entry.discovery === "runtime") {
+      if (entry.rows.length === 0 || entry.discovery === "runtime" || entry.discovery === "refreshable") {
         continue;
       }
       const providerConfig = providerConfigFromManifestRows(entry.rows);
@@ -249,7 +249,7 @@ function resolveRuntimeManifestCatalogPluginIds(
     );
     const ownsRuntimeDiscovery = Object.entries(plugin.modelCatalog?.discovery ?? {}).some(
       ([provider, discovery]) =>
-        discovery === "runtime" && ownedProviders.has(normalizeProviderId(provider)),
+        (discovery === "runtime" || discovery === "refreshable") && ownedProviders.has(normalizeProviderId(provider)),
     );
     if (ownsRuntimeDiscovery) {
       pluginIds.add(plugin.id);
@@ -259,7 +259,7 @@ function resolveRuntimeManifestCatalogPluginIds(
       continue;
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
-    if (plan.entries.some((entry) => entry.discovery === "runtime")) {
+    if (plan.entries.some((entry) => entry.discovery === "runtime" || entry.discovery === "refreshable")) {
       pluginIds.add(plugin.id);
     }
   }

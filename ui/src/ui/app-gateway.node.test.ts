@@ -820,6 +820,18 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
+  it("marks the visible session for one reconnect resume after close", () => {
+    const host = createHost();
+    host.currentSessionId = " session-before-reconnect ";
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitClose({ code: 1006 });
+
+    expect(host.reconnectResumeSessionId).toBe("session-before-reconnect");
+  });
+
   it("routes exec approval requested events with command spans", () => {
     const { host, client } = connectHostGateway();
 
@@ -1158,6 +1170,20 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1));
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+  });
+
+  it("refreshes an open Talk catalog after hello", async () => {
+    const host = createHost();
+    const fetchRealtimeTalkCatalog = vi.fn(async () => undefined);
+    Object.assign(host, {
+      realtimeTalkOptionsOpen: true,
+      fetchRealtimeTalkCatalog,
+    });
+
+    connectGateway(host);
+    requireGatewayClient().emitHello();
+
+    await vi.waitFor(() => expect(fetchRealtimeTalkCatalog).toHaveBeenCalledOnce());
   });
 
   it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
