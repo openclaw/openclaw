@@ -123,6 +123,15 @@ export function resolveLlmIdleTimeoutMs(params?: {
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
   model?: { baseUrl?: string; id?: string; provider?: string };
+  /**
+   * True when the run targets a non-`off` thinking level. Cloud thinking
+   * models (e.g. Gemini 2.5 Flash with `thinking=medium`) can legitimately
+   * emit zero stream chunks for well over the default 120s while they reason
+   * server-side before producing any tokens. The implicit network-silence
+   * watchdog would otherwise fire a false-positive timeout (#80349) — the
+   * same opt-out local providers already receive.
+   */
+  thinkingEnabled?: boolean;
 }): number {
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
   const clampImplicitTimeoutMs = (valueMs: number) =>
@@ -194,6 +203,19 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const isLocalProvider =
     typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
   if (isLocalProvider && !isOllamaCloudModel(params?.model)) {
+    return 0;
+  }
+
+  // Cloud thinking models share the local-provider characteristic that drives
+  // the opt-out above: they can legitimately stream nothing for well over 120s
+  // while reasoning server-side. Applying the default network-silence watchdog
+  // to a thinking-enabled cloud run produces false-positive `LLM idle timeout`
+  // failures even though the provider is still working (#80349). Disable the
+  // implicit watchdog, guarded the same way as the local-provider opt-out so
+  // Ollama `:cloud` models (hosted remotely even via local Ollama) keep the
+  // cloud watchdog. Explicit provider / run / agent timeouts resolved earlier
+  // still bound the run.
+  if (params?.thinkingEnabled && !isOllamaCloudModel(params?.model)) {
     return 0;
   }
 

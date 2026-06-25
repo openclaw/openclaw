@@ -300,6 +300,51 @@ describe("resolveLlmIdleTimeoutMs", () => {
       30_000,
     );
   });
+
+  it("disables the default cloud idle watchdog when thinking is enabled (#80349)", () => {
+    // A cloud thinking model (e.g. Gemini 2.5 Flash with thinking=medium) can
+    // legitimately emit no chunks for well over 120s while it reasons
+    // server-side. The implicit network-silence watchdog must not fire on such
+    // runs, mirroring the local-provider opt-out.
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true })).toBe(0);
+  });
+
+  it("keeps the default cloud idle watchdog when thinking is off", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: false })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("still honors an explicit provider request timeout when thinking is enabled", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true, modelRequestTimeoutMs: 300_000 })).toBe(
+      300_000,
+    );
+  });
+
+  it("still applies an explicit shorter run timeout when thinking is enabled", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true, runTimeoutMs: 60_000 })).toBe(60_000);
+  });
+
+  it("does not disable the watchdog for a thinking-enabled local provider (already opted out)", () => {
+    // Local providers already return 0 regardless of thinking; the flag is a
+    // no-op there and must not re-arm the cloud watchdog.
+    expect(
+      resolveLlmIdleTimeoutMs({
+        thinkingEnabled: true,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(0);
+  });
+
+  it("keeps the cloud watchdog for Ollama cloud models even when thinking is enabled", () => {
+    // `:cloud` models are hosted remotely and stream like cloud providers, so
+    // thinking does not opt them out (the watchdog stays, consistent with the
+    // existing isOllamaCloudModel guard). Explicit timeouts still apply.
+    expect(
+      resolveLlmIdleTimeoutMs({
+        thinkingEnabled: true,
+        model: { provider: "ollama", id: "glm-5.1:cloud", baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
 });
 
 describe("streamWithIdleTimeout", () => {
