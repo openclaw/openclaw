@@ -880,11 +880,15 @@ function resolveSqliteTargetFromSessionStorePath(storePath: string): ResolvedSql
   }
   const sessionsDir = path.dirname(resolved);
   if (path.basename(sessionsDir) !== "sessions") {
-    return {};
+    return {
+      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
+    };
   }
   const agentDir = path.dirname(sessionsDir);
   if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return {};
+    return {
+      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
+    };
   }
   return {
     agentId: normalizeAgentId(path.basename(agentDir)),

@@ -20,6 +20,7 @@ import {
   listSessionEntries,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  loadTranscriptEvents,
   markSessionAbortTarget,
   patchSessionEntry,
   persistSessionResetLifecycle,
@@ -360,7 +361,7 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe(inserted?.sessionId);
   });
 
-  it("creates entries with initialized transcripts and normalized sessionFile metadata", async () => {
+  it("creates entries with initialized SQLite transcripts and scoped session metadata", async () => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -382,30 +383,33 @@ describe("session accessor file-backed seam", () => {
     if (!created.ok) {
       throw new Error("expected session creation to succeed");
     }
-    expect(path.basename(created.sessionFile)).toBe("session-1.jsonl");
+    expect(created.sessionFile).toContain("sqlite:main:session-1:");
     expect(created.entry.sessionFile).toBe(created.sessionFile);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: "session-1", type: "session" })]);
   });
 
-  it("rolls back the entry when transcript initialization fails", async () => {
+  it("does not persist the entry when creation validation fails", async () => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",
       storePath,
     };
-    fs.writeFileSync(path.join(tempDir, "blocked"), "not a directory", "utf8");
 
     const created = await createSessionEntryWithTranscript(scope, () => ({
-      ok: true,
-      entry: {
-        sessionFile: "blocked/session-1.jsonl",
-        sessionId: "session-1",
-        updatedAt: 10,
-      },
+      error: "invalid patch",
+      ok: false,
     }));
 
     expect(created).toMatchObject({
       ok: false,
-      phase: "transcript",
+      phase: "entry",
     });
     expect(loadSessionEntry(scope)).toBeUndefined();
     expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();

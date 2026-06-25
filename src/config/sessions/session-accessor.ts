@@ -1109,45 +1109,70 @@ export async function createSessionEntryWithTranscript<TError = string>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
-  return await updateSessionStore(storePath, async (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-    const created = await createEntry({
-      existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
-      sessionEntries: cloneSessionEntries(store),
-    });
-    if (!created.ok) {
-      return { ok: false, error: created.error, phase: "entry" };
-    }
-
-    const ensured = ensureCreatedSessionTranscript({
-      agentId: scope.agentId,
-      entry: created.entry,
-      storePath,
-    });
-    if (!ensured.ok) {
-      delete store[resolved.normalizedKey];
-      return ensured;
-    }
-
-    const entry =
-      created.entry.sessionFile === ensured.sessionFile
-        ? created.entry
-        : {
-            ...created.entry,
-            sessionFile: ensured.sessionFile,
-          };
-    store[resolved.normalizedKey] = entry;
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
-    }
-    return { ok: true, entry, sessionFile: ensured.sessionFile };
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+  const created = await createEntry({
+    existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
+    sessionEntries: cloneSessionEntries(store),
   });
+  if (!created.ok) {
+    return { ok: false, error: created.error, phase: "entry" };
+  }
+
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  const sessionFile = formatSqliteSessionFileTarget({
+    agentId,
+    sessionId: created.entry.sessionId,
+    storePath,
+  });
+  try {
+    await appendSqliteTranscriptEvent(
+      {
+        agentId,
+        sessionId: created.entry.sessionId,
+        sessionKey: resolved.normalizedKey,
+        storePath,
+      },
+      createSessionTranscriptHeader({ sessionId: created.entry.sessionId }),
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatErrorMessage(err),
+      phase: "transcript",
+    };
+  }
+
+  const entry =
+    created.entry.sessionFile === sessionFile
+      ? created.entry
+      : {
+          ...created.entry,
+          sessionFile,
+        };
+  await applySessionEntryLifecycleMutation({
+    storePath,
+    removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
+    upserts: [{ sessionKey: resolved.normalizedKey, entry }],
+    skipMaintenance: true,
+  });
+  return { ok: true, entry, sessionFile };
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
   return Object.fromEntries(
     Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
   );
+}
+
+function formatSqliteSessionFileTarget(params: {
+  agentId: string;
+  sessionId: string;
+  storePath: string;
+}): string {
+  return `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
 }
 
 function createReplySessionInitializationRevision(params: {
