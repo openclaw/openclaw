@@ -15,6 +15,11 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
+export type ParsedCronRunScopeSuffix = {
+  baseSessionKey: string | undefined;
+  runId: string | undefined;
+};
+
 export type RawSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
@@ -257,6 +262,32 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
     return false;
   }
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
+}
+
+/**
+ * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
+ * (`agent:<id>:cron:<job>:run:<runId>`, #91685), yielding the cache-stable base key.
+ * The run scope is only ever appended to cron keys, so this is gated to that exact
+ * shape: any other key (including channel ids that embed a `:run:` segment) is returned
+ * unchanged with `runId` undefined, never truncating an unrelated session identity.
+ */
+export function parseCronRunScopeSuffix(
+  sessionKey: string | undefined | null,
+): ParsedCronRunScopeSuffix {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, runId: undefined };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed || !/^cron:[^:]+:run:[^:]+$/.test(parsed.rest)) {
+    return { baseSessionKey: raw, runId: undefined };
+  }
+  const runMarker = ":run:";
+  const markerIndex = raw.lastIndexOf(runMarker);
+  return {
+    baseSessionKey: raw.slice(0, markerIndex),
+    runId: raw.slice(markerIndex + runMarker.length),
+  };
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
