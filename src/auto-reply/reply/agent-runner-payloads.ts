@@ -342,7 +342,11 @@ export async function buildReplyPayloads(params: {
         payloads: mediaFiltered,
         sentTexts,
       });
-      dedupedPayloads.push(...textFiltered);
+      const metaFiltered = dedupeRuntime.filterMessagingToolMetaCommentary({
+        payloads: textFiltered,
+        sentTexts,
+      });
+      dedupedPayloads.push(...metaFiltered);
     }
   }
   const directlySentTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();

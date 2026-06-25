@@ -2,6 +2,7 @@
 export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
+  filterMessagingToolMetaCommentary,
   resolveMessagingToolPayloadDedupe,
   shouldDedupeMessagingToolRepliesForRoute,
   type MessagingToolPayloadDedupeDecision,

@@ -5,6 +5,8 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   filterMessagingToolMediaDuplicates,
+  filterMessagingToolMetaCommentary,
+  isPostToolSendMetaCommentary,
   resolveMessagingToolPayloadDedupe,
   shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads.js";
@@ -381,5 +383,98 @@ describe("resolveMessagingToolPayloadDedupe", () => {
       useGlobalSentTextEvidenceFallback: false,
       useGlobalSentMediaUrlEvidenceFallback: false,
     });
+  });
+});
+
+describe("isPostToolSendMetaCommentary", () => {
+  it.each([
+    // Chinese meta-acks (Hansen F30/F31 reproduction set)
+    "已发",
+    "已发 #22141",
+    "已发送",
+    "主回复已发",
+    "主回复已发 (#22142)",
+    "核心回答如下",
+    "总结如下",
+    "不再追加总结",
+    "好了",
+    "收到",
+    // English meta-acks
+    "Sent",
+    "Sent above",
+    "Sent #22141",
+    "Done.",
+    "Replied above",
+    "Posted.",
+    "Acknowledged.",
+    "OK",
+    "Okay",
+    "Roger",
+    "Got it",
+    "Copy that",
+    "Replying above",
+    "Answer below",
+    // Compound meta-acks with short trailing comments
+    "OK, that's the fix.",
+    "已发, 不再追加.",
+    "已发. 不再追加.",
+    // Case insensitivity + emoji stripping
+    "OK 👍",
+    "  sent  ",
+  ])("returns true for meta-commentary %j", (text) => {
+    expect(isPostToolSendMetaCommentary(text)).toBe(true);
+  });
+
+  it.each([
+    // Real reply content (must never be suppressed)
+    "已发 now let me explain the actual fix in detail: the dedupe threshold is 10.",
+    "Here is my analysis of the situation.",
+    "I think we should rerun the test suite before pushing.",
+    "Yes, the migration is complete and tested on staging.",
+    "Let me check that for you — one moment.",
+    "The price is $4,235.67, up 2.3% on the day.",
+    // Long acks that wrap into real content
+    "OK so basically the issue is that the dedupe only fires for texts of length >= 10, which means the short meta-commentary escapes. Let me draft a fix.",
+  ])("returns false for real reply content %j", (text) => {
+    expect(isPostToolSendMetaCommentary(text)).toBe(false);
+  });
+
+  it("returns false for empty / whitespace-only text", () => {
+    expect(isPostToolSendMetaCommentary("")).toBe(false);
+    expect(isPostToolSendMetaCommentary("   ")).toBe(false);
+  });
+});
+
+describe("filterMessagingToolMetaCommentary", () => {
+  it("does nothing when no message-tool sends happened this run", () => {
+    const filtered = filterMessagingToolMetaCommentary({
+      payloads: [{ text: "已发 #1" }],
+      sentTexts: [],
+    });
+    expect(filtered).toEqual([{ text: "已发 #1" }]);
+  });
+
+  it("drops meta-acks when message-tool sends happened this run", () => {
+    const filtered = filterMessagingToolMetaCommentary({
+      payloads: [
+        { text: "已发 #22141" },
+        { text: "Sent above" },
+        { text: "OK" },
+        { text: "Here is the real follow-up analysis: ..." },
+      ],
+      sentTexts: ["主回复内容 (length >= 10)"],
+    });
+    expect(filtered.map((p) => p.text)).toEqual(["Here is the real follow-up analysis: ..."]);
+  });
+
+  it("never suppresses media payloads even if the caption is meta-ack", () => {
+    const filtered = filterMessagingToolMetaCommentary({
+      payloads: [
+        { text: "已发", mediaUrl: "https://example.com/chart.png" },
+        { text: "Sent", mediaUrls: ["https://example.com/photo.jpg"] },
+      ],
+      sentTexts: ["main reply"],
+    });
+    expect(filtered).toHaveLength(2);
   });
 });

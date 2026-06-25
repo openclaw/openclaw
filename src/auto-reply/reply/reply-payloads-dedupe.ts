@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import {
+  isMessagingToolDuplicate,
+  isPostToolSendMetaCommentary,
+} from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
@@ -99,6 +102,39 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   return nextPayloads ?? payloads;
+}
+
+/**
+ * Removes trailing payloads that are short post-tool-send meta commentary.
+ *
+ * After an agent calls the message tool to deliver its main reply, models
+ * sometimes append a brief acknowledgement ("已发 #22141", "Sent above",
+ * "核心回答如下", "OK", "Roger"). These acks reach the channel as a second
+ * visible message and are a well-known duplicate-reply pattern. This filter
+ * only fires when the run already produced message-tool sends (`sentTexts`
+ * non-empty) — i.e. the agent has actually delivered its main reply and
+ * any final text that matches a meta-ack pattern is suppressing itself.
+ */
+export function filterMessagingToolMetaCommentary(params: {
+  payloads: ReplyPayload[];
+  sentTexts: string[];
+}): ReplyPayload[] {
+  const { payloads, sentTexts } = params;
+  if (sentTexts.length === 0) {
+    return payloads;
+  }
+  return payloads.filter((payload) => {
+    if (payload.mediaUrl || payload.mediaUrls?.length) {
+      // Media payloads always carry new information, even if the caption is
+      // meta-ack; never suppress them.
+      return true;
+    }
+    const text = payload.text ?? "";
+    if (!text) {
+      return true;
+    }
+    return !isPostToolSendMetaCommentary(text);
+  });
 }
 
 function normalizeMediaForDedupe(value: string): string {

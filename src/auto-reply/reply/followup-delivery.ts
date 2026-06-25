@@ -19,6 +19,7 @@ import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
+  filterMessagingToolMetaCommentary,
   resolveMessagingToolPayloadDedupe,
 } from "./reply-payloads.js";
 import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
@@ -134,7 +135,11 @@ export function resolveFollowupDeliveryPayloads(params: {
       payloads: mediaFiltered,
       sentTexts,
     });
-    dedupedPayloads.push(...textFiltered);
+    const metaFiltered = filterMessagingToolMetaCommentary({
+      payloads: textFiltered,
+      sentTexts,
+    });
+    dedupedPayloads.push(...metaFiltered);
   }
   return dedupedPayloads;
 }
