@@ -144,26 +144,26 @@ printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%F
 # fallback must not immediately kickstart -k the freshly spawned gateway.
 # The final status is captured
 # before self-cleanup so a genuine failure remains observable.
-status=0
+exit_status=0
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
   if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
-    status=0
+    exit_status=0
   else
     launchctl kickstart -k 'gui/${uid}/${escaped}'
-    status=$?
+    exit_status=$?
   fi
 fi
-if [ "$status" -eq 0 ]; then
+if [ "$exit_status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$exit_status" >&2
 fi
 # Self-cleanup (log is retained under the OpenClaw state logs directory).
 script_dir=$(dirname "$0")
 rm -f "$0"
 rmdir "$script_dir" 2>/dev/null || true
-exit "$status"
+exit "$exit_status"
 `;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);

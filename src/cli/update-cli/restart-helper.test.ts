@@ -263,6 +263,8 @@ exit 1
       expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain("Bootstrap loads RunAtLoad agents");
+      expect(content).not.toMatch(/(^|\n)\s*status=/u);
+      expect(content).toContain('exit "$exit_status"');
       expect(content).toContain('rm -f "$0"');
       expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
       await cleanupScript(scriptPath);
