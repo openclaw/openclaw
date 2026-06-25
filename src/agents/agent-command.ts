@@ -137,12 +137,35 @@ import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
+import { reconcilePersistedRunningSession } from "./session-running-reconciliation.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function resolveTerminalReconciliationReason(params: {
+  result: { meta?: unknown };
+  deliveryResult?: unknown;
+}): string | undefined {
+  const meta = params.result.meta;
+  const error = meta && typeof meta === "object" ? (meta as { error?: unknown }).error : undefined;
+  const kind = error && typeof error === "object" ? (error as { kind?: unknown }).kind : undefined;
+  if (kind === "incomplete_turn") {
+    return "incomplete_turn_fallback";
+  }
+  const delivery = params.deliveryResult as
+    | { deliveryStatus?: { reason?: unknown }; safeFallbackDelivered?: unknown }
+    | undefined;
+  if (
+    delivery?.safeFallbackDelivered === true ||
+    delivery?.deliveryStatus?.reason === "safety_hook_blocked_fallback_delivered"
+  ) {
+    return "safety_hook_blocked_final_fallback";
+  }
+  return undefined;
+}
 
 function hasExactConfiguredProviderModel(params: {
   cfg: OpenClawConfig;
@@ -2335,6 +2358,29 @@ async function agentCommandInternal(
             }
           : deliveryParams,
       );
+      const terminalReconciliationReason = resolveTerminalReconciliationReason({
+        result,
+        deliveryResult,
+      });
+      if (
+        terminalReconciliationReason &&
+        sessionStore &&
+        sessionKey &&
+        !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun
+      ) {
+        await reconcilePersistedRunningSession({
+          storePath,
+          sessionKey,
+          activeRunPresent: false,
+          reason: terminalReconciliationReason,
+          safeFallbackDelivered:
+            terminalReconciliationReason === "incomplete_turn_fallback"
+              ? deliveryResult?.deliverySucceeded === true
+              : (deliveryResult as { safeFallbackDelivered?: boolean } | undefined)
+                  ?.safeFallbackDelivered === true,
+        });
+      }
 
       // Phase 2: Clear pending delivery payload after successful delivery.
       if (

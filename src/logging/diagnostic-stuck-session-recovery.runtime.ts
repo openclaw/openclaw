@@ -1,4 +1,5 @@
 // Stuck session recovery runtime helpers inspect embedded sessions for recovery.
+import path from "node:path";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -9,6 +10,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { reconcilePersistedRunningSession } from "../agents/session-running-reconciliation.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -83,6 +85,25 @@ function formatRecoveryContext(
     fields.push(`laneQueued=${extra.queuedCount}`);
   }
   return fields.join(" ");
+}
+
+async function reconcileRecoveredSession(params: {
+  request: StuckSessionRecoveryParams;
+  activeRunPresent: boolean;
+  reason: string;
+}) {
+  const sessionKey = params.request.sessionKey?.trim();
+  const sessionFile = params.request.sessionFile?.trim();
+  if (!sessionKey || !sessionFile) {
+    return;
+  }
+  await reconcilePersistedRunningSession({
+    storePath: path.join(path.dirname(path.resolve(sessionFile)), "sessions.json"),
+    sessionKey,
+    activeRunPresent: params.activeRunPresent,
+    reason: params.reason,
+    safeFallbackDelivered: false,
+  });
 }
 
 export async function recoverStuckDiagnosticSession(
@@ -306,6 +327,14 @@ export async function recoverStuckDiagnosticSession(
               released,
               lane: sessionLane ?? undefined,
             };
+      await reconcileRecoveredSession({
+        request: params,
+        activeRunPresent: false,
+        reason:
+          outcome.action === "abort_embedded_run"
+            ? "stuck_recovery_abort_embedded_run"
+            : "stuck_recovery_release_lane",
+      });
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }

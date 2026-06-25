@@ -1,7 +1,11 @@
 /**
  * Tests that session abort requests stay scoped to the targeted agent.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -10,6 +14,7 @@ const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
   canonicalKey: sessionKey,
+  storePath: undefined as string | undefined,
 }));
 
 vi.mock("../server-session-key.js", () => ({
@@ -77,6 +82,20 @@ function createContext(
 
 function createRespond(): RespondFn {
   return vi.fn() as unknown as RespondFn;
+}
+
+async function withSessionStore<T>(
+  entries: Record<string, SessionEntry>,
+  run: (storePath: string) => Promise<T>,
+): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-sessions-abort-"));
+  const storePath = join(dir, "sessions.json");
+  try {
+    await saveSessionStore(storePath, entries, { skipMaintenance: true });
+    return await run(storePath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function createBetaRunContext(activeRun: ActiveRun): GatewayRequestContext {
@@ -268,6 +287,129 @@ describe("sessions.abort agent scope", () => {
       new Set(["conn-1"]),
       { dropIfSlow: true },
     );
+  });
+
+  it("reconciles stale persisted running state when abort finds no active run", async () => {
+    const sessionKey = "agent:main:main";
+    const originalUpdatedAt = Date.now() - 60_000;
+    await withSessionStore(
+      {
+        [sessionKey]: {
+          sessionId: "session-stale-no-active-run",
+          updatedAt: originalUpdatedAt,
+          status: "running",
+          restartRecoveryDeliveryRunId: "run-stale",
+          restartRecoveryDeliveryContext: {
+            channel: "telegram",
+            to: "user-1",
+          },
+        },
+      },
+      async (storePath) => {
+        const broadcastToConnIds = vi.fn();
+        loadSessionEntryMock.mockReturnValueOnce({
+          canonicalKey: sessionKey,
+          storePath,
+        });
+        chatAbortMock.mockImplementationOnce(
+          async ({ respond: abortRespond }: { respond: RespondFn }) => {
+            abortRespond(true, { ok: true, aborted: false, runIds: [] });
+          },
+        );
+        const context = createContext({
+          extra: {
+            getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+            broadcastToConnIds,
+            dedupe: new Map(),
+          },
+        });
+
+        const respond = await callSessions(
+          "sessions.abort",
+          { key: sessionKey },
+          { context, reqId: "req-stale-no-active-run" },
+        );
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { ok: true, abortedRunId: null, status: "no-active-run" },
+          undefined,
+          undefined,
+        );
+        const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+        expect(stored?.status).toBe("failed");
+        expect(stored?.abortedLastRun).toBe(true);
+        expect(stored?.recoveredFromStaleRunning).toBe(true);
+        expect(stored?.staleRunningRecoveryReason).toBe("sessions_abort_no_active_run");
+        expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+        expect(stored?.sessionId).toBe("session-stale-no-active-run");
+        expect(stored?.endedAt).toEqual(expect.any(Number));
+        expect(stored?.updatedAt).toBeGreaterThan(originalUpdatedAt);
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            sessionKey,
+            reason: "abort",
+          }),
+          new Set(["conn-1"]),
+          { dropIfSlow: true },
+        );
+      },
+    );
+  });
+
+  it("does not clear persisted session state when abort stops an active run", async () => {
+    const sessionKey = "agent:main:main";
+    const originalEntry: SessionEntry = {
+      sessionId: "session-active-abort",
+      updatedAt: Date.now() - 60_000,
+      status: "running",
+      restartRecoveryDeliveryRunId: "run-active",
+      restartRecoveryDeliveryContext: {
+        channel: "telegram",
+        to: "user-1",
+      },
+    };
+    await withSessionStore({ [sessionKey]: originalEntry }, async (storePath) => {
+      loadSessionEntryMock.mockReturnValueOnce({
+        canonicalKey: sessionKey,
+        storePath,
+      });
+      chatAbortMock.mockImplementationOnce(
+        async ({ respond: abortRespond }: { respond: RespondFn }) => {
+          abortRespond(true, { ok: true, aborted: true, runIds: ["run-active"] });
+        },
+      );
+      const context = createContext({
+        extra: {
+          getSessionEventSubscriberConnIds: () => new Set(),
+          broadcastToConnIds: vi.fn(),
+          dedupe: new Map(),
+        },
+      });
+
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: sessionKey, runId: "run-active" },
+        { context, reqId: "req-active-abort" },
+      );
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { ok: true, abortedRunId: "run-active", status: "aborted" },
+        undefined,
+        undefined,
+      );
+      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(stored?.status).toBe("running");
+      expect(stored?.restartRecoveryDeliveryRunId).toBe("run-active");
+      expect(stored?.restartRecoveryDeliveryContext).toEqual({
+        channel: "telegram",
+        to: "user-1",
+      });
+      expect(stored?.updatedAt).toBe(originalEntry.updatedAt);
+    });
   });
 
   it("forwards selected-agent scope for key-based global aborts", async () => {
