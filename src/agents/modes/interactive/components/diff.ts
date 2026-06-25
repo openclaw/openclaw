@@ -75,7 +75,7 @@ function renderIntraLineDiff(
   return { removedLine, addedLine };
 }
 
-export interface RenderDiffOptions {
+interface RenderDiffOptions {
   /** File path (unused, kept for API compatibility) */
   filePath?: string;
 }

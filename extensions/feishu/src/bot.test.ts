@@ -351,7 +351,6 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./media.js", () => ({
-  downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
   saveMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
@@ -424,6 +423,7 @@ async function dispatchMessage(params: {
   currentCfg?: ClawdbotConfig;
   event: FeishuMessageEvent;
   channelRuntime?: PluginRuntime["channel"];
+  botOpenId?: string;
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -444,6 +444,7 @@ async function dispatchMessage(params: {
   await handleFeishuMessage({
     cfg,
     event: params.event,
+    botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
   });
@@ -4162,6 +4163,150 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     // No reply should be dispatched: empty message is silently skipped
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not drop empty-text message when it quotes a parent message (#90177)", async () => {
+    // A Feishu reply containing only @bot (no additional text) was being
+    // dropped before the quoted message content was fetched. The handler
+    // should fetch quoted content first and only skip if all of current
+    // text, media, and quoted content are empty.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_quoted_001",
+      chatId: "oc-dm",
+      content: "quoted message content from parent",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-reply-only-bot",
+        },
+      },
+      message: {
+        message_id: "msg-empty-with-quote",
+        parent_id: "om_quoted_001",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        // Empty text — only @bot mention, no additional content
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // A reply should be dispatched because quoted content provides context
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches mention-only group reply with quoted content in requireMention:true group (#90177)", async () => {
+    // #90177 is specifically about group chats. The empty-message drop happens
+    // after the group admission/mention gate, so the fix must also work when
+    // the sender mentions the bot in a requireMention:true group and quotes a
+    // parent message with meaningful content — the reply should dispatch with
+    // the quoted text in the body.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_group_quoted_001",
+      chatId: "oc-group-90177",
+      content: "parent message with context",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group-90177": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-group-sender",
+        },
+      },
+      message: {
+        message_id: "msg-group-empty-with-quote",
+        parent_id: "om_group_quoted_001",
+        chat_id: "oc-group-90177",
+        chat_type: "group",
+        message_type: "text",
+        // Empty text — only @bot mention, no additional content
+        content: JSON.stringify({ text: "" }),
+        // Bot mention so the message passes the requireMention gate
+        mentions: [
+          { key: "@_bot_1", id: { open_id: "ou-bot-90177" }, name: "Bot", tenant_key: "" },
+        ],
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou-bot-90177" });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const context = mockCallArg<{ Body?: string }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.Body).toContain("[Replying to:");
+    expect(context.Body).toContain("parent message with context");
+  });
+
+  it("does not over-fetch quoted message for unmentioned empty reply in requireMention:true group (#90177)", async () => {
+    // An empty-text reply that quotes a parent but does NOT mention the bot
+    // in a requireMention:true group should be rejected at the mention gate
+    // before the quoted message is fetched, so getMessageFeishu is never
+    // called and nothing is dispatched.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group-90177-neg": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-group-sender-neg",
+        },
+      },
+      message: {
+        message_id: "msg-group-unmentioned-empty-quote",
+        parent_id: "om_group_quoted_neg",
+        chat_id: "oc-group-90177-neg",
+        chat_type: "group",
+        message_type: "text",
+        // Empty text with no bot mention
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou-bot-90177-neg" });
+
+    expect(mockGetMessageFeishu).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });

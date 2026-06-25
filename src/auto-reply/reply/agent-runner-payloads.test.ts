@@ -905,7 +905,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("drops all final payloads when block pipeline streamed successfully", async () => {
+  it("preserves unsent text-only final payloads after block pipeline streamed partial content", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
       isAborted: () => false,
@@ -916,8 +916,36 @@ describe("buildReplyPayloads media filter integration", () => {
       hasBuffered: () => false,
       getSentMediaUrls: () => [],
     };
-    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
-    // without aborting, so hasSentPayload is never reached.
+    // The pipeline streamed some partial content, but the final text payload was
+    // never sent (hasSentPayload returns false). The old bug dropped all text-only
+    // finals unconditionally; the fix preserves unsent finals.
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "all",
+      payloads: [{ text: "response", replyToId: "post-123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("response");
+  });
+
+  it("drops already-sent text-only final payloads after block pipeline streamed the exact same text", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: (payload) =>
+        payload.text === "response" && !payload.mediaUrl && !payload.mediaUrls,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+    // The final text-only payload matches what the pipeline already sent,
+    // so it should be dropped.
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: true,
@@ -927,6 +955,60 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("drops a text-only final with an empty envelope assembled from multiple streamed blocks", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "first block second block", channelData: {} }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("preserves final rich content when only its text was streamed", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "response", presentation }],
+    });
+
+    expect(replyPayloads).toEqual([
+      expect.objectContaining({
+        text: "response",
+        presentation,
+      }),
+    ]);
   });
 
   it("keeps unsent final media after block pipeline streamed the text", async () => {

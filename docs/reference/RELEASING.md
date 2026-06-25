@@ -118,8 +118,8 @@ the maintainer-only release runbook.
    `CHANGELOG.md` section. Stable releases published to npm `latest` become the
    GitHub latest release; stable maintenance releases kept on npm `beta` are
    created with GitHub `latest=false`. The workflow also uploads the preflight
-   dependency evidence to the GitHub release as
-   `openclaw-<version>-dependency-evidence.zip` for post-release incident
+   dependency evidence, the full-validation manifest, and postpublish registry
+   verification evidence to the GitHub release for post-release incident
    response. The publish workflow prints child run IDs immediately, auto-approves
    release environment gates the workflow token is allowed to approve, summarizes
    failed child jobs with log tails, closes out the GitHub release and dependency
@@ -155,7 +155,51 @@ the maintainer-only release runbook.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
-    and run the release announcement steps.
+    run the release announcement steps, then complete [Stable main
+    closeout](#stable-main-closeout) before calling a stable release finished.
+
+## Stable main closeout
+
+Stable publication is not complete until `main` carries the actual shipped
+release state.
+
+1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+   forward-port real fixes that are absent from `main`. Do not blindly merge
+   release-only compatibility, test, or validation adapters into newer `main`.
+2. Set `main` to the shipped stable version, not a speculative next train. Run
+   `pnpm release:prep` after the root version change, then
+   `pnpm deps:shrinkwrap:generate`.
+3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
+   tagged release branch. Include the stable `appcast.xml` update when the mac
+   release published one.
+4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
+   section to `main` until the operator explicitly starts that release train.
+5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
+   contains the shipped version and changelog before calling the stable release
+   done.
+6. Keep the repository variables `RELEASE_ROLLBACK_DRILL_ID` and
+   `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
+   `OpenClaw Stable Main Closeout` starts from the `main` push that carries the
+   shipped version, changelog, and appcast after stable publication. It reads
+   immutable postpublish evidence to bind the shipped tag to its Full Release
+   Validation and Publish runs, then verifies the stable main state, release,
+   mandatory stable soak, and blocking performance evidence. It attaches an
+   immutable closeout manifest and checksum to the GitHub release. The automatic
+   push trigger skips legacy releases that predate immutable postpublish
+   evidence; it never treats that skip as a completed closeout. A complete
+   closeout requires both assets and a matching checksum. A partial manifest
+   replays its recorded `main` SHA and rollback drill to regenerate identical
+   bytes, then attaches the missing checksum; an invalid pair, or a checksum
+   without a manifest, stays blocking. A push-triggered run without rollback
+   drill repository variables skips without completing closeout; a missing or
+   more-than-90-day-old drill record still blocks manual evidence-backed
+   closeout. Private recovery commands remain in the maintainer-only runbook.
+   Use manual dispatch only to repair or replay an evidence-backed stable closeout.
+   A legacy fallback correction tag may reuse base-package evidence only when
+   the correction tag resolves to the same source commit as the base stable tag.
+   A correction with different source must publish and verify its own package
+   evidence.
 
 ## Release preflight
 
@@ -183,11 +227,11 @@ the maintainer-only release runbook.
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches
   `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS
-  package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs
-  keep exhaustive live/E2E and Docker release-path soak behind
-  `run_release_soak=true`; `release_profile=full` forces soak on. With
-  `release_profile=full` and `rerun_group=all`, it also runs package Telegram
-  E2E against the `release-package-under-test` artifact from release checks.
+  package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full
+  runs always include exhaustive live/E2E and Docker release-path soak;
+  `run_release_soak=true` is retained for an explicit beta soak. Package
+  Acceptance provides the canonical package Telegram E2E during candidate
+  validation, avoiding a second concurrent live poller.
   Provide `release_package_spec` after publishing a beta to reuse the shipped
   npm package across release checks, Package Acceptance, and package Telegram
   E2E without rebuilding the release tarball. Provide
@@ -417,20 +461,16 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
-parent `release-package-under-test` artifact for package-facing checks, and
-dispatches standalone package Telegram E2E when `release_profile=full` with
-`rerun_group=all` or when `release_package_spec` or
-`npm_telegram_package_spec` is set. `OpenClaw Release
-Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
-release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
-only acceptable when the `Full Release Validation` summary shows `normal_ci`,
-`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
-intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
-the `npm_telegram` child must also be successful; outside full/all it is skipped
-unless a published `release_package_spec` or `npm_telegram_package_spec` was
-provided. The final
+`target_ref=<release-ref>`, then dispatches `OpenClaw Release Checks`.
+`OpenClaw Release Checks` fans out install smoke, cross-OS release checks,
+live/E2E Docker release-path coverage when soak is enabled, Package Acceptance
+with the canonical Telegram package E2E, QA Lab parity, live Matrix, and live
+Telegram. A full/all run is only acceptable when the `Full Release Validation`
+summary shows `normal_ci`, `plugin_prerelease`, and `release_checks` as
+successful, unless a focused rerun intentionally skipped the separate `Plugin
+Prerelease` child. Use the standalone `npm-telegram` child only for a focused
+published-package rerun with `release_package_spec` or
+`npm_telegram_package_spec`. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
 See [Full release validation](/reference/full-release-validation) for the
@@ -450,13 +490,12 @@ Use `release_profile` to select live/provider breadth:
 - `stable`: minimum plus stable provider/backend coverage for release approval
 - `full`: stable plus broad advisory provider/media coverage
 
-Use `run_release_soak=true` with `stable` when the release-blocking lanes are
-green and you want the exhaustive live/E2E, Docker release-path, and
-bounded published upgrade-survivor sweep before promotion. That sweep covers
+Stable and full validation always run the exhaustive live/E2E, Docker
+release-path, and bounded published upgrade-survivor sweep before promotion.
+Use `run_release_soak=true` to request that same sweep for a beta. That sweep covers
 the latest four stable packages plus pinned `2026.4.23` and `2026.5.2`
 baselines plus older `2026.4.15` coverage, with duplicate baselines removed and
-each baseline sharded into its own Docker runner job. `full` implies
-`run_release_soak=true`.
+each baseline sharded into its own Docker runner job.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
 ref once as `release-package-under-test` and reuses that artifact in cross-OS,
@@ -516,8 +555,8 @@ runs only the release-only plugin child, `release-checks` runs every release
 box, and the narrower release groups are `install-smoke`, `cross-os`,
 `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`.
 Focused `npm-telegram` reruns require `release_package_spec` or
-`npm_telegram_package_spec`; full/all runs with `release_profile=full` use the
-release-checks package artifact. Focused
+`npm_telegram_package_spec`; full/all runs use the canonical package Telegram
+E2E inside Package Acceptance. Focused
 cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
 another OS/suite filter. QA release-check failures block normal release
 validation, including required OpenClaw dynamic tool drift in the standard tier.
@@ -647,7 +686,7 @@ prepared release package artifact, `suite_profile=custom`,
 configured-auth update restart, live ClawHub skill install, stale plugin dependency cleanup, offline plugin
 fixtures, plugin update, and Telegram package QA against the same resolved
 tarball. Blocking release checks use the default latest published package
-baseline; `run_release_soak=true` or
+baseline; the beta profile with `run_release_soak=true`, `release_profile=stable`, or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
 Package Acceptance with `source=npm` for an already shipped candidate,
@@ -813,8 +852,8 @@ package cannot ship without every publishable official plugin, including
   require the resolved commit to be reachable from an OpenClaw branch or
   release tag.
 - `run_release_soak`: opt into exhaustive live/E2E, Docker release-path, and
-  all-since upgrade-survivor soak on stable/default release checks. It is forced
-  on by `release_profile=full`.
+  all-since upgrade-survivor soak for beta release checks. It is forced on by
+  `release_profile=stable` and `release_profile=full`.
 
 Rules:
 

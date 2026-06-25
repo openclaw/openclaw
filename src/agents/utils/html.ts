@@ -5,7 +5,7 @@
  * entity subset emitted by trusted HTML producers without parsing full HTML.
  */
 /** Decoded entity text plus the source length consumed from the input. */
-export interface DecodedHtmlEntity {
+interface DecodedHtmlEntity {
   text: string;
   length: number;
 }
@@ -18,7 +18,7 @@ function decodeCodePoint(codePoint: number): string | undefined {
 }
 
 /** Decodes a named or numeric HTML entity without the surrounding `&`/`;`. */
-export function decodeHtmlEntity(entity: string): string | undefined {
+function decodeHtmlEntity(entity: string): string | undefined {
   switch (entity) {
     case "amp":
       return "&";

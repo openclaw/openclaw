@@ -1,6 +1,6 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -20,7 +20,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -112,14 +112,13 @@ function resolveSlackCommandMenuModelContext(params: {
       agentId: params.agentId,
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[params.sessionKey];
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return { provider: defaultModel.provider, model: defaultModel.model };
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
@@ -596,11 +595,17 @@ export async function registerSlackMonitorSlashCommands(params: {
               sessionKey: menuRoute.sessionKey,
             })
           : {};
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        const menuModelCatalog =
+          commandDefinition.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
           ...menuModelContext,
+          ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;

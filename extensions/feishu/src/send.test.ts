@@ -258,7 +258,39 @@ describe("getMessageFeishu", () => {
         }),
       },
     });
-    expect(result).toEqual({ messageId: "om_mentions", chatId: "oc_send" });
+    expect(typeof result.receipt.sentAt).toBe("number");
+    expect(result).toEqual({
+      messageId: "om_mentions",
+      chatId: "oc_send",
+      receipt: {
+        primaryPlatformMessageId: "om_mentions",
+        platformMessageIds: ["om_mentions"],
+        parts: [
+          {
+            platformMessageId: "om_mentions",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "feishu",
+              messageId: "om_mentions",
+              chatId: "oc_send",
+              conversationId: "oc_send",
+            },
+            threadId: "oc_send",
+          },
+        ],
+        threadId: "oc_send",
+        sentAt: result.receipt.sentAt,
+        raw: [
+          {
+            channel: "feishu",
+            messageId: "om_mentions",
+            chatId: "oc_send",
+            conversationId: "oc_send",
+          },
+        ],
+      },
+    });
   });
 
   it("extracts text content from interactive card elements", async () => {

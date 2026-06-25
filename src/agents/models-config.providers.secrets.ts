@@ -28,7 +28,6 @@ import {
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type {
-  ProfileApiKeyResolution,
   ProviderApiKeyResolver,
   ProviderAuthResolver,
   ProviderConfig,
@@ -36,17 +35,8 @@ export type {
 } from "./models-config.providers.secret-helpers.js";
 
 export {
-  listAuthProfilesForProvider,
   normalizeApiKeyConfig,
-  normalizeConfiguredProviderApiKey,
-  normalizeHeaderValues,
-  normalizeResolvedEnvApiKey,
-  resolveApiKeyFromCredential,
-  resolveApiKeyFromProfiles,
-  resolveAwsSdkApiKeyVarName,
-  resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
-  toDiscoveryApiKey,
 } from "./models-config.providers.secret-helpers.js";
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);

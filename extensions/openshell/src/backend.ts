@@ -45,6 +45,21 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+export function buildOpenShellDirectoryUploadArgs(params: {
+  sandboxName: string;
+  localPath: string;
+  remotePath: string;
+}): string[] {
+  return [
+    "sandbox",
+    "upload",
+    "--no-git-ignore",
+    params.sandboxName,
+    params.localPath,
+    normalizeRemotePath(params.remotePath),
+  ];
+}
+
 export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
@@ -146,7 +161,7 @@ export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "    ;;",
   "esac",
 ].join("\n");
-const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+export const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="${2:-$1}"',
@@ -157,13 +172,14 @@ const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
   '[ -n "$target" ] || target="/"',
   '[ -n "$root" ] || root="/"',
   'case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
-  'old_ifs="$IFS"',
-  'IFS="/"',
-  "set -- ${target#/} ${root#/}",
-  'IFS="$old_ifs"',
-  "for part do",
-  '  [ -n "$part" ] || continue',
-  '  case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  'for path_to_check in "$target" "$root"; do',
+  '  relative="${path_to_check#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "  done",
   "done",
   'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
   'mkdir -p -- "$root"',
@@ -171,10 +187,9 @@ const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
   'relative="${target#"$root"}"',
   'relative="${relative#/}"',
   'current="$canonical_root"',
-  'IFS="/"',
-  "set -- $relative",
-  'IFS="$old_ifs"',
-  "for part do",
+  'while [ -n "$relative" ]; do',
+  '  part="${relative%%/*}"',
+  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
   '  [ -n "$part" ] || continue',
   '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
   '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
@@ -678,7 +693,7 @@ class OpenShellSandboxBackendImpl {
       this.params.remoteWorkspaceDir,
     );
     await this.runRemoteShellScriptInternal({
-      script: `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
+      script: `${ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
       args: [remoteSkillsWorkspaceDir, this.params.remoteWorkspaceDir],
     });
     const stats = await fs.lstat(this.params.createParams.skillsWorkspaceDir).catch(() => null);
@@ -738,24 +753,26 @@ class OpenShellSandboxBackendImpl {
       async ({ dir: tmpDir }) => {
         // Stage a symlink-free snapshot so upload never dereferences host paths
         // outside the mirrored workspace tree.
+        const remoteRootName = path.posix.basename(normalizeRemotePath(remotePath));
+        const stagedRoot = path.join(tmpDir, remoteRootName);
         await stageDirectoryContents({
           sourceDir: localPath,
-          targetDir: tmpDir,
+          targetDir: stagedRoot,
         });
-        const result = await runOpenShellCli({
-          context: this.params.execContext,
-          args: [
-            "sandbox",
-            "upload",
-            "--no-git-ignore",
-            this.params.execContext.sandboxName,
-            tmpDir,
-            remotePath,
-          ],
-          cwd: this.params.createParams.workspaceDir,
-        });
-        if (result.code !== 0) {
-          throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+        const stagedEntries = (await fs.readdir(stagedRoot)).toSorted();
+        for (const entry of stagedEntries) {
+          const result = await runOpenShellCli({
+            context: this.params.execContext,
+            args: buildOpenShellDirectoryUploadArgs({
+              sandboxName: this.params.execContext.sandboxName,
+              localPath: path.join(stagedRoot, entry),
+              remotePath,
+            }),
+            cwd: this.params.createParams.workspaceDir,
+          });
+          if (result.code !== 0) {
+            throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+          }
         }
       },
     );

@@ -59,6 +59,9 @@ function formatCleanupActionCell(
   if (action === "prune-missing") {
     return theme.error(label);
   }
+  if (action === "prune-model-run") {
+    return theme.warn(label);
+  }
   if (action === "prune-stale") {
     return theme.warn(label);
   }
@@ -74,6 +77,7 @@ function formatCleanupActionCell(
 function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
+  modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -87,6 +91,7 @@ function buildActionRows(params: {
       action: resolveSessionCleanupAction({
         key: row.key,
         missingKeys: params.missingKeys,
+        modelRunPrunedKeys: params.modelRunPrunedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
@@ -154,6 +159,7 @@ function renderStoreDryRunPlan(params: {
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
+  params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {

@@ -154,7 +154,7 @@ export async function startDebugProxyServer(params: {
   settings: DebugProxySettings;
 }): Promise<DebugProxyServerHandle> {
   await ensureDebugProxyCa(params.settings.certDir);
-  const store = getDebugProxyCaptureStore(params.settings.dbPath, params.settings.blobDir);
+  const store = getDebugProxyCaptureStore();
   const recordProxyEvent = createProxyCaptureRecorder({ store, settings: params.settings });
   const host = params.host?.trim() || "127.0.0.1";
 

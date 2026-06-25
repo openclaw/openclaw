@@ -17,6 +17,7 @@ export type GatewayRpcOpts = {
   timeout?: string;
   expectFinal?: boolean;
   json?: boolean;
+  localPortOverride?: number;
 };
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
@@ -50,6 +51,7 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
         params,
         expectFinal: Boolean(opts.expectFinal),
         timeoutMs,
+        localPortOverride: opts.localPortOverride,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),

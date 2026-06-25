@@ -1,6 +1,7 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -11,7 +12,11 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import {
+  shouldRotateCodexAppServerBindingForRuntime,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -29,6 +34,40 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
+  };
+}
+
+function createNetworkProxyThreadLifecycleAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "openclaw-network",
+    permissions: {
+      "openclaw-network": {
+        filesystem: {
+          ":minimal": "read",
+          ":project_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
+  };
+  return {
+    ...createThreadLifecycleAppServerOptions(),
+    networkProxy: {
+      profileName: "openclaw-network",
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
   };
 }
 
@@ -66,8 +105,9 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 function createMessageDynamicTool(
   description: string,
   actions: string[] = ["send"],
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name: "message",
     description,
     inputSchema: {
@@ -84,10 +124,9 @@ function createMessageDynamicTool(
   };
 }
 
-function createNamedDynamicTool(
-  name: string,
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+function createNamedDynamicTool(name: string): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name,
     description: `${name} test tool`,
     inputSchema: {
@@ -102,9 +141,10 @@ function createDeferredNamedDynamicTool(
   name: string,
 ): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
   return {
-    ...createNamedDynamicTool(name),
-    namespace: "openclaw",
-    deferLoading: true,
+    type: "namespace",
+    name: "openclaw",
+    description: "",
+    tools: [{ ...createNamedDynamicTool(name), deferLoading: true }],
   };
 }
 
@@ -214,6 +254,35 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v0",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "local-loopback",
+        current: "local-runtime-v1",
+      }),
+    ).toBe(false);
+  });
+
   it("does not write a binding when thread start resolves after abort", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -286,6 +355,47 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.threadId).toBe("thread-existing");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("sends legacy flat dynamic tools on thread start", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-flat-tools");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send a message."),
+        createDeferredNamedDynamicTool("web_search"),
+      ],
+      appServer,
+    });
+
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
+      | { dynamicTools?: unknown[] }
+      | undefined;
+    expect(startParams?.dynamicTools).toEqual([
+      expect.objectContaining({
+        name: "message",
+        description: "Send a message.",
+      }),
+      expect.objectContaining({
+        name: "web_search",
+        namespace: "openclaw",
+        deferLoading: true,
+      }),
+    ]);
+    expect(startParams?.dynamicTools?.[0]).not.toHaveProperty("type");
+    expect(startParams?.dynamicTools?.[1]).not.toHaveProperty("type");
   });
 
   it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
@@ -1404,6 +1514,42 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.threadId).toBe("thread-existing");
   });
 
+  it("starts a new thread when the network proxy config is not active on the binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const appServer = createNetworkProxyThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-network-proxy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1]).not.toHaveProperty("sandbox");
+    expect(requestCalls[0]?.[1].config).toMatchObject(appServer.networkProxy.configPatch);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-network-proxy");
+    expect(binding?.networkProxyProfileName).toBe("openclaw-network");
+    expect(binding?.networkProxyConfigFingerprint).toBe(appServer.networkProxy.configFingerprint);
+  });
+
   it("passes native hook relay config on thread start and resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2127,6 +2273,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",
+        connectionClass: "local-loopback",
+        remoteAppsSubstrate: "preconfigured",
       },
     });
 

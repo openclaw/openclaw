@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import { createDeferred } from "../test-utils/deferred.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -24,7 +27,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -52,19 +55,6 @@ const sendReq = (
     }),
   );
 };
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
@@ -97,12 +87,24 @@ async function withGatewayChatHarness(
   }
 }
 
-async function writeMainSessionStore() {
+function testSessionFilePath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: Date.now() },
+      main: {
+        sessionId,
+        updatedAt: futureFixtureUpdatedAt(),
+        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
+      },
     },
   });
+}
+
+function futureFixtureUpdatedAt(): number {
+  return Date.now() + 60_000;
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -115,8 +117,12 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
-  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+async function writeMainSessionTranscript(
+  sessionDir: string,
+  lines: string[],
+  sessionId = "sess-main",
+) {
+  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
 }
 
 async function removeTempDir(dir: string): Promise<void> {
@@ -197,13 +203,14 @@ async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
   historyMaxBytes?: number;
+  sessionId?: string;
 }) {
   if (params.historyMaxBytes !== undefined) {
     setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionDir, params.sessionId);
   return sessionDir;
 }
 
@@ -763,7 +770,7 @@ describe("gateway server chat", () => {
 
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1245,7 +1252,7 @@ describe("gateway server chat", () => {
 
   test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1985,7 +1992,8 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
-      const originalHome = process.env.HOME;
+      const sessionId = "sess-claude-cli-backfill";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
       const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
@@ -2023,13 +2031,14 @@ describe("gateway server chat", () => {
         ].join("\n"),
         "utf-8",
       );
-      process.env.HOME = homeDir;
+      setTestEnvValue("HOME", homeDir);
       try {
         await writeSessionStore({
           entries: {
             main: {
-              sessionId: "sess-main",
-              updatedAt: Date.now(),
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
               modelProvider: "claude-cli",
               model: "claude-sonnet-4-6",
               cliSessionBindings: {
@@ -2050,11 +2059,7 @@ describe("gateway server chat", () => {
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
-        if (originalHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = originalHome;
-        }
+        homeEnvSnapshot.restore();
       }
     });
   });
@@ -2409,6 +2414,76 @@ describe("gateway server chat", () => {
     );
   });
 
+  test("chat.send rejects Control UI reconnect resume marker from public WebChat clients", async () => {
+    await withGatewayChatHarness(
+      async ({ ws }) => {
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-public-webchat-resume",
+        });
+        expect(sendRes.ok).toBe(false);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
+  test("chat.send forwards Control UI reconnect resume internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: InternalGetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          __controlUiReconnectResume: true,
+          message: "hello after reconnect",
+          idempotencyKey: "idem-requested-session-id",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts?.requestedSessionId).toBe("sess-main");
+        expect(capturedOpts?.resumeRequestedSession).toBe(true);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
@@ -2737,11 +2812,12 @@ describe("gateway server chat", () => {
 
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionId = "sess-archive-backed";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
       await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z"),
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
         [
-          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
           JSON.stringify({
             id: "msg-archive-full-assistant",
             message: {

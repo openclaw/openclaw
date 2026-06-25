@@ -12,10 +12,10 @@ content, ordering, grouping, and attribution discipline.
 
 ## Goal
 
-Rewrite the target `CHANGELOG.md` version section from history, not from stale
-draft notes. Produce grouped user-facing release notes sorted by user interest
-while preserving every relevant issue/PR ref and every human `Thanks @...`
-attribution.
+Rebuild the target `CHANGELOG.md` version section from a complete, generated
+history manifest, not stale draft notes. Produce grouped user-facing release
+notes sorted by user interest while preserving every relevant issue/PR ref and
+every human `Thanks @...` attribution.
 
 ## Inputs
 
@@ -34,8 +34,37 @@ attribution.
    - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
    - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
    - also inspect `--since='24 hours ago'` when main moved during the release.
-3. Read linked PRs/issues or diffs for ambiguous commits. Direct commits matter;
-   infer notes from subject, body, touched files, tests, and nearby commits.
+3. Generate the complete contribution record and editorial manifest before
+   writing grouped prose:
+
+   ```bash
+   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+     --base <base-tag> \
+     --target <target-ref> \
+     --version <YYYY.M.PATCH> \
+     --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
+     --write-ledger
+   ```
+
+   - the manifest is the required input to the rewrite, not an after-the-fact
+     audit; it contains every referenced PR, eligible contributor credit,
+     inline issue context, every direct commit, and an editorial-eligibility
+     classification for PRs and direct commits
+   - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
+     contribution records from the prior changelog are retained even when an
+     older merged commit omitted its PR number; the verifier excludes records
+     for work reverted after the base tag, including beta work reverted before
+     the stable release
+   - source PR discovery combines merged GitHub commit associations with merged
+     PR references explicitly present in active commit subjects/bodies so
+     cherry-picks and squash commits remain accounted for. Resolve every
+     association page and exclude PRs merged after the target release commit
+   - read the manifest before editing `### Highlights`, `### Changes`, or
+     `### Fixes`; do not carry old grouped prose forward without re-auditing it
+   - inspect linked PRs/issues or diffs for ambiguous commits. Direct commits
+     are editorial input, not public ledger rows; infer material user outcomes
+     from subject, body, touched files, tests, and nearby commits
+
 4. Rewrite one stable-base section only:
    - use `## YYYY.M.PATCH`
    - do not create beta-specific headings
@@ -44,10 +73,21 @@ attribution.
      section instead of deleting them
 5. Section shape:
    - `### Highlights`: 5-8 bullets, broad user wins first
+     - include only a clear user-visible capability or workflow unlock, a
+       material reliability/safety fix, a broad cross-surface improvement, or
+       a release-defining integration/compatibility milestone
+     - every highlight must say what changed for a user in one sentence; use
+       one user story per bullet and group its supporting PRs
+     - exclude tests, CI, refactors, docs, catalog churn, and implementation
+       detail unless the outcome is a material install/update, data-safety, or
+       widely visible user improvement
    - `### Changes`: new capabilities and behavior changes
    - `### Fixes`: user-facing fixes first, grouped by impact and surface
    - group related changes/fixes by surface and user impact; avoid one bullet
      per tiny commit when several commits tell one user-facing story
+   - `### Complete contribution record`: generated PR-first record after the
+     grouped prose; it is the exhaustive accounting surface, not a second
+     release summary
 6. Preserve attribution:
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
@@ -62,17 +102,35 @@ attribution.
    - multiple `Thanks @...` handles in one bullet are expected; do not drop or
      collapse contributor credit just because the note is grouped
    - if one grouped bullet covers both direct commits and PRs, keep all PR refs
-     and thanks, plus any issue refs from the direct commits
-   - before finalizing, audit the final release-note body:
-     - extract all `#NNN` refs from the notes
-     - resolve which refs are PRs and collect human PR authors
-     - resolve issue refs used as bug/report refs and collect human reporters
-     - scan represented commits for `Co-authored-by`
-     - compare those handles to the final `Thanks @...` set
-     - fix every missing human credit or explicitly record why it is omitted
+     and thanks, plus any issue refs and human credit from the direct work
+   - issues remain normal inline `#NNN` references. Do not add a separate
+     linked-issues inventory. The generated PR record keeps source issues
+     inline as `Related #NNN` on the PR that shipped them
+   - when backfilling an older linked-issues inventory, preserve reporter
+     credit inline for every GitHub-confirmed closing PR relationship. Do not
+     infer a PR relationship from a generic cross-reference event, invent an
+     unrelated PR link for a standalone report, or recreate the retired
+     inventory
+   - the complete contribution record lists every merged source PR exactly once
+     as `**PR #NNN**`; source PRs include GitHub commit associations and merged
+     PR references explicitly present in active commit subjects/bodies. It
+     preserves author/co-author credit and any issue references in the original
+     title
+   - direct commits remain in the manifest with GitHub-resolved author,
+     co-author, issue, and editorial-eligibility data. They inform grouped
+     prose but are never rendered as a public `#### Direct commits` dump. Add
+     direct-commit credit to a grouped bullet only when it shares an explicit
+     closing issue reference or at least two distinctive subject terms
+   - the verifier rejects `docs`, `test`, `refactor`, `ci`, `build`, `chore`,
+     and `style` PRs in Highlights, Changes, or Fixes. Keep those internal
+     contributions in the complete PR record, but do not give them editorial
+     release-note space
+   - classify internal-only work from conventional prefixes and clear title
+     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
+     untyped title is not automatically editorial
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`
+   - never thank bots, `@claude`, `@openclaw`, `@clawsweeper`, or `@steipete`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -91,10 +149,50 @@ attribution.
    - if any compatibility `removeAfter` is on/before release date, resolve it
      or explicitly record the blocker before shipping
 10. Validate and ship:
-   - `git diff --check`
-   - for docs/changelog-only changes, no broad tests are required
-   - commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
-   - push, pull/rebase if needed, then branch/rebase release from latest `main`
+
+- after the manifest-driven rewrite, regenerate and verify the complete
+  contribution record before committing:
+  ```bash
+  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+    --base <base-tag> \
+    --target <target-ref> \
+    --version <YYYY.M.PATCH> \
+    --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
+    --write-ledger
+  ```
+- the command fails when any `#NNN` reference in release history or the
+  rendered release section cannot resolve, when reverted work is presented
+  as shipped, when a source PR is absent from the contribution record, when
+  direct commits are rendered as a public record dump, when non-editorial
+  PRs appear in grouped prose, or when an eligible PR author or known
+  co-author is missing from that PR's `Thanks @...` credit
+- when grouped prose names a PR, that same bullet must retain every
+  contributor and linked-reporter credit from its generated PR record
+- unqualified `#NNN` references resolve against `openclaw/openclaw`;
+  cross-repository references such as `openclaw/imsg#141` remain literal
+  text and must not be rewritten as local issue links
+- after the GitHub release or prerelease is published, verify every matching
+  release page against the same source section:
+  ```bash
+  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+    --base <base-tag> \
+    --target <target-ref> \
+    --version <YYYY.M.PATCH> \
+    --release-tag v<YYYY.M.PATCH> \
+    --check-github
+  ```
+- add one `--release-tag` for every beta and stable page in the train; a
+  `### Release verification` tail is permitted, but any other body drift
+  fails the check; the GitHub body must begin with the complete
+  `## YYYY.M.PATCH` changelog section, including its heading
+- GitHub release bodies are limited to 125,000 characters. If the complete
+  source section plus an existing verification tail exceeds that limit, keep
+  the source section intact and omit the tail; never truncate the
+  contribution record
+- `git diff --check`
+- for docs/changelog-only changes, no broad tests are required
+- commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
+- push, pull/rebase if needed, then branch/rebase release from latest `main`
 
 ## Quota / API Outage Rule
 

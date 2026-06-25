@@ -1,5 +1,8 @@
 /** Builds final reply payloads after sanitization, media normalization, and dedupe. */
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -342,6 +345,20 @@ export async function buildReplyPayloads(params: {
       dedupedPayloads.push(...textFiltered);
     }
   }
+  const directlySentTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
+  for (const sentPayload of params.directlySentBlockPayloads ?? []) {
+    const sentText = sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
+    if (!sentText) {
+      continue;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
+    const fragments = directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
+    if (fragments) {
+      fragments.push(sentText);
+    } else {
+      directlySentTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
+    }
+  }
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const hasDirectlySentText = (payload: ReplyPayload): boolean => {
@@ -352,21 +369,10 @@ export async function buildReplyPayloads(params: {
     if (!text || !params.directlySentBlockPayloads?.length) {
       return false;
     }
-    const fragmentsByAssistantMessage = new Map<number | undefined, string[]>();
-    for (const sentPayload of params.directlySentBlockPayloads) {
-      const sentText =
-        sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
-      if (!sentText) {
-        continue;
-      }
-      const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-      const fragments = fragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
-      fragments.push(sentText);
-      fragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
-    }
     const normalizedText = text.trim();
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    const applicableFragments = fragmentsByAssistantMessage.get(assistantMessageIndex);
+    const applicableFragments =
+      directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
     return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
@@ -375,7 +381,20 @@ export async function buildReplyPayloads(params: {
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (!reply.hasMedia) {
-      return null;
+      // Aggregate coverage suppresses plain text split across streamed blocks; rich content needs
+      // exact evidence. Partial coverage cannot safely reconstruct a formatted remainder, so
+      // preserve the complete final rather than silently truncate it.
+      const hasRichContent = hasOutboundReplyContent(
+        { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
+        { trimText: true },
+      );
+      const wasSent = hasRichContent
+        ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
+        : params.blockReplyPipeline?.hasSentPayload(payload);
+      if (wasSent) {
+        return null;
+      }
+      return payload;
     }
     if (!reply.trimmedText) {
       return payload;

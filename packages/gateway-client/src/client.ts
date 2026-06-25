@@ -363,6 +363,8 @@ export type GatewayReconnectPausedInfo = {
 
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
   transientPreHelloCleanClose: boolean;
 };
 
@@ -500,10 +502,11 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    env: opts.env,
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });
 }
@@ -545,6 +548,7 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
+  private transportValidated = false;
   private helloOkReceived = false;
   private suppressedTransientPreHelloCleanCloses = 0;
 
@@ -668,6 +672,7 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.socketOpened = false;
+    this.transportValidated = false;
     this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
@@ -683,6 +688,7 @@ export class GatewayClient {
           return;
         }
       }
+      this.transportValidated = true;
       this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
@@ -690,6 +696,8 @@ export class GatewayClient {
       const reasonText = rawDataToString(reason);
       const closeInfo: GatewayClientCloseInfo = {
         phase: this.helloOkReceived ? "post-hello" : "pre-hello",
+        socketOpened: this.socketOpened,
+        transportValidated: this.transportValidated,
         transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
       };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
@@ -700,6 +708,7 @@ export class GatewayClient {
         this.ws = null;
       }
       this.socketOpened = false;
+      this.transportValidated = false;
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();
@@ -713,7 +722,7 @@ export class GatewayClient {
         this.suppressedTransientPreHelloCleanCloses += 1;
         this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
         this.scheduleReconnect();
-        this.opts.onClose?.(code, reasonText, closeInfo);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       // Clear persisted device auth state only when device-token auth was active.
@@ -744,16 +753,16 @@ export class GatewayClient {
           details: connectErrorDetails,
         })
       ) {
-        this.opts.onReconnectPaused?.({
+        this.notifyReconnectPaused({
           code,
           reason: reasonText,
           detailCode: connectErrorDetailCode,
         });
-        this.opts.onClose?.(code, reasonText);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
+      this.notifyClose(code, reasonText, closeInfo);
     });
     ws.on("error", (err) => {
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
@@ -915,7 +924,7 @@ export class GatewayClient {
             : 30_000;
         this.lastTick = Date.now();
         this.startTickWatch();
-        this.opts.onHelloOk?.(helloOk);
+        this.notifyHelloOk(helloOk);
       })
       .catch((err: unknown) => {
         if (err instanceof GatewayClientTransientPreHelloCloseError) {
@@ -1123,6 +1132,38 @@ export class GatewayClient {
       this.logDebug(
         `gateway client connect error handler error: ${formatGatewayClientErrorForLog(err)}`,
       );
+    }
+  }
+
+  private notifyHelloOk(helloOk: HelloOk): void {
+    try {
+      this.opts.onHelloOk?.(helloOk);
+    } catch (err) {
+      this.logDebug(
+        `gateway client hello-ok handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyReconnectPaused(info: GatewayReconnectPausedInfo): void {
+    try {
+      this.opts.onReconnectPaused?.(info);
+    } catch (err) {
+      this.logDebug(
+        `gateway client reconnect paused handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyClose(code: number, reason: string, info?: GatewayClientCloseInfo): void {
+    try {
+      if (info === undefined) {
+        this.opts.onClose?.(code, reason);
+        return;
+      }
+      this.opts.onClose?.(code, reason, info);
+    } catch (err) {
+      this.logDebug(`gateway client close handler error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 
@@ -1598,7 +1639,14 @@ export class GatewayClient {
       });
       signal?.addEventListener("abort", abortHandler, { once: true });
     });
-    this.ws.send(JSON.stringify(frame));
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (error) {
+      const pending = this.pending.get(id);
+      this.pending.delete(id);
+      pending?.cleanup?.();
+      throw error;
+    }
     return p;
   }
 }

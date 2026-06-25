@@ -90,12 +90,13 @@ Pinned iOS version `2026.4.10` maps to:
   - prepares App Store distribution signing and bundle settings against the pinned iOS version
 - `scripts/ios-release-signing.mjs`
   - validates the checked-in App Store signing manifest
-  - creates or verifies Developer Portal bundle IDs, capabilities, certificates, and profiles through `asc`
-  - syncs encrypted signing assets with the private shared signing repo
+  - renders the temporary release xcconfig profile pins
 - `apps/ios/fastlane/Fastfile`
   - resolves version metadata from the pinned iOS helper
+  - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
+  - syncs encrypted App Store signing assets with Fastlane `match`
   - increments App Store Connect build numbers for the pinned short version
-  - uploads screenshots and release notes before archiving a release build
+  - uploads screenshots, release notes, and the rendered App Review PDF attachment before archiving a release build
 
 ## Release-note resolution order
 
@@ -155,4 +156,4 @@ Fastlane and Xcode should consume only the pinned iOS version from `apps/ios/ver
 
 Changing `package.json.version` alone must not change the iOS app version until a maintainer explicitly runs the pin step.
 
-App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, and upload builds, but it should not submit a build for review.
+App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, upload the App Review PDF attachment, and upload builds, but it should not upload the App Store Connect `Notes` field or submit a build for review.

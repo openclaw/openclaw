@@ -1,20 +1,8 @@
-// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { createDeferred } from "../../../src/test-utils/deferred.js";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
   return await Promise.race([
@@ -56,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   reconcileSkillsAgentIdMock: vi.fn(),
   loadUsageMock: vi.fn(async () => {}),
   loadWorkboardMock: vi.fn(async () => {}),
+  stopWorkboardLifecycleRefreshMock: vi.fn(),
+  stopWorkboardPollingMock: vi.fn(),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
   startNodesPollingMock: vi.fn(),
@@ -144,6 +134,8 @@ vi.mock("./controllers/usage.ts", () => ({
 }));
 vi.mock("./controllers/workboard.ts", () => ({
   loadWorkboard: mocks.loadWorkboardMock,
+  stopWorkboardLifecycleRefresh: mocks.stopWorkboardLifecycleRefreshMock,
+  stopWorkboardPolling: mocks.stopWorkboardPollingMock,
 }));
 
 import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
@@ -170,6 +162,7 @@ function createHost() {
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionKey: "main",
     selectedAgentId: null as string | null,
+    hello: null as { auth?: { role?: string; scopes?: string[] } } | null,
     settings: {},
     basePath: "",
   };
@@ -358,6 +351,23 @@ describe("refreshActiveTab", () => {
       client: host.client,
       force: true,
       requestUpdate: host.requestUpdate,
+      refreshDiagnostics: true,
+    });
+  });
+
+  it("keeps read-only Workboard tab preload on the read refresh path", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+    host.hello = { auth: { role: "operator", scopes: ["operator.read"] } };
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+      refreshDiagnostics: false,
     });
   });
 
@@ -383,10 +393,10 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadSkillsMock).toHaveBeenCalledWith(host);
   });
 
-  it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
+  it("starts node polling and stops inactive tab pollers on tab changes", () => {
     vi.useFakeTimers();
     const host = createHost();
-    host.tab = "overview";
+    host.tab = "workboard";
     const pendingReload = vi.fn();
     host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
@@ -396,6 +406,8 @@ describe("refreshActiveTab", () => {
     expect(mocks.startNodesPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopWorkboardPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopWorkboardLifecycleRefreshMock).toHaveBeenCalledWith(host);
     vi.advanceTimersByTime(1_000);
     expect(pendingReload).not.toHaveBeenCalled();
 

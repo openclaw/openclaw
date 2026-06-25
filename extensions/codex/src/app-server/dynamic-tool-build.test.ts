@@ -15,7 +15,9 @@ import {
   filterCodexDynamicToolsForAllowlist,
   hasWildcardCodexToolsAllow,
   includeForcedCodexDynamicToolAllow,
+  mapCodexAppServerRemoteWorkspacePath,
   resetOpenClawCodingToolsFactoryForTests,
+  resolveCodexAppServerExecutionCwd,
   resolveOpenClawCodingToolsSessionKeys,
   resolveCodexMessageToolProvider,
   setOpenClawCodingToolsFactoryForTests,
@@ -26,9 +28,11 @@ import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
   resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexDynamicToolsLoadingForRuntime,
   shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
@@ -142,6 +146,58 @@ describe("Codex app-server dynamic tool build", () => {
         messageProvider: "discord-voice",
       }),
     ).toBe("discord");
+  });
+
+  it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
+    expect(
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/openclaw/packages/example",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toBe("/home/oai/openclaw-workspaces/packages/example");
+    expect(
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/openclaw",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toBe("/home/oai/openclaw-workspaces");
+  });
+
+  it("fails closed when remote cwd projection cannot stay under the remote workspace root", () => {
+    expect(() =>
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/other",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toThrow("outside OpenClaw workspace root");
+  });
+
+  it("maps Windows child paths through remote Codex app-server workspaces", () => {
+    expect(
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "C:\\Users\\kevinlin\\code\\openclaw\\packages\\example",
+        localWorkspaceRoot: "C:\\Users\\kevinlin\\code\\openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toBe("/home/oai/openclaw-workspaces/packages/example");
+  });
+
+  it("maps sandbox exec-server cwd through the remote workspace mapping", () => {
+    expect(
+      resolveCodexAppServerExecutionCwd({
+        effectiveCwd: "/Users/kevinlin/code/openclaw",
+        environment: {
+          id: "sandbox-1",
+          cwd: "/Users/kevinlin/code/openclaw/sandbox",
+        } as never,
+        nativeToolSurfaceEnabled: true,
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toBe("/home/oai/openclaw-workspaces/sandbox");
   });
 
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {
@@ -401,9 +457,32 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldUseDirectCodexDynamicToolsForModel("gpt-5.4-nano")).toBe(true);
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
-    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    const webSearch = flattenCodexDynamicToolFunctions(toolBridge.specs).find(
+      (tool) => tool.name === "web_search",
+    );
     expect(webSearch).not.toHaveProperty("deferLoading");
     expect(webSearch).not.toHaveProperty("namespace");
+  });
+
+  it("uses direct dynamic tools for remote Codex app-server connections", () => {
+    const tools = [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("web_search")];
+    const loading = resolveCodexDynamicToolsLoadingForRuntime({}, "openai/gpt-5.5", {
+      connectionClass: "remote",
+    });
+    const toolBridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading,
+    });
+
+    expect(resolveCodexDynamicToolsLoadingForRuntime({}, "openai/gpt-5.5")).toBe("searchable");
+    expect(loading).toBe("direct");
+    expect(toolBridge.specs).toHaveLength(2);
+    expect(flattenCodexDynamicToolFunctions(toolBridge.specs).map((tool) => tool.name)).toEqual([
+      "message",
+      "web_search",
+    ]);
+    expect(toolBridge.specs.some((tool) => tool.type === "namespace")).toBe(false);
   });
 
   it("quarantines unreadable tool entries before Codex-specific filtering", async () => {
@@ -594,10 +673,36 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
-  it("keeps OpenClaw shell tools for node-targeted Codex app-server runs", async () => {
+  it("exposes pinned node shell tools for node-targeted Codex app-server runs", async () => {
+    const execTool = {
+      ...createRuntimeDynamicTool("exec"),
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          workdir: { type: "string" },
+          host: { type: "string" },
+          security: { type: "string" },
+          ask: { type: "string" },
+          node: { type: "string" },
+        },
+        required: ["command", "host", "node"],
+        additionalProperties: false,
+      },
+    };
+    vi.mocked(execTool.execute).mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        },
+      ],
+      details: { status: "running" },
+    });
+    const processTool = createRuntimeDynamicTool("process");
     setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
+      execTool,
+      processTool,
       createRuntimeDynamicTool("message"),
     ]);
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -613,10 +718,50 @@ describe("Codex app-server dynamic tool build", () => {
     };
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      nativeToolSurfaceEnabled: false,
+      nativeToolSurfaceEnabled: true,
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "node_exec", "node_process"]);
+    const nodeExec = tools.find((tool) => tool.name === "node_exec");
+    const nodeProcess = tools.find((tool) => tool.name === "node_process");
+    expect(nodeExec?.description).toContain("host=node internally");
+    expect(nodeProcess?.description).toContain("node_exec sessions");
+    expect(nodeExec?.parameters).toEqual({
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        workdir: { type: "string" },
+      },
+      required: ["command"],
+      additionalProperties: false,
+    });
+    const result = await nodeExec?.execute(
+      "call-1",
+      {
+        command: "pwd",
+        host: "gateway",
+        node: "model-selected-node",
+        security: "full",
+        ask: "off",
+      },
+      undefined,
+    );
+    expect(execTool.execute).toHaveBeenCalledWith(
+      "call-1",
+      {
+        command: "pwd",
+        host: "node",
+        node: "mac-mini",
+      },
+      undefined,
+      undefined,
+    );
+    expect(result?.content).toEqual([
+      {
+        type: "text",
+        text: "Command still running (session exec-1, pid 123). Use node_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      },
+    ]);
 
     const runtimePolicySessionFile = path.join(tempDir, "runtime-policy-session.jsonl");
     const runtimePolicyParams = createParams(runtimePolicySessionFile, workspaceDir);
@@ -634,11 +779,15 @@ describe("Codex app-server dynamic tool build", () => {
     } as never;
     const runtimePolicyTools = await buildDynamicToolsForTest(runtimePolicyParams, workspaceDir, {
       sandboxSessionKey: "agent:policy:session-1",
-      nativeToolSurfaceEnabled: false,
+      nativeToolSurfaceEnabled: true,
       sessionAgentId: "policy",
     });
 
-    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual([
+      "message",
+      "node_exec",
+      "node_process",
+    ]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -809,6 +958,26 @@ describe("Codex app-server dynamic tool build", () => {
     expect(factoryOptions[0]).toMatchObject({
       currentChannelId: "D123",
       currentMessagingTarget: "user:U123",
+    });
+  });
+
+  it("passes the approval reviewer device into Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.approvalReviewerDeviceId = "device-ios-reviewer";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(factoryOptions[0]).toMatchObject({
+      approvalReviewerDeviceId: "device-ios-reviewer",
     });
   });
 
@@ -1003,15 +1172,30 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
-    const tools = ["exec", "sandbox_exec", "sandbox_process", "apply_patch", "read", "message"].map(
-      (name) => ({ name }),
-    );
+    const tools = [
+      "exec",
+      "sandbox_exec",
+      "sandbox_process",
+      "node_exec",
+      "node_process",
+      "apply_patch",
+      "read",
+      "message",
+    ].map((name) => ({ name }));
 
     expect(
       filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"]).map(
         (tool) => tool.name,
       ),
-    ).toEqual(["exec", "sandbox_exec", "sandbox_process", "apply_patch", "read"]);
+    ).toEqual([
+      "exec",
+      "sandbox_exec",
+      "sandbox_process",
+      "node_exec",
+      "node_process",
+      "apply_patch",
+      "read",
+    ]);
   });
 
   it("treats an explicit empty Codex dynamic toolsAllow as no tools", () => {
@@ -1044,7 +1228,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
-  it("disables Codex native tool surfaces when the effective exec target is node", () => {
+  it("keeps Codex native tool surfaces when the effective exec target is node", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     sessionParams.disableTools = false;
@@ -1055,16 +1239,16 @@ describe("Codex app-server dynamic tool build", () => {
       ask: "off",
     };
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(true);
 
     sessionParams.toolsAllow = ["*"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(true);
 
     const globalParams = createParams(path.join(tempDir, "global-session.jsonl"), workspaceDir);
     globalParams.disableTools = false;
     globalParams.config = { tools: { exec: { host: "node" } } } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(true);
 
     const autoOverrideParams = createParams(
       path.join(tempDir, "auto-override-session.jsonl"),
@@ -1088,7 +1272,7 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(agentParams, undefined, {
         agentId: "main",
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     const runtimePolicyParams = createParams(
       path.join(tempDir, "runtime-policy-session.jsonl"),
@@ -1106,7 +1290,7 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(true);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
@@ -1223,6 +1407,24 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableMessageTool = false;
     params.sourceReplyDeliveryMode = "automatic";
     expect(shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("retains forced message policy for the registered schema override", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = [];
+
+    expect(shouldForceMessageTool(params)).toBe(false);
+    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, params)).toEqual([]);
+
+    const registeredPolicyParams = { ...params, disableMessageTool: false };
+    expect(shouldForceMessageTool(registeredPolicyParams)).toBe(true);
+    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, registeredPolicyParams)).toEqual([
+      "message",
+    ]);
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {

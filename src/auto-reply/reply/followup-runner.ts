@@ -13,6 +13,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -63,10 +64,12 @@ import {
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
+  resolveRunFastModeForFallbackCandidate,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
 import {
@@ -88,6 +91,7 @@ import {
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
+import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -688,6 +692,8 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
+      const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+      let preflightCompactionApplied;
       try {
         activeSessionEntry = await runPreflightCompactionIfNeeded({
           cfg: runtimeConfig,
@@ -703,6 +709,8 @@ export function createFollowupRunner(params: {
           replyOperation,
           onCompactionNotice: notifyPreflightCompaction,
         });
+        preflightCompactionApplied =
+          (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
       } catch (err) {
         clearAgentRunContext(runId, lifecycleGeneration);
         const message = formatErrorMessage(err);
@@ -840,6 +848,11 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      const fastModeStartedAtMs = Date.now();
+      const fastModeAutoProgressState: FastModeAutoProgressState = {
+        offAnnounced: false,
+        resetAnnounced: false,
+      };
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -875,6 +888,13 @@ export function createFollowupRunner(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateFastMode = resolveRunFastModeForFallbackCandidate({
+              run: candidateRun,
+              config: runtimeConfig,
+              provider,
+              model,
+              sessionEntry: activeSessionEntry,
+            });
             const activeProbe = run.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
               markAutoFallbackPrimaryProbe({
@@ -991,6 +1011,19 @@ export function createFollowupRunner(params: {
                           });
                         }
                       : undefined,
+                  onFastModeAutoProgress: async (payload) => {
+                    await enqueueProgressDelivery(async () => {
+                      await sendFollowupPayloads(
+                        [payload],
+                        effectiveQueued,
+                        {
+                          provider,
+                          modelId: model,
+                        },
+                        { kind: "tool", mirror: false, runId },
+                      );
+                    });
+                  },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
                       ? (resultLocal) =>
@@ -1031,6 +1064,11 @@ export function createFollowupRunner(params: {
                       config: runtimeConfig,
                     }),
                     thinkLevel: run.thinkLevel,
+                    fastMode: candidateFastMode.fastMode,
+                    fastModeStartedAtMs,
+                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                    fastModeAutoProgressState,
+                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                     timeoutMs: run.timeoutMs,
                     runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                     runId,
@@ -1056,13 +1094,15 @@ export function createFollowupRunner(params: {
                       provider: run.messageProvider,
                     }),
                     currentChannelId: queued.originatingTo,
+                    senderId: run.senderId,
+                    chatId: queued.originatingChatId,
+                    channelContext: run.channelContext,
                     currentThreadTs:
                       queued.originatingThreadId != null
                         ? String(queued.originatingThreadId)
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
-                    senderId: run.senderId,
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
@@ -1106,6 +1146,7 @@ export function createFollowupRunner(params: {
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
+                chatId: queued.originatingChatId,
                 currentThreadTs:
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
@@ -1118,6 +1159,7 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
+                channelContext: run.channelContext,
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
@@ -1149,6 +1191,10 @@ export function createFollowupRunner(params: {
                 model,
                 ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
+                fastMode: candidateFastMode.fastMode,
+                fastModeStartedAtMs,
+                fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                fastModeAutoProgressState,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: shouldSuppressToolErrorWarnings,
@@ -1331,6 +1377,7 @@ export function createFollowupRunner(params: {
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
           clearCliSessionBinding:
             usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true,
+          preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
           logLabel: "followup",
         });
       }
@@ -1359,6 +1406,60 @@ export function createFollowupRunner(params: {
       }
 
       let deliveryPayloads = finalPayloads;
+      const responseUsageSessionRaw =
+        activeSessionEntry?.responseUsage ??
+        (replySessionKey ? sessionStore?.[replySessionKey]?.responseUsage : undefined);
+      const winnerProvider = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+      const winnerModel = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
+      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+      const replyUsageState = buildReplyUsageState({
+        config: runtimeConfig,
+        provider: providerUsed,
+        model: modelUsed,
+        fallbackExhausted,
+        winnerProvider,
+        winnerModel,
+        reasoningEffort: typeof run.thinkLevel === "string" ? run.thinkLevel : undefined,
+        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+        agentId: run.agentId,
+        sessionId: run.sessionId,
+        chatType: queued.originatingChatType,
+        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+        requestedProvider: run.provider,
+        requestedModel: run.model,
+        compactionCount:
+          typeof runResult.meta?.agentMeta?.compactionCount === "number"
+            ? runResult.meta.agentMeta.compactionCount
+            : undefined,
+        contextTokenBudget:
+          typeof contextTokensUsed === "number" && Number.isFinite(contextTokensUsed)
+            ? contextTokensUsed
+            : undefined,
+        promptTokens,
+        usage,
+        lastCallUsage,
+      });
+      const responseUsageLine = resolveResponseUsageLine({
+        config: runtimeConfig,
+        sessionRaw: responseUsageSessionRaw,
+        channel: resolveOriginMessageProvider({
+          originatingChannel: queued.originatingChannel,
+          provider: run.messageProvider,
+        }),
+        usage,
+        provider: providerUsed,
+        model: modelUsed,
+        preserveUserFacingSessionState,
+        replyUsageState,
+      });
+      if (responseUsageLine) {
+        deliveryPayloads = appendUsageLine(deliveryPayloads, responseUsageLine);
+      }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -1393,7 +1494,7 @@ export function createFollowupRunner(params: {
             {
               text: `🧹 Auto-compaction complete${suffix}.`,
             },
-            ...finalPayloads,
+            ...deliveryPayloads,
           ];
         }
       }

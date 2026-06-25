@@ -36,7 +36,7 @@ export async function getUpdateCheckResult(params: {
   });
 }
 
-export type UpdateAvailability = {
+type UpdateAvailability = {
   available: boolean;
   hasGitUpdate: boolean;
   hasRegistryUpdate: boolean;

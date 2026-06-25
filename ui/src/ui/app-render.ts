@@ -23,6 +23,7 @@ import {
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
+  dismissRealtimeTalkError,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -35,6 +36,7 @@ import {
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
+import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -379,14 +381,13 @@ async function ensureSkillWorkshopRevisionSessionsLoaded(
 async function resolveSkillWorkshopRevisionSessionKey(
   state: AppViewState,
   proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
+  proposalAgentId: string,
 ): Promise<string | null> {
   if (state.skillWorkshopUseCurrentChatForRevisions) {
     return normalizeOptionalString(state.sessionKey) ?? null;
   }
 
-  const agentId = normalizeAgentId(
-    proposal.origin?.agentId ?? resolveSidebarSelectedAgentId(state),
-  );
+  const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
   await ensureSkillWorkshopRevisionSessionsLoaded(state, agentId);
 
   const originRow = findSkillWorkshopRevisionSessionRow(state, proposal.origin?.sessionKey);
@@ -411,11 +412,12 @@ async function sendSkillWorkshopRevisionRequest(
   state: AppViewState,
   instructions: string,
   proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
+  proposalAgentId: string,
 ): Promise<void> {
   if (!state.client || !state.connected) {
     throw new Error("Gateway is not connected.");
   }
-  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal);
+  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal, proposalAgentId);
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
@@ -427,12 +429,12 @@ async function sendSkillWorkshopRevisionRequest(
   } else {
     await switchChatSessionAndWait(state, sessionKey);
   }
-  const proposalAgentId = proposal.origin?.agentId?.trim();
+  const scopedProposalAgentId = proposal.origin?.agentId?.trim() || proposalAgentId;
   await state.handleSendChat(instructions, {
     restoreDraft: true,
     skillWorkshopRevision: {
       proposalId: proposal.key,
-      ...(proposalAgentId ? { agentId: proposalAgentId } : {}),
+      agentId: scopedProposalAgentId,
     },
   });
 }
@@ -1403,8 +1405,11 @@ export function renderApp(state: AppViewState) {
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const activeAssistantAgentId = resolveSidebarSelectedAgentId(state);
   const localAssistantAvatarOverride =
-    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
+    normalizeOptionalString(
+      loadLocalAssistantIdentity({ agentId: activeAssistantAgentId }).avatar,
+    ) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAssistantAvatarStatus = localAssistantAvatarOverride
     ? "data"
@@ -1819,10 +1824,12 @@ export function renderApp(state: AppViewState) {
               : typeof agentsDefaults.thinkingLevel === "string"
                 ? agentsDefaults.thinkingLevel
                 : "off";
+          const resolvedFastMode =
+            activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults.fastMode;
           const fastMode =
-            typeof activeSession?.fastMode === "boolean"
-              ? activeSession.fastMode
-              : agentsDefaults.fastMode === true;
+            resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean"
+              ? resolvedFastMode
+              : false;
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -1837,8 +1844,8 @@ export function renderApp(state: AppViewState) {
                 requestHostUpdate?.(),
               );
             },
-            onFastModeToggle: () => {
-              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+            onFastModeChange: (mode) => {
+              void patchSession(state, state.sessionKey, { fastMode: mode }).then(() =>
                 requestHostUpdate?.(),
               );
             },
@@ -1904,7 +1911,7 @@ export function renderApp(state: AppViewState) {
             assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
             assistantAvatarUploadError: state.assistantAvatarUploadError,
             onAssistantAvatarOverrideChange: (dataUrl) => {
-              setAssistantAvatarOverride(state, dataUrl);
+              setAssistantAvatarOverride(state, dataUrl, activeAssistantAgentId);
               state.chatAvatarUrl = dataUrl;
               state.chatAvatarSource = dataUrl;
               state.chatAvatarStatus = "data";
@@ -1913,13 +1920,21 @@ export function renderApp(state: AppViewState) {
               requestHostUpdate?.();
             },
             onAssistantAvatarClearOverride: () => {
-              setAssistantAvatarOverride(state, null);
+              setAssistantAvatarOverride(state, null, activeAssistantAgentId);
               state.chatAvatarUrl = null;
               state.chatAvatarSource = null;
               state.chatAvatarStatus = null;
               state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
-              void state.loadAssistantIdentity?.().finally(() => requestHostUpdate?.());
+              const identitySessionKey = buildAgentMainSessionKey({
+                agentId: activeAssistantAgentId,
+              });
+              void state
+                .loadAssistantIdentity?.({
+                  sessionKey: identitySessionKey,
+                  expectedSessionKey: state.sessionKey,
+                })
+                .finally(() => requestHostUpdate?.());
               requestHostUpdate?.();
             },
             basePath: state.basePath ?? "",
@@ -2311,8 +2326,7 @@ export function renderApp(state: AppViewState) {
       }
     })();
   }
-  const openChatWorkspaceFile = (filePath: string) => {
-    const itemId = `file:${filePath}`;
+  const startChatWorkspaceFileOpenRequest = (itemId: string) => {
     chatWorkspaceFiles.activeId = itemId;
     const previousRequest = chatWorkspaceFileOpenRequests.get(state);
     const openRequest = {
@@ -2334,6 +2348,11 @@ export function renderApp(state: AppViewState) {
         currentFiles?.activeId === itemId
       );
     };
+    return { isCurrentOpenRequest, openRequest };
+  };
+  const openChatWorkspaceFile = (filePath: string) => {
+    const itemId = `file:${filePath}`;
+    const { isCurrentOpenRequest, openRequest } = startChatWorkspaceFileOpenRequest(itemId);
     void (async () => {
       if (!state.client || !state.connected) {
         return;
@@ -2377,27 +2396,7 @@ export function renderApp(state: AppViewState) {
   };
   const openChatWorkspaceArtifact = (artifactId: string) => {
     const itemId = `artifact:${artifactId}`;
-    chatWorkspaceFiles.activeId = itemId;
-    const previousRequest = chatWorkspaceFileOpenRequests.get(state);
-    const openRequest = {
-      agentId: chatWorkspaceFiles.agentId,
-      id: (previousRequest?.id ?? 0) + 1,
-      itemId,
-      sessionKey: currentSessionWorkspaceKey(),
-    };
-    chatWorkspaceFileOpenRequests.set(state, openRequest);
-    const isCurrentOpenRequest = () => {
-      const currentRequest = chatWorkspaceFileOpenRequests.get(state);
-      const currentFiles = currentChatWorkspaceFilesState();
-      return (
-        currentRequest?.id === openRequest.id &&
-        currentRequest.agentId === resolveChatWorkspaceAgentId() &&
-        currentRequest.itemId === itemId &&
-        currentRequest.sessionKey === currentSessionWorkspaceKey() &&
-        currentFiles?.agentId === openRequest.agentId &&
-        currentFiles?.activeId === itemId
-      );
-    };
+    const { isCurrentOpenRequest, openRequest } = startChatWorkspaceFileOpenRequest(itemId);
     void (async () => {
       if (!state.client || !state.connected) {
         return;
@@ -2970,6 +2969,9 @@ export function renderApp(state: AppViewState) {
                     const next = new Set(state.sessionsSelectedKeys);
                     for (const k of deleted) {
                       next.delete(k);
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: k,
+                      });
                     }
                     state.sessionsSelectedKeys = next;
                   }
@@ -3019,15 +3021,20 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 canWrite: hasOperatorWriteAccess(auth),
                 canModelOverride: hasOperatorAdminAccess(auth),
-                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
-                  enabledByDefault: false,
-                }),
+                pluginEnabled: state.configSnapshot
+                  ? isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                      enabledByDefault: false,
+                    })
+                  : null,
+                pluginEnablementError:
+                  !state.configSnapshot && !state.configLoading ? state.lastError : null,
                 agentsList: state.agentsList,
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onRequestUpdate: requestHostUpdate,
               });
             })
@@ -3643,8 +3650,8 @@ export function renderApp(state: AppViewState) {
                   state.skillWorkshopRevisionDraft = "";
                 },
                 onRevisionSubmit: (key) =>
-                  void requestSkillWorkshopRevision(state, key, (message, proposal) =>
-                    sendSkillWorkshopRevisionRequest(state, message, proposal),
+                  void requestSkillWorkshopRevision(state, key, (message, proposal, agentId) =>
+                    sendSkillWorkshopRevisionRequest(state, message, proposal, agentId),
                   ),
                 onPreviewFile: (key, path) => {
                   state.skillWorkshopSelectedKey = key;
@@ -3775,12 +3782,14 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkConversation: state.realtimeTalkConversation,
                   realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
                   realtimeTalkOptions: state.realtimeTalkOptions,
+                  realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
                   connected: state.connected,
                   canSend: state.connected,
                   disabledReason: chatDisabledReason,
                   error: chatViewError,
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
+                  onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   sessionWorkspace: {
@@ -3828,6 +3837,9 @@ export function renderApp(state: AppViewState) {
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {
                     state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
+                    if (state.realtimeTalkOptionsOpen) {
+                      void state.fetchRealtimeTalkCatalog();
+                    }
                   },
                   onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
                   canAbort: hasAbortableSessionRun(state),
@@ -3850,6 +3862,9 @@ export function renderApp(state: AppViewState) {
                         ...scopedAgentParamsForSession(state, state.sessionKey),
                       });
                       state.chatMessages = [];
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: state.sessionKey,
+                      });
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],

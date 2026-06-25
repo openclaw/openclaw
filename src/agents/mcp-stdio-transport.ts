@@ -11,7 +11,7 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
-export type OpenClawStdioServerParameters = {
+type OpenClawStdioServerParameters = {
   command: string;
   args?: string[];
   env?: Record<string, string>;

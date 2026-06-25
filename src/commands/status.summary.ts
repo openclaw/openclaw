@@ -85,7 +85,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (typeof entry?.fastMode === "boolean") {
+  if (entry?.fastMode === "auto") {
+    flags.push("fast:auto");
+  } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
@@ -313,8 +315,9 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
-  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
+  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });

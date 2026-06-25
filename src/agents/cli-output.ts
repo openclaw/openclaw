@@ -21,12 +21,29 @@ type CliUsage = {
   total?: number;
 };
 
+type CliProcessDiagnostics = {
+  backendId: string;
+  processReason: string;
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | number | null;
+  durationMs: number;
+  stdoutBytes: number;
+  stdoutHash: string;
+  stderrBytes: number;
+  stderrHash: string;
+  useResume: boolean;
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  errorText?: string;
+  diagnostics?: {
+    process?: CliProcessDiagnostics;
+  };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
@@ -64,13 +81,28 @@ function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
-/** Returns whether JSONL output carries correlated Claude-style tool events. */
+function isGeminiCliProvider(providerId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(providerId) === "google-gemini-cli";
+}
+
+function isGeminiStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  return (
+    params.backend.jsonlDialect === "gemini-stream-json" || isGeminiCliProvider(params.providerId)
+  );
+}
+
+/** Returns whether JSONL output carries correlated provider tool events. */
 export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
   return (
-    params.backend.jsonlDialect === "claude-stream-json" || isClaudeCliProvider(params.providerId)
+    params.backend.jsonlDialect === "claude-stream-json" ||
+    isClaudeCliProvider(params.providerId) ||
+    isGeminiStreamJsonDialect(params)
   );
 }
 
@@ -636,6 +668,77 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
+function dispatchGeminiCliStreamingToolEvent(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ToolUseTracker;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+}): void {
+  if (!isGeminiStreamJsonDialect(params)) {
+    return;
+  }
+  if (params.parsed.type === "tool_use") {
+    const toolCallId =
+      typeof params.parsed.tool_id === "string" ? params.parsed.tool_id.trim() : "";
+    const name = typeof params.parsed.tool_name === "string" ? params.parsed.tool_name.trim() : "";
+    if (!toolCallId || !name) {
+      return;
+    }
+    const args = isRecord(params.parsed.parameters) ? params.parsed.parameters : {};
+    emitToolStartOnce(params.tracker, toolCallId, name, args, params.onToolUseStart);
+    return;
+  }
+  if (params.parsed.type === "tool_result") {
+    const toolCallId =
+      typeof params.parsed.tool_id === "string" ? params.parsed.tool_id.trim() : "";
+    if (!toolCallId) {
+      return;
+    }
+    const result =
+      params.parsed.status === "error" && isRecord(params.parsed.error)
+        ? params.parsed.error
+        : params.parsed.output;
+    emitToolResultOnce(
+      params.tracker,
+      toolCallId,
+      params.parsed.status === "error",
+      result,
+      params.onToolResult,
+    );
+  }
+}
+
+const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
+const GEMINI_CLI_RESULT_ERROR_FALLBACK = "Gemini CLI result status was error.";
+
+function isFallbackGeminiCliStreamJsonError(errorText: string): boolean {
+  return (
+    errorText === GEMINI_CLI_ERROR_EVENT_FALLBACK || errorText === GEMINI_CLI_RESULT_ERROR_FALLBACK
+  );
+}
+
+function preferGeminiCliStreamJsonError(current: string | undefined, next: string): string {
+  if (!current) {
+    return next;
+  }
+  if (isFallbackGeminiCliStreamJsonError(current) && !isFallbackGeminiCliStreamJsonError(next)) {
+    return next;
+  }
+  return current;
+}
+
+function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string | undefined {
+  if (parsed.type === "error" && parsed.severity === "error") {
+    return collectExplicitCliErrorText(parsed) || GEMINI_CLI_ERROR_EVENT_FALLBACK;
+  }
+  if (parsed.type === "result" && parsed.status === "error") {
+    return collectExplicitCliErrorText(parsed) || GEMINI_CLI_RESULT_ERROR_FALLBACK;
+  }
+  return undefined;
+}
+
 /** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
@@ -699,6 +802,18 @@ export function createCliJsonlStreamingParser(params: {
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
+    const geminiErrorText = isGeminiStreamJsonDialect(params)
+      ? readGeminiCliStreamJsonError(parsed)
+      : undefined;
+    if (geminiErrorText) {
+      output = {
+        text: "",
+        sessionId,
+        usage,
+        errorText: preferGeminiCliStreamJsonError(output?.errorText, geminiErrorText),
+      };
+      return;
+    }
 
     if (classifyClaudeCommentary && parsed.type === "result") {
       flushPendingClaudeAssistantText();
@@ -738,6 +853,14 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     if (params.onToolUseStart || params.onToolResult) {
+      dispatchGeminiCliStreamingToolEvent({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: toolTracker,
+        onToolUseStart: params.onToolUseStart,
+        onToolResult: params.onToolResult,
+      });
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
@@ -757,6 +880,33 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (!delta) {
+      if (
+        isGeminiStreamJsonDialect(params) &&
+        parsed.type === "message" &&
+        parsed.role === "assistant" &&
+        typeof parsed.content === "string"
+      ) {
+        const deltaText = parsed.content;
+        if (deltaText) {
+          assistantText = `${assistantText}${deltaText}`;
+          params.onAssistantDelta({
+            text: assistantText,
+            delta: deltaText,
+            sessionId,
+            usage,
+          });
+        }
+      } else if (
+        isGeminiStreamJsonDialect(params) &&
+        parsed.type === "result" &&
+        parsed.status === "success"
+      ) {
+        output = {
+          text: assistantText.trim(),
+          sessionId,
+          usage,
+        };
+      }
       return;
     }
     if (classifyClaudeCommentary) {
@@ -813,6 +963,9 @@ export function createCliJsonlStreamingParser(params: {
       if (output) {
         return output;
       }
+      if (isGeminiStreamJsonDialect(params) && (assistantText.trim() || sessionId || usage)) {
+        return { text: assistantText.trim(), sessionId, usage };
+      }
       const text = texts.join("\n").trim();
       return text ? { text, sessionId, usage } : null;
     },
@@ -833,6 +986,9 @@ export function parseCliJsonl(
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
+  let geminiText = "";
+  let geminiErrorText: string | undefined;
+  let sawGeminiStructuredOutput = false;
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
       sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
@@ -843,6 +999,31 @@ export function parseCliJsonl(
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
+      }
+
+      if (isGeminiStreamJsonDialect({ backend, providerId })) {
+        const nextGeminiErrorText = readGeminiCliStreamJsonError(parsed);
+        if (nextGeminiErrorText) {
+          geminiErrorText = preferGeminiCliStreamJsonError(geminiErrorText, nextGeminiErrorText);
+          sawGeminiStructuredOutput = true;
+          continue;
+        }
+        if (
+          parsed.type === "message" &&
+          parsed.role === "assistant" &&
+          typeof parsed.content === "string"
+        ) {
+          geminiText = `${geminiText}${parsed.content}`;
+          sawGeminiStructuredOutput = true;
+          continue;
+        }
+        if (
+          parsed.type === "tool_use" ||
+          parsed.type === "tool_result" ||
+          parsed.type === "result"
+        ) {
+          sawGeminiStructuredOutput = true;
+        }
       }
 
       const claudeResult = parseClaudeCliJsonlResult({
@@ -864,6 +1045,15 @@ export function parseCliJsonl(
         }
       }
     }
+  }
+  if (isGeminiStreamJsonDialect({ backend, providerId }) && geminiErrorText) {
+    return { text: "", sessionId, usage, errorText: geminiErrorText };
+  }
+  if (
+    isGeminiStreamJsonDialect({ backend, providerId }) &&
+    (sawGeminiStructuredOutput || sessionId || usage)
+  ) {
+    return { text: geminiText.trim(), sessionId, usage };
   }
   const text = texts.join("\n").trim();
   if (!text) {

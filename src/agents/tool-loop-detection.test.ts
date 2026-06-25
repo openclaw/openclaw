@@ -20,7 +20,6 @@ import {
   UNKNOWN_TOOL_THRESHOLD,
   WARNING_THRESHOLD,
   detectToolCallLoop,
-  getToolCallStats,
   hashToolCall,
   recordToolCall,
   recordToolCallOutcome,
@@ -1266,50 +1265,4 @@ describe("tool-loop-detection", () => {
     });
   });
 
-  describe("getToolCallStats", () => {
-    it("returns zero stats for empty history", () => {
-      const state = createState();
-
-      const stats = getToolCallStats(state);
-      expect(stats.totalCalls).toBe(0);
-      expect(stats.uniquePatterns).toBe(0);
-      expect(stats.mostFrequent).toBeNull();
-    });
-
-    it("counts total calls and unique patterns", () => {
-      const state = createState();
-
-      for (let i = 0; i < 5; i += 1) {
-        recordToolCall(state, "read", { path: "/file.txt" }, `same-${i}`);
-      }
-
-      recordToolCall(state, "write", { path: "/output.txt" }, "write-1");
-      recordToolCall(state, "list", { dir: "/home" }, "list-1");
-      recordToolCall(state, "read", { path: "/other.txt" }, "read-other");
-
-      const stats = getToolCallStats(state);
-      expect(stats.totalCalls).toBe(8);
-      expect(stats.uniquePatterns).toBe(4);
-    });
-
-    it("identifies most frequent pattern", () => {
-      const state = createState();
-
-      for (let i = 0; i < 3; i += 1) {
-        recordToolCall(state, "read", { path: "/file1.txt" }, `p1-${i}`);
-      }
-
-      for (let i = 0; i < 7; i += 1) {
-        recordToolCall(state, "read", { path: "/file2.txt" }, `p2-${i}`);
-      }
-
-      for (let i = 0; i < 2; i += 1) {
-        recordToolCall(state, "write", { path: "/output.txt" }, `p3-${i}`);
-      }
-
-      const stats = getToolCallStats(state);
-      expect(stats.mostFrequent?.toolName).toBe("read");
-      expect(stats.mostFrequent?.count).toBe(7);
-    });
-  });
 });

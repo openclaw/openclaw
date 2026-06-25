@@ -60,20 +60,6 @@ function resolveMemoryToolContext(options: MemoryToolOptions) {
   return { cfg, agentId };
 }
 
-export async function getMemoryManagerContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<
-  | {
-      manager: NonNullable<MemorySearchManagerResult["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
-}
-
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -127,17 +113,25 @@ export function buildMemorySearchUnavailableResult(
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
+  const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
+    normalizedReason,
+  );
   const warning =
     overrides?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : "Memory search is unavailable due to an embedding/provider error.");
+      : isMissingNodeSqlite
+        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+        : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
-      : "Check embedding provider configuration and retry memory_search.");
+      : isMissingNodeSqlite
+        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+        : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

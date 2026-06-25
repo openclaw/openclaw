@@ -144,7 +144,7 @@ the shared live sweep:
 | Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                              |
-| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the bundled contract                                                    |
+| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                                     |
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |

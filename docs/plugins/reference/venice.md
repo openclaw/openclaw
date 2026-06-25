@@ -12,7 +12,7 @@ Adds Venice model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/venice-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/venice-provider`
 
 ## Surface
 

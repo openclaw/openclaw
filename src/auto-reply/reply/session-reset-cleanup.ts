@@ -3,7 +3,7 @@ import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 
 /** Runtime cleanup result for reset-related queues and system events. */
-export type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
+type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
   systemEventsCleared: number;
 };
 

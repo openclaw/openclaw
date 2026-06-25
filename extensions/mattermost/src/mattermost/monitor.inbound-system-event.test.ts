@@ -104,7 +104,6 @@ vi.mock("./client.js", async () => {
 });
 
 vi.mock("./draft-stream.js", () => ({
-  buildMattermostToolStatusText: () => "Working",
   createMattermostDraftStream: mockState.createMattermostDraftStream,
 }));
 
@@ -441,6 +440,54 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
     expect(ctx?.MessageSid).toBe("post-1");
+    expect(ctx?.OriginatingChannel).toBe("mattermost");
+    expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("dispatches a bare bot mention whose body is empty after normalization as a wake event", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-bare-mention",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclaw",
+          create_at: 1_714_000_000_001,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("@openclaw");
+    expect(ctx?.MessageSid).toBe("post-bare-mention");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
   });
