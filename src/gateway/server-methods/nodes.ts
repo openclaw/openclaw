@@ -25,6 +25,7 @@ import {
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { resolveMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPairedDevice,
@@ -58,6 +59,7 @@ import {
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
 import { dispatchAttachMcpMessage } from "../attach-relay.js";
+import { mintAttachGrant } from "../mcp-grant-store.js";
 import type { JsonRpcRequest } from "../mcp-http.protocol.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
@@ -882,12 +884,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
   // link; the gateway dispatches it to the SAME scoped loopback tools as the gateway-host case via
   // the grant (no new gateway endpoint). Scope is bound to the grant's sessionKey, never the node.
   "node.attachRelay": async ({ params, respond, context }) => {
-    const record = (typeof params === "object" && params !== null ? params : {}) as Record<
-      string,
-      unknown
-    >;
-    const grantToken = typeof record.grantToken === "string" ? record.grantToken : "";
-    const message = record.mcpMessage;
+    const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
+    const message = params.mcpMessage;
     const isJsonRpc =
       typeof message === "object" &&
       message !== null &&
@@ -906,6 +904,26 @@ export const nodeHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
     });
     respond(true, { mcpResponse });
+  },
+  // Self-service attach grant for a paired node: a connected role:node client is already an approved,
+  // authenticated node (the role gate IS the pairing check), so its pairing authorizes minting. The
+  // grant binds to the user's MAIN gateway session — pick-up-anywhere for the same conversation — and
+  // is scoped/TTL'd/revocable (PR1), bound to the session not the node, so the node can't widen it.
+  // Caller-chosen sessions + the cross-agent/user entitlement map are a follow-up (today single-owner,
+  // so main is the safe default). The node uses the returned token with node.attachRelay.
+  "node.attachGrant": async ({ params, respond, context }) => {
+    const ttlRaw = params.ttlMs;
+    const ttlMs =
+      typeof ttlRaw === "number" && Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : undefined;
+    const grant = mintAttachGrant({
+      sessionKey: resolveMainSessionKey(context.getRuntimeConfig()),
+      ttlMs,
+    });
+    respond(true, {
+      sessionKey: grant.sessionKey,
+      token: grant.token,
+      expiresAtMs: grant.expiresAtMs,
+    });
   },
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {

@@ -537,6 +537,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.describe",
       "node.pluginSurface.refresh",
       "node.attachRelay",
+      "node.attachGrant",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
