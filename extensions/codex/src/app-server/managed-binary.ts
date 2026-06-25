@@ -12,6 +12,7 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
+const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
 
 type ManagedCodexAppServerPaths = {
   commandPath: string;
@@ -77,10 +78,15 @@ function resolveManagedCodexAppServerCommandCandidates(
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
   return [
     ...new Set([
+      ...resolveDesktopCodexAppServerCommandCandidates(platform),
       ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
       ...resolveManagedCodexPackageBinCandidates(roots, platform),
     ]),
   ];
+}
+
+function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
+  return platform === "darwin" ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND] : [];
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
