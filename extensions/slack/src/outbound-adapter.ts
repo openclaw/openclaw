@@ -67,6 +67,29 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
+function assertSlackThreadDeliveryResult(params: {
+  result: Awaited<ReturnType<SlackSendFn>>;
+  to: string;
+  threadTs?: string;
+}) {
+  if (!params.threadTs) {
+    return;
+  }
+  const deliveredThreadTs = normalizeOptionalString(params.result?.threadTs);
+  if (deliveredThreadTs === params.threadTs) {
+    return;
+  }
+  const deliveredMessageId = normalizeOptionalString(params.result?.messageId);
+  const suffix = deliveredThreadTs
+    ? `; delivered thread ${deliveredThreadTs}`
+    : deliveredMessageId
+      ? `; delivered message ${deliveredMessageId}`
+      : "";
+  throw new Error(
+    `Slack delivery did not confirm thread ${params.threadTs} for ${params.to}${suffix}`,
+  );
+}
+
 async function sendSlackOutboundMessage(params: {
   cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
@@ -108,6 +131,7 @@ async function sendSlackOutboundMessage(params: {
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
+  assertSlackThreadDeliveryResult({ result, to: params.to, threadTs });
   return result;
 }
 
