@@ -832,4 +832,70 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("preserves delivery-mirror with unique text when no raw assistant precedes it (message-tool scenario)", async () => {
+    // When a delivery-mirror row is the only assistant reply (e.g., the
+    // response comes from a message-tool send, not a raw model turn),
+    // it must be preserved — not filtered out by a blanket DM skip.
+    const sessionContent = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "Turn on the lights" } }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Lights turned on" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    // The delivery-mirror is the only assistant reply — must be preserved
+    expect(assistantLines).toEqual(["assistant: Lights turned on"]);
+    expect(memoryContent).toContain("Lights turned on");
+  });
+
+  it("filters delivery-mirror duplicates but preserves standalone gateway-injected assistant rows (fixes #92563)", async () => {
+    const sessionContent = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "What is 2+2?" } }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "claude",
+          content: [
+            { type: "thinking", text: "..." },
+            { type: "text", text: "2+2 = 4" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "2+2 = 4" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [{ type: "text", text: "standalone gateway reply" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    // delivery-mirror duplicate is filtered, gateway-injected standalone is preserved
+    expect(assistantLines).toEqual(["assistant: 2+2 = 4", "assistant: standalone gateway reply"]);
+    expect(memoryContent).toContain("standalone gateway reply");
+  });
 });
