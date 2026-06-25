@@ -1,10 +1,10 @@
 // Gateway agent integration tests cover channel routing, session context,
 // WebSocket requests, agent event delivery, and provider/runtime error handling.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
@@ -177,17 +177,12 @@ async function sendAgentWsRequestAndWaitFinal(
 const _gwSessionTempDirs: string[] = [];
 
 async function useTempSessionStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-  _gwSessionTempDirs.push(dir);
+  const dir = makeTempDir(_gwSessionTempDirs, "openclaw-gw-");
   testState.sessionStorePath = path.join(dir, "sessions.json");
 }
 
-afterAll(async () => {
-  await Promise.all(
-    _gwSessionTempDirs.map((dir) =>
-      fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
-    ),
-  );
+afterAll(() => {
+  cleanupTempDirs(_gwSessionTempDirs);
 });
 
 describe("gateway server agent", () => {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   adoptCronRunSessionMetadata,
@@ -219,15 +220,12 @@ describe("createPersistCronSessionEntry", () => {
 const _cronSessionTempDirs: string[] = [];
 
 async function createTranscriptFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-session-"));
-  _cronSessionTempDirs.push(dir);
+  const dir = makeTempDir(_cronSessionTempDirs, "openclaw-cron-session-");
   const file = path.join(dir, "session.jsonl");
   await fs.writeFile(file, `${JSON.stringify({ type: "session", sessionId: "run-session-id" })}\n`);
   return file;
 }
 
-afterAll(async () => {
-  await Promise.all(
-    _cronSessionTempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+afterAll(() => {
+  cleanupTempDirs(_cronSessionTempDirs);
 });

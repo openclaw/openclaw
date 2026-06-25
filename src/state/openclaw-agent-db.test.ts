@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
@@ -35,9 +36,7 @@ type RegisteredAgentDatabaseRow = {
 const _agentDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-"));
-  _agentDbTempDirs.push(dir);
-  return dir;
+  return makeTempDir(_agentDbTempDirs, "openclaw-agent-db-");
 }
 
 function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv } = {}) {
@@ -55,9 +54,7 @@ function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv 
 }
 
 afterAll(() => {
-  for (const dir of _agentDbTempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTempDirs(_agentDbTempDirs);
 });
 
 afterEach(() => {
