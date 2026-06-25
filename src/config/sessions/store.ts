@@ -26,7 +26,11 @@ import {
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import { resolveExplicitSessionFilePath, resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import {
+  resolveExplicitSessionFilePath,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "./paths.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   isSessionSkillPromptBlobReadable,
@@ -62,8 +66,10 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
+  type ResolvedSessionMaintenanceConfigInput,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
@@ -163,11 +169,16 @@ export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   getSessionStoreCacheVersion,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   resolveMaintenanceConfig,
 };
 export type { SessionMaintenanceApplyReport } from "./store-maintenance-operations.js";
-export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
+export type {
+  ResolvedSessionMaintenanceConfig,
+  ResolvedSessionMaintenanceConfigInput,
+  SessionMaintenanceWarning,
+};
 
 type SaveSessionStoreOptions = {
   /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */

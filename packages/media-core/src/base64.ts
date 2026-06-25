@@ -74,8 +74,15 @@ export function canonicalizeBase64(base64: string): string | undefined {
     }
     cleaned += base64[i];
   }
-  if (!cleaned || cleaned.length % 4 !== 0) {
+  if (!cleaned) {
     return undefined;
+  }
+  const remainder = cleaned.length % 4;
+  if (remainder !== 0) {
+    if (sawPadding || remainder === 1) {
+      return undefined;
+    }
+    cleaned += "=".repeat(4 - remainder);
   }
   return cleaned;
 }

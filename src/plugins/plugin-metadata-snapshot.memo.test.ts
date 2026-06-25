@@ -274,6 +274,36 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
+  it("does not emit metadata scan spans for hot memo hits", () => {
+    const stateDir = tempStateDir();
+    const timelinePath = path.join(stateDir, "timeline", "metadata.jsonl");
+    const env = {
+      OPENCLAW_DIAGNOSTICS: "timeline",
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+    };
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+
+    const events = fs
+      .readFileSync(timelinePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { name?: unknown; type?: unknown });
+    expect(events.map((event) => [event.type, event.name])).toEqual([
+      ["span.start", "plugins.metadata.scan"],
+      ["span.end", "plugins.metadata.scan"],
+    ]);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
+
   it("skips persisted registry filesystem fingerprints after a process memo hit", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
