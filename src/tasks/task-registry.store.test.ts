@@ -7,6 +7,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -28,6 +33,7 @@ import {
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
+  onTaskRegistryEvent,
   resetTaskRegistryForTests,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
@@ -112,6 +118,7 @@ describe("task-registry store runtime", () => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
+    resetGlobalHookRunner();
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -306,6 +313,83 @@ describe("task-registry store runtime", () => {
       kind: "deleted",
       taskId: created.taskId,
     });
+  });
+
+  it("notifies runtime task listeners without replacing configured observers", () => {
+    const events: TaskRegistryObserverEvent[] = [];
+    const stop = onTaskRegistryEvent((event) => events.push(event));
+
+    const created = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:listener",
+      runId: "run-listener",
+      task: "Listener task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    stop();
+    deleteTaskRecordById(created.taskId);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "upserted",
+        task: expect.objectContaining({ taskId: created.taskId }),
+      }),
+    ]);
+  });
+
+  it("emits metadata-only typed plugin hooks for task lifecycle changes", async () => {
+    const createdHook = vi.fn();
+    const updatedHook = vi.fn();
+    const finishedHook = vi.fn();
+    const deletedHook = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "task_created", handler: createdHook },
+        { hookName: "task_updated", handler: updatedHook },
+        { hookName: "task_finished", handler: finishedHook },
+        { hookName: "task_deleted", handler: deletedHook },
+      ]),
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
+        saveSnapshot: () => {},
+      },
+    });
+
+    const created = createTaskRecord({
+      runtime: "subagent",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:hook",
+      runId: "run-hook",
+      task: "Sensitive prompt must not be exposed",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    markTaskTerminalById({ taskId: created.taskId, status: "succeeded", endedAt: 200 });
+    deleteTaskRecordById(created.taskId);
+    await Promise.resolve();
+
+    expect(createdHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({ title: "subagent task", runtime: "subagent" }),
+      }),
+      expect.objectContaining({ ownerKey: "agent:main:main" }),
+    );
+    expect(updatedHook).toHaveBeenCalledWith(
+      expect.objectContaining({ task: expect.objectContaining({ status: "succeeded" }) }),
+      expect.anything(),
+    );
+    expect(finishedHook).toHaveBeenCalledTimes(1);
+    expect(deletedHook).toHaveBeenCalledTimes(1);
+    expect(createdHook.mock.calls[0]?.[0]).not.toHaveProperty("task.task");
+    expect(JSON.stringify(createdHook.mock.calls[0]?.[0])).not.toContain(
+      "Sensitive prompt must not be exposed",
+    );
   });
 
   it("uses atomic task-plus-delivery store methods when available", async () => {

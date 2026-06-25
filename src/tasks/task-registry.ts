@@ -21,6 +21,12 @@ import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
+  emitTaskCreatedHook,
+  emitTaskDeletedHook,
+  emitTaskFinishedHook,
+  emitTaskUpdatedHook,
+} from "./task-activity-hooks.js";
+import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
@@ -69,6 +75,7 @@ const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
+const taskRegistryEventListeners = new Set<(event: TaskRegistryObserverEvent) => void>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
@@ -266,17 +273,36 @@ function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecor
 
 function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
   const observers = getTaskRegistryObservers();
-  if (!observers?.onEvent) {
+  if (!observers?.onEvent && taskRegistryEventListeners.size === 0) {
     return;
   }
-  try {
-    observers.onEvent(createEvent());
-  } catch (error) {
-    log.warn("Task registry observer failed", {
-      event: "task-registry",
-      error,
-    });
+  const event = createEvent();
+  if (observers?.onEvent) {
+    try {
+      observers.onEvent(event);
+    } catch (error) {
+      log.warn("Task registry observer failed", {
+        event: "task-registry",
+        error,
+      });
+    }
   }
+  for (const listener of taskRegistryEventListeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      log.warn("Task registry event listener failed", {
+        event: "task-registry",
+        error,
+      });
+    }
+  }
+}
+
+/** Subscribe to best-effort task registry changes. Snapshot reads remain authoritative. */
+export function onTaskRegistryEvent(listener: (event: TaskRegistryObserverEvent) => void) {
+  taskRegistryEventListeners.add(listener);
+  return () => taskRegistryEventListeners.delete(listener);
 }
 
 function persistTaskRegistry(): boolean {
@@ -1233,6 +1259,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     task: cloneTaskRecord(next),
     previous: cloneTaskRecord(current),
   }));
+  emitTaskUpdatedHook({ task: next, previous: current });
   return cloneTaskRecord(next);
 }
 
@@ -1842,7 +1869,9 @@ export function createTaskRecord(params: {
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  emitTaskCreatedHook(record);
   if (isTerminalTaskStatus(record.status)) {
+    emitTaskFinishedHook(record);
     void maybeDeliverTaskTerminalUpdate(taskId);
   }
   return cloneTaskRecord(record);
@@ -2396,11 +2425,13 @@ export function deleteTaskRecordById(taskId: string): boolean {
     taskId: current.taskId,
     previous: cloneTaskRecord(current),
   }));
+  emitTaskDeletedHook(current);
   return true;
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   clearTaskRegistryMemory();
+  taskRegistryEventListeners.clear();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {

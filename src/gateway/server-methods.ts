@@ -182,6 +182,10 @@ const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
 );
+const loadSessionActivityHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-activity.js"),
+  (module) => module.sessionActivityHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -533,6 +537,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.compact",
     ],
     loadHandlers: loadSessionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.activity"],
+    loadHandlers: loadSessionActivityHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

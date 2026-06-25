@@ -97,6 +97,11 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
+import {
+  applySessionToolActivityEvent,
+  loadSessionActivity,
+  type SessionActivityState,
+} from "./session-activity.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   handleAgentEvent,
@@ -150,6 +155,8 @@ export type ChatPageHost = ChatHost &
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
+    sessionActivityLoading: boolean;
+    sessionActivity: import("../../api/types.ts").SessionActivityResult | null;
     sessionsShowArchived: boolean;
     selectedChatSessionArchived: boolean;
     agentsList: AgentsListResult | null;
@@ -333,6 +340,8 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatReplyTarget = null;
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
+  state.sessionActivity = null;
+  state.sessionActivityLoading = false;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
@@ -931,6 +940,8 @@ export function createPageState(
     sessionsResultAgentId: null,
     sessionsLoading: false,
     sessionsError: null,
+    sessionActivityLoading: false,
+    sessionActivity: null,
     sessionsShowArchived: false,
     selectedChatSessionArchived: false,
     agentsList: context.agents.state.agentsList,
@@ -1082,8 +1093,25 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
+    applySessionToolActivityEvent(
+      state as unknown as SessionActivityState,
+      event.payload as Parameters<typeof applySessionToolActivityEvent>[1],
+    );
     handleAgentEvent(state as never, event.payload as never);
     requestPageUpdate(state);
+    return;
+  }
+  if (event.event === "session.activity") {
+    const payload = event.payload as
+      | { sessionKey?: unknown; sourceSessionKey?: unknown; reason?: unknown }
+      | undefined;
+    const isDirectLiveToolUpdate =
+      payload?.reason === "tool" && payload.sourceSessionKey === state.sessionKey;
+    if (payload?.sessionKey === state.sessionKey && !isDirectLiveToolUpdate) {
+      void loadSessionActivity(state as unknown as SessionActivityState).finally(() =>
+        requestPageUpdate(state),
+      );
+    }
     return;
   }
   if (event.event === "session.operation") {

@@ -73,6 +73,7 @@ import {
 import { exportChatMarkdown } from "./export.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { loadSessionActivity } from "./session-activity.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 
 type ChatRouteData = {
@@ -142,6 +143,7 @@ export class ChatPage extends LitElement {
     });
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
+    const activityLoad = loadSessionActivity(state);
     state.requestUpdate();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
@@ -166,6 +168,7 @@ export class ChatPage extends LitElement {
     );
     void subscriptionSync;
     void historyLoad;
+    void activityLoad;
     void sessionsRefresh;
   }
 
@@ -589,6 +592,7 @@ export class ChatPage extends LitElement {
       };
       this.connectedClient = startupClient;
       void syncSelectedSessionMessageSubscription(state, { force: true });
+      void loadSessionActivity(state).finally(() => state.requestUpdate?.());
       void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
         void finishStartup();
@@ -638,6 +642,8 @@ export class ChatPage extends LitElement {
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
       streamStartedAt: state.chatStreamStartedAt,
+      activity: state.sessionActivity,
+      activityLoading: state.sessionActivityLoading,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       draft: state.chatMessage,
       queue: state.chatQueue,

@@ -2,7 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { SessionActivityResult, SessionsListResult } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -63,6 +63,8 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  activity?: SessionActivityResult | null;
+  activityLoading?: boolean;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -158,6 +160,18 @@ export function renderChat(props: ChatProps) {
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const canCompose = props.connected && props.canSend;
   let chatSection: HTMLElement | null = null;
+  const activityItems = [
+    ...(props.activity?.tasks ?? []).map((task) => ({
+      id: `task:${task.id}`,
+      label: task.label ?? task.title,
+      detail: task.runtime,
+    })),
+    ...(props.activity?.tools ?? []).map((tool) => ({
+      id: `tool:${tool.id}`,
+      label: tool.title,
+      detail: "tool",
+    })),
+  ];
 
   const thread = renderChatThread({
     sessionKey: props.sessionKey,
@@ -344,7 +358,38 @@ export function renderChat(props: ChatProps) {
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
-              ${thread} ${chatColumnFooter}
+              ${thread}
+              ${props.activityLoading || activityItems.length
+                ? html`
+                    <div class="chat-queue chat-activity" role="status" aria-live="polite">
+                      <div class="chat-queue__title">
+                        ${props.activityLoading
+                          ? html`<span
+                              class="usage-loading-spinner"
+                              aria-label="Loading activity"
+                              style="display: inline-block; margin-right: 6px; vertical-align: -1px"
+                            ></span>`
+                          : nothing}
+                        Running${activityItems.length ? ` (${activityItems.length})` : ""}
+                      </div>
+                      ${activityItems.length
+                        ? html`
+                            <div class="chat-queue__list">
+                              ${activityItems.map(
+                                (item) => html`
+                                  <div class="chat-queue__item" title=${item.label}>
+                                    <div class="chat-queue__text">${item.label}</div>
+                                    <span class="chat-queue__state">${item.detail}</span>
+                                  </div>
+                                `,
+                              )}
+                            </div>
+                          `
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              ${chatColumnFooter}
             </div>
 
             ${sidebarOpen
