@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { resolveCronSession } from "./session.js";
@@ -28,6 +29,9 @@ export type PersistCronSessionEntry = () => Promise<void>;
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
   const sessionFile = entry.sessionFile?.trim();
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return true;
+  }
   return Boolean(sessionFile && fs.existsSync(sessionFile));
 }
 

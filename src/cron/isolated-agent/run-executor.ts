@@ -7,6 +7,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -28,7 +29,6 @@ import {
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
   resolveCronAgentLane,
-  resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -235,7 +235,11 @@ export function createCronPromptExecutor(params: {
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
-    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+    formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      storePath: params.cronSession.storePath,
+    });
   // Fallback for callers that bypass prepareCronRunContext before persisting retries.
   if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
     params.cronSession.sessionEntry.sessionFile = sessionFile;
