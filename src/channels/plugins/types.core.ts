@@ -647,6 +647,8 @@ export type ChannelMessagingAdapter = {
       source: "normalized" | "directory";
     };
     replyToId?: string | null;
+    /** True when replyToId came from an explicit payload target or reply tag. */
+    replyToIsExplicit?: boolean;
     threadId?: string | number | null;
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };

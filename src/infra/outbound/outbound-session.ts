@@ -39,6 +39,7 @@ export type ResolveOutboundSessionRouteParams = {
   currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
+  replyToIsExplicit?: boolean;
   threadId?: string | number | null;
 };
 

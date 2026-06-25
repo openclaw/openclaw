@@ -122,6 +122,7 @@ describe("message action threading helpers", () => {
         replyToId: threadId == null ? threadId : String(threadId),
         threadId: threadId ?? null,
       }),
+      replyToIsExplicit: false,
       resolveOutboundSessionRoute,
       ensureOutboundSessionEntry,
     });
@@ -129,6 +130,7 @@ describe("message action threading helpers", () => {
     expect(resolveOutboundSessionRoute).toHaveBeenCalledOnce();
     expect(firstMockArg(resolveOutboundSessionRoute)).toMatchObject({
       replyToId: "root-42",
+      replyToIsExplicit: false,
       threadId: "root-42",
     });
   });
