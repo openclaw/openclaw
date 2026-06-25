@@ -950,8 +950,9 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      const currentTurnMediaByMessageId = new Map<string, TelegramMediaRef>();
       let skippedCount = 0;
-      for (const { ctx } of entry.messages) {
+      for (const { ctx, msg } of entry.messages) {
         let media;
         try {
           media = await resolveMedia({
@@ -970,11 +971,13 @@ export const registerTelegramHandlers = ({
           continue;
         }
         if (media) {
-          allMedia.push({
+          const mediaRef: TelegramMediaRef = {
             path: media.path,
-            contentType: media.contentType,
-            stickerMetadata: media.stickerMetadata,
-          });
+            ...(media.contentType ? { contentType: media.contentType } : {}),
+            ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+          };
+          allMedia.push(mediaRef);
+          currentTurnMediaByMessageId.set(String(msg.message_id), mediaRef);
         } else {
           skippedCount++;
         }
@@ -1004,6 +1007,7 @@ export const registerTelegramHandlers = ({
         ctx: primaryEntry.ctx,
         msg: primaryEntry.msg,
         allMedia,
+        currentTurnMediaByMessageId,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1373,6 +1377,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
+    currentTurnMediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>;
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
@@ -1448,17 +1453,28 @@ export const registerTelegramHandlers = ({
         shouldHydrateReplyMedia,
       );
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
+      const addPromptContextMedia = (messageId: string | undefined, media: TelegramMediaRef) => {
+        const promptMediaPath = resolveTelegramPromptMediaPath(media.path);
+        if (!messageId || !promptMediaPath) {
+          return;
+        }
+        promptContextMediaByMessageId.set(messageId, {
+          ...media,
+          path: promptMediaPath,
+        });
+      };
+      for (const [messageId, media] of params.currentTurnMediaByMessageId ?? []) {
+        addPromptContextMedia(messageId, media);
+      }
       const currentMessageId =
         typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
       const currentMedia = params.allMedia[0];
-      const currentPromptMediaPath = currentMedia?.path
-        ? resolveTelegramPromptMediaPath(currentMedia.path)
-        : undefined;
-      if (currentMessageId && currentMedia && currentPromptMediaPath) {
-        promptContextMediaByMessageId.set(currentMessageId, {
-          ...currentMedia,
-          path: currentPromptMediaPath,
-        });
+      if (
+        currentMessageId &&
+        currentMedia &&
+        !promptContextMediaByMessageId.has(currentMessageId)
+      ) {
+        addPromptContextMedia(currentMessageId, currentMedia);
       }
       for (const entry of replyChain) {
         const promptMediaPath = entry.mediaPath
