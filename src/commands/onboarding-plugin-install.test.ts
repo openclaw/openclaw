@@ -4,6 +4,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import type {
+  BundledPluginLoadPathAlias,
+  BundledPluginLoadPathAliasKind,
+} from "../plugins/bundled-load-path-aliases.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -121,7 +125,9 @@ vi.mock("../plugins/bundled-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/bundled-dir.js")>()),
   resolveBundledPluginsDir: resolveBundledPluginsDirMock,
 }));
-const resolvePackagedBundledLoadPathAliasMock = vi.hoisted(() => vi.fn(() => undefined));
+const resolvePackagedBundledLoadPathAliasMock = vi.hoisted(() =>
+  vi.fn<() => BundledPluginLoadPathAlias | null>(() => null),
+);
 vi.mock("../plugins/bundled-load-path-aliases.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/bundled-load-path-aliases.js")>()),
   resolvePackagedBundledLoadPathAlias: resolvePackagedBundledLoadPathAliasMock,
@@ -1666,8 +1672,8 @@ describe("addPluginLoadPath bundled guard", () => {
       const bundledPluginPath = path.join(bundledRoot, "demo");
       resolveBundledPluginsDirMock.mockReturnValue(bundledRoot);
       resolvePackagedBundledLoadPathAliasMock.mockReturnValue({
-        kind: "current",
-        localPath: bundledPluginPath,
+        kind: "current" as BundledPluginLoadPathAliasKind,
+        path: bundledPluginPath,
       });
 
       const result = await ensureOnboardingPluginInstalled({
