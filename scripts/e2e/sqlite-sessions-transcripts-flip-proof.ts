@@ -1,4 +1,4 @@
-// Path 3 SQLite flip proof runner exercises an isolated live gateway lifecycle.
+// SQLite sessions/transcripts flip proof runner exercises an isolated live gateway lifecycle.
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -53,7 +53,7 @@ type ProofCheckpoint = {
   sqlite: SqliteEvidence;
 };
 
-export type Path3SqliteFlipProofReport = {
+export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
   checkpoints: ProofCheckpoint[];
@@ -85,19 +85,19 @@ type RunOptions = {
 
 const AGENT_ID = "main";
 const RESET_SESSION_KEY = "agent:main:main";
-const DELETE_SESSION_KEY = "agent:main:dashboard:path3-delete";
+const DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-delete";
 const SHARED_SESSION_KEYS = [
-  "agent:main:dashboard:path3-shared-a",
-  "agent:main:dashboard:path3-shared-b",
+  "agent:main:dashboard:sqlite-shared-a",
+  "agent:main:dashboard:sqlite-shared-b",
 ] as const;
 
 /** Runs the isolated live gateway SQLite flip proof and returns structured evidence. */
-export async function runPath3SqliteFlipProof(
+export async function runSqliteSessionsTranscriptsFlipProof(
   options: RunOptions = {},
-): Promise<Path3SqliteFlipProofReport> {
+): Promise<SqliteSessionsTranscriptsFlipProofReport> {
   const print = options.print ?? false;
   const inst = await createOpenClawTestInstance({
-    name: `path3-sqlite-flip-${randomUUID()}`,
+    name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
   });
@@ -137,7 +137,7 @@ export async function runPath3SqliteFlipProof(
     const client = await connectGatewayClient({
       url: inst.url,
       token: inst.gatewayToken,
-      clientDisplayName: "path3-sqlite-flip-proof",
+      clientDisplayName: "sqlite-sessions-transcripts-flip-proof",
       requestTimeoutMs: 20_000,
       timeoutMs: 20_000,
     });
@@ -154,7 +154,7 @@ export async function runPath3SqliteFlipProof(
     const restartedClient = await connectGatewayClient({
       url: inst.url,
       token: inst.gatewayToken,
-      clientDisplayName: "path3-sqlite-flip-proof-restart",
+      clientDisplayName: "sqlite-sessions-transcripts-flip-proof-restart",
       requestTimeoutMs: 20_000,
       timeoutMs: 20_000,
     });
@@ -167,9 +167,9 @@ export async function runPath3SqliteFlipProof(
         context,
         resetSessionId,
         context.resetSessionKey,
-        "path3 appended after reset",
+        "sqlite appended after reset",
       );
-      await requireHistoryContains(restartedClient, context.resetSessionKey, "path3 appended");
+      await requireHistoryContains(restartedClient, context.resetSessionKey, "sqlite appended");
       await waitForSqliteEvents(context.agentDbPath, resetSessionId, 1);
       await record("after-transcript-append");
 
@@ -195,7 +195,7 @@ export async function runPath3SqliteFlipProof(
     await inst.cleanup();
   }
 
-  const report: Path3SqliteFlipProofReport = {
+  const report: SqliteSessionsTranscriptsFlipProofReport = {
     ok: failures.length === 0,
     agentId: context.agentId,
     checkpoints,
@@ -221,7 +221,7 @@ function buildProofContext(stateDir: string): ProofContext {
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
     deleteSessionKey: DELETE_SESSION_KEY,
-    legacySessionId: "path3-legacy-main",
+    legacySessionId: "sqlite-legacy-main",
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
     stateDir,
@@ -235,30 +235,30 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   const now = Date.now();
   const entries = {
     [context.resetSessionKey]: legacyEntry(context.legacySessionId, now),
-    [context.deleteSessionKey]: legacyEntry("path3-delete-session", now - 1_000),
-    [context.sharedSessionKeys[0]]: legacyEntry("path3-shared-session", now - 2_000, {
-      sessionFile: "path3-shared-a.jsonl",
+    [context.deleteSessionKey]: legacyEntry("sqlite-delete-session", now - 1_000),
+    [context.sharedSessionKeys[0]]: legacyEntry("sqlite-shared-session", now - 2_000, {
+      sessionFile: "sqlite-shared-a.jsonl",
     }),
-    [context.sharedSessionKeys[1]]: legacyEntry("path3-shared-session", now - 3_000, {
-      sessionFile: "path3-shared-b.jsonl",
+    [context.sharedSessionKeys[1]]: legacyEntry("sqlite-shared-session", now - 3_000, {
+      sessionFile: "sqlite-shared-b.jsonl",
     }),
   };
   await fs.writeFile(context.storePath, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
   await writeTranscript(context.activeSessionsDir, context.legacySessionId, [
     legacySessionEvent(context.legacySessionId),
-    { type: "message", id: "path3-user-1", message: { role: "user", content: "legacy hello" } },
+    { type: "message", id: "sqlite-user-1", message: { role: "user", content: "legacy hello" } },
   ]);
-  await writeTranscript(context.activeSessionsDir, "path3-delete-session", [
-    legacySessionEvent("path3-delete-session"),
-    { type: "message", id: "path3-delete-1", message: { role: "user", content: "delete me" } },
+  await writeTranscript(context.activeSessionsDir, "sqlite-delete-session", [
+    legacySessionEvent("sqlite-delete-session"),
+    { type: "message", id: "sqlite-delete-1", message: { role: "user", content: "delete me" } },
   ]);
-  await writeTranscript(context.activeSessionsDir, "path3-shared-a", [
-    legacySessionEvent("path3-shared-session"),
-    { type: "message", id: "path3-shared-1", message: { role: "user", content: "shared" } },
+  await writeTranscript(context.activeSessionsDir, "sqlite-shared-a", [
+    legacySessionEvent("sqlite-shared-session"),
+    { type: "message", id: "sqlite-shared-1", message: { role: "user", content: "shared" } },
   ]);
-  await writeTranscript(context.activeSessionsDir, "path3-shared-b", [
-    legacySessionEvent("path3-shared-session"),
-    { type: "message", id: "path3-shared-2", message: { role: "user", content: "shared b" } },
+  await writeTranscript(context.activeSessionsDir, "sqlite-shared-b", [
+    legacySessionEvent("sqlite-shared-session"),
+    { type: "message", id: "sqlite-shared-2", message: { role: "user", content: "shared b" } },
   ]);
   await fs.writeFile(
     path.join(context.activeSessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
@@ -619,7 +619,7 @@ function tail(value: string, maxChars = 8_000): string {
 function printCheckpoint(checkpoint: ProofCheckpoint): void {
   process.stderr.write(
     [
-      `[path3-sqlite-flip] ${checkpoint.label}`,
+      `[sqlite-sessions-transcripts-flip-proof] ${checkpoint.label}`,
       `  sqlite sessions=${checkpoint.sqlite.sessions} entries=${checkpoint.sqlite.sessionEntries} transcriptEvents=${checkpoint.sqlite.transcriptEvents}`,
       `  activeJsonl=${checkpoint.activeJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
       checkpoint.doctor
@@ -634,6 +634,6 @@ function printCheckpoint(checkpoint: ProofCheckpoint): void {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const report = await runPath3SqliteFlipProof({ print: true });
+  const report = await runSqliteSessionsTranscriptsFlipProof({ print: true });
   process.exit(report.ok ? 0 : 1);
 }
