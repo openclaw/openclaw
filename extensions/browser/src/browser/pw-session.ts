@@ -54,6 +54,11 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 const { chromium } = playwrightCore;
 
+export type BrowserActionDownload = {
+  suggestedFilename: string;
+  savedPath: string;
+};
+
 /** Console message captured from a Playwright page. */
 export type BrowserConsoleMessage = {
   type: string;
@@ -99,15 +104,9 @@ export type BrowserObservedDialogState = {
   recent: BrowserObservedDialogRecord[];
 };
 
-/** Download state that agents can inspect. */
-export type BrowserObservedDownloadState = {
-  recent: RecentPageDownload[];
-};
-
 /** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
-  downloads?: BrowserObservedDownloadState;
 };
 
 /** Raised when an action is blocked by an observed modal dialog. */
@@ -151,13 +150,9 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
-/** A download recorded by the background auto-save handler. */
-export type RecentPageDownload = {
-  suggestedFilename: string;
-  savedPath: string;
-  /** Monotonic sequence number; use as cursor to avoid missing downloads when buffer wraps. */
-  seq: number;
-  timestampMs: number;
+type ActionDownloadCapture = {
+  promises: Array<Promise<BrowserActionDownload>>;
+  waiters: Array<() => void>;
 };
 
 type PageState = {
@@ -169,12 +164,7 @@ type PageState = {
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
-  /** Downloads auto-saved by the background handler (not waiter-managed). */
-  recentDownloads: RecentPageDownload[];
-  /** Monotonic counter incremented each time a download save completes. */
-  downloadSeq: number;
-  /** Promises tracking in-flight auto-save completions so callers can await them. */
-  downloadSavePromises: Array<Promise<void>>;
+  actionDownloadCaptures: ActionDownloadCapture[];
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
   recentDialogs: BrowserObservedDialogRecord[];
@@ -215,7 +205,6 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 const MAX_RECENT_DIALOGS = 20;
-const MAX_RECENT_DOWNLOADS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
@@ -248,6 +237,32 @@ function buildManagedDownloadPath(fileName: string): string {
   return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
 }
 
+type ManagedDownloadPayload = {
+  suggestedFilename?: () => string;
+  saveAs?: (outPath: string) => Promise<void>;
+  path?: () => Promise<string>;
+};
+
+function saveUnmanagedDownload(download: ManagedDownloadPayload): Promise<BrowserActionDownload> {
+  const suggestedFilename = sanitizeUntrustedFileName(
+    download.suggestedFilename?.() || "download.bin",
+    "download.bin",
+  );
+  const managedPath = buildManagedDownloadPath(suggestedFilename);
+  const managedSave = (async () => {
+    await writeViaSiblingTempPath({
+      rootDir: DEFAULT_DOWNLOAD_DIR,
+      targetPath: managedPath,
+      writeTemp: async (tempPath) => {
+        await download.saveAs?.(tempPath);
+      },
+    });
+    return { suggestedFilename, savedPath: managedPath };
+  })();
+  download.path = async () => (await managedSave).savedPath;
+  return managedSave;
+}
+
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
@@ -263,6 +278,61 @@ function isRecoverablePlaywrightDisconnectError(err: unknown): boolean {
     message.includes("websocket closed") ||
     message.includes("cdp socket closed")
   );
+}
+
+export function beginActionDownloadCaptureOnPage(page: Page): {
+  drain: (opts?: { graceMs?: number }) => Promise<
+    | {
+        count: number;
+        recent: BrowserActionDownload[];
+      }
+    | undefined
+  >;
+  dispose: () => void;
+} {
+  const state = ensurePageState(page);
+  const capture: ActionDownloadCapture = { promises: [], waiters: [] };
+  state.actionDownloadCaptures.push(capture);
+  let disposed = false;
+
+  const waitForFirstDownload = async (graceMs: number) => {
+    if (capture.promises.length > 0 || graceMs <= 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, graceMs);
+      capture.waiters.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  };
+
+  return {
+    drain: async (opts = {}) => {
+      await waitForFirstDownload(opts.graceMs ?? 0);
+      const downloads: BrowserActionDownload[] = [];
+      let index = 0;
+      while (index < capture.promises.length) {
+        const pending = capture.promises.slice(index);
+        index = capture.promises.length;
+        downloads.push(...(await Promise.all(pending)));
+      }
+      return downloads.length > 0 ? { count: downloads.length, recent: downloads } : undefined;
+    },
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      state.actionDownloadCaptures = state.actionDownloadCaptures.filter(
+        (item) => item !== capture,
+      );
+      for (const notify of capture.waiters.splice(0)) {
+        notify();
+      }
+    },
+  };
 }
 
 function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
@@ -321,8 +391,6 @@ function serializeObservedBrowserState(state: PageState): BrowserObservedState {
       pending: state.pendingDialogs.map(serializePendingDialog),
       recent: state.recentDialogs.map(serializeDialogRecord),
     },
-    downloads:
-      state.recentDownloads.length > 0 ? { recent: state.recentDownloads.slice() } : undefined,
   };
 }
 
@@ -627,9 +695,7 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDownload: 0,
     downloadWaiterDepth: 0,
-    recentDownloads: [],
-    downloadSeq: 0,
-    downloadSavePromises: [],
+    actionDownloadCaptures: [],
     nextObservedDialogId: 0,
     pendingDialogs: [],
     recentDialogs: [],
@@ -705,55 +771,21 @@ export function ensurePageState(page: Page): PageState {
     page.on("dialog", (dialog: Dialog) => {
       observeDialog(state, dialog);
     });
-    page.on(
-      "download",
-      (download: {
-        suggestedFilename?: () => string;
-        saveAs?: (outPath: string) => Promise<void>;
-        path?: () => Promise<string>;
-      }) => {
-        if (state.downloadWaiterDepth > 0) {
-          return;
+    page.on("download", (download: ManagedDownloadPayload) => {
+      if (state.downloadWaiterDepth > 0) {
+        return;
+      }
+      const managedSave = saveUnmanagedDownload(download);
+      const capture = state.actionDownloadCaptures.at(-1);
+      if (capture) {
+        capture.promises.push(managedSave);
+        for (const notify of capture.waiters.splice(0)) {
+          notify();
         }
-        const suggested = sanitizeUntrustedFileName(
-          download.suggestedFilename?.() || "download.bin",
-          "download.bin",
-        );
-        const managedPath = buildManagedDownloadPath(suggested);
-        const seq = ++state.downloadSeq;
-        const managedSave = (async () => {
-          await writeViaSiblingTempPath({
-            rootDir: DEFAULT_DOWNLOAD_DIR,
-            targetPath: managedPath,
-            writeTemp: async (tempPath) => {
-              await download.saveAs?.(tempPath);
-            },
-          });
-          state.recentDownloads.push({
-            suggestedFilename: suggested,
-            savedPath: managedPath,
-            seq,
-            timestampMs: Date.now(),
-          });
-          if (state.recentDownloads.length > MAX_RECENT_DOWNLOADS) {
-            state.recentDownloads.shift();
-          }
-          return managedPath;
-        })();
-        // Track the save promise so callers can drain pending saves
-        // before sampling recentDownloads (avoids the saveAs race).
-        state.downloadSavePromises.push(
-          managedSave.then(
-            () => {},
-            () => {},
-          ),
-        );
-        if (state.downloadSavePromises.length > MAX_RECENT_DOWNLOADS) {
-          state.downloadSavePromises = state.downloadSavePromises.slice(-MAX_RECENT_DOWNLOADS);
-        }
-        download.path = async () => await managedSave;
-      },
-    );
+        return;
+      }
+      managedSave.catch(() => {});
+    });
     page.on("close", () => {
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {

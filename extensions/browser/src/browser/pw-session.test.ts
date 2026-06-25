@@ -5,6 +5,7 @@ import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import {
+  beginActionDownloadCaptureOnPage,
   ensurePageState,
   refLocator,
   rememberRoleRefsForTarget,
@@ -235,6 +236,81 @@ describe("pw-session ensurePageState", () => {
 
     handlers.get("download")?.[0]?.(download);
 
+    expect(download).not.toHaveProperty("path");
+    expect(download.saveAs).not.toHaveBeenCalled();
+  });
+
+  it("captures only downloads owned by an active action", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "action-download", "utf8");
+    });
+    const download: MutableDownload = {
+      suggestedFilename: () => "clicked.txt",
+      saveAs,
+    };
+
+    handlers.get("download")?.[0]?.(download);
+    const result = await capture.drain();
+    capture.dispose();
+
+    expect(result).toEqual({
+      count: 1,
+      recent: [
+        {
+          suggestedFilename: "clicked.txt",
+          savedPath: expect.stringMatching(/clicked\.txt$/),
+        },
+      ],
+    });
+    const savedPath = result?.recent[0]?.savedPath ?? "";
+    expect(path.dirname(savedPath)).toBe(DEFAULT_DOWNLOAD_DIR);
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toBe("action-download");
+  });
+
+  it("waits briefly for action downloads that arrive after the action returns", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "late-download", "utf8");
+    });
+    const drain = capture.drain({ graceMs: 1000 });
+
+    setTimeout(() => {
+      handlers.get("download")?.[0]?.({
+        suggestedFilename: () => "late.txt",
+        saveAs,
+      });
+    }, 0);
+
+    const result = await drain;
+    capture.dispose();
+
+    expect(result?.count).toBe(1);
+    expect(result?.recent[0]?.suggestedFilename).toBe("late.txt");
+    await expect(fs.readFile(result?.recent[0]?.savedPath ?? "", "utf8")).resolves.toBe(
+      "late-download",
+    );
+  });
+
+  it("does not let action captures steal explicit waiter downloads", async () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    state.downloadWaiterDepth = 1;
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const download = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: vi.fn(async () => {}),
+    };
+
+    handlers.get("download")?.[0]?.(download);
+    const result = await capture.drain();
+    capture.dispose();
+
+    expect(result).toBeUndefined();
     expect(download).not.toHaveProperty("path");
     expect(download.saveAs).not.toHaveBeenCalled();
   });

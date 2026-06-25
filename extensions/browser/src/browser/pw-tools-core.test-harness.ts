@@ -20,6 +20,10 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  beginActionDownloadCaptureOnPage: vi.fn(() => ({
+    drain: vi.fn(async () => undefined),
+    dispose: vi.fn(() => {}),
+  })),
   closeBlockedNavigationTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
