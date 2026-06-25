@@ -633,6 +633,7 @@ export function buildAfterTurnRuntimeContext(params: {
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+    transcriptStorage: { kind: "sqlite" },
   };
 }
 

@@ -427,6 +427,40 @@ describe("openclaw agent database", () => {
         '{"sessionId":"session-1","updatedAt":20,"startedAt":11,"endedAt":19,"status":"done","chatType":"group","channel":"discord","deliveryContext":{"accountId":"acct-1"},"modelProvider":"openai","model":"gpt-5.5","agentHarnessId":"codex","parentSessionKey":"agent:worker-1:parent","spawnedBy":"agent:worker-1:spawner","displayName":"Example group"}',
         20
       );
+      CREATE TABLE memory_index_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      );
+      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
+      CREATE TABLE memory_index_sources (
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT,
+        session_id TEXT,
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, source_key),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE memory_index_chunks (
+        id TEXT PRIMARY KEY,
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT NOT NULL,
+        session_id TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        embedding_dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (source_kind, source_key)
+          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
       PRAGMA user_version = 1;
     `);
     db.close();
@@ -492,6 +526,16 @@ describe("openclaw agent database", () => {
         to: "conversation_id",
       }),
     );
+    const memoryIndexSourceColumns = database.db
+      .prepare("PRAGMA table_info(memory_index_sources)")
+      .all() as Array<{ name?: unknown }>;
+    expect(memoryIndexSourceColumns.map((column) => column.name)).toEqual([
+      "path",
+      "source",
+      "hash",
+      "mtime",
+      "size",
+    ]);
   });
 
   it("refuses to open newer per-agent schema versions", () => {
