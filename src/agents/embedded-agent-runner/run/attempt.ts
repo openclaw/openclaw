@@ -4627,7 +4627,7 @@ export async function runEmbeddedAttempt(
               contextMode: params.bootstrapContextMode,
               contextTokenBudget,
               reserveTokens,
-              tools: effectiveTools,
+              tools: [...effectiveTools, ...clientToolDefs],
               toolResultMaxChars: promptToolResultMaxChars,
               llmBoundaryTokenPressure: {
                 estimatedPromptTokens: llmBoundaryTokenPressure,

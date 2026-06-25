@@ -43,7 +43,7 @@ export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
-  toolSchemaTokens: number;
+  toolSchemaTokens?: number;
   pressureSource?: string;
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
@@ -423,13 +423,14 @@ export function formatPrePromptPrecheckLog(params: {
   sessionFile?: string;
 }): string {
   const { result } = params;
+  const toolSchemaTokens = result.toolSchemaTokens ?? 0;
   return (
     `[context-overflow-precheck] pre-prompt check ` +
     `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"} ` +
     `provider=${params.provider}/${params.modelId} ` +
     `route=${result.route} ` +
     `estimatedPromptTokens=${result.estimatedPromptTokens} ` +
-    `toolSchemaTokens=${result.toolSchemaTokens} ` +
+    `toolSchemaTokens=${toolSchemaTokens} ` +
     `pressureSource=${result.pressureSource ?? "unknown"} ` +
     `promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve} ` +
     `overflowTokens=${result.overflowTokens} ` +
