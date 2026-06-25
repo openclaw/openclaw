@@ -71,6 +71,10 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import {
+  isReplyRunActiveForSessionId,
+  resolveActiveReplyRunSessionId,
+} from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -156,6 +160,20 @@ function resolveStaleSessionEndReason(params: {
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
+}
+
+function hasActiveReplyRunForSessionEntry(params: {
+  entry: SessionEntry | undefined;
+  sessionKey: string;
+}): boolean {
+  const sessionId = normalizeOptionalString(params.entry?.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  return (
+    resolveActiveReplyRunSessionId(params.sessionKey) === sessionId &&
+    isReplyRunActiveForSessionId(sessionId)
+  );
 }
 
 export type SessionInitResult = {
@@ -482,6 +500,11 @@ async function initSessionStateAttempt(
           policy: resetPolicy,
         })
     : undefined;
+  const deferImplicitRolloverForActiveRun =
+    !resetTriggered &&
+    canReuseExistingEntry &&
+    entryFreshness?.fresh === false &&
+    hasActiveReplyRunForSessionEntry({ entry, sessionKey });
   const softResetAllowed =
     softReset.matched &&
     resetAuthorized &&
@@ -509,6 +532,7 @@ async function initSessionStateAttempt(
     }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
+    deferImplicitRolloverForActiveRun ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&

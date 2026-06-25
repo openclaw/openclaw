@@ -28,6 +28,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry, testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
@@ -466,6 +467,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   resetSystemEventsForTest();
+  replyRunRegistryTesting.resetReplyRunRegistry();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState thread forking", () => {
@@ -3660,6 +3662,68 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
       expect(archived).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers implicit daily rollover while the existing session has an active reply run", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-stale-active-run-");
+      const sessionKey = "agent:main:telegram:dm:archive-active-user";
+      const existingSessionId = "active-stale-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const sessionStartedAt = new Date(2026, 0, 18, 3, 58, 0).getTime();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          sessionStartedAt,
+          updatedAt: sessionStartedAt,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message","part":1}\n', "utf8");
+      replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while previous turn streams",
+          RawBody: "hello while previous turn streams",
+          CommandBody: "hello while previous turn streams",
+          From: "user-active-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      await expect(fs.readFile(transcriptPath, "utf8")).resolves.toBe(
+        '{"type":"message","part":1}\n',
+      );
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(store[sessionKey]?.sessionId).toBe(existingSessionId);
+      expect(store[sessionKey]?.sessionStartedAt).toBe(sessionStartedAt);
     } finally {
       vi.useRealTimers();
     }
