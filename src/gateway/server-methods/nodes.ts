@@ -57,6 +57,8 @@ import {
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
+import { dispatchAttachMcpMessage } from "../attach-relay.js";
+import type { JsonRpcRequest } from "../mcp-http.protocol.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -876,6 +878,35 @@ export async function waitForNodeReconnect(params: {
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
+  // Conduit relay: a paired node forwards a harness's MCP JSON-RPC frame over its EXISTING gateway
+  // link; the gateway dispatches it to the SAME scoped loopback tools as the gateway-host case via
+  // the grant (no new gateway endpoint). Scope is bound to the grant's sessionKey, never the node.
+  "node.attachRelay": async ({ params, respond, context }) => {
+    const record = (typeof params === "object" && params !== null ? params : {}) as Record<
+      string,
+      unknown
+    >;
+    const grantToken = typeof record.grantToken === "string" ? record.grantToken : "";
+    const message = record.mcpMessage;
+    const isJsonRpc =
+      typeof message === "object" &&
+      message !== null &&
+      typeof (message as { method?: unknown }).method === "string";
+    if (!grantToken || !isJsonRpc) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "grantToken and a JSON-RPC mcpMessage are required"),
+      );
+      return;
+    }
+    const mcpResponse = await dispatchAttachMcpMessage({
+      grantToken,
+      message: message as JsonRpcRequest,
+      cfg: context.getRuntimeConfig(),
+    });
+    respond(true, { mcpResponse });
+  },
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {
       respondInvalidParams({
