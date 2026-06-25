@@ -212,19 +212,21 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
   });
 
-  it("caps iterations for pathological sub-second intervals", () => {
+  it("falls back to startMs after 7-day horizon for intervals without active slot", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
       startMs,
-      intervalMs: 1, // 1ms — pathological
+      intervalMs: HOUR, // 1h interval — only 168 checks in the 7-day horizon
       phaseMs: 0,
       isActive: () => false,
     });
     const elapsedMs = performance.now() - t0;
 
+    // No active slot within 7 days → fallback to startMs
     expect(result).toBe(startMs);
-    expect(elapsedMs).toBeLessThan(500);
+    // With only 168 iterations, this is near-instant
+    expect(elapsedMs).toBeLessThan(100);
   });
 
   it("handles intervalMs larger than the seek horizon", () => {

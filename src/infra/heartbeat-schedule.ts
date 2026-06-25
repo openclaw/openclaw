@@ -80,8 +80,6 @@ export function resolveNextHeartbeatDueMs(params: {
  * `startMs` is already phase-aligned and `intervalMs` addition maintains it.
  */
 const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000;
-// Prevent pathological sub-minute intervals from blocking the event loop.
-const MAX_SEEK_ITERATIONS = 10_080; // 7 days at 1-minute steps
 
 export function seekNextActivePhaseDueMs(params: {
   startMs: number;
@@ -96,13 +94,11 @@ export function seekNextActivePhaseDueMs(params: {
   const intervalMs = resolvePositiveIntervalMs(params.intervalMs);
   const horizonMs = params.startMs + MAX_SEEK_HORIZON_MS;
   let candidateMs = params.startMs;
-  let iterations = 0;
-  while (candidateMs <= horizonMs && iterations < MAX_SEEK_ITERATIONS) {
+  while (candidateMs <= horizonMs) {
     if (isActive(candidateMs)) {
       return candidateMs;
     }
     candidateMs += intervalMs;
-    iterations++;
   }
   // No in-window slot found; fall back so the runtime guard can gate it.
   return params.startMs;
