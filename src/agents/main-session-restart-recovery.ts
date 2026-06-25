@@ -7,6 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
+import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type RestartRecoveryRun,
@@ -399,6 +401,59 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
+function hasInspectableContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as {
+    content?: unknown;
+    tool_calls?: unknown;
+    __openclaw?: unknown;
+  };
+  // Oversized transcript messages carry __openclaw.truncated metadata and
+  // a placeholder content block — they must stay fail-closed.
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- upstream metadata key
+  if (msg.__openclaw != null && typeof msg.__openclaw === "object") {
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- upstream metadata key
+    const meta = msg.__openclaw as { truncated?: unknown };
+    if (meta.truncated === true) {
+      return false;
+    }
+  }
+  const content = msg.content;
+  // Content present, non-empty, and not an oversized-message placeholder.
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (trimmed.length > 0 && !trimmed.startsWith("[chat.history omitted")) {
+      return true;
+    }
+    // Empty or placeholder string — fall through to tool_calls check below.
+  } else if (Array.isArray(content) && content.length > 0) {
+    // A single text block with the oversized placeholder is not inspectable.
+    if (
+      content.length === 1 &&
+      content[0] != null &&
+      typeof content[0] === "object" &&
+      (content[0] as { type?: unknown }).type === "text"
+    ) {
+      const text = (content[0] as { text?: unknown }).text;
+      if (
+        typeof text === "string" &&
+        text.trim().startsWith("[chat.history omitted")
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+  // Tool calls stored outside content (raw OpenAI format) are inspectable
+  // even when content is empty.
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    return true;
+  }
+  return false;
+}
+
 function isApprovalPendingToolResult(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
     return false;
@@ -410,18 +465,126 @@ function isApprovalPendingToolResult(message: unknown): boolean {
   return (details as { status?: unknown }).status === "approval-pending";
 }
 
-function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null {
-  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
-    return "transcript tail is not resumable";
+function findLastUserMessage(messages: unknown[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "user") {
+      continue;
+    }
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content;
+    }
+    // User content can be an array of content blocks (e.g. multi-modal messages
+    // with text + image_url blocks). Extract text from text blocks.
+    if (Array.isArray(content)) {
+      const textParts = collectTextContentBlocks(content);
+      if (textParts.length > 0) {
+        return textParts.join("\n");
+      }
+    }
   }
-  if (isApprovalPendingToolResult(lastMeaningful)) {
-    return "transcript tail is a stale approval-pending tool result";
-  }
-  return null;
+  return undefined;
 }
 
-function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+/** Canonical OpenClaw-normalized tool-call content-block types (see agents/tool-call-id.ts TOOL_CALL_TYPES).
+ *  Includes snake_case variants (tool_use, tool_call, function_call) that appear in
+ *  Anthropic API response blocks and ACP events before normalization. */
+const CONTENT_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_use",
+  "tool_call",
+  "function_call",
+]);
+
+function hasAssistantToolCalls(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as {
+    role?: unknown;
+    tool_calls?: unknown;
+    content?: unknown;
+  };
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  // OpenAI raw format: top-level tool_calls array
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    return true;
+  }
+  // OpenClaw canonical format: content blocks with toolCall/toolUse/functionCall type.
+  // After normalization, tool calls are represented as content array blocks
+  // rather than top-level tool_calls (see agents/tool-call-id.ts).
+  if (Array.isArray(msg.content)) {
+    return msg.content.some(
+      (block: unknown) =>
+        block != null &&
+        typeof block === "object" &&
+        CONTENT_TOOL_CALL_BLOCK_TYPES.has(
+          (block as { type?: string }).type ?? "",
+        ),
+    );
+  }
+  return false;
+}
+
+function resolveMainSessionResumeBlockReason(messages: unknown[]): {
+  reason: string | null;
+  lastMeaningful: unknown;
+} {
+  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
+  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
+    return { reason: "transcript tail is not resumable", lastMeaningful };
+  }
+  if (isApprovalPendingToolResult(lastMeaningful)) {
+    return {
+      reason: "transcript tail is a stale approval-pending tool result",
+      lastMeaningful,
+    };
+  }
+  return { reason: null, lastMeaningful };
+}
+
+function buildResumeMessage(
+  pendingFinalDeliveryText?: string | null,
+  recoveredUserMessage?: string,
+  hasPendingToolCalls?: boolean,
+): string {
+  if (recoveredUserMessage) {
+    const truncated =
+      recoveredUserMessage.length > 500
+        ? `${recoveredUserMessage.slice(0, 500)}...`
+        : recoveredUserMessage;
+    // Delimit the recovered user text clearly so it cannot blend with
+    // the system recovery instruction or the idempotency guard (#95609).
+    // Sanitize to strip control characters and injected markers.
+    const sanitized = sanitizePendingFinalDeliveryText(truncated);
+    const untrustedBlock = wrapUntrustedPromptDataBlock({
+      label: "The user's original request",
+      text: sanitized,
+    });
+    const base =
+      "[System] I was interrupted mid-action by a gateway restart. " +
+      "The user's original request is shown below.\n\n" +
+      untrustedBlock + "\n\n";
+    const idempotencyGuard = hasPendingToolCalls
+      ? "IMPORTANT: Before taking any action, review the transcript to determine " +
+        "which tool calls from the interrupted turn were already completed. " +
+        "Do not re-execute completed side effects. "
+      : "";
+    return (
+      base +
+      idempotencyGuard +
+      "Continue from the existing transcript. Do not ask the user to repeat themselves."
+    );
+  }
   const base =
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
@@ -566,6 +729,9 @@ async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
+  recoveredUserMessage?: string;
+  /** When true, the assistant tail had pending tool_calls — add idempotency guard. */
+  hasPendingAssistantToolCalls?: boolean;
 }): Promise<boolean> {
   const sanitizedPendingText =
     typeof params.pendingFinalDeliveryText === "string"
@@ -578,7 +744,11 @@ async function resumeMainSession(params: {
   });
   try {
     const agentParams: Record<string, unknown> = {
-      message: buildResumeMessage(sanitizedPendingText),
+      message: buildResumeMessage(
+        sanitizedPendingText,
+        params.recoveredUserMessage,
+        params.hasPendingAssistantToolCalls,
+      ),
       sessionKey: params.sessionKey,
       idempotencyKey: crypto.randomUUID(),
       deliver: Boolean(deliveryContext),
@@ -821,8 +991,62 @@ async function recoverStore(params: {
       continue;
     }
 
-    const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
+    const { reason: resumeBlockReason, lastMeaningful } =
+      resolveMainSessionResumeBlockReason(messages);
     if (resumeBlockReason) {
+      const isNonResumableAssistantTail =
+        resumeBlockReason === "transcript tail is not resumable" &&
+        !isApprovalPendingToolResult(lastMeaningful) &&
+        hasInspectableContent(lastMeaningful);
+      if (isNonResumableAssistantTail) {
+        let lastUserMessage = findLastUserMessage(messages);
+        // The initial 20-message window may not contain a user message in
+        // long tool-loop transcripts. Try a larger window before giving up.
+        if (!lastUserMessage) {
+          try {
+            messages = await readSessionMessagesAsync(
+              {
+                agentId: resolveAgentIdFromSessionKey(sessionKey),
+                sessionEntry: entry,
+                sessionId: entry.sessionId,
+                sessionKey,
+                storePath: params.storePath,
+              },
+              {
+                mode: "recent",
+                maxMessages: 200,
+                maxBytes: 1024 * 1024,
+              },
+            );
+            lastUserMessage = findLastUserMessage(messages);
+          } catch {
+            // Keep the original 20-message slice; recovery will fall through
+            // to sendUnresumableSessionNotice below.
+          }
+        }
+        if (lastUserMessage) {
+          const pendingToolCalls = hasAssistantToolCalls(lastMeaningful);
+          // Gate side-effecting recovery: when the assistant tail has pending
+          // tool calls, automatic resume could re-execute completed side
+          // effects.  Fall through to sendUnresumableSessionNotice so the user
+          // can confirm before continuing (#95609).
+          if (!pendingToolCalls) {
+            const resumed = await resumeMainSession({
+              cfg: params.cfg,
+              entry,
+              storePath: params.storePath,
+              sessionKey,
+              recoveredUserMessage: lastUserMessage,
+              hasPendingAssistantToolCalls: false,
+            });
+            if (resumed) {
+              params.resumedSessionKeys.add(resumeDedupeKey);
+              result.recovered++;
+              continue;
+            }
+          }
+        }
+      }
       await sendUnresumableSessionNotice({
         cfg: params.cfg,
         entry,
