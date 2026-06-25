@@ -2,6 +2,7 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -125,6 +126,7 @@ type RunMessageActionInput = {
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
+    currentMessagingTarget?: string;
     currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
@@ -1194,6 +1196,47 @@ describe("message tool agent routing", () => {
     expect(call?.toolContext?.currentThreadTs).toBe("111.222");
     expect(call?.toolContext?.replyToMode).toBe("all");
   });
+
+  it("forwards the routable target through createOpenClawTools to the message tool", async () => {
+    mockSendResult({ channel: "slack", to: "user:U123" });
+    const plugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+
+    const tool = createOpenClawTools({
+      config: {} as never,
+      agentChannel: "slack",
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      target: "user:U123",
+      message: "stay in DM thread",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentChannelProvider: "slack",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    });
+  });
 });
 
 describe("message tool explicit target guard", () => {
@@ -1211,6 +1254,35 @@ describe("message tool explicit target guard", () => {
         filePath: "/tmp/report.png",
       }),
     ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "poll",
+      params: {
+        action: "poll",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    },
+    {
+      action: "sticker",
+      params: {
+        action: "sticker",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(tool.execute("1", params)).rejects.toThrow(/Explicit message target required/i);
 
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
@@ -2620,6 +2692,10 @@ describe("message tool internal-runtime-context sanitization", () => {
       name: "delivery hint only",
       message:
         "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+    {
+      name: "narration-aware delivery hint only",
+      message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",

@@ -1,5 +1,36 @@
+run_hosted_prepare_gates() {
+  local pr="$1"
+  local current_head="$2"
+  local changelog_only="$3"
+  local remote_head
+  remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  if [ "$remote_head" != "$current_head" ]; then
+    echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
+    return 1
+  fi
+
+  local repo
+  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  local args=(
+    scripts/verify-pr-hosted-gates.mjs
+    --repo "$repo"
+    --sha "$current_head"
+    --output ".local/gates-hosted-checks.json"
+  )
+  if [ "$changelog_only" = "true" ]; then
+    args+=(--changelog-only)
+  fi
+  run_quiet_logged "exact-head hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
+
+  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+    echo "A lease retry changed the prepared head, so its exact-head hosted evidence no longer applies."
+    echo "Stop here, wait for CI/Testbox on the pushed head, then re-run prepare-run."
+    return 1
+  fi
 
   bootstrap_deps_if_needed
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
@@ -14,7 +45,6 @@ prepare_gates() {
   enter_worktree "$pr" false
 
   checkout_prep_branch "$pr"
-  bootstrap_deps_if_needed
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091
   source .local/pr-meta.env
@@ -32,6 +62,10 @@ prepare_gates() {
   local docs_only=false
   if [ -n "$changed_files" ] && [ -z "$non_docs" ]; then
     docs_only=true
+  fi
+  local changelog_only=false
+  if [ "$changed_files" = "CHANGELOG.md" ]; then
+    changelog_only=true
   fi
 
   local changelog_required=false
@@ -85,8 +119,9 @@ prepare_gates() {
   fi
 
   local gates_mode="full"
+  local hosted_gates_head=""
   local reuse_gates=false
-  if [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
+  if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
     delta_since_verified=$(git diff --name-only "$previous_last_verified_head"..HEAD)
     if [ -z "$delta_since_verified" ] || file_list_is_docsish_only "$delta_since_verified"; then
@@ -94,10 +129,18 @@ prepare_gates() {
     fi
   fi
 
-  if [ "$reuse_gates" = "true" ]; then
+  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+    gates_mode="hosted_exact_head"
+    if [ "$changelog_only" = "true" ]; then
+      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
+    fi
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
+    hosted_gates_head="$current_head"
+  elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
   else
+    bootstrap_deps_if_needed
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
 
@@ -128,10 +171,12 @@ prepare_gates() {
     GATES_MODE "$gates_mode" \
     LAST_VERIFIED_HEAD_SHA "$current_head" \
     FULL_GATES_HEAD_SHA "${previous_full_gates_head:-}" \
+    HOSTED_GATES_HEAD_SHA "$hosted_gates_head" \
     GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/gates.env
 
   echo "docs_only=$docs_only"
+  echo "changelog_only=$changelog_only"
   echo "changelog_required=$changelog_required"
   echo "gates_mode=$gates_mode"
   echo "wrote=.local/gates.env"

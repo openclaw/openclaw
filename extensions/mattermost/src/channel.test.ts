@@ -74,6 +74,14 @@ function requireMattermostReplyToModeResolver() {
   return resolveReplyToMode;
 }
 
+function requireMattermostThreadTargetMatcher() {
+  const matchesToolContextTarget = mattermostPlugin.threading?.matchesToolContextTarget;
+  if (!matchesToolContextTarget) {
+    throw new Error("mattermost threading.matchesToolContextTarget missing");
+  }
+  return matchesToolContextTarget;
+}
+
 function requireMattermostSendText() {
   const sendText = mattermostPlugin.outbound?.sendText;
   if (!sendText) {
@@ -178,6 +186,324 @@ describe("mattermostPlugin", () => {
   });
 
   describe("threading", () => {
+    it("builds tool context from the effective Mattermost thread root", () => {
+      const buildToolContext = mattermostPlugin.threading?.buildToolContext;
+      if (!buildToolContext) {
+        throw new Error("mattermost threading.buildToolContext missing");
+      }
+      const hasRepliedRef = { value: false };
+
+      expect(
+        buildToolContext({
+          cfg: createMattermostTestConfig(),
+          accountId: "default",
+          context: {
+            To: "channel:C1",
+            ChatType: "channel",
+            CurrentMessageId: "child-1",
+            MessageThreadId: "root-1",
+          },
+          hasRepliedRef,
+        }),
+      ).toEqual({
+        currentChannelId: "channel:C1",
+        currentThreadTs: "root-1",
+        currentMessageId: "child-1",
+        replyToMode: "all",
+        hasRepliedRef,
+        sameChannelThreadRequired: true,
+      });
+    });
+
+    it.each(["first", "batched"] as const)(
+      "preserves %s mode when the current post starts the thread",
+      (replyToMode) => {
+        const buildToolContext = mattermostPlugin.threading?.buildToolContext;
+        if (!buildToolContext) {
+          throw new Error("mattermost threading.buildToolContext missing");
+        }
+
+        const context = buildToolContext({
+          cfg: {
+            channels: {
+              mattermost: {
+                replyToMode,
+              },
+            },
+          },
+          accountId: "default",
+          context: {
+            To: "channel:C1",
+            ChatType: "channel",
+            CurrentMessageId: "post-1",
+            MessageThreadId: "post-1",
+          },
+        });
+
+        expect(context?.replyToMode).toBe(replyToMode);
+      },
+    );
+
+    it("matches bare Mattermost channel ids against the active channel target", () => {
+      const matchesToolContextTarget = requireMattermostThreadTargetMatcher();
+
+      expect(
+        matchesToolContextTarget({
+          target: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
+          },
+        }),
+      ).toBe(true);
+      expect(
+        matchesToolContextTarget({
+          target: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:kqfek9psh7fw8mpa5berwyytqw",
+          },
+        }),
+      ).toBe(false);
+    });
+
+    it("exposes the effective reply root as the transport thread", () => {
+      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("mattermost threading.resolveReplyTransport missing");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "post-parent",
+          threadId: "other-thread",
+        }),
+      ).toEqual({
+        replyToId: "other-thread",
+        threadId: "other-thread",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: true,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: false,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          threadId: 42,
+        }),
+      ).toEqual({
+        replyToId: "42",
+        threadId: "42",
+      });
+    });
+
+    it("matches final delivery routing for existing threads and direct messages", () => {
+      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("mattermost threading.resolveReplyTransport missing");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          threadId: "root-post",
+          replyDelivery: {
+            chatType: "channel",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "other-root",
+          replyToIsExplicit: true,
+          threadId: "ambient-root",
+          replyDelivery: {
+            chatType: "channel",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: "other-root",
+        threadId: "other-root",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "dm-post",
+          replyDelivery: {
+            chatType: "direct",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: null,
+        threadId: null,
+      });
+    });
+
+    it("extracts explicit and implicit send thread evidence", () => {
+      const extractToolSend = mattermostPlugin.actions?.extractToolSend;
+      if (!extractToolSend) {
+        throw new Error("mattermost actions.extractToolSend missing");
+      }
+
+      expect(
+        extractToolSend({
+          args: { action: "send", to: "channel:C1", replyTo: "root-1" },
+        }),
+      ).toMatchObject({
+        to: "channel:C1",
+        threadId: "root-1",
+      });
+      expect(
+        extractToolSend({
+          args: { action: "send", to: "channel:C1" },
+        }),
+      ).toMatchObject({
+        to: "channel:C1",
+        threadImplicit: true,
+      });
+
+      const extractToolSendResult = mattermostPlugin.actions?.extractToolSendResult;
+      if (!extractToolSendResult) {
+        throw new Error("mattermost actions.extractToolSendResult missing");
+      }
+      expect(
+        extractToolSendResult({
+          send: { to: "channel:C1" },
+          result: {
+            details: {
+              toolSend: {
+                to: "channel:C1",
+                threadId: "root-1",
+              },
+            },
+          },
+        }),
+      ).toEqual({
+        to: "channel:C1",
+        threadId: "root-1",
+      });
+      expect(
+        extractToolSendResult({
+          send: { to: "user:U1" },
+          result: {
+            details: {
+              toolSend: {
+                to: "channel:DM1",
+              },
+            },
+          },
+        }),
+      ).toEqual({
+        to: "user:U1",
+      });
+    });
+
+    it("resolves the active Mattermost root for same-channel sends", () => {
+      const resolveAutoThreadId = mattermostPlugin.threading?.resolveAutoThreadId;
+      if (!resolveAutoThreadId) {
+        throw new Error("mattermost threading.resolveAutoThreadId missing");
+      }
+
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "channel:C1",
+          replyToId: "child-1",
+          toolContext: {
+            currentChannelId: "channel:C1",
+            currentThreadTs: "root-1",
+            currentMessageId: "child-1",
+            replyToMode: "off",
+          },
+        }),
+      ).toBe("root-1");
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "channel:C2",
+          toolContext: {
+            currentChannelId: "channel:C1",
+            currentThreadTs: "root-1",
+            replyToMode: "all",
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
+            currentThreadTs: "root-1",
+            replyToMode: "all",
+          },
+        }),
+      ).toBe("root-1");
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "channel:C1",
+          replyToId: "other-root",
+          toolContext: {
+            currentChannelId: "channel:C1",
+            currentThreadTs: "root-1",
+            currentMessageId: "child-1",
+            replyToMode: "all",
+          },
+        }),
+      ).toBe("other-root");
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "channel:C1",
+          toolContext: {
+            currentChannelId: "channel:C1",
+            currentThreadTs: "root-1",
+            currentMessageId: "root-1",
+            replyToMode: "first",
+            hasRepliedRef: { value: true },
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "channel:C1",
+          toolContext: {
+            currentChannelId: "channel:C1",
+            currentThreadTs: "root-1",
+            currentMessageId: "root-1",
+            replyToMode: "batched",
+          },
+        }),
+      ).toBeUndefined();
+    });
+
     it("uses replyToMode for channel messages and keeps direct messages off", () => {
       const resolveReplyToMode = requireMattermostReplyToModeResolver();
 
@@ -448,6 +774,49 @@ describe("mattermostPlugin", () => {
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
       expect(options.accountId).toBe("default");
       expect(options.replyToId).toBe("post-root");
+    });
+
+    it("uses threadId as the Mattermost root when generic replyTo names a child post", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            threadId: "post-root",
+            replyTo: "child-post",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("post-root");
+    });
+
+    it("keeps explicit replyToId precedence when threadId is also provided", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            replyToId: "explicit-root",
+            threadId: "post-root",
+            replyTo: "child-post",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("explicit-root");
     });
 
     it("routes filePath send actions through Mattermost media upload options", async () => {

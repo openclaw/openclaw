@@ -1,6 +1,6 @@
 // Git hook tests validate pre-commit hook behavior and scripts.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
@@ -18,6 +18,35 @@ const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.Process
     encoding: "utf8",
     env: env ? { ...baseRunEnv, ...env } : baseRunEnv,
   }).trim();
+};
+
+type FailedCommand = {
+  status: number;
+  stderr: string;
+  stdout: string;
+};
+
+const runFailure = (
+  cwd: string,
+  cmd: string,
+  args: string[] = [],
+  env?: NodeJS.ProcessEnv,
+): FailedCommand => {
+  try {
+    run(cwd, cmd, args, env);
+  } catch (error) {
+    if (error instanceof Error && "status" in error) {
+      const failure = error as Error & { status?: number; stderr?: string; stdout?: string };
+      return {
+        status: failure.status ?? 1,
+        stderr: String(failure.stderr ?? ""),
+        stdout: String(failure.stdout ?? ""),
+      };
+    }
+    throw error;
+  }
+
+  throw new Error("expected command to fail");
 };
 
 function writeExecutable(dir: string, name: string, contents: string): void {
@@ -52,6 +81,14 @@ function installPreCommitFixture(dir: string): string {
   mkdirSync(fakeBinDir, { recursive: true });
   writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
   return fakeBinDir;
+}
+
+function installRunNodeToolFixture(dir: string): void {
+  mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+  symlinkSync(
+    path.join(process.cwd(), "scripts", "pre-commit", "run-node-tool.sh"),
+    path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
+  );
 }
 
 function splitNonEmptyLines(output: string): string[] {
@@ -161,5 +198,58 @@ describe("git-hooks/pre-commit (integration)", () => {
     });
 
     expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
+  });
+});
+
+describe("scripts/pre-commit/run-node-tool.sh", () => {
+  it("runs the installed local tool without invoking pnpm", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-local-");
+    installRunNodeToolFixture(dir);
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    const fakeBinDir = path.join(dir, "bin");
+    const toolBinDir = path.join(dir, "node_modules", ".bin");
+    mkdirSync(fakeBinDir, { recursive: true });
+    mkdirSync(toolBinDir, { recursive: true });
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/usr/bin/env bash\necho 'pnpm should not run from run-node-tool' >&2\nexit 99\n",
+    );
+    writeExecutable(toolBinDir, "oxfmt", "#!/usr/bin/env bash\nprintf 'local:%s\\n' \"$*\"\n");
+
+    expect(
+      run(dir, "bash", ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"], {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      }),
+    ).toBe("local:--write a.ts");
+  });
+
+  it("fails before pnpm can hydrate dependencies when node_modules is missing", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-missing-deps-");
+    installRunNodeToolFixture(dir);
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    const fakeBinDir = path.join(dir, "bin");
+    const markerPath = path.join(dir, "pnpm-called");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      `#!/usr/bin/env bash\ntouch ${JSON.stringify(markerPath)}\nexit 99\n`,
+    );
+
+    const result = runFailure(
+      dir,
+      "bash",
+      ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"],
+      { PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Missing repo dependencies: cannot run oxfmt without node_modules.",
+    );
+    expect(existsSync(markerPath)).toBe(false);
   });
 });

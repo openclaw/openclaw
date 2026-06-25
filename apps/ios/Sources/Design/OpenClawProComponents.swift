@@ -5,7 +5,6 @@ enum OpenClawProMetric {
     static let cardRadius: CGFloat = 10
     static let controlRadius: CGFloat = 8
     static let bottomScrollInset: CGFloat = 96
-    static let heroRadius: CGFloat = 12
 }
 
 struct OpenClawProBackground: View {
@@ -250,13 +249,6 @@ struct OpenClawSidebarRevealButton: View {
         self.headerAction = action
     }
 
-    init(action: @escaping () -> Void) {
-        self.headerAction = OpenClawSidebarHeaderAction(
-            systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
-            action: action)
-    }
-
     var body: some View {
         let button = Button(action: self.headerAction.action) {
             Image(systemName: self.headerAction.systemName)
@@ -430,46 +422,6 @@ struct ProProgressBar: View {
     }
 }
 
-struct ProWorkRow: View {
-    let icon: String
-    let title: String
-    let detail: String
-    let state: String
-    let trailing: String
-    let color: Color
-    var progress: Double?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ProIconBadge(systemName: self.icon, color: self.color)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(self.title)
-                        .font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 8)
-                    Text(self.trailing)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Text(self.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    if let progress {
-                        ProProgressBar(progress: progress, color: self.color)
-                            .frame(maxWidth: 120)
-                    }
-                    Text(self.state)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(self.color)
-                }
-            }
-        }
-        .padding(.vertical, 9)
-    }
-}
-
 struct ProCapsule: View {
     @Environment(\.colorScheme) private var colorScheme
     let title: String
@@ -550,94 +502,6 @@ struct OpenClawGatewayCompactPill: View {
         case .disconnected:
             "wifi.slash"
         }
-    }
-}
-
-struct ProSegmentedControl: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let labels: [String]
-    @Binding var selection: Int
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(self.labels.enumerated()), id: \.offset) { index, label in
-                Button {
-                    self.selection = index
-                } label: {
-                    Text(label)
-                        .font(.subheadline.weight(self.selection == index ? .semibold : .regular))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(self.segmentFill(isSelected: self.selection == index), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background {
-            Capsule()
-                .fill(self.trackFill)
-                .overlay {
-                    Capsule().strokeBorder(self.trackStroke, lineWidth: 1)
-                }
-        }
-    }
-
-    private func segmentFill(isSelected: Bool) -> Color {
-        guard isSelected else { return .clear }
-        return self.colorScheme == .dark ? Color.white.opacity(0.12) : Color.primary.opacity(0.08)
-    }
-
-    private var trackFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.72)
-    }
-
-    private var trackStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)
-    }
-}
-
-struct ProHeroActionButton: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let detail: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: self.action) {
-            HStack(spacing: 12) {
-                Image(systemName: self.systemImage)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .background(OpenClawBrand.accentHot, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(self.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "arrow.right")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(OpenClawBrand.accentHot)
-            }
-            .padding(12)
-            .proGlassSurface(
-                fill: self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.68),
-                stroke: OpenClawBrand.accent.opacity(self.colorScheme == .dark ? 0.22 : 0.14),
-                radius: 18,
-                isProminent: true,
-                interactive: true)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -793,26 +657,5 @@ struct ProStatusRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-    }
-}
-
-struct ProTimelineRow: View {
-    let done: Bool
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ProIconBadge(
-                systemName: self.done ? "checkmark.circle.fill" : "clock.fill",
-                color: self.done ? OpenClawBrand.ok : OpenClawBrand.warn)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(self.title)
-                    .font(.subheadline.weight(.medium))
-                Text(self.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 }

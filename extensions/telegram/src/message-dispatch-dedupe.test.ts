@@ -11,8 +11,11 @@ import {
   claimTelegramMessageDispatchReplay,
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
+  forgetTelegramMessageDispatchReplay,
   releaseTelegramMessageDispatchReplay,
   TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+  TelegramMessageDispatchReplayForgetError,
+  type TelegramMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
 
 const tempDirs: string[] = [];
@@ -202,6 +205,29 @@ describe("Telegram message dispatch replay guard", () => {
     await expect(duplicate).resolves.toEqual({
       kind: "claimed",
       key: first.key,
+    });
+  });
+
+  it("fails rollback when a committed dispatch key cannot be forgotten", async () => {
+    const guard = {
+      claim: async () => ({ kind: "claimed" }),
+      commit: async () => true,
+      forget: async (key: string) => key !== "failed-key",
+      hasRecent: async () => false,
+      warmup: async () => 0,
+      clearMemory: () => {},
+      memorySize: () => 0,
+      release: () => {},
+    } satisfies TelegramMessageDispatchReplayGuard;
+
+    await expect(
+      forgetTelegramMessageDispatchReplay({
+        guard,
+        keys: ["ok-key", "failed-key", "failed-key"],
+      }),
+    ).rejects.toMatchObject({
+      name: TelegramMessageDispatchReplayForgetError.name,
+      failures: [{ key: "failed-key" }],
     });
   });
 });

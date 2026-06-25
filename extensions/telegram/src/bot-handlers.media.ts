@@ -19,12 +19,6 @@ export function hasInboundMedia(msg: Message): boolean {
   );
 }
 
-export function hasReplyTargetMedia(msg: Message): boolean {
-  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const replyTarget = msg.reply_to_message ?? externalReply;
-  return Boolean(replyTarget && hasInboundMedia(replyTarget));
-}
-
 export function resolveInboundMediaFileId(msg: Message): string | undefined {
   return (
     msg.sticker?.file_id ??

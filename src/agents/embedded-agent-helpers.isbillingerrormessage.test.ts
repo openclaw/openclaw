@@ -1,6 +1,7 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
 import {
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
@@ -1034,6 +1035,66 @@ describe("image dimension errors", () => {
       raw,
     });
     expect(isImageDimensionErrorMessage(raw)).toBe(true);
+  });
+});
+
+describe("classifyAssistantFailoverReason", () => {
+  const opencodeGoStalledStreamError = {
+    role: "assistant" as const,
+    api: "openai-completions" as const,
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    content: [],
+    timestamp: 0,
+  };
+
+  it("classifies opencode-go provider-owned stalled streams as timeout", () => {
+    expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
+  });
+
+  it("does not classify caller-aborted assistant messages as provider failover", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        stopReason: "aborted",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses structured assistant error bodies for model-not-found 400s", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openai",
+        model: "some-model-id",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+        errorBody:
+          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+        content: [],
+        timestamp: 0,
+      }),
+    ).toBe("model_not_found");
   });
 });
 

@@ -23,6 +23,12 @@ export const icons = {
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </svg>
   `,
+  clock: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  `,
   link: html`
     <svg viewBox="0 0 24 24">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -153,17 +159,18 @@ export const icons = {
   `,
   layoutComfortable: html`
     <svg viewBox="0 0 24 24">
-      <rect width="7" height="7" x="3" y="3" rx="1" />
-      <rect width="7" height="7" x="14" y="3" rx="1" />
-      <rect width="7" height="7" x="3" y="14" rx="1" />
-      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="16" height="5" x="4" y="4" rx="1.5" />
+      <rect width="16" height="5" x="4" y="15" rx="1.5" />
+      <line x1="7" x2="16" y1="7" y2="7" />
+      <line x1="7" x2="16" y1="18" y2="18" />
     </svg>
   `,
   layoutCompact: html`
     <svg viewBox="0 0 24 24">
-      <rect width="18" height="3" x="3" y="5" rx="1" />
-      <rect width="18" height="3" x="3" y="11" rx="1" />
-      <rect width="18" height="3" x="3" y="17" rx="1" />
+      <rect width="16" height="3" x="4" y="4" rx="1" />
+      <rect width="16" height="3" x="4" y="9" rx="1" />
+      <rect width="16" height="3" x="4" y="14" rx="1" />
+      <rect width="16" height="3" x="4" y="19" rx="1" />
     </svg>
   `,
   arrowDown: html`
@@ -496,6 +503,13 @@ export const icons = {
       <path d="M10 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  panelRightClose: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" stroke-linecap="round" />
+      <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
   maximize: html`
     <svg viewBox="0 0 24 24">
       <polyline points="15 3 21 3 21 9" />
@@ -518,23 +532,4 @@ export type IconName = keyof typeof icons;
 
 export function icon(name: IconName): TemplateResult {
   return icons[name];
-}
-
-export function renderIcon(name: IconName, className = "nav-item__icon"): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${icons[name]}</span>`;
-}
-
-// Legacy function for compatibility
-export function renderEmojiIcon(
-  iconContent: string | TemplateResult,
-  className: string,
-): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${iconContent}</span>`;
-}
-
-export function setEmojiIcon(target: HTMLElement | null, iconLocal: string): void {
-  if (!target) {
-    return;
-  }
-  target.textContent = iconLocal;
 }

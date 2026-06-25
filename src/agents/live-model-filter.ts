@@ -21,6 +21,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3-flash-preview",
+  "moonshot/kimi-k2.7-code",
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
@@ -232,11 +233,6 @@ export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
 /** Return whether a ref belongs to the curated small-model live lane. */
 export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
-}
-
-/** Return whether a ref is explicitly prioritized for the small-model live lane. */
-export function isPrioritizedSmallLiveModelRef(ref: ModelRef): boolean {
-  return isSmallLiveModelRef(ref);
 }
 
 /** List high-signal priority refs in priority order. */

@@ -13,6 +13,7 @@ import { NonEmptyString } from "./primitives.js";
 function cronAgentTurnPayloadSchema(params: {
   message: TSchema;
   model: TSchema;
+  fallbacks: TSchema;
   toolsAllow: TSchema;
 }) {
   return Type.Object(
@@ -20,12 +21,15 @@ function cronAgentTurnPayloadSchema(params: {
       kind: Type.Literal("agentTurn"),
       message: params.message,
       model: Type.Optional(params.model),
-      fallbacks: Type.Optional(Type.Array(Type.String())),
+      fallbacks: Type.Optional(params.fallbacks),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),
+      // Server-managed marker for auto-stamped defaults; persisted so CLI cron
+      // runs can drop only the cap that was never user-explicit.
+      toolsAllowIsDefault: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );
@@ -232,6 +236,7 @@ export const CronPayloadSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
     model: Type.String(),
+    fallbacks: Type.Array(Type.String()),
     toolsAllow: Type.Array(Type.String()),
   }),
   cronCommandPayloadSchema({
@@ -251,6 +256,7 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     model: Type.Union([Type.String(), Type.Null()]),
+    fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
   cronCommandPayloadSchema({
@@ -463,6 +469,7 @@ export const CronListParamsSchema = Type.Object(
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
     agentId: Type.Optional(NonEmptyString),
+    compact: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

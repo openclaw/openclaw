@@ -97,7 +97,11 @@ function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  return parseStrictPositiveInteger(raw);
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error("--invoke-timeout must be a positive integer.");
+  }
+  return parsed;
 }
 
 function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): number | undefined {
@@ -118,6 +122,14 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
   const parsed = parseStrictFiniteNumber(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a number.`);
+  }
+  return parsed;
+}
+
+function parseCanvasSnapshotQualityOption(raw: string | undefined): number | undefined {
+  const parsed = parseCanvasFiniteNumberOption(raw, "--quality");
+  if (parsed !== undefined && (parsed < 0 || parsed > 1)) {
+    throw new Error("--quality must be between 0 and 1.");
   }
   return parsed;
 }
@@ -245,8 +257,8 @@ async function invokeCanvas(
   command: string,
   params?: Record<string, unknown>,
 ) {
-  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   return await deps.callGatewayCli(
     "node.invoke",
     opts,
@@ -278,7 +290,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
         await deps.runNodesCommand("canvas snapshot", async () => {
           const format = parseCanvasSnapshotRequestFormat(opts.format);
           const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
-          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
+          const quality = parseCanvasSnapshotQualityOption(opts.quality);
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
             format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,

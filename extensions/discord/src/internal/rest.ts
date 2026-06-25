@@ -39,6 +39,7 @@ export type RequestClientOptions = {
   baseUrl?: string;
   apiVersion?: number;
   userAgent?: string;
+  signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
@@ -237,13 +238,16 @@ export class RequestClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
     timeout.unref?.();
+    const signal = this.options.signal
+      ? AbortSignal.any([this.options.signal, controller.signal])
+      : controller.signal;
     this.requestControllers.add(controller);
     try {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
         body: await normalizeFetchBody(body, headers),
-        signal: controller.signal,
+        signal,
       });
       const text = await response.text();
       const parsed = coerceResponseBody(text);

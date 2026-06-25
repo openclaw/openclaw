@@ -450,6 +450,131 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("prefers a fresh light snippet outside the top diary-covered candidates", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const stalePath = path.join(workspaceDir, "memory", "2026-04-03.md");
+    const freshPath = path.join(workspaceDir, "memory", "2026-04-04.md");
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    const staleSnippets = [
+      "初次见面时，我第一次醒来并认识了主人。",
+      "The first morning began beside a quiet terminal.",
+      "An early config file felt like the first map of home.",
+      "The initial heartbeat made the empty workspace feel awake.",
+    ];
+    await fs.writeFile(stalePath, `${staleSnippets.join("\n")}\n`, "utf-8");
+    await fs.writeFile(
+      freshPath,
+      "Later routing notes: queue hydration changed after plugin reload.\n",
+      "utf-8",
+    );
+    for (const [index, snippet] of staleSnippets.entries()) {
+      for (let recall = 0; recall < staleSnippets.length - index; recall += 1) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `first-day-${index}-${recall}`,
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: index + 1,
+              endLine: index + 1,
+              score: 0.93,
+              snippet,
+              source: "memory",
+            },
+          ],
+        });
+      }
+    }
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "routing queue reload",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-04.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Later routing notes: queue hydration changed after plugin reload.",
+          source: "memory",
+        },
+      ],
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "DREAMS.md"),
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        ...staleSnippets.flatMap((snippet, index) => [
+          "---",
+          "",
+          `*April ${index + 1}, 2026, 10:00 AM UTC*`,
+          "",
+          snippet,
+          "",
+        ]),
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const subagent = createMockNarrativeSubagent("A later routing note finally took the page.");
+    const testConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                  },
+                  rem: {
+                    enabled: false,
+                    limit: 0,
+                    lookbackDays: 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs,
+    });
+
+    const message = firstNarrativeRun(subagent).message;
+    expect(message).toContain("Later routing notes: queue hydration changed after plugin reload.");
+    expect(message).toContain("Recent diary entries already written");
+    expect(message).not.toContain("\n- 初次见面时，我第一次醒来并认识了主人。");
+  });
+
   it("triggers light dreaming when the token is embedded in a reminder body", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
@@ -1860,6 +1985,78 @@ describe("memory-core dreaming phases", () => {
     const newOccurrences = combinedCorpus.match(/Keep retention at 365 days\./g)?.length ?? 0;
     expect(oldOccurrences).toBe(1);
     expect(newOccurrences).toBe(1);
+  });
+
+  it("skips reset/deleted archive artifacts without active transcripts during session ingestion", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const archivePath = path.join(
+      sessionsDir,
+      "archived-only.jsonl.deleted.2026-04-06T01-00-00.000Z",
+    );
+    await fs.writeFile(
+      archivePath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [{ type: "text", text: "Archived session should not be dreamed." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const mtime = new Date("2026-04-06T01:05:00.000Z");
+    await fs.utimes(archivePath, mtime, mtime);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    await expectPathMissing(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+    );
+
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
   });
 
   it("buckets session snippets by per-message day rather than file mtime", async () => {

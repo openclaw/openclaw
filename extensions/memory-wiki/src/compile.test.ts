@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
+import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -90,7 +91,6 @@ describe("compileMemoryWikiVault", () => {
       }),
       "utf8",
     );
-
     const result = await compileMemoryWikiVault(config);
 
     expect(result.pageCounts.source).toBe(1);
@@ -119,6 +119,46 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+  });
+
+  it("discovers pages in nested subdirectories during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "top.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
+        body: "# Top Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "sub", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+        body: "# Nested Source\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.pageCounts.source).toBe(2);
+    // Root index should link to both
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Top Source](sources/top.md)",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sources/sub/nested.md)",
+    );
+    // Sources index should link to nested file
+    await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sub/nested.md)",
+    );
   });
 
   it("renders native directory index links relative to each generated index", async () => {
@@ -489,6 +529,29 @@ describe("compileMemoryWikiVault", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "raw-alpha.md"),
+      `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "tracked-raw-alpha.md"),
+      `# Tracked Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nImported source body was damaged.\n`,
+      "utf8",
+    );
+    await writeMemoryWikiSourceSyncState(config.vault.path, {
+      version: 1,
+      entries: {
+        tracked: {
+          group: "bridge",
+          pagePath: "sources/tracked-raw-alpha.md",
+          sourcePath: "/tmp/MEMORY.md",
+          sourceUpdatedAtMs: 1,
+          sourceSize: 2,
+          renderFingerprint: "tracked-fingerprint",
+        },
+      },
+    });
 
     const result = await compileMemoryWikiVault(config);
 
@@ -517,6 +580,12 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("[Alpha](../entities/alpha.md): missing updatedAt");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
+    ).resolves.not.toContain("[Raw Alpha Source](../sources/raw-alpha.md)");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
+    ).resolves.toContain("Tracked Raw Alpha Source");
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {
@@ -528,6 +597,85 @@ describe("compileMemoryWikiVault", () => {
     expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
       "claim.alpha.db",
     );
+  });
+
+  it("excludes concept and synthesis pages from stale-pages report", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "entity-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha Entity",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Entity\n",
+      }),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "source-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+
+    // Concept page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "concept-beta.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.beta",
+          title: "Beta Concept",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Beta Concept\n",
+      }),
+      "utf8",
+    );
+
+    // Synthesis page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "synthesis-gamma.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.gamma",
+          title: "Gamma Synthesis",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Gamma Synthesis\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const stalePages = await fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8");
+
+    // Entity and source pages still appear in stale-pages
+    expect(stalePages).toContain("[Alpha Entity](../entities/entity-alpha.md)");
+    expect(stalePages).toContain("[Alpha Source](../sources/source-alpha.md)");
+    // Concept and synthesis pages are excluded
+    expect(stalePages).not.toContain("[Beta Concept](../concepts/concept-beta.md)");
+    expect(stalePages).not.toContain("[Gamma Synthesis](../syntheses/synthesis-gamma.md)");
   });
 
   it("skips dashboard report pages when createDashboards is disabled", async () => {

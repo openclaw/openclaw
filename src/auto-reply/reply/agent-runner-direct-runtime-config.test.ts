@@ -175,7 +175,7 @@ describe("runReplyAgent runtime config", () => {
     enqueueFollowupRunMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
-    resolveReplyToModeMock.mockReturnValue("default");
+    resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
     runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
@@ -284,6 +284,14 @@ describe("runReplyAgent runtime config", () => {
     });
     expect(getReplyPayloadMetadata(result)).toEqual({
       deliverDespiteSourceReplySuppression: true,
+      replyDelivery: {
+        chatType: "direct",
+        replyToMode: "all",
+      },
+      replyDeliverySource: {
+        channel: "telegram",
+        accountId: "default",
+      },
     });
   });
 

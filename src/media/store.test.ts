@@ -794,6 +794,28 @@ describe("media store", () => {
       run: async (storeEntry: typeof import("./store.js")) => await storeEntry.cleanOldMedia(1_000),
     },
     {
+      name: "stays at the media root during non-recursive cleanup and retains first-level subdirs",
+      setup: async (storeRoot: typeof import("./store.js")) => {
+        const rootFile = await storeRoot.saveMediaBuffer(Buffer.from("old root"), "text/plain", "");
+        const inbound = await storeRoot.saveMediaBuffer(
+          Buffer.from("retained inbound"),
+          "text/plain",
+          "inbound",
+        );
+        const past = Date.now() - 10_000;
+        await fs.utimes(rootFile.path, past / 1000, past / 1000);
+        await fs.utimes(inbound.path, past / 1000, past / 1000);
+        return {
+          // recursive:false must stay at the media root, so retained subdir media survives even
+          // when older than the TTL. Guards the fs-safe maxDepth/recursive mapping in cleanOldMedia.
+          removedFiles: [rootFile.path],
+          preservedFiles: [inbound.path],
+        };
+      },
+      run: async (storeNonRecursive: typeof import("./store.js")) =>
+        await storeNonRecursive.cleanOldMedia(1_000, { recursive: false }),
+    },
+    {
       name: "prunes empty directory chains after recursive cleanup",
       setup: async (storeResult: typeof import("./store.js")) => {
         const nested = await storeResult.saveMediaBuffer(

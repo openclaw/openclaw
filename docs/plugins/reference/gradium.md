@@ -12,7 +12,7 @@ Adds text-to-speech provider support.
 ## Distribution
 
 - Package: `@openclaw/gradium-speech`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/gradium-speech`
 
 ## Surface
 

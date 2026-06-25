@@ -53,10 +53,6 @@ enum OnboardingStateStore {
         defaults.set(true, forKey: self.firstRunIntroSeenDefaultsKey)
     }
 
-    static func markIncomplete(defaults: UserDefaults = .standard) {
-        defaults.set(false, forKey: self.completedDefaultsKey)
-    }
-
     static func reset(defaults: UserDefaults = .standard) {
         defaults.set(false, forKey: self.completedDefaultsKey)
         defaults.set(false, forKey: self.firstRunIntroSeenDefaultsKey)

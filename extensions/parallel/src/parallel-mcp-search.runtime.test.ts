@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
   url: string;
@@ -42,6 +43,28 @@ function jsonResponse(body: unknown, headers?: Record<string, string>): Response
     status: 200,
     headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 function readBody(call: EndpointCall): Record<string, unknown> {
@@ -201,6 +224,10 @@ describe("runParallelMcpSearch", () => {
     expect(headerOf(endpointMockState.calls[2], "MCP-Protocol-Version")).toBe("2025-06-18");
     // No bearer token on the anonymous free path.
     expect(headerOf(endpointMockState.calls[0], "Authorization")).toBeUndefined();
+    // Every call identifies OpenClaw at the HTTP layer (not just node).
+    for (const call of endpointMockState.calls) {
+      expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
+    }
     // tools/call carries the documented web_search args.
     const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
@@ -265,5 +292,47 @@ describe("runParallelMcpSearch", () => {
     await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
       /initialize failed \(500\)/,
     );
+  });
+
+  it("bounds initialize error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    endpointMockState.responses.push(tracked.response);
+
+    const error = await runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }).catch(
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/initialize failed \(503\): parallel mcp unavailable/);
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful MCP bodies without using response.text()", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "Content-Type": "application/json" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    endpointMockState.responses.push(streamed.response);
+
+    const error = await runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }).catch(
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "Parallel MCP: text response exceeds 16777216 bytes",
+    );
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

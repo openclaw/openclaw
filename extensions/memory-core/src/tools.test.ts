@@ -1,6 +1,7 @@
 // Memory Core tests cover tools plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
@@ -10,9 +11,13 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+import {
+  buildMemorySearchUnavailableResult,
+  MemoryGetSchema,
+  MemorySearchSchema,
+} from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -116,6 +121,37 @@ describe("memory_search unavailable payloads", () => {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
+    });
+  });
+
+  it("returns explicit unavailable metadata for missing node:sqlite failures", async () => {
+    const error =
+      "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite";
+    setMemorySearchImpl(async () => {
+      throw new Error(error);
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("missing-node-sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error,
+      warning:
+        "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+      action:
+        "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+    });
+  });
+
+  it("keeps explicit unavailable metadata overrides for missing node:sqlite reasons", () => {
+    const result = buildMemorySearchUnavailableResult("missing node:sqlite", {
+      warning: "custom warning",
+      action: "custom action",
+    });
+
+    expectUnavailableMemorySearchDetails(result, {
+      error: "missing node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
     });
   });
 
@@ -257,6 +293,59 @@ describe("memory_search unavailable payloads", () => {
     ]);
     expect(searchCalls).toBe(2);
     expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: undefined }),
+      expect.objectContaining({ purpose: undefined }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("re-resolves and closes one-shot CLI managers when a cached sqlite handle was closed", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        throw new Error("database is not open");
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+      oneShotCliRun: true,
+    });
+    const result = await tool.execute("closed-db-cli", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "Thread-hidden codename: ORBIT-22.",
+        source: "memory",
+      },
+    ]);
+    expect(searchCalls).toBe(2);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: "cli" }),
+      expect.objectContaining({ purpose: "cli" }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {

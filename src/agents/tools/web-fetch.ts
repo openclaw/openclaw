@@ -17,8 +17,9 @@ import { wrapExternalContent, wrapWebContent } from "../../security/external-con
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
-import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -211,6 +212,42 @@ const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
   includeWarning: false,
 }).length;
+
+function formatTerminalWebFetchOrigin(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatWebFetchTerminalPresentation(result: unknown): { text: string } | undefined {
+  if (!isRecord(result) || !isRecord(result.details)) {
+    return undefined;
+  }
+  const details = result.details;
+  const origin =
+    formatTerminalWebFetchOrigin(details.finalUrl) ?? formatTerminalWebFetchOrigin(details.url);
+  const status = typeof details.status === "number" ? details.status : undefined;
+  if (!origin || status === undefined) {
+    return undefined;
+  }
+  const lines = [`Web fetch completed.`, `Origin: ${origin}`, `Status: ${status}`];
+  if (typeof details.contentType === "string" && details.contentType.trim()) {
+    lines.push(`Content type: ${details.contentType.trim()}`);
+  }
+  if (typeof details.rawLength === "number" && Number.isFinite(details.rawLength)) {
+    lines.push(`Content length: ${Math.max(0, Math.floor(details.rawLength))} characters`);
+  }
+  if (details.truncated === true) {
+    lines.push("Truncated: yes");
+  }
+  return { text: lines.join("\n") };
+}
 
 function wrapWebFetchContent(
   value: string,
@@ -673,7 +710,7 @@ export function createWebFetchTool(options?: {
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  return {
+  const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
     description:
@@ -770,4 +807,7 @@ export function createWebFetchTool(options?: {
       }
     },
   };
+  return setToolTerminalPresentation(tool, (_params, result) =>
+    formatWebFetchTerminalPresentation(result),
+  );
 }

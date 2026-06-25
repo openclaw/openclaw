@@ -15,7 +15,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
+import { resolveSessionTotalTokens } from "../config/sessions.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -360,17 +361,16 @@ export async function sessionsCommand(
   }
 
   const allRows = targets.flatMap((target) => {
-    const store = loadSessionStore(target.storePath);
-    return Object.entries(store)
-      .filter(([, entry]) => {
+    return listSessionEntries({ agentId: target.agentId, storePath: target.storePath })
+      .filter(({ entry }) => {
         if (activeMinutes === undefined) {
           return true;
         }
         const updatedAt = entry?.updatedAt;
         return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
       })
-      .map(([key, entry]) => {
-        const row = toSessionDisplayRow(key, entry);
+      .map(({ sessionKey, entry }) => {
+        const row = toSessionDisplayRow(sessionKey, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
         const acpSessionKey = resolveStoredSessionKeyForAgentStore({
           cfg,
@@ -402,7 +402,7 @@ export async function sessionsCommand(
           agentId,
           acpRuntime,
           agentRuntime,
-          kind: classifySessionKind(row.key, store[row.key]),
+          kind: classifySessionKind(row.key, entry),
           runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
             cfg,
             key: row.key,

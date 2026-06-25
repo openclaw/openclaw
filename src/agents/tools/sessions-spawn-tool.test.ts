@@ -132,7 +132,19 @@ describe("sessions_spawn tool", () => {
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 
-    const tool = createSessionsSpawnTool();
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
@@ -143,6 +155,7 @@ describe("sessions_spawn tool", () => {
 
     expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
     expect(tool.description).toContain('runtime="acp"');
+    expect(tool.description).toContain('unless ACP uses `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
@@ -259,6 +272,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.thread).toBeUndefined();
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(tool.description).not.toContain("thread-bound");
+    expect(tool.description).not.toContain("session-mode output stays in thread");
   });
 
   it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {
@@ -542,6 +556,7 @@ describe("sessions_spawn tool", () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
       agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
@@ -573,11 +588,13 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.streamTo).toBe("parent");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
+    expect(spawnContext.requesterAgentIdOverride).toBe("main");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
     expect(registration.runId).toBe("run-acp");
     expect(registration.childSessionKey).toBe("agent:codex:acp:1");
     expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterAgentId).toBe("main");
     expect(registration.task).toBe("investigate the failing CI run");
     expect(registration.cleanup).toBe("keep");
     expect(registration.spawnMode).toBe("session");

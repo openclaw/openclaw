@@ -20,6 +20,28 @@ const buildResponse = (params: { status: number; body?: unknown }): MockResponse
   };
 };
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
     const fetcher = vi.fn();
@@ -64,5 +86,31 @@ describe("fetchPluralKitMessageInfo", () => {
 
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
+  });
+
+  it("bounds PluralKit API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
+      status: 500,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetcher = vi.fn(async () => tracked.response);
+
+    let caught: Error | undefined;
+    try {
+      await fetchPluralKitMessageInfo({
+        messageId: "boom",
+        config: { enabled: true },
+        fetcher: fetcher as unknown as typeof fetch,
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("PluralKit API failed (500): plural failure");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_400);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

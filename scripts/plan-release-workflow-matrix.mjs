@@ -100,7 +100,14 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "MiniMax",
     providers: "minimax",
+    models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+    max_models: "2",
     profiles: "stable full",
+  },
+  {
+    provider_label: "Moonshot",
+    providers: "moonshot",
+    profiles: "full",
   },
   {
     provider_label: "OpenAI",

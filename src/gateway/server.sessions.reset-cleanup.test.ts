@@ -264,6 +264,97 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
 });
 
+test("sessions.reset finishes after lifecycle rotation during destructive cleanup", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  const prepareFreshSession = installAcpRuntimeBackendWithFreshSession();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-1",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
+      },
+    }),
+  });
+  let lifecycleCurrent = true;
+  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
+    lifecycleCurrent = false;
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "new",
+    commandSource: "gateway:agent",
+    assertCurrent: () => {
+      if (!lifecycleCurrent) {
+        throw new Error("stale lifecycle");
+      }
+    },
+  });
+
+  expect(reset.ok).toBe(true);
+  expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+  expect(prepareFreshSession).not.toHaveBeenCalled();
+});
+
+test("sessions.reset preserves a newer session after lifecycle rotation", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  installAcpRuntimeBackendWithFreshSession();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-1",
+    }),
+  });
+  let lifecycleCurrent = true;
+  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
+    lifecycleCurrent = false;
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("new-owner-session"),
+      },
+    });
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  await expect(
+    performGatewaySessionReset({
+      key: "main",
+      reason: "new",
+      commandSource: "gateway:agent",
+      assertCurrent: () => {
+        if (!lifecycleCurrent) {
+          throw new Error("stale lifecycle");
+        }
+      },
+    }),
+  ).rejects.toThrow("stale lifecycle");
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  expect(store["agent:main:main"]?.sessionId).toBe("new-owner-session");
+});
+
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -562,4 +653,25 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset preserves explicit responseUsage preference across session rollover", async () => {
+  // Regression: a full session reset must carry the user's display preference forward
+  // so the usage footer mode survives rollovers. Only /usage reset clears the override.
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { responseUsage: "tokens" }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; responseUsage?: string };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.responseUsage).toBe("tokens");
 });

@@ -22,7 +22,6 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
-  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -34,6 +33,7 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   mode: "enforce" as const,
   pruneAfterMs: 7 * DAY_MS,
   maxEntries: 500,
+  modelRunPruneAfterMs: DAY_MS,
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
@@ -132,6 +132,126 @@ describe("Integration: saveSessionStore with pruning", () => {
     } else {
       process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
+  });
+
+  it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const normalRecent = "agent:main:explicit:normal-recent";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+      [normalRecent]: makeEntry(now - 2 * DAY_MS),
+    };
+
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        pruneAfterMs: 30 * DAY_MS,
+        maxEntries: 2,
+      },
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
+    expect(loaded).toHaveProperty(normalRecent);
+  });
+
+  it("sessions cleanup dry-run and apply report stale model-run probe pruning", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174010";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174011";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const cfg = { session: { store: storePath } };
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+    const defaultDryRun = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(defaultDryRun.previewResults[0]?.summary.modelRunPruned).toBe(0);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 1,
+        },
+      },
+    });
+    const dryRun = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.modelRunPruned).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    const applied = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: false, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.modelRunPruned).toBe(1);
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
+  });
+
+  it("saveSessionStore pressure-gates unset default model-run pruning", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174020";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174021";
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+    await saveSessionStore(storePath, {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+    });
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 1,
+        },
+      },
+    });
+    await saveSessionStore(storePath, loadSessionStore(storePath, { skipCache: true }));
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
@@ -890,57 +1010,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     } finally {
       unregister();
     }
-  });
-
-  it("persists quota suspension TTL transitions through writer maintenance", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      suspended: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 30_000,
-          expectedResumeBy: now - 1,
-          state: "suspended",
-          reason: "quota_exhausted",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-      active: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 61_000,
-          expectedResumeBy: now - 31_000,
-          state: "active",
-          reason: "circuit_open",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-    };
-    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
-
-    const result = await runQuotaSuspensionMaintenance({
-      storePath,
-      now,
-      ttlMs: 30_000,
-      log: false,
-    });
-
-    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
-    const loaded = loadSessionStore(storePath, { skipCache: true });
-    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(loaded.active?.quotaSuspension).toBeUndefined();
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {

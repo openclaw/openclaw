@@ -381,6 +381,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-room-partial-streaming-preview",
       "matrix-room-quiet-streaming-preview",
       "matrix-room-tool-progress-preview",
+      "matrix-room-tool-progress-command-preview",
       "matrix-room-tool-progress-preview-opt-out",
       "matrix-room-tool-progress-error",
       "matrix-room-tool-progress-mention-safety",
@@ -3283,6 +3284,99 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.previewBodyPreview).toBe("- `tool: exec_command`");
     expect(artifacts.previewEventId).toBe("$tool-progress-generic-preview");
     expect(artifacts.reply?.eventId).toBe("$tool-progress-generic-final");
+  });
+
+  it("rejects stale Matrix command text after command progress completes", async () => {
+    const previewEventId = "$tool-progress-command-preview";
+    mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-command-trigger",
+      events: [
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: previewEventId,
+            body: "Working\n`🔧 Exec: matrix-command-progress-start`",
+          }),
+          since: "driver-sync-preview",
+        },
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: "$tool-progress-command-update",
+            body: "Working\n`🔧 Exec: matrix-command-progress-start`\n`🔧 Exec: completed`",
+            relatesTo: {
+              relType: "m.replace",
+              eventId: previewEventId,
+            },
+          }),
+          since: "driver-sync-progress",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-command-preview");
+
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).rejects.toThrow(
+      "Matrix command progress kept stale command text after completion",
+    );
+  });
+
+  it("accepts completed Matrix command progress when the stale command line is gone", async () => {
+    const previewEventId = "$tool-progress-command-clean-preview";
+    mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-command-clean-trigger",
+      events: [
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: previewEventId,
+            body: "Working\n`🔧 Exec: matrix-command-progress-start`",
+          }),
+          since: "driver-sync-preview",
+        },
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: "$tool-progress-command-clean-update",
+            body: "Working\n`🔧 Exec: completed`",
+            relatesTo: {
+              relType: "m.replace",
+              eventId: previewEventId,
+            },
+          }),
+          since: "driver-sync-progress",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-command-clean-final",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                "MATRIX_QA_TOOL_PROGRESS_COMMAND",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-final",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-command-preview");
+
+    const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
+    const artifacts = result.artifacts as {
+      previewBodyPreview?: unknown;
+      previewEventId?: unknown;
+      reply?: { eventId?: unknown; tokenMatched?: unknown };
+    };
+    expect(artifacts.previewBodyPreview).toBe("Working\n`🔧 Exec: completed`");
+    expect(artifacts.previewEventId).toBe(previewEventId);
+    expect(artifacts.reply?.eventId).toBe("$tool-progress-command-clean-final");
+    expect(artifacts.reply?.tokenMatched).toBe(true);
   });
 
   it("reports Matrix tool progress preview candidates when the progress wait times out", async () => {

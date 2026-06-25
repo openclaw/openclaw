@@ -16,6 +16,14 @@ vi.mock("./helpers.js", () => ({
   resolveCommandOptionArgs: resolveCommandOptionArgsMock,
 }));
 
+function setRawArgs(command: Command, rawArgs: string[]): void {
+  (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
+}
+
+function deleteRawArgs(command: Command): void {
+  delete (command as Command & { rawArgs?: string[] }).rawArgs;
+}
+
 describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -26,12 +34,11 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses action command name + args as fallback argv", async () => {
     const program = new Command().name("openclaw");
+    setRawArgs(program, ["node", "openclaw", "status", "--json"]);
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
     const actionCommand = {
       name: () => "status",
-      parent: {
-        rawArgs: ["node", "openclaw", "status", "--json"],
-      },
+      parent: program,
     } as unknown as Command;
     resolveActionArgsMock.mockReturnValue(["--json"]);
 
@@ -47,10 +54,11 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("falls back to action args without command name when action has no name", async () => {
     const program = new Command().name("openclaw");
+    setRawArgs(program, ["node", "openclaw"]);
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
     const actionCommand = {
       name: () => "",
-      parent: {},
+      parent: program,
     } as unknown as Command;
     resolveActionArgsMock.mockReturnValue(["--json"]);
 
@@ -58,7 +66,7 @@ describe("reparseProgramFromActionArgs", () => {
 
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
-      rawArgs: undefined,
+      rawArgs: ["node", "openclaw"],
       fallbackArgv: ["--json"],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
@@ -85,6 +93,48 @@ describe("reparseProgramFromActionArgs", () => {
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 
+  it("uses root raw args and reparses the root for nested lazy commands", async () => {
+    const root = new Command().name("openclaw");
+    setRawArgs(root, ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"]);
+    const workspaces = root.command("workspaces");
+    const audit = workspaces.command("audit");
+    const exportCommand = audit.command("export");
+    const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
+    const auditParseAsync = vi.spyOn(audit, "parseAsync");
+    resolveActionArgsMock.mockReturnValue(["--since", "1"]);
+
+    await reparseProgramFromActionArgs(audit, [exportCommand]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"],
+      fallbackArgv: ["workspaces", "audit", "export", "--since", "1"],
+    });
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(auditParseAsync).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs the full nested command path when Commander rawArgs is missing", async () => {
+    // #83893: nested lazy commands still need their ancestor path if
+    // Commander stops exposing root rawArgs at runtime.
+    const root = new Command().name("openclaw");
+    const workspaces = root.command("workspaces");
+    const audit = workspaces.command("audit");
+    const exportCommand = audit.command("export");
+    deleteRawArgs(root);
+    const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
+    resolveActionArgsMock.mockReturnValue(["--since", "1"]);
+
+    await reparseProgramFromActionArgs(audit, [exportCommand]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: undefined,
+      fallbackArgv: ["workspaces", "audit", "export", "--since", "1"],
+    });
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+  });
+
   it("uses program root when action command is missing", async () => {
     const program = new Command().name("openclaw");
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
@@ -98,5 +148,24 @@ describe("reparseProgramFromActionArgs", () => {
       fallbackArgv: [],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+  });
+
+  it("falls back to fallbackArgv when Commander rawArgs is missing from the root command", async () => {
+    // #83893: rawArgs is a Commander runtime field, so the root command must
+    // still reparse from reconstructed argv if Commander stops exposing it.
+    const root = new Command().name("openclaw");
+    const configCommand = root.command("config");
+    deleteRawArgs(root);
+    const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
+    resolveActionArgsMock.mockReturnValue(["set", "key", "value"]);
+
+    await reparseProgramFromActionArgs(root, [configCommand]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: undefined,
+      fallbackArgv: ["config", "set", "key", "value"],
+    });
+    expect(parseAsync).toHaveBeenCalled();
   });
 });

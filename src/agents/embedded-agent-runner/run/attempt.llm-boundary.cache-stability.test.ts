@@ -20,6 +20,9 @@
 import { describe, expect, it } from "vitest";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { streamOpenAICompletions } from "../../../llm/providers/openai-completions.js";
+import { streamOpenAIResponses } from "../../../llm/providers/openai-responses.js";
+import type { Context, Model } from "../../../llm/types.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 
 // ---------------------------------------------------------------------------
@@ -29,6 +32,10 @@ import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 type AgentMsg = Parameters<typeof normalizeMessagesForLlmBoundary>[0][number];
 
 const TZ = "UTC";
+// Payload capture stops before transport, but the provider helper still
+// requires this option. Keep the fixture as joined inert text so scanners do
+// not treat it as credential material.
+const TEST_PROVIDER_OPTION_VALUE = ["fixture", "transport", "value"].join("-");
 
 /** A user message as it sits in the JSONL transcript: BARE string + timestamp. */
 function storedUserMsg(content: string, timestamp: number): AgentMsg {
@@ -57,7 +64,92 @@ const ASSISTANT_MSG: AgentMsg = {
 const TS_TURN1 = 1717570800000; // fixed arrival time for turn 1
 const TS_TURN2 = 1717570860000; // turn 2 (a minute later — crosses minute boundary)
 
-const EXPECTED_PREFIX_TURN1 = buildTimestampPrefix(new Date(TS_TURN1), { timezone: TZ });
+function requiredTimestampPrefix(timestamp: number): string {
+  const prefix = buildTimestampPrefix(new Date(timestamp), { timezone: TZ });
+  if (!prefix) {
+    throw new Error("expected timestamp prefix");
+  }
+  return prefix;
+}
+
+const EXPECTED_PREFIX_TURN1 = requiredTimestampPrefix(TS_TURN1);
+const EXPECTED_PREFIX_TURN2 = requiredTimestampPrefix(TS_TURN2);
+
+const OPENAI_COMPLETIONS_MODEL = {
+  id: "gpt-5.5",
+  name: "GPT-5.5",
+  api: "openai-completions",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 4096,
+} satisfies Model<"openai-completions">;
+
+const OPENAI_RESPONSES_MODEL = {
+  ...OPENAI_COMPLETIONS_MODEL,
+  api: "openai-responses",
+} satisfies Model<"openai-responses">;
+
+async function captureOpenAICompletionsPayload(
+  messages: AgentMsg[],
+): Promise<Record<string, unknown>> {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const stream = streamOpenAICompletions(
+    OPENAI_COMPLETIONS_MODEL,
+    {
+      systemPrompt: "Stable system prompt",
+      messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
+    },
+    {
+      apiKey: TEST_PROVIDER_OPTION_VALUE,
+      cacheRetention: "none",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload capture");
+      },
+    },
+  );
+
+  const result = await stream.result();
+  expect(result.stopReason).toBe("error");
+  expect(capturedPayload).toBeDefined();
+  return capturedPayload!;
+}
+
+async function captureOpenAIResponsesPayload(
+  messages: AgentMsg[],
+): Promise<Record<string, unknown>> {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const stream = streamOpenAIResponses(
+    OPENAI_RESPONSES_MODEL,
+    {
+      systemPrompt: "Stable system prompt",
+      messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
+    },
+    {
+      apiKey: TEST_PROVIDER_OPTION_VALUE,
+      cacheRetention: "none",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload capture");
+      },
+    },
+  );
+
+  const result = await stream.result();
+  expect(result.stopReason).toBe("error");
+  expect(capturedPayload).toBeDefined();
+  return capturedPayload!;
+}
+
+function firstTwoProviderMessages(payload: Record<string, unknown>): unknown[] {
+  const messages = payload.messages ?? payload.input;
+  expect(Array.isArray(messages)).toBe(true);
+  return (messages as unknown[]).slice(0, 2);
+}
 
 // ---------------------------------------------------------------------------
 // THE GATE: bare-current vs bare-historical byte identity
@@ -101,6 +193,62 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     expect(normalizedHistorical[0]?.content).toBe(expected);
     expect(typeof normalizedCurrent[0]?.content).toBe("string");
     expect(typeof normalizedHistorical[0]?.content).toBe("string");
+  });
+
+  it("keeps the OpenAI Chat Completions provider prefix stable with timestamps enabled", async () => {
+    const rawText = "Post-fix cache test ping 1 of 2";
+    const currentPayload = await captureOpenAICompletionsPayload([
+      currentUserMsg(rawText, TS_TURN1),
+    ]);
+    const historicalPayload = await captureOpenAICompletionsPayload([
+      storedUserMsg(rawText, TS_TURN1),
+      ASSISTANT_MSG,
+      currentUserMsg("Post-fix cache test ping 2 of 2", TS_TURN2),
+    ]);
+
+    const expectedTurn1 = `${EXPECTED_PREFIX_TURN1}${rawText}`;
+    const currentStablePrefix = firstTwoProviderMessages(currentPayload);
+    const historicalStablePrefix = firstTwoProviderMessages(historicalPayload);
+
+    expect(JSON.stringify(currentStablePrefix)).toBe(JSON.stringify(historicalStablePrefix));
+    expect(currentStablePrefix[1]).toEqual({ role: "user", content: expectedTurn1 });
+    expect(historicalStablePrefix[1]).toEqual({ role: "user", content: expectedTurn1 });
+
+    const historicalBytes = JSON.stringify(historicalPayload);
+    expect(historicalBytes.indexOf(EXPECTED_PREFIX_TURN2)).toBeGreaterThan(
+      historicalBytes.indexOf(expectedTurn1),
+    );
+  });
+
+  it("keeps the OpenAI Responses provider prefix stable with timestamps enabled", async () => {
+    const rawText = "Post-fix cache test ping 1 of 2";
+    const currentPayload = await captureOpenAIResponsesPayload([currentUserMsg(rawText, TS_TURN1)]);
+    const historicalPayload = await captureOpenAIResponsesPayload([
+      storedUserMsg(rawText, TS_TURN1),
+      ASSISTANT_MSG,
+      currentUserMsg("Post-fix cache test ping 2 of 2", TS_TURN2),
+    ]);
+
+    const expectedTurn1 = `${EXPECTED_PREFIX_TURN1}${rawText}`;
+    const currentStablePrefix = firstTwoProviderMessages(currentPayload);
+    const historicalStablePrefix = firstTwoProviderMessages(historicalPayload);
+
+    expect(JSON.stringify(currentStablePrefix)).toBe(JSON.stringify(historicalStablePrefix));
+    expect(currentStablePrefix[1]).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: expectedTurn1 }],
+    });
+    expect(historicalStablePrefix[1]).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: expectedTurn1 }],
+    });
+
+    const historicalBytes = JSON.stringify(historicalPayload);
+    expect(historicalBytes.indexOf(EXPECTED_PREFIX_TURN2)).toBeGreaterThan(
+      historicalBytes.indexOf(expectedTurn1),
+    );
   });
 
   it("stamp derives from message timestamp, not wall-clock — repeated calls are byte-stable", () => {

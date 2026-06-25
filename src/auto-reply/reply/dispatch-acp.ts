@@ -13,6 +13,7 @@ import {
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -41,7 +42,7 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
@@ -382,6 +383,7 @@ export async function tryDispatchAcpReply(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
   bypassForCommand: boolean;
@@ -440,6 +442,7 @@ export async function tryDispatchAcpReply(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    originatingChatType: params.originatingChatType,
     onReplyStart: params.onReplyStart,
     abortSignal: params.abortSignal,
     runId: params.runId,
@@ -537,7 +540,7 @@ export async function tryDispatchAcpReply(params: {
     if (agentPolicyError) {
       throw agentPolicyError;
     }
-    if (hasInboundMedia(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
+    if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
         const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
         await applyMediaUnderstanding({

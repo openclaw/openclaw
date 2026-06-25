@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
   QA_FRONTIER_CHARACTER_EVAL_MODELS,
@@ -426,8 +427,8 @@ async function defaultRunJudge(params: {
 }
 
 async function defaultRunSuite(params: Parameters<RunSuiteFn>[0]) {
-  const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-  return await runQaSuiteFromRuntime(params);
+  const { runQaFlowSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+  return await runQaFlowSuiteFromRuntime(params);
 }
 
 function renderCharacterEvalReport(params: {
@@ -520,7 +521,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
 
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${createQaArtifactRunId()}`);
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 

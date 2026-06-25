@@ -21,12 +21,52 @@ export function readTextFileTail(file, maxBytes) {
 
   const length = Math.min(maxBytes, stat.size);
   const start = stat.size - length;
-  const fd = fs.openSync(file, "r");
+  let fd;
   try {
+    fd = fs.openSync(file, "r");
     const buffer = Buffer.alloc(length);
     const bytesRead = fs.readSync(fd, buffer, 0, length, start);
     return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return "";
   } finally {
-    fs.closeSync(fd);
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Tail diagnostics are best-effort; callers may be preserving a richer error.
+      }
+    }
   }
+}
+
+function textFileTooLargeError(message) {
+  return Object.assign(new Error(message), { code: "ETOOBIG" });
+}
+
+export function readTextFileBounded(file, label, maxBytes, options = {}) {
+  const tailBytes = options.tailBytes ?? 16 * 1024;
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a file: ${file}`);
+  }
+  if (stat.size > maxBytes) {
+    throw textFileTooLargeError(
+      `${label} exceeded ${maxBytes} bytes: ${file} (${stat.size} bytes). Tail: ${readTextFileTail(
+        file,
+        tailBytes,
+      )}`,
+    );
+  }
+  const text = fs.readFileSync(file, "utf8");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxBytes) {
+    throw textFileTooLargeError(
+      `${label} exceeded ${maxBytes} bytes: ${file} (${bytes} bytes). Tail: ${readTextFileTail(
+        file,
+        tailBytes,
+      )}`,
+    );
+  }
+  return text;
 }

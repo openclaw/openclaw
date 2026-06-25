@@ -195,6 +195,13 @@ describe("manifest model suppression", () => {
       resolveManifestBuiltInModelSuppression({
         provider: "qwen",
         id: "qwen3.6-plus",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         env: process.env,
       }),

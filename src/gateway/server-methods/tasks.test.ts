@@ -12,10 +12,11 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -35,17 +36,13 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
 });
 
 afterEach(async () => {
   resetTaskRegistryForTests();
-  if (ORIGINAL_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
+  stateDirEnvSnapshot.restore();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
 
@@ -134,6 +131,31 @@ describe("tasks gateway handlers", () => {
     expect(listedTask?.sessionKey).toBe("agent:main:main");
     expect(listedTask?.childSessionKey).toBe("agent:worker:subagent:child");
     expect(listedTask?.runId).toBe("run-running");
+  });
+
+  it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
+    // Cross-agent subagent task: the registry derives agentId=worker from the
+    // child session key, while owner/requester keys belong to main. tasks.list
+    // for main must not leak the worker task through the session-key fallback.
+    const workerTask = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-worker-authoritative",
+      task: "Inspect worker state",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    expect(workerTask.agentId).toBe("worker");
+
+    const mainView = await runTaskHandler("tasks.list", { agentId: "main" });
+    expect(mainView.calls[0]?.[0]).toBe(true);
+    expect(mainView.payload?.tasks ?? []).toEqual([]);
+
+    const workerView = await runTaskHandler("tasks.list", { agentId: "worker" });
+    expect(workerView.payload?.tasks?.map((task) => task.taskId)).toEqual([workerTask.taskId]);
   });
 
   it("gets completed tasks with stable completed status", async () => {

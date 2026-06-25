@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -27,32 +27,45 @@ import {
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
 type TestMessageOverrides = {
+  admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
   body?: string;
-  chatType?: "direct" | "group";
-  conversationId?: string;
-  from?: string;
   mentionedJids?: string[];
   selfE164?: string;
   selfJid?: string;
   selfLid?: string;
 };
 
-const makeMsg = (overrides: TestMessageOverrides): WebInboundMessage => {
-  const from = overrides.from ?? "120363401234567890@g.us";
+const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => {
+  const conversationId = overrides.admission?.conversation?.id ?? "120363401234567890@g.us";
+  const conversationKind = overrides.admission?.conversation?.kind ?? "group";
   return createTestWebInboundMessage({
     event: { id: "m1" },
     payload: { body: overrides.body ?? "" },
     platform: {
-      chatJid: "120363401234567890@g.us",
+      chatJid: conversationId,
       recipientJid: "15551234567@s.whatsapp.net",
       selfE164: overrides.selfE164,
       selfJid: overrides.selfJid,
       selfLid: overrides.selfLid,
     },
-    from,
-    conversationId: overrides.conversationId ?? from,
-    accountId: "default",
-    chatType: overrides.chatType ?? "group",
+    admission: {
+      ...overrides.admission,
+      accountId: overrides.admission?.accountId ?? "default",
+      conversation: {
+        kind: conversationKind,
+        id: conversationId,
+        ...overrides.admission?.conversation,
+      },
+      sender: {
+        id: conversationId,
+        ...overrides.admission?.sender,
+      },
+      senderAccess: {
+        reasonCode:
+          conversationKind === "direct" ? "dm_policy_allowlisted" : "group_policy_allowed",
+        ...overrides.admission?.senderAccess,
+      },
+    },
     group: {
       mentions: {
         jids: overrides.mentionedJids,
@@ -119,7 +132,7 @@ describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
   function expectMentioned(
-    msg: WebInboundMessage,
+    msg: AdmittedWebInboundMessage,
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
@@ -162,9 +175,12 @@ describe("isBotMentionedFromTargets", () => {
       // Direct chat with self, not a group — the original "ignore mentions
       // in self-chat" suppression still applies here so that mentioning the
       // owner in their own DM does not falsely trigger the bot.
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "@owner ping",
       mentionedJids: ["999@s.whatsapp.net"],
       selfE164: "+999",
@@ -173,9 +189,12 @@ describe("isBotMentionedFromTargets", () => {
     expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
@@ -277,8 +296,10 @@ describe("getSessionSnapshot", () => {
         const storePath = path.join(root, "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
-        await saveSessionStore(storePath, {
-          [sessionKey]: {
+        await upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
             lastChannel: "whatsapp",
@@ -314,7 +335,11 @@ describe("web auto-reply util", () => {
   describe("mentions diagnostics", () => {
     it("returns normalized debug fields and mention outcome", () => {
       const msg = makeMsg({
-        from: "777@lid",
+        admission: {
+          conversation: {
+            id: "777@lid",
+          },
+        },
         body: "openclaw ping",
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",

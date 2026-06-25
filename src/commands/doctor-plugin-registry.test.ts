@@ -10,6 +10,7 @@ import {
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
@@ -429,6 +430,55 @@ describe("maybeRepairPluginRegistryState", () => {
       }),
     ]);
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Removed stale managed npm plugin package",
+    );
+  });
+
+  it("does not remove retained managed npm packages during stale bundled repair", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+    });
+    await markRetainedManagedNpmInstall({
+      packageDir: managed.packageDir,
+      pluginId: "google-meet",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
+    expect(vi.mocked(note).mock.calls.join("\n")).not.toContain(
       "Removed stale managed npm plugin package",
     );
   });
