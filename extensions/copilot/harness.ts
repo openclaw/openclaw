@@ -463,7 +463,7 @@ function computeSessionKey(
       ? p.model
       : p.runtimeModel && typeof p.runtimeModel === "object"
         ? p.runtimeModel
-      : { id: typeof p.model === "string" ? p.model : undefined };
+        : { id: typeof p.model === "string" ? p.model : undefined };
   const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
   const modelId =
     modelObj.id ??
@@ -788,9 +788,9 @@ export function createCopilotAgentHarness(
           ? { ready: true }
           : { ready: false, reason: status.statusMessage ?? "Copilot CLI is not authenticated" };
       } catch {
-        if (ctx.signal?.aborted && handle && pool) {
-          // SDK start/auth calls have no cancellation contract. Evict and
-          // force-stop the connecting client before another run can acquire it.
+        if (handle && pool) {
+          // SDK startup failures leave the client in an error state, and auth RPC failures leave
+          // connection health unknown. Evict before another run can acquire the client.
           await pool.invalidate(handle);
           handle = undefined;
         }
