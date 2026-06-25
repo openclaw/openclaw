@@ -20,6 +20,7 @@ GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || true)"
 if [[ -n "$GIT_DIR" ]] && \
   { [[ -f "$GIT_DIR/MERGE_HEAD" ]] || \
     [[ -f "$GIT_DIR/CHERRY_PICK_HEAD" ]] || \
+    [[ -f "$GIT_DIR/REVERT_HEAD" ]] || \
     [[ -f "$GIT_DIR/REBASE_HEAD" ]] || \
     [[ -d "$GIT_DIR/rebase-merge" ]] || \
     [[ -d "$GIT_DIR/rebase-apply" ]]; }; then

@@ -216,6 +216,7 @@ describe("git-hooks/pre-commit (integration)", () => {
 
   it.each([
     ["cherry-pick", "CHERRY_PICK_HEAD", "file"],
+    ["revert", "REVERT_HEAD", "file"],
     ["rebase head", "REBASE_HEAD", "file"],
     ["merge rebase state", "rebase-merge", "dir"],
     ["apply rebase state", "rebase-apply", "dir"],
