@@ -325,6 +325,14 @@ export type DiagnosticsOtelConfig = {
         systemPrompt?: boolean;
         toolDefinitions?: boolean;
       };
+  /**
+   * Opt-in export of a hashed session identifier as `langfuse.session.id`,
+   * `session.id`, and `gen_ai.conversation.id` on root spans (harness.run,
+   * run), enabling session grouping in Langfuse, Latitude, Arize/Phoenix,
+   * and other OTLP backends.  The raw session key is never exposed — only
+   * a SHA-256 hash is emitted.  Default: false.
+   */
+  sessionAttribute?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {

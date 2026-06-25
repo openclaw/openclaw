@@ -567,6 +567,7 @@ export const OpenClawSchema = z
               .optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            sessionAttribute: z.boolean().optional(),
             captureContent: z
               .union([
                 z.boolean(),
