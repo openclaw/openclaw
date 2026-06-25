@@ -126,7 +126,7 @@ If you place bootstrap files in `agentDir` but **not** in the `workspace` direct
   Move this file to the workspace directory if you want it injected into the system prompt.
 ```
 
-Note: The warning is only emitted when a bootstrap file exists in `agentDir` but not in `workspace`. If the same file exists in both locations, no warning is shown (this allows intentional per-agent overrides).
+Note: The warning is only emitted when a bootstrap file exists in `agentDir` but not in `workspace`. If the same file exists in both locations, no warning is shown because the `workspace` copy is the one that is loaded.
 
 This is especially important for security-critical rules in `AGENTS.md` — placing them in `agentDir` means they will have zero enforcement. Always put bootstrap files in the `workspace` directory.
 </Warning>
