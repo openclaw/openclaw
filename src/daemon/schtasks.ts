@@ -1134,7 +1134,6 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       ? findVerifiedGatewayListenerPidsOnPortSync(configuredPort)
       : [];
 
-
   const hasLaunchEvidence = async (): Promise<boolean> => {
     const command = await readScheduledTaskCommand(params.env).catch(() => null);
     const installedArguments = command?.programArguments;
@@ -1142,7 +1141,6 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       parsePortFromProgramArguments(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(params.env);
-    const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
     if (manageGatewayPort && taskPort) {
       const listenerPids = findVerifiedGatewayListenerPidsOnPortSync(taskPort);
       if (baselineGatewayPids.length > 0) {
