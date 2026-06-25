@@ -3962,6 +3962,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Auth detail codes quick map
   - H2: Gateway service not running
   - H2: macOS gateway silently stops responding, then resumes when you touch the dashboard
+  - H2: macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
   - H2: Gateway exits during high memory use
   - H2: Gateway rejected invalid config
   - H2: Gateway probe warnings
