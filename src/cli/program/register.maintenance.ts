@@ -34,7 +34,22 @@ export function registerMaintenanceCommands(program: Command) {
       "Emit plugin-compat findings only (machine-readable with --json)",
       false,
     )
-    .option("--json", "With --lint or --post-upgrade: emit machine-readable JSON output", false)
+    .option(
+      "--session-sqlite <mode>",
+      "Run session SQLite migration mode (dry-run|import|validate|inspect)",
+    )
+    .option("--session-sqlite-store <path>", "With --session-sqlite: inspect one session store")
+    .option("--session-sqlite-agent <id>", "With --session-sqlite: inspect one agent")
+    .option(
+      "--session-sqlite-all-agents",
+      "With --session-sqlite: inspect configured and discovered agent stores",
+      false,
+    )
+    .option(
+      "--json",
+      "With --lint, --post-upgrade, or --session-sqlite: emit machine-readable JSON output",
+      false,
+    )
     .option(
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
@@ -76,6 +91,13 @@ export function registerMaintenanceCommands(program: Command) {
         );
         return;
       }
+      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+        defaultRuntime.error(
+          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
       if (hasLintOnlyDoctorOptions(opts)) {
         defaultRuntime.error(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
@@ -85,6 +107,7 @@ export function registerMaintenanceCommands(program: Command) {
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { doctorCommand } = await import("../../commands/doctor.js");
+        const sessionSqlite = parseDoctorSessionSqliteMode(opts.sessionSqlite);
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
@@ -95,6 +118,14 @@ export function registerMaintenanceCommands(program: Command) {
           allowExec: Boolean(opts.allowExec),
           deep: Boolean(opts.deep),
           postUpgrade: Boolean(opts.postUpgrade),
+          ...(sessionSqlite ? { sessionSqlite } : {}),
+          ...(typeof opts.sessionSqliteStore === "string"
+            ? { sessionSqliteStore: opts.sessionSqliteStore }
+            : {}),
+          ...(typeof opts.sessionSqliteAgent === "string"
+            ? { sessionSqliteAgent: opts.sessionSqliteAgent }
+            : {}),
+          sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
           json: Boolean(opts.json),
         });
         defaultRuntime.exit(0);
@@ -181,16 +212,45 @@ export function registerMaintenanceCommands(program: Command) {
 function hasLintOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
+  readonly sessionSqlite?: unknown;
   readonly severityMin?: unknown;
   readonly all?: boolean;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
-    (opts.json === true && opts.postUpgrade !== true) ||
+    (opts.json === true && opts.postUpgrade !== true && typeof opts.sessionSqlite !== "string") ||
     typeof opts.severityMin === "string" ||
     opts.all === true ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)
   );
+}
+
+function hasSessionSqliteOnlyDoctorOptions(opts: {
+  readonly sessionSqlite?: unknown;
+  readonly sessionSqliteAgent?: unknown;
+  readonly sessionSqliteAllAgents?: unknown;
+  readonly sessionSqliteStore?: unknown;
+}): boolean {
+  return (
+    typeof opts.sessionSqlite !== "string" &&
+    (typeof opts.sessionSqliteAgent === "string" ||
+      opts.sessionSqliteAllAgents === true ||
+      typeof opts.sessionSqliteStore === "string")
+  );
+}
+
+function parseDoctorSessionSqliteMode(
+  value: unknown,
+): "dry-run" | "import" | "validate" | "inspect" | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "dry-run" || value === "import" || value === "validate" || value === "inspect") {
+    return value;
+  }
+  defaultRuntime.error("Invalid --session-sqlite mode. Use dry-run, import, validate, or inspect.");
+  defaultRuntime.exit(2);
+  throw new Error("unreachable");
 }
