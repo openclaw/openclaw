@@ -441,16 +441,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     // labels differ; prefer the active auth label so status matches execution.
     selectedModelAuth = activeModelAuth;
   }
-  const usageShouldFollowActiveRuntime =
+  const activeRuntimeIsAuthoritative =
     !modelRefs.activeDiffers ||
     fallbackState.active ||
     hasSessionAutoModelFallbackProvenance(sessionEntry) ||
     runtimeAliasModelEquivalent;
-  const usageAuthLabel = usageShouldFollowActiveRuntime ? activeModelAuth : selectedModelAuth;
-  const usageStatusProvider = usageShouldFollowActiveRuntime
+  const usageAuthLabel = activeRuntimeIsAuthoritative ? activeModelAuth : selectedModelAuth;
+  const usageStatusProvider = activeRuntimeIsAuthoritative
     ? activeStatusProvider
     : selectedStatusProvider;
-  const usageProvider = usageShouldFollowActiveRuntime ? activeProvider : selectedLookupProvider;
+  const usageProvider = activeRuntimeIsAuthoritative ? activeProvider : selectedLookupProvider;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
     shouldUseCodexSyntheticUsage({
@@ -616,22 +616,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: selectedStatusProvider,
     model: modelRefs.selected.model || selectedLookupModel,
   });
-  const runtimeSnapshotHasFallbackProvenance =
-    !modelRefs.activeDiffers ||
-    fallbackState.active ||
-    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
-    areRuntimeModelRefsEquivalent(modelRefs.active.label, modelRefs.selected.label, {
-      config: cfg,
-    });
   const statusAgentContextTokens =
     typeof contextTokens === "number" &&
     contextTokens > 0 &&
-    (runtimeSnapshotHasFallbackProvenance ||
+    (activeRuntimeIsAuthoritative ||
       contextTokens === configuredContextTokens ||
       contextTokens === selectedContextTokens)
       ? contextTokens
       : undefined;
-  const statusRuntimeContextTokens = runtimeSnapshotHasFallbackProvenance
+  const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
         ? contextTokens
