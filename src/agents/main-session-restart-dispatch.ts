@@ -35,17 +35,16 @@ function buildResumeMessage(
   hasPendingToolCalls?: boolean,
 ): string {
   if (recoveredUserMessage) {
-    const truncated =
-      recoveredUserMessage.length > 500
-        ? `${recoveredUserMessage.slice(0, 500)}...`
-        : recoveredUserMessage;
-    // Delimit the recovered user text clearly so it cannot blend with
-    // the system recovery instruction or the idempotency guard (#95609).
-    // Sanitize to strip control characters and injected markers.
-    const sanitized = sanitizePendingFinalDeliveryText(truncated);
+    // Delimit the recovered user text inside an untrusted prompt-data block so
+    // it cannot blend with the system recovery instruction or the idempotency
+    // guard.  wrapUntrustedPromptDataBlock applies the input-safe
+    // sanitizeForPromptLiteral internally and accepts a maxChars cap; do NOT
+    // apply the agent-output display sanitizer (sanitizePendingFinalDeliveryText)
+    // to user-authored text (#95609).
     const untrustedBlock = wrapUntrustedPromptDataBlock({
       label: "The user's original request",
-      text: sanitized,
+      text: recoveredUserMessage,
+      maxChars: 500,
     });
     const recoveredBase =
       "[System] I was interrupted mid-action by a gateway restart. " +
