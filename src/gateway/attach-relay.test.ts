@@ -39,8 +39,16 @@ describe("dispatchAttachMcpMessage (conduit relay core)", () => {
         sessionKey: "agent:main:relay",
         senderIsOwner: false,
         surface: "loopback",
+        // routed via resolveMcpLoopbackScopedTools, so the native-tool exclusion is applied —
+        // a relayed grant cannot reach destructive tools the gateway-host loopback attach withholds
+        excludeToolNames: expect.any(Set),
       }),
     );
+    const excluded = vi.mocked(resolveGatewayScopedTools).mock.calls[0][0]
+      .excludeToolNames as Set<string>;
+    for (const native of ["read", "write", "edit", "apply_patch", "exec", "process"]) {
+      expect(excluded.has(native)).toBe(true);
+    }
     // the MCP message goes to the SAME handler the HTTP path uses, with the scoped tools + agentId
     expect(handleMcpJsonRpc).toHaveBeenCalledWith(
       expect.objectContaining({
