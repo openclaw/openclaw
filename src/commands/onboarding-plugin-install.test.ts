@@ -1705,7 +1705,7 @@ describe("addPluginLoadPath bundled guard", () => {
 
   it("adds non-bundled plugin load path when bundled guard does not match", async () => {
     resolveBundledPluginsDirMock.mockReturnValue(undefined);
-    resolvePackagedBundledLoadPathAliasMock.mockReturnValue(undefined);
+    resolvePackagedBundledLoadPathAliasMock.mockReturnValue(null);
 
     await withTempDir({ prefix: "openclaw-onboarding-install-non-bundled-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
