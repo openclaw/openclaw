@@ -223,6 +223,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // is control-plane rate-limited; revoke is intentionally not (cheap, idempotent, frees memory).
   { name: "attach.grant", scope: "operator.admin", controlPlaneWrite: true },
   { name: "attach.revoke", scope: "operator.admin" },
+  { name: "attach.adopt", scope: "operator.admin", controlPlaneWrite: true },
   { name: "push.web.vapidPublicKey", scope: "operator.write", advertise: false },
   { name: "push.web.subscribe", scope: "operator.write", advertise: false },
   { name: "push.web.unsubscribe", scope: "operator.write", advertise: false },

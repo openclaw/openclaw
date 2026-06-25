@@ -56,6 +56,7 @@ vi.mock("../runtime.js", () => ({
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
+import { spawn } from "node:child_process";
 import { callGateway } from "../gateway/call.js";
 import { registerAttachCli } from "./attach-cli.js";
 
@@ -85,6 +86,9 @@ describe("openclaw attach (action)", () => {
     );
     // setup mode leaves the grant live (no revoke) and must not point at a revoke command that does not exist
     expect(gatewayCalls.find((c) => c.method === "attach.revoke")).toBeUndefined();
+    // --print-config never launches claude, so it must NOT adopt: persisting a binding to a session
+    // that is never created would break the next --resume.
+    expect(gatewayCalls.find((c) => c.method === "attach.adopt")).toBeUndefined();
     const out = logs.join("\n");
     expect(out).toContain("agent:main:cli");
     expect(out).toContain("--mcp-config");
@@ -167,5 +171,46 @@ describe("openclaw attach (action)", () => {
     } as never);
     await runAttach("--print-config");
     expect(exitCode).toBe(1);
+  });
+
+  it("new session: passes --session-id and adopts ONLY after claude spawns", async () => {
+    await runAttach("--session", "agent:main:new"); // spawn path (no --print-config)
+    const spawnArgs = vi.mocked(spawn).mock.calls.at(-1)?.[1] as string[];
+    expect(spawnArgs).toContain("--session-id");
+    expect(spawnArgs).not.toContain("--resume");
+    // the session file does not exist until claude runs, so no adopt before the spawn event fires
+    expect(gatewayCalls.find((c) => c.method === "attach.adopt")).toBeUndefined();
+    spawnedChild.emit("spawn");
+    await Promise.resolve();
+    const adopt = gatewayCalls.find((c) => c.method === "attach.adopt");
+    expect(adopt?.params.cliSessionId).toBeTruthy();
+    expect(adopt?.params.cwd).toBeTruthy(); // cwd is sent so the gateway gates resume per project
+    spawnedChild.emit("exit", 0, null); // finish cleanly
+  });
+
+  it("does NOT adopt when claude fails to spawn (no phantom binding)", async () => {
+    await runAttach("--session", "agent:main:spawnfail");
+    spawnedChild.emit("error", new Error("ENOENT")); // spawn failed → "error", never "spawn"
+    await Promise.resolve();
+    expect(gatewayCalls.find((c) => c.method === "attach.adopt")).toBeUndefined();
+  });
+
+  it("resume: passes --resume and does NOT adopt when the session already has a binding", async () => {
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      sessionKey: "agent:main:r",
+      token: "tok-123",
+      expiresAtMs: 2_000_000_000_000,
+      resumeSessionId: "prev-session-uuid",
+      mcpConfig: {
+        mcpServers: { openclaw: { type: "http", url: "http://127.0.0.1:9/mcp", headers: {} } },
+      },
+      env: { OPENCLAW_MCP_TOKEN: "tok-123" },
+    } as never);
+    await runAttach("--print-config", "--session", "agent:main:r");
+    expect(gatewayCalls.find((c) => c.method === "attach.adopt")).toBeUndefined();
+    const out = logs.join("\n");
+    expect(out).toContain("--resume");
+    expect(out).toContain("prev-session-uuid");
+    expect(out).not.toContain("--session-id");
   });
 });

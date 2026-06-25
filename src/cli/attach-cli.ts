@@ -4,6 +4,7 @@
 // exit. The grant — not a process-global token — keeps this a lower-trust, revocable boundary
 // (see src/gateway/mcp-grant-store.ts).
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +22,8 @@ type AttachGrant = {
   sessionKey: string;
   token: string;
   expiresAtMs: number;
+  /** The Claude cli session already bound to this gateway session, if any — resume it. */
+  resumeSessionId?: string;
   mcpConfig: { mcpServers: Record<string, unknown> };
   env: Record<string, string>;
 };
@@ -76,7 +79,7 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       const granted = (await callGateway({
         config: cfg,
         method: "attach.grant",
-        params: { sessionKey: opts.session, ttlMs },
+        params: { sessionKey: opts.session, ttlMs, cwd: process.cwd() },
         // attach.grant is operator.admin-scoped. Use CLI mode so callGateway auto-resolves the
         // operator device identity (which carries operator.admin); mode BACKEND or an explicit
         // deviceIdentity:null drops it and the call fails with "missing scope: operator.admin".
@@ -101,6 +104,18 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       }
       const grant = granted as AttachGrant;
 
+      // Bind a Claude cli session id so the conversation is recorded (gateway history import) and
+      // resumable. The gateway returns resumeSessionId only when the bound session was created in THIS
+      // cwd (it gates on the cwd hash, since Claude scopes sessions per project) — so `claude --resume`
+      // is safe here. Otherwise start a fresh known id (claude accepts --session-id); we adopt it only
+      // AFTER claude actually spawns (see child "spawn" below), never here: the session file doesn't
+      // exist until claude runs, so adopting before a successful spawn — or in --print-config, which
+      // never launches — would bind a sessionKey to a session id that never exists, breaking the next
+      // --resume. Resumes already have a binding, so only fresh sessions adopt.
+      const resumeId = grant.resumeSessionId;
+      const sessionId = resumeId ?? randomUUID();
+      const sessionArgs = resumeId ? ["--resume", sessionId] : ["--session-id", sessionId];
+
       const { path: configPath, cleanup } = writeClaudeMcpConfig(grant.mcpConfig);
       const expiresAt = new Date(grant.expiresAtMs).toISOString();
 
@@ -115,7 +130,7 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
               expiresAt,
               env: grant.env,
               configPath,
-              launch: [opts.bin, "--mcp-config", configPath],
+              launch: [opts.bin, ...sessionArgs, "--mcp-config", configPath],
             },
             null,
             2,
@@ -149,9 +164,28 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       defaultRuntime.log(
         `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
       );
-      const child = spawn(opts.bin, ["--mcp-config", configPath], {
+      const child = spawn(opts.bin, [...sessionArgs, "--mcp-config", configPath], {
         stdio: "inherit",
         env: { ...process.env, ...grant.env },
+      });
+
+      // Adopt the session only once claude actually starts: "spawn" fires on a successful launch (a
+      // failed spawn fires "error" instead, never "spawn"), and `claude --session-id` is what creates
+      // the session file — so this is the first moment the bound id is guaranteed to become real.
+      // Only fresh sessions adopt (resumes already have a binding). Best-effort; never blocks the run.
+      child.on("spawn", () => {
+        if (resumeId) {
+          return;
+        }
+        void callGateway({
+          config: cfg,
+          method: "attach.adopt",
+          params: { token: grant.token, cliSessionId: sessionId, cwd: process.cwd() },
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+        }).catch(() => {
+          // Best-effort binding; the session still runs if adopt can't reach the gateway.
+        });
       });
 
       // Claude Code shares the TTY foreground group, so Ctrl-C reaches it directly — don't forward

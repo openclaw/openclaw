@@ -276,7 +276,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadConnectHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["attach.grant", "attach.revoke"],
+    methods: ["attach.grant", "attach.revoke", "attach.adopt"],
     loadHandlers: loadAttachHandlers,
   }),
   ...createLazyCoreHandlers({
