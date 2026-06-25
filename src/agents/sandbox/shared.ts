@@ -17,9 +17,18 @@ export function slugifySessionKey(value: string) {
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  const workspaceScopeHash = trimmed.match(/:workspace:([a-f0-9]{8})$/i)?.[1]?.toLowerCase();
   // Keep the readable prefix bounded; uniqueness comes from the trailing hash of
-  // the full untruncated key, including any workspace scope suffix.
-  const base = safe.slice(0, 32) || "session";
+  // the full untruncated key. Workspace-scoped keys keep their workspace hash
+  // outside the readable-prefix truncation window so container names and
+  // workspace paths retain tenant entropy even for long agent/session keys.
+  const base =
+    (workspaceScopeHash
+      ? safe.replace(/-workspace-[a-f0-9]{8}$/i, "").slice(0, 24)
+      : safe.slice(0, 32)) || "session";
+  if (workspaceScopeHash) {
+    return `${base}-workspace-${workspaceScopeHash}-${hash}`;
+  }
   return `${base}-${hash}`;
 }
 

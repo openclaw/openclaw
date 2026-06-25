@@ -5,7 +5,6 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -21,6 +20,7 @@ import {
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { slugifySessionKey } from "./shared.js";
 import {
   buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -444,16 +444,5 @@ export function resolveSshRuntimePaths(
 }
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
-  const trimmed = scopeKey.trim() || "session";
-  // Keep the path human-readable while hashing the original scope to avoid
-  // collisions after normalization and truncation.
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  const hash = Array.from(trimmed).reduce(
-    (acc, char) => ((acc * 33) ^ char.charCodeAt(0)) >>> 0,
-    5381,
-  );
-  return `openclaw-ssh-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+  return `openclaw-ssh-${slugifySessionKey(scopeKey)}`;
 }

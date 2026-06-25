@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
-import { resolveSandboxScopeKey } from "./sandbox/shared.js";
+import { resolveSandboxScopeKey, slugifySessionKey } from "./sandbox/shared.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -66,6 +66,12 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxScopeKey", () => {
+  it("preserves workspace hash entropy outside slug prefix truncation", () => {
+    expect(slugifySessionKey("agent:poly:msteams:channel-1:workspace:1234abcd")).toMatch(
+      /^agent-poly-msteams-chann-workspace-1234abcd-[a-f0-9]{8}$/,
+    );
+  });
+
   it("scopes session sandboxes by workspace", () => {
     const first = resolveSandboxScopeKey("session", "agent:poly:msteams:channel-1", {
       workspaceDir: "/tmp/openclaw-customers/atica/openclaw/agents/poly/workspace",
@@ -498,7 +504,7 @@ describe("resolveSandboxContext", () => {
       path.join(".openclaw", "sandbox", "skills-workspaces"),
     );
     expect(syncOptions?.targetWorkspaceDir).toMatch(
-      /[\\/]agent-main-main-workspace-[a-f0-9]{6}-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+      /[\\/]agent-main-main-workspace-[a-f0-9]{8}-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
     );
     expect(syncOptions?.targetWorkspaceDir).not.toBe(
       path.join(workspaceDir, ".openclaw", "sandbox-skills"),
@@ -545,7 +551,7 @@ describe("resolveSandboxContext", () => {
 
     expect(result?.workspaceDir).toBe(workspaceDir);
     expect(result?.containerWorkdir).toMatch(
-      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-workspace-[a-f0-9]{6}-[a-f0-9]{8}\/workspace$/,
+      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-workspace-[a-f0-9]{8}-[a-f0-9]{8}\/workspace$/,
     );
     expect(result?.containerWorkdir).not.toBe("/workspace");
     expect(result?.skillsWorkspaceDir).toContain(
