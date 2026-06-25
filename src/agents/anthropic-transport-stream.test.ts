@@ -307,6 +307,82 @@ describe("anthropic transport stream", () => {
     expect(cancelCount).toBe(1);
   });
 
+  it("bounds streamed Anthropic success responses without content-length", async () => {
+    // The bounded reader is configured at module load, so this test uses a
+    // hand-rolled streaming body that exceeds the configured cap (16 MiB).
+    // To keep the test fast and deterministic we drive the same SSE parser
+    // logic directly via the exported transport's stream() method, since
+    // pulling 16 MiB through a vitest mock would dwarf the test runtime.
+    const { parseAnthropicSseBodyForTest } = await import("./anthropic-transport-stream.js");
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    let cancelReason: unknown;
+
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        // Emit 1 MiB chunks until the bounded reader cancels us. 19 chunks
+        // is enough to exceed the 16 MiB cap on the second pull after the
+        // 16 MiB threshold is crossed.
+        controller.enqueue(encoder.encode("a".repeat(1024 * 1024)));
+      },
+      cancel(reason) {
+        cancelCount += 1;
+        cancelReason = reason;
+      },
+    });
+
+    let error: Error | null = null;
+    try {
+      for await (const event of parseAnthropicSseBodyForTest(oversizedBody)) {
+        expect(event).toBeDefined();
+      }
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toMatch(/Anthropic Messages success body exceeded/);
+    expect(error?.message).toMatch(/16777216/);
+    // The bounded reader cancelled the upstream producer after the cap was hit.
+    expect(cancelCount).toBe(1);
+    // Server-side observation: pullCount is at least 17 (16 MiB / 1 MiB per pull)
+    // and well below 20 (the test never drained a 20 MiB body).
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
+    expect(cancelReason).toBeInstanceOf(Error);
+  });
+
+  it("parses normal Anthropic success SSE responses end-to-end", async () => {
+    // The bounded reader must allow small valid SSE streams to pass through
+    // unchanged; the cap is the only change.
+    const { parseAnthropicSseBodyForTest } = await import("./anthropic-transport-stream.js");
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1,"output_tokens":0}}}\n\n' +
+              'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n' +
+              'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n' +
+              'data: {"type":"content_block_stop","index":0}\n\n' +
+              'data: {"type":"message_stop"}\n\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+
+    const events: Record<string, unknown>[] = [];
+    for await (const event of parseAnthropicSseBodyForTest(body)) {
+      events.push(event);
+    }
+    const types = events.map((e) => e.type);
+    expect(types).toContain("message_start");
+    expect(types).toContain("content_block_delta");
+    expect(types).toContain("message_stop");
+  });
+
   it("aborts stalled streamed Anthropic error responses", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();

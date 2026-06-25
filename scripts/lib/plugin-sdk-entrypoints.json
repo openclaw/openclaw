@@ -216,6 +216,7 @@
   "inline-image-data-url-runtime",
   "response-limit-runtime",
   "session-binding-runtime",
+  "stream-reader-with-limit",
   "session-key-runtime",
   "session-store-runtime",
   "session-transcript-runtime",

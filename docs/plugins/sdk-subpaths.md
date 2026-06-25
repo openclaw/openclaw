@@ -306,6 +306,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/inline-image-data-url-runtime` | Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
+    | `plugin-sdk/stream-reader-with-limit` | Streaming-body SSE/NDJSON byte-cap guard for hostile unbounded responses, mirroring the response-limit-runtime pattern for chunk-by-chunk streaming reads |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/session-store-runtime` | Session-store helpers without broad config writes/maintenance imports |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers without database lifecycle controls |

@@ -5,6 +5,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-b
 import type { Context, Model } from "../types.js";
 import {
   extractOpenAICodexAccountId,
+  parseSSEForTest,
   resetOpenAICodexWebSocketDebugStats,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
@@ -559,5 +560,100 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+});
+
+describe("parseSSEForTest (streaming 200 success-body bound)", () => {
+  const CHUNK_SIZE = 1024 * 1024;
+
+  function createHostileSseBody(params: {
+    totalBytes: number;
+    onCancel: (reason: unknown) => void;
+    onPull?: () => void;
+  }): Response {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        params.onPull?.();
+        const remaining = params.totalBytes - pulled;
+        if (remaining <= 0) {
+          controller.close();
+          return;
+        }
+        const size = Math.min(CHUNK_SIZE, remaining);
+        controller.enqueue(new Uint8Array(size));
+        pulled += size;
+      },
+      cancel(reason) {
+        params.onCancel(reason);
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("bounds streamed OpenAI Codex Responses success bodies without content-length", async () => {
+    let cancelReason: unknown;
+    let pullCount = 0;
+    const body = createHostileSseBody({
+      totalBytes: 64 * 1024 * 1024,
+      onPull: () => {
+        pullCount += 1;
+      },
+      onCancel: (reason) => {
+        cancelReason = reason;
+      },
+    });
+
+    let caught: Error | null = null;
+    try {
+      for await (const event of parseSSEForTest(body)) {
+        expect(event).toBeDefined();
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toMatch(
+      /OpenAI Codex Responses success body exceeded 16777216 bytes/,
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    // The bounded reader should have cancelled well before draining the full 64 MiB.
+    // With 1 MiB chunks, 17-20 pulls is the bounded range (16 MiB + a couple of overshoot).
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
+  });
+
+  it("parses normal OpenAI Codex Responses SSE responses end-to-end", async () => {
+    const events = [
+      { type: "response.created", response: { id: "resp_1" } },
+      { type: "response.output_text.delta", delta: "hello" },
+      { type: "response.completed", response: { id: "resp_1" } },
+    ];
+    const body = new Response(
+      events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
+
+    const collected: Record<string, unknown>[] = [];
+    for await (const event of parseSSEForTest(body)) {
+      collected.push(event);
+    }
+
+    expect(collected.map((e) => e.type)).toEqual([
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+    ]);
   });
 });
