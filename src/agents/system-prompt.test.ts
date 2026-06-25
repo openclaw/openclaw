@@ -512,6 +512,16 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("mentions append mode in the model-visible write tool summary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["write"],
+    });
+
+    expect(prompt).toContain("- write: Create, overwrite, or append to files");
+    expect(prompt).not.toContain("- write: Create or overwrite files");
+  });
+
   it("includes docs guidance when docsPath is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

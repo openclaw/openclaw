@@ -110,6 +110,11 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+/** Normalize model-supplied file-tool path params without touching payload text. */
+export function normalizeFileToolPathParam(value: string): string {
+  return stripMalformedXmlArgValueSuffix(value);
+}
+
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,

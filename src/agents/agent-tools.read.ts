@@ -27,6 +27,7 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
+  normalizeFileToolPathParam,
   stripMalformedXmlArgValueSuffix,
   stripMalformedXmlArgValueSuffixFromKeys,
   wrapToolParamValidation,
@@ -1107,7 +1108,7 @@ export function wrapToolWriteWithAppend(tool: AnyAgentTool): AnyAgentTool {
       }
       let normalizedArgs = args;
       if (record && record.append === true && typeof record.path === "string") {
-        const normalizedPath = stripMalformedXmlArgValueSuffix(record.path);
+        const normalizedPath = normalizeFileToolPathParam(record.path);
         if (!normalizedPath.trim()) {
           throw malformedXmlArgValuePathError("path");
         }
