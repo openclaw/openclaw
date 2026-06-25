@@ -978,26 +978,28 @@ describe("session accessor file-backed seam", () => {
   });
 
   it("applies restart recovery replacements without exposing mutable store rows", async () => {
-    fs.writeFileSync(
+    await applySessionEntryLifecycleMutation({
       storePath,
-      JSON.stringify(
+      upserts: [
         {
-          "agent:main:main": {
+          sessionKey: "agent:main:main",
+          entry: {
             sessionId: "session-1",
             status: "running",
             updatedAt: 10,
           },
-          "agent:main:other": {
+        },
+        {
+          sessionKey: "agent:main:other",
+          entry: {
             sessionId: "session-2",
             status: "running",
             updatedAt: 20,
           },
-        } satisfies Record<string, SessionEntry>,
-        null,
-        2,
-      ),
-      "utf8",
-    );
+        },
+      ],
+      skipMaintenance: true,
+    });
 
     const result = await applyRestartRecoveryLifecycle({
       storePath,
@@ -1020,13 +1022,12 @@ describe("session accessor file-backed seam", () => {
     });
 
     expect(result).toEqual({ replaced: true });
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:main"]).toMatchObject({
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       abortedLastRun: true,
       sessionId: "session-1",
       updatedAt: 30,
     });
-    expect(store["agent:main:other"]).toMatchObject({
+    expect(loadSessionEntry({ sessionKey: "agent:main:other", storePath })).toMatchObject({
       sessionId: "session-2",
       status: "running",
       updatedAt: 20,

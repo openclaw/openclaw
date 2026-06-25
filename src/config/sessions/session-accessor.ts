@@ -1524,31 +1524,33 @@ export async function applyRestartRecoveryLifecycle<T>(params: {
   requireWriteSuccess?: boolean;
   skipMaintenance?: boolean;
 }): Promise<T> {
-  const writerResult = await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const entries = Object.entries(store).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry: structuredClone(entry),
-      }));
-      const operation = await params.update(entries);
-      let changed = false;
-      for (const replacement of operation.replacements ?? []) {
-        if (!Object.hasOwn(store, replacement.sessionKey)) {
-          continue;
-        }
-        store[replacement.sessionKey] = structuredClone(replacement.entry);
-        changed = true;
-      }
-      return { changed, result: operation.result };
-    },
-    {
-      requireWriteSuccess: params.requireWriteSuccess,
-      skipMaintenance: params.skipMaintenance ?? true,
-      skipSaveWhenResult: (result) => !result.changed,
-    },
+  const entries = listSessionEntries({ storePath: params.storePath }).map(
+    ({ sessionKey, entry }) => ({
+      sessionKey,
+      entry: structuredClone(entry),
+    }),
   );
-  return writerResult.result;
+  const operation = await params.update(entries);
+  const replacements = [...(operation.replacements ?? [])];
+  let changed = false;
+  for (const replacement of replacements) {
+    if (!entries.some((entry) => entry.sessionKey === replacement.sessionKey)) {
+      continue;
+    }
+    await patchSessionEntry(
+      { sessionKey: replacement.sessionKey, storePath: params.storePath },
+      () => replacement.entry,
+      {
+        replaceEntry: true,
+        skipMaintenance: params.skipMaintenance ?? true,
+      },
+    );
+    changed = true;
+  }
+  if (params.requireWriteSuccess && replacements.length > 0 && !changed) {
+    throw new Error("restart recovery lifecycle did not persist any replacements");
+  }
+  return operation.result;
 }
 
 /**
@@ -2734,11 +2736,13 @@ function snapshotTemporarySessionMapping(
 ): TemporarySessionMappingSnapshot {
   const storePath = resolveAccessStorePath(scope);
   try {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[scope.sessionKey];
+    const exact = loadExactSessionEntry({
+      ...scope,
+      storePath,
+    });
     return {
       canRestore: true,
-      ...(entry ? { entry: structuredClone(entry), hadEntry: true } : { hadEntry: false }),
+      ...(exact ? { entry: structuredClone(exact.entry), hadEntry: true } : { hadEntry: false }),
       sessionKey: scope.sessionKey,
       storePath,
     };
@@ -2759,17 +2763,19 @@ async function restoreTemporarySessionMapping(
     return undefined;
   }
   try {
-    await updateSessionStore(
-      snapshot.storePath,
-      (store) => {
-        if (snapshot.hadEntry) {
-          store[snapshot.sessionKey] = structuredClone(snapshot.entry);
-          return;
-        }
-        delete store[snapshot.sessionKey];
-      },
-      { activeSessionKey: snapshot.sessionKey },
-    );
+    if (snapshot.hadEntry) {
+      await replaceSessionEntry(
+        { sessionKey: snapshot.sessionKey, storePath: snapshot.storePath },
+        structuredClone(snapshot.entry),
+      );
+    } else {
+      await applySessionEntryLifecycleMutation({
+        storePath: snapshot.storePath,
+        removals: [{ sessionKey: snapshot.sessionKey }],
+        activeSessionKey: snapshot.sessionKey,
+        skipMaintenance: true,
+      });
+    }
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);
