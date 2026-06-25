@@ -70,6 +70,21 @@ export function expectChannelInboundContextContract(ctx: MsgContext) {
   if (ctx.SenderId != null) {
     expect(normalizeContextString(ctx.SenderId)).toBeTruthy();
   }
+
+  if (ctx.SourceActor != null) {
+    expect(ctx.SourceActor).toBeTypeOf("object");
+    expect(normalizeContextString(ctx.SourceActor.id)).toBeTruthy();
+    if (ctx.SourceActorId != null) {
+      expect(normalizeContextString(ctx.SourceActorId)).toBe(
+        normalizeContextString(ctx.SourceActor.id),
+      );
+    }
+    if (ctx.SourceActorPeerId != null && ctx.SourceActor.peerId != null) {
+      expect(normalizeContextString(ctx.SourceActorPeerId)).toBe(
+        normalizeContextString(ctx.SourceActor.peerId),
+      );
+    }
+  }
 }
 
 export function expectChannelTurnDispatchResultContract(

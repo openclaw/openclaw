@@ -13,6 +13,7 @@ import type {
   InboundSourceModality,
   MentionSource,
   MsgContext,
+  SourceActorContext,
   SupplementalContextFacts,
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
@@ -55,6 +56,9 @@ export type NormalizedTurnInput = {
   raw?: unknown;
 };
 
+/** Stable source actor facts for attribution, memory routing, and diagnostics. */
+export type SourceActorFacts = SourceActorContext;
+
 /** Sender identity facts projected into channel access, routing, and prompt context. */
 export type SenderFacts = {
   id?: string;
@@ -65,6 +69,7 @@ export type SenderFacts = {
   isBot?: boolean;
   isSelf?: boolean;
   displayLabel?: string;
+  sourceActor?: SourceActorFacts;
 };
 
 /** Conversation identity and threading facts for a channel turn. */
