@@ -535,6 +535,41 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     );
   });
 
+  it("fails closed instead of sending auth-profile bearers to a remote app-server", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (_method: string, _params: unknown) => {
+      throw new Error("remote app-server must not receive auth-profile MCP config");
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir, {
+          mcp: {
+            servers: {
+              ducktape: {
+                transport: "streamable-http",
+                url: "https://agents.ducktape.xyz/mcp",
+                auth: "oauth",
+                oauth: { authProfileId: "ducktape:mcp" },
+              },
+            },
+          },
+        } as unknown as EmbeddedRunAttemptParams["config"]),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: {
+          ...createAppServerOptions(),
+          connectionClass: "remote",
+        },
+      }),
+    ).rejects.toThrow(
+      "Cannot project mcp.servers.ducktape.oauth.authProfileId into Codex app-server",
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

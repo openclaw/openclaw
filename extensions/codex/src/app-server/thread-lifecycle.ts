@@ -346,6 +346,7 @@ export async function startOrResumeThread(params: {
       : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
           agentId: params.agentId ?? params.params.agentId,
           agentDir: params.params.agentDir,
+          allowLiteralAuthProfileProjection: params.appServer.connectionClass !== "remote",
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(

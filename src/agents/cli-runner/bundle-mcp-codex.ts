@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { buildCodexMcpServersConfig, normalizeCodexMcpServerConfig } from "../codex-mcp-config.js";
-import { resolveMcpAuthProfileBundleConfig } from "../mcp-auth-profile.js";
+import { resolveMcpAuthProfileBundleConfig, resolveMcpAuthProfileId } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
@@ -27,6 +27,7 @@ type CodexThreadConfigObject = { [key: string]: CodexThreadConfigValue };
 type CodexUserMcpServersProjectionOptions = {
   agentId?: string;
   agentDir?: string;
+  allowLiteralAuthProfileProjection?: boolean;
 };
 
 function normalizeAgentIds(value: unknown): string[] {
@@ -124,6 +125,16 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   ) as BundleMcpConfig["mcpServers"];
   if (Object.keys(allowedServers).length === 0) {
     return undefined;
+  }
+  if (options?.allowLiteralAuthProfileProjection === false) {
+    const authProfileServerName = Object.entries(allowedServers).find(([, server]) =>
+      resolveMcpAuthProfileId(server),
+    )?.[0];
+    if (authProfileServerName) {
+      throw new Error(
+        `Cannot project mcp.servers.${authProfileServerName}.oauth.authProfileId into Codex app-server: refreshed bearer projection is only supported for local app-server connections.`,
+      );
+    }
   }
   const resolvedConfig = await resolveMcpAuthProfileBundleConfig({
     config: { mcpServers: allowedServers },
