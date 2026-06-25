@@ -692,6 +692,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    deliveryError?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
     provider?: string;
@@ -740,7 +741,11 @@ export function applyJobResult(
     job,
     runStatus: result.status,
     delivered: result.delivered,
-    error: result.error,
+    // A successful run keeps `error` empty but may carry a dedicated
+    // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
+    // so `lastDeliveryError` is populated without conflating it with a
+    // run-level failure. Error runs fall back to the run error as before.
+    error: result.deliveryError ?? result.error,
     globalFailureDestination: state.deps.cronConfig?.failureDestination,
   });
   job.state.lastDelivered = deliveryState.delivered;
@@ -1011,6 +1016,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
+        deliveryError: result.deliveryError,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
         provider: result.provider,
@@ -1034,6 +1040,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    deliveryError: result.deliveryError,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
     provider: result.provider,
@@ -2137,6 +2144,7 @@ async function executeDetachedCronJob(
     return {
       status: res.status,
       error: res.error,
+      deliveryError: res.deliveryError,
       summary: res.summary,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
@@ -2189,6 +2197,10 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    // Forward the post-run delivery failure recorded on an otherwise
+    // successful run so the service can persist it as `lastDeliveryError` and
+    // emit it on the finished event for CLI/UI/API run logs (#95419).
+    deliveryError: res.deliveryError,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
