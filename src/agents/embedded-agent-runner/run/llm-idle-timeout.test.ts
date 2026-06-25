@@ -323,6 +323,38 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true, runTimeoutMs: 60_000 })).toBe(60_000);
   });
 
+  it("does not clamp an explicit longer run timeout to 120s when thinking is enabled (#80349)", () => {
+    // The thinking bypass must run before the implicit run-timeout clamp: an
+    // operator who raised the hard cap to 300s for a thinking model must not
+    // have it clamped back to the 120s silence watchdog.
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true, runTimeoutMs: 300_000 })).toBe(300_000);
+  });
+
+  it("does not clamp agents.defaults.timeoutSeconds to 120s when thinking is enabled", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, thinkingEnabled: true })).toBe(300_000);
+  });
+
+  it("still clamps an explicit longer run timeout to 120s when thinking is off", () => {
+    // Non-thinking cloud runs keep the network-silence ceiling.
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: false, runTimeoutMs: 300_000 })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("still clamps a longer agents.defaults.timeoutSeconds to 120s for Ollama cloud thinking", () => {
+    // `:cloud` models keep the cloud watchdog even with thinking: a raised
+    // agent cap is still bounded by the 120s silence ceiling.
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        thinkingEnabled: true,
+        model: { provider: "ollama", id: "glm-5.1:cloud", baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
   it("does not disable the watchdog for a thinking-enabled local provider (already opted out)", () => {
     // Local providers already return 0 regardless of thinking; the flag is a
     // no-op there and must not re-arm the cloud watchdog.
