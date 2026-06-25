@@ -1232,15 +1232,14 @@ export async function updateSessionEntry(
 export function resolveSessionAbortTarget(
   scope: SessionAccessScope,
 ): SessionAbortTargetIdentity | null {
-  const store = loadSessionStore(resolveSessionStorePathForScope(scope));
-  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-  if (!resolved.existing) {
+  const entry = loadSessionEntry(scope);
+  if (!entry) {
     return null;
   }
   return {
-    entry: { ...resolved.existing },
-    sessionId: resolved.existing.sessionId,
-    sessionKey: resolved.normalizedKey,
+    entry: { ...entry },
+    sessionId: entry.sessionId,
+    sessionKey: normalizeStoreSessionKey(scope.sessionKey),
   };
 }
 
@@ -1253,61 +1252,45 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  const storePath = resolveSessionStorePathForScope(params.scope);
-  let canPersistSingleEntry = false;
   let resolvedTarget: SessionAbortTargetResult | null = null;
   try {
-    return await updateSessionStore(
-      storePath,
-      (store) => {
-        const resolved = resolveSessionStoreEntry({
-          store,
-          sessionKey: params.scope.sessionKey,
-        });
-        if (!resolved.existing) {
-          return null;
-        }
-        const sessionKey = resolved.normalizedKey;
+    const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
+    const updated = await patchSessionEntry(
+      params.scope,
+      (currentEntry) => {
         resolvedTarget = {
-          entry: { ...resolved.existing },
+          entry: { ...currentEntry },
           persisted: false,
-          sessionId: resolved.existing.sessionId,
+          sessionId: currentEntry.sessionId,
           sessionKey,
         };
         const entry = {
-          ...resolved.existing,
+          ...currentEntry,
           abortedLastRun: true,
           updatedAt: params.now?.() ?? Date.now(),
         };
         applySessionAbortCutoff(
           entry,
           params.resolveAbortCutoff?.({
-            entry: { ...resolved.existing },
+            entry: { ...currentEntry },
             sessionKey,
           }),
         );
-        store[sessionKey] = entry;
-        canPersistSingleEntry = resolved.legacyKeys.length === 0;
-        for (const legacyKey of resolved.legacyKeys) {
-          if (legacyKey !== sessionKey) {
-            delete store[legacyKey];
-          }
-        }
-        return {
-          entry: { ...entry },
-          persisted: true,
-          sessionId: entry.sessionId,
-          sessionKey,
-        };
+        return entry;
       },
       {
-        resolveSingleEntryPersistence: (result) =>
-          result && result.sessionKey && canPersistSingleEntry
-            ? { sessionKey: result.sessionKey, entry: result.entry }
-            : null,
-        skipSaveWhenResult: (result) => result === null,
+        replaceEntry: true,
+        skipMaintenance: true,
       },
     );
+    return updated
+      ? {
+          entry: { ...updated },
+          persisted: true,
+          sessionId: updated.sessionId,
+          sessionKey,
+        }
+      : null;
   } catch (error) {
     const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
     if (fallbackTarget) {
