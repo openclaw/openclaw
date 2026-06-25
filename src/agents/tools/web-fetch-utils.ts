@@ -8,6 +8,16 @@ import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 /** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 
+function decodeNumericEntity(raw: string, radix: 10 | 16): string {
+  // A numeric character reference denotes a Unicode code point, so fromCodePoint
+  // (not fromCharCode, which truncates mod 2^16 and corrupts astral-plane chars
+  // like emoji) is required. Mirrors decodeHtmlEntity in ../utils/html.ts.
+  const codePoint = Number.parseInt(raw, radix);
+  return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    ? String.fromCodePoint(codePoint)
+    : `&#${radix === 16 ? "x" : ""}${raw};`;
+}
+
 function decodeEntities(value: string): string {
   return value
     .replace(/&nbsp;/gi, " ")
@@ -16,8 +26,8 @@ function decodeEntities(value: string): string {
     .replace(/&#39;/gi, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gi, (_, dec) => String.fromCharCode(Number.parseInt(dec, 10)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => decodeNumericEntity(hex, 16))
+    .replace(/&#(\d+);/gi, (_, dec) => decodeNumericEntity(dec, 10));
 }
 
 function stripTags(value: string): string {
