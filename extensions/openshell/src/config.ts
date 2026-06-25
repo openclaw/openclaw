@@ -112,8 +112,15 @@ const OpenShellPluginConfigSchema = z.strictObject({
         return;
       }
       for (const key of Object.keys(env)) {
-        const trimmed = key.trim();
-        if (!trimmed) {
+        if (key !== key.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `env key "${key}" has surrounding whitespace`,
+            path: ["env", key],
+          });
+          return;
+        }
+        if (!key) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "env keys must not be empty",
@@ -121,19 +128,19 @@ const OpenShellPluginConfigSchema = z.strictObject({
           });
           return;
         }
-        if (trimmed.startsWith("OPENSHELL_")) {
+        if (key.startsWith("OPENSHELL_")) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `env key "${trimmed}" uses reserved OPENSHELL_ prefix`,
-            path: ["env", trimmed],
+            message: `env key "${key}" uses reserved OPENSHELL_ prefix`,
+            path: ["env", key],
           });
           return;
         }
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `env key "${trimmed}" is not a valid environment variable name`,
-            path: ["env", trimmed],
+            message: `env key "${key}" is not a valid environment variable name`,
+            path: ["env", key],
           });
           return;
         }
