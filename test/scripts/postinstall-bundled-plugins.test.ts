@@ -14,8 +14,10 @@ import {
   pruneInstalledPackageDist,
   pruneLegacyPluginRuntimeDepsState,
   pruneBundledPluginSourceNodeModules,
+  resolveGatewayPort,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
+  warnIfGatewayNeedsRestart,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -1220,5 +1222,151 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(removePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("gateway port resolution", () => {
+  const DEFAULT_PORT = 18789;
+  const hd = () => "/home/test";
+
+  it("resolves default port when no sources exist", () => {
+    const existsSync = vi.fn(() => false);
+    expect(resolveGatewayPort({ env: {}, existsSync, homedir: hd })).toBe(DEFAULT_PORT);
+  });
+
+  it("resolves port from OPENCLAW_GATEWAY_PORT env var", () => {
+    const existsSync = vi.fn(() => false);
+    expect(
+      resolveGatewayPort({ env: { OPENCLAW_GATEWAY_PORT: "12345" }, existsSync, homedir: hd }),
+    ).toBe(12345);
+  });
+
+  it("resolves port from service-env (launchd)", () => {
+    const readdirSync = vi.fn(() => [{ name: "openclaw-gateway.env", isDirectory: () => false }]);
+    const readFileSync = vi.fn(() => "export OPENCLAW_GATEWAY_PORT='19003'\n");
+    expect(
+      resolveGatewayPort({
+        env: { OPENCLAW_STATE_DIR: "/state" },
+        existsSync: vi.fn(() => true),
+        readdirSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(19003);
+  });
+
+  it("resolves port from gateway.systemd.env", () => {
+    let callCount = 0;
+    const readFileSync = vi.fn(() => {
+      callCount++;
+      return "OPENCLAW_GATEWAY_PORT=13579\n";
+    });
+    const existsSync = vi.fn((p: string) => {
+      // Only gateway.systemd.env exists (not service-env, not systemd unit)
+      return p.endsWith("gateway.systemd.env");
+    });
+    expect(
+      resolveGatewayPort({
+        env: { HOME: "/home/test", OPENCLAW_STATE_DIR: "/state" },
+        existsSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(13579);
+  });
+
+  it("resolves port from systemd unit inline Environment= directive", () => {
+    const readFileSync = vi.fn((p: string) => {
+      if (p.endsWith(".service"))
+        return "[Service]\nEnvironment=OPENCLAW_GATEWAY_PORT=24680\nExecStart=/usr/bin/openclaw gateway\n";
+      return "OPENCLAW_GATEWAY_PORT=13579\n";
+    });
+    const existsSync = vi.fn((p: string) => {
+      // Unit file and gateway.systemd.env exist, but service-env does not
+      if (p.includes("service-env")) return false;
+      return true;
+    });
+    expect(
+      resolveGatewayPort({
+        env: { HOME: "/home/test", OPENCLAW_STATE_DIR: "/state" },
+        existsSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(24680); // Unit inline takes precedence over gateway.systemd.env
+  });
+
+  it("resolves port from config file gateway.port", () => {
+    let callCount = 0;
+    const readFileSync = vi.fn(() => {
+      callCount++;
+      return JSON.stringify({ gateway: { port: 34680 } });
+    });
+    const existsSync = vi.fn((p: string) => {
+      // Only config file exists (no service-env, no systemd files)
+      return p.includes(".openclaw") || p.includes("openclaw.json");
+    });
+    expect(
+      resolveGatewayPort({
+        env: { HOME: "/home/test" },
+        existsSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(34680);
+  });
+
+  it("env var takes precedence over all other sources", () => {
+    const readFileSync = vi.fn(() => {
+      throw new Error("should not read");
+    });
+    const existsSync = vi.fn(() => true);
+    expect(
+      resolveGatewayPort({
+        env: { OPENCLAW_GATEWAY_PORT: "9999", OPENCLAW_STATE_DIR: "/state" },
+        existsSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(9999);
+  });
+
+  it("warns when gateway is listening on the resolved port", async () => {
+    const probe = vi.fn(async () => true);
+    const warn = vi.fn();
+    await warnIfGatewayNeedsRestart({
+      env: { OPENCLAW_GATEWAY_PORT: "18789" },
+      warn,
+      probe,
+    });
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls[0][0]).toContain("WARNING");
+  });
+
+  it("does not warn when no gateway is listening", async () => {
+    const probe = vi.fn(async () => false);
+    const warn = vi.fn();
+    await warnIfGatewayNeedsRestart({
+      env: { OPENCLAW_GATEWAY_PORT: "18789" },
+      warn,
+      probe,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("respects OPENCLAW_STATE_DIR in config resolution", () => {
+    const readFileSync = vi.fn(() => JSON.stringify({ gateway: { port: 24680 } }));
+    const existsSync = vi.fn((p: string) => {
+      // Only state dir config and unit file exist (no service-env, no systemd env file)
+      return p.includes("state") || p.endsWith(".service");
+    });
+    expect(
+      resolveGatewayPort({
+        env: { HOME: "/home/test", OPENCLAW_STATE_DIR: "/custom-state" },
+        existsSync,
+        readFileSync,
+        homedir: hd,
+      }),
+    ).toBe(24680);
   });
 });

@@ -1202,23 +1202,46 @@ function readGatewayPortFromSystemdEnv({
   readFileSync: readFile = readFileSync,
   homedir: homeDir = homedir,
 } = {}) {
+  // 1. Try gateway.systemd.env first (EnvironmentFile written by install)
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || join(homeDir(), ".openclaw");
   const envFilePath = join(stateDir, "gateway.systemd.env");
-  if (!exists(envFilePath)) {
-    return null;
-  }
-  try {
-    const content = readFile(envFilePath, "utf8");
-    const match = content.match(/^OPENCLAW_GATEWAY_PORT=(\d+)$/m);
-    if (match?.[1]) {
-      const port = Number(match[1]);
-      if (Number.isFinite(port) && port > 0 && port <= 65535) {
-        return port;
+  if (exists(envFilePath)) {
+    try {
+      const content = readFile(envFilePath, "utf8");
+      const match = content.match(/^OPENCLAW_GATEWAY_PORT=(\d+)$/m);
+      if (match?.[1]) {
+        const port = Number(match[1]);
+        if (Number.isFinite(port) && port > 0 && port <= 65535) {
+          return port;
+        }
       }
+    } catch {
+      // Unreadable env file -- ignore
     }
-  } catch {
-    // Unreadable env file -- ignore
   }
+
+  // 2. Try systemd unit file inline Environment= directive.
+  //    The gateway port may be stored as Environment=OPENCLAW_GATEWAY_PORT=<port>
+  //    directly in the unit file rather than in a separate EnvironmentFile.
+  const serviceName = env.OPENCLAW_SYSTEMD_UNIT?.trim() || "openclaw-gateway";
+  const unitName = serviceName.endsWith(".service") ? serviceName : `${serviceName}.service`;
+  const unitPath = join(homeDir(), ".config", "systemd", "user", unitName);
+  if (exists(unitPath)) {
+    try {
+      const content = readFile(unitPath, "utf8");
+      // Match Environment=OPENCLAW_GATEWAY_PORT=<port> (possibly quoted)
+      const envMatch = content.match(/^Environment=["']?OPENCLAW_GATEWAY_PORT=(\d+)/m);
+      if (envMatch?.[1]) {
+        const port = Number(envMatch[1]);
+        if (Number.isFinite(port) && port > 0 && port <= 65535) {
+          return port;
+        }
+      }
+    } catch {
+      // Unreadable unit file -- ignore
+    }
+  }
+
   return null;
 }
 
