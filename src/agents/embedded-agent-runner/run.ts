@@ -10,7 +10,10 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSessionTranscriptRuntimeReadTarget,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -2038,6 +2041,18 @@ async function runEmbeddedAgentInternal(
             runtimeAuthState,
           });
           const attemptFastMode = resolveAttemptFastModeParam();
+          const trajectorySessionFile = resolvedSessionKey
+            ? (
+                await resolveSessionTranscriptRuntimeReadTarget({
+                  agentId: workspaceResolution.agentId,
+                  sessionId: activeSessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: resolveStorePath(params.config?.session?.store, {
+                    agentId: workspaceResolution.agentId,
+                  }),
+                })
+              ).sessionFile
+            : activeSessionFile;
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -2166,6 +2181,7 @@ async function runEmbeddedAgentInternal(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
+            trajectorySessionFile,
             workspaceDir: resolvedWorkspace,
             cwd: params.cwd,
             agentDir,

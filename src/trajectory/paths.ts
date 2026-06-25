@@ -1,6 +1,7 @@
 // Trajectory path helpers resolve storage paths for trajectory artifacts.
 import fs from "node:fs";
 import path from "node:path";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 
@@ -61,6 +62,14 @@ export function resolveTrajectoryFilePath(params: {
     return path.join(
       process.cwd(),
       `${safeTrajectorySessionFileName(params.sessionId)}.trajectory.jsonl`,
+    );
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (sqliteMarker) {
+    return path.join(
+      path.dirname(path.resolve(sqliteMarker.storePath)),
+      "trajectory",
+      `${safeTrajectorySessionFileName(sqliteMarker.sessionId)}.jsonl`,
     );
   }
   return params.sessionFile.endsWith(".jsonl")

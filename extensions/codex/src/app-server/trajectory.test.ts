@@ -87,6 +87,38 @@ describe("Codex trajectory recorder", () => {
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
+  it("stores SQLite-backed trajectory captures under the session store trajectory dir", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions", "sessions.json");
+    const trajectorySessionFile = `sqlite:main:session-1:${storePath}`;
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "sessions", "session.jsonl"),
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        provider: "codex",
+        modelId: "gpt-5.4",
+        model: { api: "responses" },
+      } as never,
+      trajectorySessionFile,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    trajectoryRecorder.recordEvent("session.started");
+    await trajectoryRecorder.flush();
+
+    expect(fs.existsSync(path.join(tmpDir, "sessions", "session.trajectory.jsonl"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "sessions", "session.trajectory-path.json"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(tmpDir, "sessions", "trajectory", "session-1.jsonl"))).toBe(
+      true,
+    );
+  });
+
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

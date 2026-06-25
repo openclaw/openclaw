@@ -1846,12 +1846,18 @@ async function agentCommandInternal(
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
     const fastModeStartedAtMs = Date.now();
+    const trajectorySessionFile = resolveInternalSessionEffectsSource({
+      agentId: sessionAgentId,
+      sessionId,
+      sessionFile,
+      storePath,
+    });
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
       sessionId,
       sessionKey,
-      sessionFile: suppressVisibleSessionEffects ? attemptSessionFile : sessionFile,
+      sessionFile: suppressVisibleSessionEffects ? attemptSessionFile : trajectorySessionFile,
       provider,
       modelId: model,
       workspaceDir,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   resolveTrajectoryFilePath,
@@ -46,6 +47,21 @@ describe("trajectory runtime", () => {
         sessionId: "session-1",
       }),
     ).toBe("/tmp/session.trajectory.jsonl");
+  });
+
+  it("resolves SQLite session markers under the owning session store trajectory dir", () => {
+    const storePath = path.join("/tmp", "openclaw", "agents", "main", "sessions", "sessions.json");
+
+    expect(
+      resolveTrajectoryFilePath({
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "session-1",
+          storePath,
+        }),
+        sessionId: "session-1",
+      }),
+    ).toBe(path.join(path.dirname(storePath), "trajectory", "session-1.jsonl"));
   });
 
   it("sanitizes session ids when resolving an override directory", () => {
