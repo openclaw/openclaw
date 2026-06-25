@@ -453,4 +453,79 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
   });
+
+  it("estimates CJK tool results with the accurate token ratio", () => {
+    // CJK characters should be counted as ~1 token per char, not ~2 tokens per char.
+    // 80k CJK chars should estimate ~80k tokens, not ~160k.
+    const cjkToolResult = "中文工具返回结果 ".repeat(8000); // ~80k chars, >50% CJK
+    const messages = [makeToolResultMessage(cjkToolResult)];
+
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue with analysis",
+    });
+
+    // estimateStringChars inflates CJK count; ÷4 yields the accurate token estimate.
+    // With the old /2 ratio this would have been ~160k tokens and triggered false overflow.
+    expect(estimatedPromptTokens).toBeLessThan(120_000);
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeLessThan(120_000);
+    expect(result.promptBudgetBeforeReserve).toBeGreaterThan(result.estimatedPromptTokens);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
+  });
+
+  it("handles mixed CJK + Latin tool results without false overflow", () => {
+    const mixedContent = "English part. ".repeat(1000) + "中文部分内容 ".repeat(5000);
+    const messages = [makeToolResultMessage(mixedContent)];
+
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+
+    // CJK is the majority, so the accurate /4 ratio applies.
+    expect(estimatedPromptTokens).toBeLessThan(60_000);
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 64_000,
+      reserveTokens: 10_000,
+    });
+
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+  });
+
+  it("keeps the conservative ratio for non-CJK tool results", () => {
+    // Non-CJK tool results should still use the conservative 2 chars/token ratio.
+    const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
+    const toolResultTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeToolResultMessage(latinText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+    const assistantTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeAssistantHistory(latinText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+
+    // Tool-result estimate should be roughly 2x the normal-text estimate for the same Latin payload.
+    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
+    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
+  });
 });

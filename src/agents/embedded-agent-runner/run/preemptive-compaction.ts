@@ -3,7 +3,7 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
-import { estimateStringChars } from "../../../utils/cjk-chars.js";
+import { estimateCjkRatio, estimateStringChars } from "../../../utils/cjk-chars.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,
@@ -105,18 +105,54 @@ function estimateContentBlockTokenPressure(
   return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(block, charsPerToken);
 }
 
-function estimateToolResultContentTokenPressure(content: unknown): number {
+function estimateToolResultCjkRatio(content: unknown): number {
   if (typeof content === "string") {
-    return estimateStringTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateCjkRatio(content);
+  }
+  if (Array.isArray(content)) {
+    let nonLatinChars = 0;
+    let totalChars = 0;
+    for (const block of content) {
+      if (typeof block === "string") {
+        nonLatinChars += Math.ceil(estimateCjkRatio(block) * block.length);
+        totalChars += block.length;
+      } else if (isRecord(block)) {
+        if (typeof block.text === "string") {
+          nonLatinChars += Math.ceil(estimateCjkRatio(block.text) * block.text.length);
+          totalChars += block.text.length;
+        } else if (typeof block.thinking === "string") {
+          nonLatinChars += Math.ceil(estimateCjkRatio(block.thinking) * block.thinking.length);
+          totalChars += block.thinking.length;
+        }
+      }
+    }
+    return totalChars > 0 ? nonLatinChars / totalChars : 0;
+  }
+  if (content !== undefined) {
+    const serialized = JSON.stringify(content);
+    return estimateCjkRatio(serialized);
+  }
+  return 0;
+}
+
+function estimateToolResultContentTokenPressure(content: unknown): number {
+  // Use the accurate 4-chars/token ratio for CJK-heavy tool results to avoid
+  // false overflow errors, while keeping the more conservative 2-chars/token
+  // ratio for non-CJK tool results to preserve existing pressure behavior.
+  const cjkRatio = estimateToolResultCjkRatio(content);
+  const charsPerToken = cjkRatio >= 0.5 ? ESTIMATED_CHARS_PER_TOKEN : TOOL_RESULT_CHARS_PER_TOKEN;
+
+  if (typeof content === "string") {
+    return estimateStringTokenPressure(content, charsPerToken);
   }
   if (Array.isArray(content)) {
     return content.reduce(
-      (sum, block) => sum + estimateContentBlockTokenPressure(block, TOOL_RESULT_CHARS_PER_TOKEN),
+      (sum, block) => sum + estimateContentBlockTokenPressure(block, charsPerToken),
       0,
     );
   }
   if (content !== undefined) {
-    return estimateJsonPayloadTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateJsonPayloadTokenPressure(content, charsPerToken);
   }
   return 0;
 }
