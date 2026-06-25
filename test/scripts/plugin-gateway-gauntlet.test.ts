@@ -150,6 +150,15 @@ describe("plugin gateway gauntlet helpers", () => {
     );
   });
 
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
+  });
+
   it("rejects valued flags followed by another option", () => {
     for (const flag of [
       "--repo-root",

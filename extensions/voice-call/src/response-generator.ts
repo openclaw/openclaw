@@ -291,10 +291,6 @@ export async function generateVoiceResponse(
   }
   const sessionId = sessionEntry.sessionId;
 
-  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
-    agentId,
-  });
-
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
@@ -324,10 +320,15 @@ export async function generateVoiceResponse(
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
+      sessionTarget: {
+        agentId,
+        sessionId,
+        sessionKey: resolvedSessionKey,
+        storePath,
+      },
       sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
       agentId,
       messageProvider: "voice",
-      sessionFile,
       workspaceDir,
       config: cfg,
       prompt: userMessage,

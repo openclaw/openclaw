@@ -38,6 +38,10 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function setEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
+}
+
 function createRuntime(): { runtime: RuntimeEnv; lines: string[] } {
   const lines: string[] = [];
   return {
@@ -71,8 +75,8 @@ async function main() {
   tempState.registerExitCleanup();
   const stateDir = tempState.stateDir;
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  setEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.mkdir(stateDir, { recursive: true });
   clearConfigCache();
@@ -104,7 +108,7 @@ async function main() {
     "fresh overview did not include setup recommendation",
   );
 
-  process.env[spec.discordEnv] = spec.discordToken;
+  setEnvValue(spec.discordEnv, spec.discordToken);
 
   const commandVars = {
     defaultWorkspace: spec.dockerDefaultWorkspace,

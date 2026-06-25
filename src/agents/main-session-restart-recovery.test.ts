@@ -73,6 +73,7 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
     ageMs: 1_000,
     stale: true,
     staleReasons: ["dead-pid"],
+    removable: true,
     removed: true,
   };
 }

@@ -115,6 +115,17 @@ before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected chat
 before testing if an existing Codex thread has already started.
 
+On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
+bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
+That keeps Computer Use under the app bundle that owns the local desktop-control
+permissions. If the desktop app is not installed, OpenClaw falls back to the
+managed Codex binary installed beside the plugin. If an installed desktop app
+initializes with an unsupported app-server version, OpenClaw closes that child
+and retries the next managed binary candidate instead of letting a stale
+desktop app shadow the plugin-local fallback. Explicit `appServer.command`
+config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides this managed
+selection.
+
 ## Commands
 
 Use the `/codex computer-use` commands from any chat surface where the `codex`
@@ -276,7 +287,13 @@ Codex app-server MCP status, or macOS permissions.
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and MCP
 server are present, but the local Computer Use bridge did not answer. Quit or
 restart Codex Computer Use, relaunch Codex Desktop if needed, then retry in a
-fresh OpenClaw session.
+fresh OpenClaw session. If the host previously ran Computer Use through an older
+managed Codex app-server, refresh the installed plugin from the desktop bundled
+marketplace:
+
+```text
+/codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+```
 
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
 tool hook could not reach an active OpenClaw relay through the local bridge or
