@@ -106,7 +106,9 @@ function compareModelIds(a: string, b: string): number {
     .filter((n) => Number.isFinite(n));
   const len = Math.min(aNums.length, bNums.length);
   for (let i = 0; i < len; i++) {
-    if (aNums[i] !== bNums[i]) return aNums[i] - bNums[i];
+    if (aNums[i] !== bNums[i]) {
+      return aNums[i] - bNums[i];
+    }
   }
   return aNums.length - bNums.length;
 }
