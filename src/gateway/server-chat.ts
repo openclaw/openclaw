@@ -30,6 +30,12 @@ import type {
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import {
+  clearSessionToolActivitiesForRun,
+  expandSessionActivityMutation,
+  recordSessionToolActivity,
+  type SessionActivityMutation,
+} from "./session-activity.js";
+import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
@@ -518,6 +524,26 @@ export function createAgentEventHandler({
     }
   };
 
+  const broadcastSessionActivityMutation = (mutation: SessionActivityMutation, reason: string) => {
+    const connIds = sessionEventSubscribers.getAll();
+    if (connIds.size === 0) {
+      return;
+    }
+    for (const expanded of expandSessionActivityMutation(mutation)) {
+      broadcastToConnIds(
+        "session.activity",
+        {
+          sessionKey: expanded.sessionKey,
+          ...(expanded.sourceSessionKey ? { sourceSessionKey: expanded.sourceSessionKey } : {}),
+          revision: expanded.revision,
+          reason,
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+    }
+  };
+
   const emitFirstAssistantChatSendTiming = (chatLink: ChatRunEntry | undefined) => {
     const timing = chatLink?.chatSendTiming;
     if (!timing || timing.firstAssistantEventSent) {
@@ -600,6 +626,13 @@ export function createAgentEventHandler({
       );
     if (isSupersededRestartRecoveryEvent) {
       return;
+    }
+
+    const toolActivityCleanupRunIds = new Set([evt.runId, clientRunId]);
+    for (const runId of toolActivityCleanupRunIds) {
+      for (const mutation of clearSessionToolActivitiesForRun(runId)) {
+        broadcastSessionActivityMutation(mutation, "tool-clear");
+      }
     }
 
     if (
@@ -1220,6 +1253,13 @@ export function createAgentEventHandler({
             return { ...agentPayload, data };
           })()
         : agentPayload;
+    const toolActivityMutation =
+      isToolEvent && !suppressHeartbeatToolEvents
+        ? recordSessionToolActivity({ event: eventForClients, sessionKey })
+        : undefined;
+    if (toolActivityMutation) {
+      broadcastSessionActivityMutation(toolActivityMutation, "tool");
+    }
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       broadcast("agent", {

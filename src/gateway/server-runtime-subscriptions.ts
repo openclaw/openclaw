@@ -3,6 +3,7 @@ import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { onTaskRegistryEvent } from "../tasks/task-registry.js";
 import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
 import type {
   ChatRunState,
@@ -10,6 +11,7 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import { bumpSessionActivityRevision, listRelatedSessionActivityKeys } from "./session-activity.js";
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
@@ -234,10 +236,36 @@ export function startGatewayEventSubscriptions(params: {
     void getLifecycleEventHandler().then((handler) => handler(evt));
   });
 
+  const taskActivityUnsub = onTaskRegistryEvent((event) => {
+    const task =
+      event.kind === "deleted"
+        ? event.previous
+        : event.kind === "upserted"
+          ? event.task
+          : undefined;
+    if (!task) {
+      return;
+    }
+    const connIds = params.sessionEventSubscribers.getAll();
+    if (connIds.size === 0) {
+      return;
+    }
+    for (const sessionKey of listRelatedSessionActivityKeys(task)) {
+      const revision = bumpSessionActivityRevision(sessionKey) ?? 0;
+      params.broadcastToConnIds(
+        "session.activity",
+        { sessionKey, revision, reason: "task" },
+        connIds,
+        { dropIfSlow: true },
+      );
+    }
+  });
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    taskActivityUnsub,
   };
 }

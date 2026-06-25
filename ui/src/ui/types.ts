@@ -15,6 +15,42 @@ export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
+export type SessionActivityTask = {
+  id: string;
+  sessionKey: string;
+  runtime: "subagent" | "acp" | "cli" | "cron";
+  title: string;
+  status: "queued" | "running";
+  createdAt: number;
+  startedAt?: number;
+  lastEventAt?: number;
+  childSessionKey?: string;
+  runId?: string;
+  label?: string;
+  progressSummary?: string;
+};
+
+export type SessionActivityTool = {
+  id: string;
+  sessionKey: string;
+  runId: string;
+  toolCallId: string;
+  name: string;
+  title: string;
+  status: "running";
+  startedAt: number;
+  updatedAt: number;
+};
+
+export type SessionActivityResult = {
+  key: string;
+  revision: number;
+  includedSessionKeys: string[];
+  truncated: boolean;
+  tasks: SessionActivityTask[];
+  tools: SessionActivityTool[];
+};
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];

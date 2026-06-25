@@ -66,6 +66,11 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
+  applySessionToolActivityEvent,
+  loadSessionActivity,
+  type SessionActivityState,
+} from "./controllers/session-activity.ts";
+import {
   applySessionsChangedEvent,
   loadSessions,
   subscribeSessions,
@@ -136,6 +141,8 @@ type GatewayHost = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   sessionsShowArchived: boolean;
+  sessionActivityLoading: boolean;
+  sessionActivity: import("./types.ts").SessionActivityResult | null;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
@@ -889,6 +896,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
+      void loadSessionActivity(host as unknown as SessionActivityState);
       void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
@@ -1289,6 +1297,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (host.onboarding) {
       return;
     }
+    applySessionToolActivityEvent(
+      host as unknown as SessionActivityState,
+      evt.payload as Parameters<typeof applySessionToolActivityEvent>[1],
+    );
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
@@ -1337,6 +1349,18 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleSessionOperationEvent>[0],
       evt.payload as SessionOperationEventPayload | undefined,
     );
+    return;
+  }
+
+  if (evt.event === "session.activity") {
+    const payload = evt.payload as
+      | { sessionKey?: unknown; sourceSessionKey?: unknown; reason?: unknown }
+      | undefined;
+    const isDirectLiveToolUpdate =
+      payload?.reason === "tool" && payload.sourceSessionKey === host.sessionKey;
+    if (payload?.sessionKey === host.sessionKey && !isDirectLiveToolUpdate) {
+      void loadSessionActivity(host as unknown as SessionActivityState);
+    }
     return;
   }
 

@@ -51,6 +51,10 @@ import {
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import {
+  clearSessionToolActivitiesForRun,
+  getSessionActivitySnapshot,
+} from "./session-activity.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 describe("agent event handler", () => {
@@ -1594,9 +1598,19 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool event")).toBe("session.tool");
-    const sessionToolPayload = requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload");
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session activity event")).toBe(
+      "session.activity",
+    );
+    expect(requireMockPayload(broadcastToConnIds, 0, 1, "session activity payload")).toEqual(
+      expect.objectContaining({
+        sessionKey: "session-1",
+        sourceSessionKey: "session-1",
+        reason: "tool",
+      }),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    const sessionToolPayload = requireMockPayload(broadcastToConnIds, 1, 1, "session tool payload");
     expectRecordFields(sessionToolPayload, {
       runId: "run-session-tool",
       sessionKey: "session-1",
@@ -1618,10 +1632,10 @@ describe("agent event handler", () => {
       toolCallId: "tool-session-1",
       args: { command: "echo hi" },
     });
-    expect(requireMockArg(broadcastToConnIds, 0, 2, "session tool recipients")).toEqual(
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
       new Set(["conn-session"]),
     );
-    expect(requireMockArg(broadcastToConnIds, 0, 3, "session tool options")).toEqual({
+    expect(requireMockArg(broadcastToConnIds, 1, 3, "session tool options")).toEqual({
       dropIfSlow: true,
     });
     resetAgentRunContextForTest();
@@ -1663,8 +1677,11 @@ describe("agent event handler", () => {
     });
 
     expect(loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool event")).toBe("session.tool");
-    expect(requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload")).toEqual(
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session activity event")).toBe(
+      "session.activity",
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockPayload(broadcastToConnIds, 1, 1, "session tool payload")).toEqual(
       expect.objectContaining({
         sessionKey: "global",
         agentId: "work",
@@ -1706,19 +1723,23 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
-    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session activity event")).toBe(
+      "session.activity",
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "run tool recipients")).toEqual(
       new Set(["conn-overlap", "conn-run-only"]),
     );
-    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
-    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+    expect(requireMockArg(broadcastToConnIds, 2, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 2, 2, "session tool recipients")).toEqual(
       new Set(["conn-session-only"]),
     );
   });
 
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
     const {
+      broadcast,
       broadcastToConnIds,
       nodeSendToSession,
       sessionEventSubscribers,
@@ -1750,6 +1771,7 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(broadcast.mock.calls.filter(([event]) => event === "session.activity")).toHaveLength(0);
     const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(0);
     resetAgentRunContextForTest();
@@ -3946,7 +3968,13 @@ describe("agent event handler", () => {
   });
 
   it("remaps chat-linked tool runId for non-full verbose payloads", () => {
-    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
+    const {
+      broadcastToConnIds,
+      chatRunState,
+      sessionEventSubscribers,
+      toolEventRecipients,
+      handler,
+    } = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
 
@@ -3958,6 +3986,7 @@ describe("agent event handler", () => {
       sessionKey: "session-tool-remap",
       verboseLevel: "on",
     });
+    sessionEventSubscribers.subscribe("conn-session");
     toolEventRecipients.add("run-tool-internal", "conn-1");
 
     handler({
@@ -3966,18 +3995,46 @@ describe("agent event handler", () => {
       stream: "tool",
       ts: Date.now(),
       data: {
-        phase: "result",
+        phase: "start",
         name: "exec",
         toolCallId: "tool-remap-1",
         result: { content: [{ type: "text", text: "secret" }] },
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = requireMockArg(broadcastToConnIds, 0, 1, "remapped tool payload") as {
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "remapped activity event")).toBe(
+      "session.activity",
+    );
+    const payload = requireMockArg(broadcastToConnIds, 1, 1, "remapped tool payload") as {
       runId?: string;
     };
     expect(payload.runId).toBe("run-tool-client");
+    expect(getSessionActivitySnapshot({ key: "session-tool-remap" }).tools[0]).toMatchObject({
+      id: "run-tool-client:tool-remap-1",
+      runId: "run-tool-client",
+      toolCallId: "tool-remap-1",
+    });
+
+    handler({
+      runId: "run-tool-internal",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(getSessionActivitySnapshot({ key: "session-tool-remap" }).tools).toEqual([]);
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        ([event, eventPayload]) =>
+          event === "session.activity" &&
+          typeof eventPayload === "object" &&
+          eventPayload !== null &&
+          (eventPayload as { reason?: unknown }).reason === "tool-clear",
+      ),
+    ).toBe(true);
+    clearSessionToolActivitiesForRun("run-tool-client");
     resetAgentRunContextForTest();
   });
 

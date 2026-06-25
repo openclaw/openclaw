@@ -70,6 +70,8 @@ export type PushTestResult = SchemaType<"PushTestResult">;
 /** Session lifecycle, message routing, compaction, patch, and usage payloads. */
 export type SessionsListParams = SchemaType<"SessionsListParams">;
 export type SessionsCleanupParams = SchemaType<"SessionsCleanupParams">;
+export type SessionsActivityParams = SchemaType<"SessionsActivityParams">;
+export type SessionsActivityResult = SchemaType<"SessionsActivityResult">;
 export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
 export type SessionsDescribeParams = SchemaType<"SessionsDescribeParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;

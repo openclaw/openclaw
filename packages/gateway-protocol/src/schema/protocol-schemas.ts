@@ -253,6 +253,8 @@ import {
 } from "./secrets.js";
 import {
   SessionsAbortParamsSchema,
+  SessionsActivityParamsSchema,
+  SessionsActivityResultSchema,
   SessionsCompactParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionBranchResultSchema,
@@ -375,6 +377,8 @@ export const ProtocolSchemas = {
   // Session lifecycle, message routing, compaction, and usage accounting.
   SessionsListParams: SessionsListParamsSchema,
   SessionsCleanupParams: SessionsCleanupParamsSchema,
+  SessionsActivityParams: SessionsActivityParamsSchema,
+  SessionsActivityResult: SessionsActivityResultSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsDescribeParams: SessionsDescribeParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,

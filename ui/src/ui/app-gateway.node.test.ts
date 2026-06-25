@@ -62,6 +62,16 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       if (method === "sessions.list") {
         return { count: 0, sessions: [] };
       }
+      if (method === "sessions.activity") {
+        return {
+          key: "main",
+          revision: 0,
+          includedSessionKeys: ["main"],
+          truncated: false,
+          tasks: [],
+          tools: [],
+        };
+      }
       return {};
     });
 
@@ -199,6 +209,8 @@ function createHost(): TestGatewayHost {
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    sessionActivityLoading: false,
+    sessionActivity: null,
     chatSideResult: null,
     chatSending: false,
     toolStreamById: new Map(),
@@ -1531,6 +1543,47 @@ describe("connectGateway", () => {
     });
     expect(JSON.stringify(host.activityEntries[0])).not.toContain("pwd");
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads session activity for clear-only tool activity events", async () => {
+    const { host, client } = connectHostGateway();
+    host.connected = true;
+    client.request.mockClear();
+
+    client.emitEvent({
+      event: "session.activity",
+      payload: {
+        sessionKey: "main",
+        sourceSessionKey: "main",
+        reason: "tool-clear",
+        revision: 2,
+      },
+    });
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("sessions.activity", {
+      key: "main",
+      includeDescendants: true,
+    });
+  });
+
+  it("keeps direct live tool activity events local", async () => {
+    const { host, client } = connectHostGateway();
+    host.connected = true;
+    client.request.mockClear();
+
+    client.emitEvent({
+      event: "session.activity",
+      payload: {
+        sessionKey: "main",
+        sourceSessionKey: "main",
+        reason: "tool",
+        revision: 2,
+      },
+    });
+    await Promise.resolve();
+
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("stores BTW side results for the active session", () => {

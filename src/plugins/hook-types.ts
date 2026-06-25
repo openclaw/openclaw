@@ -115,6 +115,13 @@ export type PluginHookName =
   | "subagent_ended"
   /** @deprecated Use gateway_stop. */
   | "deactivate"
+  | "task_created"
+  | "task_updated"
+  | "task_finished"
+  | "task_deleted"
+  | "tool_started"
+  | "tool_updated"
+  | "tool_finished"
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
@@ -156,6 +163,13 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_spawned",
   "subagent_ended",
   "deactivate",
+  "task_created",
+  "task_updated",
+  "task_finished",
+  "task_deleted",
+  "tool_started",
+  "tool_updated",
+  "tool_finished",
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
@@ -656,6 +670,54 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+/** Metadata-only task record exposed to passive lifecycle hooks. */
+export type PluginHookTaskActivity = {
+  id: string;
+  runtime: "subagent" | "acp" | "cli" | "cron";
+  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "lost";
+  title: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  updatedAt?: number;
+  label?: string;
+  progressSummary?: string;
+  runId?: string;
+  childSessionKey?: string;
+};
+
+export type PluginHookTaskActivityContext = {
+  requesterSessionKey: string;
+  ownerKey: string;
+  childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
+};
+
+export type PluginHookTaskActivityEvent = {
+  task: PluginHookTaskActivity;
+  previous?: PluginHookTaskActivity;
+};
+
+export type PluginHookToolActivity = {
+  id: string;
+  name: string;
+  title: string;
+  startedAt: number;
+  updatedAt: number;
+};
+
+export type PluginHookToolActivityEvent = {
+  phase: "started" | "updated" | "finished";
+  activity: PluginHookToolActivity;
+};
+
+export type PluginHookToolActivityContext = {
+  sessionKey: string;
+  runId: string;
+  toolCallId: string;
 };
 
 export type PluginHookToolResultPersistContext = {
@@ -1173,6 +1235,34 @@ export type PluginHookHandlerMap = {
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  task_created: (
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ) => Promise<void> | void;
+  task_updated: (
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ) => Promise<void> | void;
+  task_finished: (
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ) => Promise<void> | void;
+  task_deleted: (
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ) => Promise<void> | void;
+  tool_started: (
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
+  ) => Promise<void> | void;
+  tool_updated: (
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
+  ) => Promise<void> | void;
+  tool_finished: (
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
   ) => Promise<void> | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,

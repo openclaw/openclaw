@@ -65,7 +65,12 @@ import { icons } from "../icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { SessionWorkspaceListResult, SessionGoal, SessionsListResult } from "../types.ts";
+import type {
+  SessionActivityResult,
+  SessionWorkspaceListResult,
+  SessionGoal,
+  SessionsListResult,
+} from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -119,6 +124,8 @@ export type ChatProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  activity?: SessionActivityResult | null;
+  activityLoading?: boolean;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -2118,6 +2125,18 @@ export function renderChat(props: ChatProps) {
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const activityItems = [
+    ...(props.activity?.tasks ?? []).map((task) => ({
+      id: `task:${task.id}`,
+      label: task.label ?? task.title,
+      detail: task.runtime,
+    })),
+    ...(props.activity?.tools ?? []).map((tool) => ({
+      id: `tool:${tool.id}`,
+      label: tool.title,
+      detail: "tool",
+    })),
+  ];
 
   const thread = html`
     <div
@@ -2752,6 +2771,40 @@ export function renderChat(props: ChatProps) {
               >
                 ${icons.x}
               </button>
+            `
+          : nothing
+      }
+      ${
+        props.activityLoading || activityItems.length
+          ? html`
+              <div class="chat-queue chat-activity" role="status" aria-live="polite">
+                <div class="chat-queue__title">
+                  ${props.activityLoading
+                    ? html`<span
+                        class="usage-loading-spinner"
+                        aria-label="Loading activity"
+                        style="display: inline-block; margin-right: 6px; vertical-align: -1px"
+                      ></span>`
+                    : nothing}
+                  Running${activityItems.length ? ` (${activityItems.length})` : ""}
+                </div>
+                ${activityItems.length
+                  ? html`
+                      <div class="chat-queue__list">
+                        ${repeat(
+                          activityItems,
+                          (item) => item.id,
+                          (item) => html`
+                            <div class="chat-queue__item" title=${item.label}>
+                              <div class="chat-queue__text">${item.label}</div>
+                              <small>${item.detail}</small>
+                            </div>
+                          `,
+                        )}
+                      </div>
+                    `
+                  : nothing}
+              </div>
             `
           : nothing
       }

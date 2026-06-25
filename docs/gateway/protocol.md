@@ -431,6 +431,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
+    - `sessions.activity` returns active detached tasks and live tool executions for a session. Descendant session activity is included by default so parent-session views can show subagent work without polling every child session separately.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
@@ -493,9 +494,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
   and use `deltaText` as the replacement text.
-- `session.message`, `session.operation`, and `session.tool`: transcript,
-  in-flight session operation, and event-stream updates for a subscribed
-  session.
+- `session.message`, `session.operation`, `session.tool`, and
+  `session.activity`: transcript, in-flight session operation, live tool
+  stream, and active task/tool activity updates for subscribed sessions.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive / liveness event.

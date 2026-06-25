@@ -114,6 +114,8 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  sessionActivityLoading?: boolean;
+  sessionActivity?: import("./types.ts").SessionActivityResult | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;

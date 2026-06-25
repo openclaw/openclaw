@@ -271,6 +271,119 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders active session tasks and tools from Gateway activity updates", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const now = Date.now();
+    const runId = "activity-run";
+    const toolCallId = "activity-tool";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for activity check.", type: "text" }],
+          role: "assistant",
+          timestamp: now - 60_000,
+        },
+      ],
+      methodResponses: {
+        "sessions.activity": {
+          key: "main",
+          revision: 4,
+          includedSessionKeys: ["main", "main/subagent-proof"],
+          truncated: false,
+          tasks: [
+            {
+              id: "task-subagent-proof",
+              sessionKey: "main",
+              runtime: "subagent",
+              title: "Investigate session activity",
+              status: "running",
+              createdAt: now - 30_000,
+              startedAt: now - 29_000,
+              lastEventAt: now - 1_000,
+              childSessionKey: "main/subagent-proof",
+              runId: "subagent-run-proof",
+              label: "Subagent: investigate session activity",
+            },
+          ],
+          tools: [
+            {
+              id: `${runId}:${toolCallId}`,
+              sessionKey: "main",
+              runId,
+              toolCallId,
+              name: "exec",
+              title: "exec: pnpm test session activity",
+              status: "running",
+              startedAt: now - 5_000,
+              updatedAt: now - 1_000,
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Ready for activity check.").waitFor({ timeout: 10_000 });
+
+      const activityRequest = await gateway.waitForRequest("sessions.activity");
+      expect(activityRequest.params).toEqual({ key: "main", includeDescendants: true });
+      await page.locator(".chat-activity").getByText("Running (2)").waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("Subagent: investigate session activity").waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("exec: pnpm test session activity").waitFor({ timeout: 10_000 });
+
+      await gateway.emitGatewayEvent("session.tool", {
+        sessionKey: "main",
+        runId,
+        ts: now + 1_000,
+        data: {
+          name: "exec",
+          phase: "result",
+          toolCallId,
+        },
+      });
+
+      await page.locator(".chat-activity").getByText("Running (1)").waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("exec: pnpm test session activity").waitFor({
+        state: "detached",
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.activity")).toHaveLength(1);
+
+      await gateway.deferNext("sessions.activity");
+      await gateway.emitGatewayEvent("session.activity", {
+        sessionKey: "main",
+        sourceSessionKey: "main/subagent-proof",
+        reason: "task",
+      });
+      const activityRequests = await waitForRequests(gateway, "sessions.activity", 2);
+      expect(activityRequests[1]?.params).toEqual({ key: "main", includeDescendants: true });
+
+      await gateway.resolveDeferred("sessions.activity", {
+        key: "main",
+        revision: 5,
+        includedSessionKeys: ["main"],
+        truncated: false,
+        tasks: [],
+        tools: [],
+      });
+      await page.locator(".chat-activity").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer clear when a stale native input replay arrives after send", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

@@ -25,6 +25,7 @@ import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import type { ChatState } from "./controllers/chat.ts";
+import { loadSessionActivity, type SessionActivityState } from "./controllers/session-activity.ts";
 import {
   createSessionAndRefresh,
   loadSessions,
@@ -177,6 +178,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.sessionActivity = null;
+  state.sessionActivityLoading = false;
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
@@ -676,6 +679,7 @@ function switchChatSessionInternal(
     state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
   const historyLoad = loadChatHistory(state as unknown as ChatState);
+  const activityLoad = loadSessionActivity(state as unknown as SessionActivityState);
   const sessionsRefresh = refreshSessionOptions(state);
   flushChatQueueAfterIdleSessionReconciliation(
     state as unknown as Parameters<typeof flushChatQueueAfterIdleSessionReconciliation>[0],
@@ -686,10 +690,11 @@ function switchChatSessionInternal(
   );
   if (opts?.awaitInitialLoad) {
     void sessionsRefresh;
-    return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
+    return Promise.allSettled([subscriptionSync, historyLoad, activityLoad]).then(() => undefined);
   }
   void subscriptionSync;
   void historyLoad;
+  void activityLoad;
   void sessionsRefresh;
   return undefined;
 }

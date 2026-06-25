@@ -19,6 +19,10 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookTaskActivityContext,
+  PluginHookTaskActivityEvent,
+  PluginHookToolActivityContext,
+  PluginHookToolActivityEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
@@ -61,6 +65,7 @@ import type {
   PluginHookGatewayCronDeliveryStatus,
   PluginHookGatewayCronJobState,
   PluginHookGatewayCronRunStatus,
+  PluginHookToolContext,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -81,7 +86,6 @@ import type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
-  PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -138,6 +142,10 @@ export type {
   PluginHookBeforeToolCallResult,
   PluginHookBeforeAgentRunEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookTaskActivityContext,
+  PluginHookTaskActivityEvent,
+  PluginHookToolActivityContext,
+  PluginHookToolActivityEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -1303,6 +1311,55 @@ export function createHookRunner(
     return runVoidHook("after_tool_call", event, ctx);
   }
 
+  async function runTaskCreated(
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ): Promise<void> {
+    return runVoidHook("task_created", event, ctx);
+  }
+
+  async function runTaskUpdated(
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ): Promise<void> {
+    return runVoidHook("task_updated", event, ctx);
+  }
+
+  async function runTaskFinished(
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ): Promise<void> {
+    return runVoidHook("task_finished", event, ctx);
+  }
+
+  async function runTaskDeleted(
+    event: PluginHookTaskActivityEvent,
+    ctx: PluginHookTaskActivityContext,
+  ): Promise<void> {
+    return runVoidHook("task_deleted", event, ctx);
+  }
+
+  async function runToolStarted(
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
+  ): Promise<void> {
+    return runVoidHook("tool_started", event, ctx);
+  }
+
+  async function runToolUpdated(
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
+  ): Promise<void> {
+    return runVoidHook("tool_updated", event, ctx);
+  }
+
+  async function runToolFinished(
+    event: PluginHookToolActivityEvent,
+    ctx: PluginHookToolActivityContext,
+  ): Promise<void> {
+    return runVoidHook("tool_finished", event, ctx);
+  }
+
   /**
    * Run tool_result_persist hook.
    *
@@ -1652,6 +1709,13 @@ export function createHookRunner(
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runTaskCreated,
+    runTaskUpdated,
+    runTaskFinished,
+    runTaskDeleted,
+    runToolStarted,
+    runToolUpdated,
+    runToolFinished,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

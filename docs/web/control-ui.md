@@ -103,7 +103,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Chat history refreshes request a bounded recent window with per-message text caps so large sessions do not force the browser to render a full transcript payload before the chat becomes usable.
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`.
     - Stream tool calls + live tool output cards in Chat (agent events).
-    - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
+    - Chat running-work strip for active background tasks and live tools, including descendant-session work (`sessions.activity`, `session.activity`, and `session.tool`).
 
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
@@ -170,11 +170,11 @@ Typical workflow:
 
 The page redacts credential-bearing URL-like values before rendering and quotes server names in command snippets so copied commands still work with spaces or shell metacharacters. The full CLI and config reference lives in [MCP](/cli/mcp).
 
-## Activity tab
+## Activity tab and chat activity strip
 
-The Activity tab is an ephemeral browser-local observer for live tool activity. It is derived from the same Gateway `session.tool` / tool event stream that powers Chat tool cards; it does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.
+The Chat view shows a running-work strip for active session work. It loads the current snapshot with `sessions.activity`, refreshes from `session.activity` events, and still uses the same `session.tool` / tool event stream that powers Chat tool cards for detailed live tool rendering.
 
-Activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, or **Clear**.
+The Activity tab remains a redaction-first tool activity log. Activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. Running detached tasks and live tools are session-scoped in the Chat strip, include descendant sessions by default, and clear from the list when the Gateway reports completion.
 
 ## Chat behavior
 

@@ -202,6 +202,73 @@ export const SessionsCleanupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SessionActivityTaskStatusSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+]);
+
+export const SessionActivityTaskSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    sessionKey: NonEmptyString,
+    runtime: Type.Union([
+      Type.Literal("subagent"),
+      Type.Literal("acp"),
+      Type.Literal("cli"),
+      Type.Literal("cron"),
+    ]),
+    title: Type.String(),
+    status: SessionActivityTaskStatusSchema,
+    createdAt: Type.Integer({ minimum: 0 }),
+    startedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastEventAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    childSessionKey: Type.Optional(NonEmptyString),
+    runId: Type.Optional(NonEmptyString),
+    label: Type.Optional(Type.String()),
+    progressSummary: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionActivityToolSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    sessionKey: NonEmptyString,
+    runId: NonEmptyString,
+    toolCallId: NonEmptyString,
+    name: NonEmptyString,
+    title: NonEmptyString,
+    status: Type.Literal("running"),
+    startedAt: Type.Integer({ minimum: 0 }),
+    updatedAt: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsActivityParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    /** Include work running in recursively spawned child sessions. Defaults to true. */
+    includeDescendants: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsActivityResultSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    /** Monotonic best-effort version for this session activity view. */
+    revision: Type.Integer({ minimum: 0 }),
+    /** The root session and any child sessions represented in this snapshot. */
+    includedSessionKeys: Type.Array(NonEmptyString),
+    /** True when descendant traversal reached the implementation safety limit. */
+    truncated: Type.Boolean(),
+    tasks: Type.Array(SessionActivityTaskSchema),
+    tools: Type.Array(SessionActivityToolSchema),
+  },
+  { additionalProperties: false },
+);
+
 /** Reads short previews for selected session keys. */
 export const SessionsPreviewParamsSchema = Type.Object(
   {
