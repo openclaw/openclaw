@@ -497,7 +497,18 @@ async function extractFileBlocks(params: {
     let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
     if (!blockText) {
       if (extracted?.images && extracted.images.length > 0) {
-        blockText = "[PDF content rendered to images; images not forwarded to model]";
+        // Forward extracted PDF page images as inline base64 data URIs so
+        // vision-capable models can read scanned documents. Mirrors the
+        // /v1/responses path behavior (openresponses-http.ts:629-630) where
+        // the same extractor output is forwarded as separate image content.
+        //
+        // Base64 data URIs are used because the chat path has no image-carrying
+        // field on ApplyMediaUnderstandingResult; embedding them in the text block
+        // ensures they reach the model without structural type changes.
+        const imageContext = extracted.images
+          .map((img, i) => `![Page ${i + 1}](data:${img.mimeType ?? "image/png"};base64,${img.base64})`)
+          .join("\n\n");
+        blockText = `[PDF content rendered to images]\n\n${imageContext}`;
       } else {
         blockText = "[No extractable text]";
       }
