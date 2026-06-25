@@ -169,14 +169,20 @@ describe("createCopilotAgentHarness", () => {
     expect(pool.release).toHaveBeenCalledOnce();
   });
 
-  it("uses forwarded provider auth after proving the Copilot runtime starts", async () => {
+  it("disables Copilot auto-login when provider auth is available", async () => {
     const client = {
       start: vi.fn(async () => {}),
       getAuthStatus: vi.fn(),
     };
     const pool = makePoolMock();
     vi.mocked(pool.acquire).mockResolvedValue({
-      key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
+      key: {
+        agentId: "test",
+        authMode: "byok",
+        authProfileId: "readiness:provider-auth",
+        authProfileVersion: "1",
+        copilotHome: "/tmp/copilot",
+      },
       client,
     } as never);
     const harness = createCopilotAgentHarness({ pool });
@@ -198,6 +204,20 @@ describe("createCopilotAgentHarness", () => {
 
     expect(client.start).toHaveBeenCalledOnce();
     expect(client.getAuthStatus).not.toHaveBeenCalled();
+    expect(pool.acquire).toHaveBeenCalledWith(
+      {
+        agentId: "test",
+        authMode: "byok",
+        authProfileId: "readiness:provider-auth",
+        authProfileVersion: "1",
+        copilotHome: "/tmp/agent/copilot",
+      },
+      {
+        copilotHome: "/tmp/agent/copilot",
+        gitHubToken: undefined,
+        useLoggedInUser: false,
+      },
+    );
     expect(pool.release).toHaveBeenCalledOnce();
   });
 

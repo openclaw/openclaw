@@ -747,11 +747,21 @@ export function createCopilotAgentHarness(
       if (disposed) {
         return { ready: false, reason: "Copilot runtime is disposed" };
       }
-      const auth = resolveCopilotAuth({
-        agentId: ctx.agentId,
-        agentDir: ctx.agentDir,
-        workspaceDir: ctx.workspaceDir,
-      });
+      // Provider-auth probes must not resolve ambient Copilot auth. A stable synthetic BYOK
+      // identity gives the pool a separate client that starts with SDK auto-login disabled.
+      const auth = ctx.providerAuthAvailable
+        ? createCopilotByokAuth({
+            agentId: ctx.agentId,
+            agentDir: ctx.agentDir,
+            workspaceDir: ctx.workspaceDir,
+            authProfileId: "readiness:provider-auth",
+            authProfileVersion: "1",
+          })
+        : resolveCopilotAuth({
+            agentId: ctx.agentId,
+            agentDir: ctx.agentDir,
+            workspaceDir: ctx.workspaceDir,
+          });
       let pool: CopilotClientPool | undefined;
       let handle: PooledClient | undefined;
       try {
@@ -760,7 +770,7 @@ export function createCopilotAgentHarness(
           {
             agentId: auth.agentId,
             authMode: auth.authMode,
-            ...(auth.authMode === "gitHubToken"
+            ...(auth.authMode === "gitHubToken" || auth.authMode === "byok"
               ? {
                   authProfileId: auth.authProfileId,
                   authProfileVersion: auth.authProfileVersion,
