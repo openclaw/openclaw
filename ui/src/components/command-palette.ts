@@ -450,6 +450,11 @@ export class CommandPalette extends LitElement {
   };
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
+    if (!event.defaultPrevented && event.key === "Escape" && this.open) {
+      event.preventDefault();
+      this.togglePalette();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
       this.togglePalette();
