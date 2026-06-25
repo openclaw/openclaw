@@ -18,6 +18,7 @@ type TestStore = {
   stateDir: string;
   storePath: string;
   tempDir: string;
+  unreferencedJsonlPath: string;
   trajectoryPath: string;
   transcriptPath: string;
 };
@@ -88,17 +89,21 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(firstImport.totals).toMatchObject({
       archivedTranscriptFiles: 2,
+      archivedUnreferencedJsonlFiles: 1,
       importedEntries: 1,
       importedTranscriptEvents: 2,
       issues: 0,
       sqliteEntries: 1,
+      unreferencedJsonlFiles: 0,
     });
     expect(secondImport.totals).toMatchObject({
       archivedTranscriptFiles: 0,
+      archivedUnreferencedJsonlFiles: 0,
       importedEntries: 0,
       importedTranscriptEvents: 0,
       issues: 0,
       sqliteEntries: 1,
+      unreferencedJsonlFiles: 0,
       validatedEntries: 1,
       validatedTranscriptEvents: 2,
     });
@@ -109,13 +114,22 @@ describe("runDoctorSessionSqlite", () => {
     });
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
     expect(fs.existsSync(store.trajectoryPath)).toBe(false);
+    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
     expect(firstImport.targets[0]?.archivedTranscriptFiles).toHaveLength(2);
     for (const archivedTranscriptPath of firstImport.targets[0]?.archivedTranscriptFiles ?? []) {
       expect(archivedTranscriptPath).toBeTruthy();
       expect(archivedTranscriptPath).not.toContain(`${path.sep}sessions${path.sep}`);
       expect(fs.existsSync(archivedTranscriptPath)).toBe(true);
     }
+    expect(firstImport.targets[0]?.archivedUnreferencedJsonlFiles).toHaveLength(1);
+    const archivedUnreferencedPath = firstImport.targets[0]?.archivedUnreferencedJsonlFiles[0];
+    expect(archivedUnreferencedPath).toBeTruthy();
+    expect(archivedUnreferencedPath).not.toContain(`${path.sep}sessions${path.sep}`);
+    expect(archivedUnreferencedPath).toContain("archive-tier.orphan.jsonl.imported-");
+    expect(fs.existsSync(archivedUnreferencedPath!)).toBe(true);
+    expect(fs.readFileSync(archivedUnreferencedPath!, "utf-8")).toBe('{"type":"event"}\n');
     expect(inspect.totals.sqliteEntries).toBe(1);
+    expect(inspect.totals.unreferencedJsonlFiles).toBe(0);
     expect(
       loadExactSqliteSessionEntry({
         agentId: "main",
@@ -242,7 +256,10 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(report.totals.issues).toBe(1);
+    expect(report.totals.archivedUnreferencedJsonlFiles).toBe(0);
+    expect(report.totals.unreferencedJsonlFiles).toBe(2);
     expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
+    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(true);
     expect(inspect.totals.sqliteEntries).toBe(0);
   });
 });
@@ -259,6 +276,7 @@ function createLegacyStore(
   const storePath = path.join(sessionDir, "sessions.json");
   const transcriptPath = path.join(sessionDir, "session-1.jsonl");
   const trajectoryPath = path.join(sessionDir, "session-1.trajectory.jsonl");
+  const unreferencedJsonlPath = path.join(sessionDir, "orphan.jsonl");
   fs.mkdirSync(sessionDir, { recursive: true });
   fs.writeFileSync(configPath, "{}\n", { mode: 0o600 });
   fs.writeFileSync(
@@ -287,7 +305,7 @@ function createLegacyStore(
   fs.writeFileSync(trajectoryPath, `${JSON.stringify({ type: "trajectory" })}\n`, {
     mode: 0o600,
   });
-  fs.writeFileSync(path.join(sessionDir, "orphan.jsonl"), '{"type":"event"}\n', {
+  fs.writeFileSync(unreferencedJsonlPath, '{"type":"event"}\n', {
     mode: 0o600,
   });
   const env = {
@@ -304,6 +322,7 @@ function createLegacyStore(
     stateDir,
     storePath,
     tempDir,
+    unreferencedJsonlPath,
     trajectoryPath,
     transcriptPath,
   };

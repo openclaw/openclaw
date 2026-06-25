@@ -43,6 +43,7 @@ export type DoctorSessionSqliteIssue = {
 export type DoctorSessionSqliteTargetReport = {
   agentId: string;
   archivedTranscriptFiles: string[];
+  archivedUnreferencedJsonlFiles: string[];
   importedEntries: number;
   importedTranscriptEvents: number;
   issues: DoctorSessionSqliteIssue[];
@@ -61,6 +62,7 @@ export type DoctorSessionSqliteReport = {
   targets: DoctorSessionSqliteTargetReport[];
   totals: {
     archivedTranscriptFiles: number;
+    archivedUnreferencedJsonlFiles: number;
     importedEntries: number;
     importedTranscriptEvents: number;
     issues: number;
@@ -143,6 +145,7 @@ async function inspectOrMigrateTarget(params: {
   const report: DoctorSessionSqliteTargetReport = {
     agentId: params.target.agentId,
     archivedTranscriptFiles: [],
+    archivedUnreferencedJsonlFiles: [],
     importedEntries: 0,
     importedTranscriptEvents: 0,
     issues,
@@ -172,6 +175,12 @@ async function inspectOrMigrateTarget(params: {
     }
     validateLegacySessionRecord(params.target, record, report);
   }
+  if (params.mode === "import" && report.issues.length === 0) {
+    archiveUnreferencedJsonlFiles(params.target, report, [...referencedTranscriptFiles]);
+  }
+  report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
+    ...referencedTranscriptFiles,
+  ]);
   report.sqliteEntries = readSqliteEntryCount(params.target);
   return report;
 }
@@ -341,6 +350,25 @@ function archiveImportedTranscript(
       message: `${record.transcriptPath}: ${String(err)}`,
       sessionKey: record.sessionKey,
     });
+  }
+}
+
+function archiveUnreferencedJsonlFiles(
+  target: SessionStoreTarget,
+  report: DoctorSessionSqliteTargetReport,
+  referencedPaths: readonly string[],
+): void {
+  for (const sourcePath of listUnreferencedJsonlFiles(target.storePath, referencedPaths)) {
+    try {
+      report.archivedUnreferencedJsonlFiles.push(
+        moveSessionJsonlToArchive(target, "archive-tier", path.basename(sourcePath), sourcePath),
+      );
+    } catch (err) {
+      report.issues.push({
+        code: "unreferenced_jsonl_archive_failed",
+        message: `${sourcePath}: ${String(err)}`,
+      });
+    }
   }
 }
 
@@ -541,6 +569,15 @@ function moveImportedTranscriptToArchive(
   sessionKey: string,
   sourcePathRaw: string,
 ): string {
+  return moveSessionJsonlToArchive(target, sessionKey, path.basename(sourcePathRaw), sourcePathRaw);
+}
+
+function moveSessionJsonlToArchive(
+  target: SessionStoreTarget,
+  archiveKey: string,
+  baseNameRaw: string,
+  sourcePathRaw: string,
+): string {
   const sourcePath = path.resolve(sourcePathRaw);
   const stat = fs.statSync(sourcePath);
   if (!stat.isFile()) {
@@ -548,8 +585,8 @@ function moveImportedTranscriptToArchive(
   }
   const archiveDir = resolveImportedTranscriptArchiveDir(target.storePath);
   fs.mkdirSync(archiveDir, { recursive: true });
-  const baseName = path.basename(sourcePath);
-  const keySlug = sessionKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
+  const baseName = baseNameRaw.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 160) || "artifact";
+  const keySlug = archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = attempt === 0 ? "" : `.${attempt}`;
     const archivePath = path.join(
@@ -569,7 +606,7 @@ function moveImportedTranscriptToArchive(
       throw err;
     }
   }
-  throw new Error(`Could not archive imported transcript for ${sessionKey}`);
+  throw new Error(`Could not archive ${baseName} for ${archiveKey}`);
 }
 
 function resolveImportedTranscriptArchiveDir(storePath: string): string {
@@ -618,6 +655,10 @@ function summarizeDoctorSessionSqliteReport(
     totals: {
       archivedTranscriptFiles: targets.reduce(
         (total, target) => total + target.archivedTranscriptFiles.length,
+        0,
+      ),
+      archivedUnreferencedJsonlFiles: targets.reduce(
+        (total, target) => total + target.archivedUnreferencedJsonlFiles.length,
         0,
       ),
       importedEntries: sumTargets(targets, "importedEntries"),
