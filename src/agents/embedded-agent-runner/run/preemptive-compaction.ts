@@ -281,7 +281,10 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
+  // Use max so MIN_PROMPT_BUDGET_TOKENS acts as a floor: small-context models
+  // (e.g. 4k) always keep at least half the window for the prompt instead of
+  // letting the ratio-based value drop so low that every prompt overflows.
+  const minPromptBudget = Math.max(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
   );
