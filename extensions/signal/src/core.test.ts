@@ -334,6 +334,34 @@ describe("signal outbound", () => {
       { capability: "afterCommit", status: "not_declared" },
     ]);
   });
+
+  it("passes replyToId through message adapter sends", async () => {
+    const send = vi.fn(async (_to: string, _text: string) => ({
+      messageId: "signal-text-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "signal", messageId: "signal-text-1" }],
+        kind: "text",
+      }),
+    }));
+    const deps = { signal: send };
+
+    await signalPlugin.message?.send?.text?.({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "hello",
+      replyToId: "1700000000001",
+      deps,
+    } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+      deps: typeof deps;
+    });
+
+    expect(send).toHaveBeenCalledWith("signal:+15555550123", "hello", {
+      cfg: {},
+      maxBytes: undefined,
+      accountId: undefined,
+      replyToId: "1700000000001",
+    });
+  });
 });
 
 describe("classifySignalCliLogLine", () => {

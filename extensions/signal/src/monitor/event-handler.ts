@@ -235,6 +235,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
+        replyToId: entry.messageId,
       },
       message: {
         body: combinedBody,
@@ -311,6 +312,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          replyContext: {
+            replyToId: ctxPayload.ReplyToId,
+            author: entry.senderRecipient,
+            body: entry.bodyText,
+          },
         });
       },
       onError: (err, info) => {

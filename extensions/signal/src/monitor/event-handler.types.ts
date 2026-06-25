@@ -76,6 +76,12 @@ export type SignalReceivePayload = {
   exception?: { message?: string } | null;
 };
 
+export type SignalNativeReplyContext = {
+  replyToId?: string;
+  author?: string;
+  body?: string;
+};
+
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
@@ -115,6 +121,7 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    replyContext?: SignalNativeReplyContext;
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

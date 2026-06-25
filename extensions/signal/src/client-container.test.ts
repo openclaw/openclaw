@@ -378,6 +378,29 @@ describe("containerSendMessage", () => {
     );
   });
 
+  it("passes quote metadata through v2 send using container field names", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Hello world",
+      quoteTimestamp: 1699999999999,
+      quoteAuthor: "+15550002222",
+      quoteMessage: "original",
+    });
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
+  });
+
   it("normalizes invalid send timestamps before returning", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -578,6 +601,38 @@ describe("containerRpcRequest typing", () => {
 
     const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+  });
+});
+
+describe("containerRpcRequest send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("translates native quote params to container send fields", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        "quote-timestamp": 1699999999999,
+        "quote-author": "+15550002222",
+        "quote-message": "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
   });
 });
 

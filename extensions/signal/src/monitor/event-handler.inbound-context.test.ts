@@ -161,6 +161,31 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.OriginatingTo).toBe("+15550002222");
   });
 
+  it("sets ReplyToId from the inbound Signal timestamp", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000001");
+    expect(context.ReplyToId).toBe("1700000000001");
+  });
+
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

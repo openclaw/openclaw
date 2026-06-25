@@ -272,6 +272,7 @@ Groups:
 - Container mode: the gateway sends via REST API and receives via WebSocket.
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
+- Replies to inbound messages include native Signal quote metadata when the backend accepts the inbound timestamp and author; if quote metadata is missing or rejected, OpenClaw sends the reply as a normal message.
 
 ## Media + limits
 

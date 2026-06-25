@@ -45,6 +45,7 @@ import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
   SignalAttachment,
+  SignalNativeReplyContext,
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
@@ -365,11 +366,16 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  replyContext?: SignalNativeReplyContext;
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
     const reply = resolveSendableOutboundReplyParts(payload);
+    const nativeReply = resolveSignalNativeReplyOptions({
+      payload,
+      replyContext: params.replyContext,
+    });
     const delivered = await deliverTextOrMediaReply({
       payload,
       text: reply.text,
@@ -381,6 +387,7 @@ async function deliverReplies(params: {
           account,
           maxBytes,
           accountId,
+          ...nativeReply,
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
@@ -391,6 +398,7 @@ async function deliverReplies(params: {
           mediaUrl,
           maxBytes,
           accountId,
+          ...nativeReply,
         });
       },
     });
@@ -398,6 +406,26 @@ async function deliverReplies(params: {
       runtime.log?.(`delivered reply to ${target}`);
     }
   }
+}
+
+function resolveSignalNativeReplyOptions(params: {
+  payload: ReplyPayload;
+  replyContext?: SignalNativeReplyContext;
+}): Pick<Parameters<typeof sendMessageSignal>[2], "replyToId" | "replyToAuthor" | "replyToBody"> {
+  const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
+  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
+  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
+    return {};
+  }
+  const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
+  if (!replyToAuthor) {
+    return { replyToId: payloadReplyToId };
+  }
+  return {
+    replyToId: payloadReplyToId,
+    replyToAuthor,
+    replyToBody: params.replyContext?.body ?? "",
+  };
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {

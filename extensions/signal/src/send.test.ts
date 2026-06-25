@@ -129,4 +129,53 @@ describe("sendMessageSignal receipts", () => {
     expect(result.messageId).toBe("unknown");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
+
+  it("passes native quote metadata when replying to a Signal timestamp", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
+
+    await sendMessageSignal("+15551234567", "hello", {
+      cfg: SIGNAL_TEST_CFG,
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550002222",
+      replyToBody: "original",
+    });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        "quote-timestamp": 1700000000001,
+        "quote-author": "+15550002222",
+        "quote-message": "original",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("falls back to an ordinary send when native quote metadata is rejected", async () => {
+    signalRpcRequestMock
+      .mockRejectedValueOnce(new Error("quote rejected"))
+      .mockResolvedValueOnce({ timestamp: 1234567893 });
+
+    const result = await sendMessageSignal("+15551234567", "hello", {
+      cfg: SIGNAL_TEST_CFG,
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550002222",
+      replyToBody: "original",
+    });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(2);
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        "quote-timestamp": 1700000000001,
+        "quote-author": "+15550002222",
+      }),
+    );
+    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quote-timestamp");
+    expect(result.messageId).toBe("1234567893");
+    expect(result.receipt.raw[0]?.meta).toEqual({
+      targetType: "recipient",
+      replyToId: "1700000000001",
+      nativeReplyStatus: "fallback",
+    });
+  });
 });
