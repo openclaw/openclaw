@@ -200,7 +200,7 @@ function formatWebFetchErrorDetail(params: {
 }
 
 function normalizeComparableWebFetchText(value: string | undefined): string {
-  return normalizeWhitespace(value ?? "").toLowerCase();
+  return normalizeWhitespace(markdownToText(value ?? "")).toLowerCase();
 }
 
 function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean {

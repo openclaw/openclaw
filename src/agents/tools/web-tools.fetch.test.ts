@@ -720,6 +720,34 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Sample Page");
   });
 
+  it("falls back to body HTML when markdown readability returns only the page title heading", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "# Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Sample Page</title></head><body><main><p>Markdown heading body marker 82685 content.</p></main></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/markdown-title-body" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Markdown heading body marker 82685 content.");
+    expect(details.text).not.toBe("# Sample Page");
+    expect(details.title).toContain("Sample Page");
+  });
+
   it("ignores fake body tags in raw-text elements and comments", async () => {
     extractReadableContentMock.mockResolvedValue({
       text: "Sample Page",
