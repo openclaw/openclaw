@@ -41,6 +41,47 @@ import UIKit
         #expect(!shouldPresent)
     }
 
+    @Test func gatewayEntryKeepsConfiguredOfflineUsersInGatewaySettings() {
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: true,
+                isPreviewMode: false) == .gateway)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .gateway)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .gateway)
+    }
+
+    @Test func gatewayEntryOpensOnboardingForFreshAndPreviewUsers() {
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .onboarding)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: true,
+                isPreviewMode: true) == .onboarding)
+    }
+
     @Test func sidebarTabsEnabledForIPadRegularWidth() {
         #expect(
             RootTabs.shouldUseSidebarTabs(

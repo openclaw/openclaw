@@ -955,9 +955,19 @@ extension RootTabs {
     }
 
     private func openGatewayEntryPoint() {
-        guard !self.appModel.isOperatorGatewayConnected else {
+        let route = Self.gatewayEntryPresentationRoute(
+            gatewayConnected: self.appModel.isOperatorGatewayConnected,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            isPreviewMode: self.appModel.isAppleReviewDemoModeEnabled)
+
+        switch route {
+        case .gateway:
             self.selectSidebarDestination(.gateway)
             return
+        case .onboarding:
+            break
         }
 
         self.presentedSheet = nil
