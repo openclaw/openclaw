@@ -7,6 +7,17 @@ vi.mock("../../config/sessions.js", async (importActual) => ({
 vi.mock("../attach-relay.js", () => ({
   dispatchAttachMcpMessage: vi.fn(async () => ({ jsonrpc: "2.0", id: 1, result: { ok: true } })),
 }));
+// node "node-ok" is owner-approved WITH the attach entitlement; "node-bare" is paired but not.
+vi.mock("../../infra/node-pairing.js", async (importActual) => ({
+  ...(await importActual<typeof import("../../infra/node-pairing.js")>()),
+  listNodePairing: vi.fn(async () => ({
+    paired: [
+      { nodeId: "node-ok", permissions: { attach: true } },
+      { nodeId: "node-bare", permissions: {} },
+    ],
+    pending: [],
+  })),
+}));
 
 import { dispatchAttachMcpMessage } from "../attach-relay.js";
 import { resetAttachGrantsForTest, resolveAttachGrant } from "../mcp-grant-store.js";
@@ -14,17 +25,24 @@ import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ctx = { getRuntimeConfig: () => ({}) };
-const call = (method: string, params: unknown, respond: ReturnType<typeof vi.fn>) =>
+const entitledClient = { connect: { device: { id: "node-ok" } } };
+const call = (
+  method: string,
+  params: unknown,
+  respond: ReturnType<typeof vi.fn>,
+  client: unknown = entitledClient,
+) =>
   nodeHandlers[method]({
     params,
     respond,
     context: ctx,
+    client,
   } as unknown as GatewayRequestHandlerOptions);
 
 describe("node attach handlers (PR5 node conduit)", () => {
   afterEach(() => resetAttachGrantsForTest());
 
-  it("node.attachGrant mints a session-bound grant for the node's MAIN session (pairing = authz)", async () => {
+  it("node.attachGrant mints a MAIN-session grant when the node has the attach entitlement", async () => {
     const respond = vi.fn();
     await call("node.attachGrant", {}, respond);
     const [ok, body] = respond.mock.calls[0] as [boolean, { sessionKey: string; token: string }];
@@ -33,6 +51,12 @@ describe("node attach handlers (PR5 node conduit)", () => {
     expect(body.token).toMatch(/^[0-9a-f]{64}$/);
     // the minted token resolves to the same session in the shared grant store
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main");
+  });
+
+  it("node.attachGrant rejects a paired node WITHOUT the owner-approved attach entitlement", async () => {
+    const respond = vi.fn();
+    await call("node.attachGrant", {}, respond, { connect: { device: { id: "node-bare" } } });
+    expect(respond.mock.calls[0][0]).toBe(false); // role:node alone is not consent to attach
   });
 
   it("node.attachRelay rejects a non-JSON-RPC message and otherwise dispatches via the relay core", async () => {

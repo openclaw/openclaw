@@ -909,13 +909,29 @@ export const nodeHandlers: GatewayRequestHandlers = {
     });
     respond(true, { mcpResponse });
   },
-  // Self-service attach grant for a paired node: a connected role:node client is already an approved,
-  // authenticated node (the role gate IS the pairing check), so its pairing authorizes minting. The
-  // grant binds to the user's MAIN gateway session — pick-up-anywhere for the same conversation — and
-  // is scoped/TTL'd/revocable (PR1), bound to the session not the node, so the node can't widen it.
-  // Caller-chosen sessions + the cross-agent/user entitlement map are a follow-up (today single-owner,
-  // so main is the safe default). The node uses the returned token with node.attachRelay.
-  "node.attachGrant": async ({ params, respond, context }) => {
+  // Self-service attach grant for a paired node — gated on an EXPLICIT `attach` entitlement the owner
+  // approved at pairing. Pairing a node for camera/canvas/system commands is NOT consent for it to
+  // reach the owner's MAIN session tools + full conversation, so role:node alone is insufficient; the
+  // node's owner-approved permissions must carry `attach` (changing a node's approval surface
+  // re-triggers owner approval, so this can't be self-granted). The grant binds to the main session,
+  // scoped/TTL'd/revocable (PR1), bound to the session not the node. Caller-chosen sessions + a
+  // cross-agent entitlement map are a follow-up. The node uses the returned token with node.attachRelay.
+  "node.attachGrant": async ({ params, respond, client, context }) => {
+    const nodeId =
+      normalizeOptionalString(client?.connect?.device?.id ?? client?.connect?.client?.id) ?? "";
+    const { paired } = await listNodePairing();
+    const approved = nodeId ? paired.find((node) => node.nodeId === nodeId) : undefined;
+    if (!approved?.permissions?.attach) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node is not entitled to attach; re-pair granting the 'attach' permission",
+        ),
+      );
+      return;
+    }
     const ttlRaw = params.ttlMs;
     const ttlMs =
       typeof ttlRaw === "number" && Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : undefined;
