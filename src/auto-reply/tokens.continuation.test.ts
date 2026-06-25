@@ -218,6 +218,51 @@ describe("parseContinuationSignal", () => {
     });
   });
 
+  it("parses delegate model override", () => {
+    const signal = parseContinuationSignal(
+      "[[CONTINUE_DELEGATE: route to a cheaper model | model=github-copilot/claude-haiku-4.5]]",
+    );
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "route to a cheaper model",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      model: "github-copilot/claude-haiku-4.5",
+    });
+  });
+
+  it("composes delegate model override with fanout", () => {
+    const signal = parseContinuationSignal(
+      "[[CONTINUE_DELEGATE: fan out cheaply | model=sonnet | fanout=tree]]",
+    );
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "fan out cheaply",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      fanoutMode: "tree",
+      model: "sonnet",
+    });
+  });
+
+  it("omits model when the delegate token carries no model modifier", () => {
+    const signal = parseContinuationSignal("[[CONTINUE_DELEGATE: inherit parent model]]");
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "inherit parent model",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+    });
+    expect(signal?.kind === "delegate" ? signal.model : "unset").toBeUndefined();
+  });
+
+  it("rejects a delegate token with an empty model value", () => {
+    expect(parseContinuationSignal("[[CONTINUE_DELEGATE: bad model | model=]]")).toBeNull();
+  });
+
   it("rejects conflicting delegate target and fanout syntax", () => {
     expect(
       parseContinuationSignal(

@@ -1142,6 +1142,7 @@ export async function runSubagentAnnounceFlow(params: {
               : {}),
             ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
             ...(chainSignal.traceparent ? { traceparent: chainSignal.traceparent } : {}),
+            ...(chainSignal.model ? { model: chainSignal.model } : {}),
           });
           const { enqueueSystemEvent } = await import("../infra/system-events.js");
           enqueueSystemEvent(
@@ -1239,6 +1240,7 @@ export async function runSubagentAnnounceFlow(params: {
                       ? { continuationFanoutMode: chainSignal.fanoutMode }
                       : {}),
                     drainsContinuationDelegateQueue: true,
+                    ...(chainSignal.model ? { model: chainSignal.model } : {}),
                   },
                   {
                     agentSessionKey: targetRequesterSessionKey,

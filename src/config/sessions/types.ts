@@ -217,6 +217,8 @@ export type SessionPostCompactionDelegate = {
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
   traceparent?: string;
+  /** Optional provider/model override forwarded to the released delegate; omitted => inherit parent. */
+  model?: string;
 };
 
 export type RestartRecoveryRun = {

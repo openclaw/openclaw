@@ -2753,6 +2753,9 @@ export async function runReplyAgent(replyParams: {
         ...(effectiveContinuationSignal.traceparent
           ? { traceparent: effectiveContinuationSignal.traceparent }
           : {}),
+        ...(effectiveContinuationSignal.model
+          ? { model: effectiveContinuationSignal.model }
+          : {}),
       });
       enqueueSystemEvent(
         `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${effectiveContinuationSignal.task}`,
@@ -2905,6 +2908,7 @@ export async function runReplyAgent(replyParams: {
                 targetSessionKeys?: string[];
                 fanoutMode?: "tree" | "all";
                 traceparent?: string;
+                model?: string;
               },
             ) => {
               let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
@@ -2962,6 +2966,7 @@ export async function runReplyAgent(replyParams: {
                       ? { continuationTargetSessionKeys: options.targetSessionKeys }
                       : {}),
                     ...(options?.fanoutMode ? { continuationFanoutMode: options.fanoutMode } : {}),
+                    ...(options?.model ? { model: options.model } : {}),
                     ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
                   },
                   {
@@ -3075,6 +3080,9 @@ export async function runReplyAgent(replyParams: {
                     ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
                     : {}),
                   ...(outboundTraceparent ? { traceparent: outboundTraceparent } : {}),
+                  ...(effectiveContinuationSignal.model
+                    ? { model: effectiveContinuationSignal.model }
+                    : {}),
                 });
                 await persistContinuationChainState({
                   count: currentChainCount,
@@ -3087,6 +3095,9 @@ export async function runReplyAgent(replyParams: {
                 silent: effectiveContinuationSignal.silent,
                 silentWake: effectiveContinuationSignal.silentWake,
                 startedAt: chainStartedAt,
+                ...(effectiveContinuationSignal.model
+                  ? { model: effectiveContinuationSignal.model }
+                  : {}),
                 ...(effectiveContinuationSignal.targetSessionKey
                   ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
                   : {}),

@@ -22,7 +22,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam, ToolInputError } from "./common.js";
+import { jsonResult, normalizeToolModelOverride, readNumberParam, readStringParam, ToolInputError } from "./common.js";
 
 const log = createSubsystemLogger("continuation/delegate-tool");
 
@@ -77,6 +77,14 @@ const ContinueDelegateToolSchema = Type.Object({
         "context from the openclaw runtime's active trace scope (set at gateway entry points). " +
         "Supply this only when injecting cross-process trace context.",
       pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
+    }),
+  ),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Optional provider/model override for the spawned delegate (e.g. github-copilot/claude-sonnet-4.6). " +
+        'Omitted or "default" = inherit the parent session\'s model. ' +
+        "Same form as sessions_spawn's model param.",
     }),
   ),
 });
@@ -196,6 +204,9 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       const traceparent = explicitTraceparent ?? formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
+      const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
+      const modelField = modelOverride ? { model: modelOverride } : {};
+
       const continuationConfig = resolveContinuationRuntimeConfig();
       const delayMs =
         requestedDelayMs !== undefined && requestedDelayMs > 0
@@ -237,6 +248,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
           stagedAt: Date.now(),
           ...targetingFields,
           ...traceContextFields,
+          ...modelField,
         });
         delegatesThisTurn += 1;
 
@@ -247,6 +259,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
           delegatesThisTurn,
           ...targetingFields,
           ...traceContextFields,
+          ...modelField,
           note:
             "Delegate will fire when compaction occurs, not on a timer. " +
             "The shard starts at the moment of compaction and returns to the post-compaction session. " +
@@ -263,6 +276,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(mode !== "normal" ? { mode } : {}),
         ...targetingFields,
         ...traceContextFields,
+        ...modelField,
       });
 
       delegatesThisTurn += 1;
@@ -276,6 +290,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         delegatesThisTurn: dispatchIndex,
         ...targetingFields,
         ...traceContextFields,
+        ...modelField,
         note:
           "Delegate will be dispatched after your response completes. " +
           "Chain tracking (cost cap, depth limit) applies.",

@@ -402,6 +402,7 @@ export async function dispatchToolDelegates(params: {
         {
           task: `[continuation:chain-hop:${nextHop}] Delegated task (turn ${nextHop}/${maxChainLength}): ${delegate.task}`,
           drainsContinuationDelegateQueue: true,
+          ...(delegate.model ? { model: delegate.model } : {}),
           ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(silent ? { silentAnnounce: true } : {}),
           ...(silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
@@ -574,6 +575,7 @@ export async function dispatchStagedPostCompactionDelegates(
     targetSessionKeys?: string[];
     fanoutMode?: "tree" | "all";
     traceparent?: string;
+    model?: string;
   }>,
   sessionKey: string,
   spawnCtx: PostCompactionSpawnContext,
@@ -685,6 +687,7 @@ export async function dispatchStagedPostCompactionDelegates(
           silentAnnounce: true,
           wakeOnReturn: true,
           drainsContinuationDelegateQueue: true,
+          ...(delegate.model ? { model: delegate.model } : {}),
           ...(delegate.targetSessionKey
             ? { continuationTargetSessionKey: delegate.targetSessionKey }
             : {}),
