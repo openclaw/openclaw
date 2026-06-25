@@ -294,8 +294,8 @@ export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
   /**
    * Runs inside the file-backed write lock before this message is appended.
-   * SQLite implementation note: duplicate/skip decisions should be evaluated
-   * inside the same write transaction as the transcript row append.
+   * SQLite evaluates duplicate/skip decisions inside the same queued write as
+   * the transcript row append because predicates may perform async reads.
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
 };
@@ -315,8 +315,8 @@ export type SessionTranscriptTurnPersistOptions = {
   cwd?: string;
   /**
    * Rejects the turn when the persisted session key no longer points at this
-   * runtime session id. SQLite implementations must evaluate this guard inside
-   * the same write transaction as the transcript append and metadata touch.
+   * runtime session id. SQLite evaluates this guard inside the same queued
+   * write as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
   /** Message rows to append under one transcript write lock. */
