@@ -1926,6 +1926,11 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // Execution succeeded: status stays ok despite the delivery failure.
     expect(result.status).toBe("ok");
     expect(result.error).toBeUndefined();
+    // The delivery dispatch error is surfaced on a dedicated `deliveryError`
+    // field (not the run-level `error`) so the service can persist it as
+    // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
+    // logs (#95419) without mislabeling the successful run as a failure.
+    expect(result.deliveryError).toBe("Message failed");
     // Delivery failure metadata is preserved and decoupled from status.
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(true);
