@@ -1116,6 +1116,10 @@ export function armTimer(state: CronServiceState) {
   // tests that simulate long-running jobs. Runtime behavior is unchanged.
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err: unknown) => {
+      // Re-arm on failure — without this, any rejection outside onTimer's
+      // finally block permanently breaks the setTimeout chain, silently
+      // killing the scheduler until gateway restart. (#73166)
+      armTimer(state);
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
   }, clampedDelay);
@@ -1135,6 +1139,8 @@ function armRunningRecheckTimer(state: CronServiceState) {
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err: unknown) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      // Re-arm on failure — see armTimer catch comment above. (#73166)
+      armTimer(state);
     });
   }, MAX_TIMER_DELAY_MS);
 }
