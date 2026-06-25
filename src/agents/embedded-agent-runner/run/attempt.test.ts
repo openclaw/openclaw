@@ -342,6 +342,15 @@ describe("shouldWarnOnOrphanedUserRepair", () => {
   });
 });
 
+const internalSessionStateSourceTools = [
+  "agent_harness_task",
+  "image_generate",
+  "music_generate",
+  "subagent_announce",
+  "subagent_interrupted_resume",
+  "video_generate",
+] as const;
+
 describe("mergeOrphanedTrailingUserPrompt", () => {
   it("merges an orphaned user leaf into the next user-triggered prompt when missing", () => {
     expect(
@@ -361,22 +370,25 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
-  it("drops stale internal inter-session leaves instead of shadowing a fresh prompt", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
+  it.each(internalSessionStateSourceTools)(
+    "drops stale internal inter-session %s leaves instead of shadowing a fresh prompt",
+    (sourceTool) => {
+      expect(
+        mergeOrphanedTrailingUserPrompt({
+          prompt: "newest inbound message",
+          trigger: "user",
+          leafMessage: {
+            content: [{ type: "text", text: `NO_REPLY stale ${sourceTool} completion` }],
+            provenance: { kind: "inter_session", sourceTool },
+          } as never,
+        }),
+      ).toEqual({
+        merged: false,
+        removeLeaf: true,
         prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: [{ type: "text", text: "NO_REPLY stale subagent completion" }],
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        } as never,
-      }),
-    ).toEqual({
-      merged: false,
-      removeLeaf: true,
-      prompt: "newest inbound message",
-    });
-  });
+      });
+    },
+  );
 
   it("keeps user-directed inter-session leaves in the repaired prompt", () => {
     expect(

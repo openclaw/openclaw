@@ -23,6 +23,15 @@ afterEach(() => {
   restoreStrategy = undefined;
 });
 
+const internalSessionStateSourceTools = [
+  "agent_harness_task",
+  "image_generate",
+  "music_generate",
+  "subagent_announce",
+  "subagent_interrupted_resume",
+  "video_generate",
+] as const;
+
 describe("embedded agent transcript repair runtime contract", () => {
   it("merges text orphan leaves into the next prompt with the queued marker", () => {
     const result = mergeOrphanedTrailingUserPrompt({
@@ -38,22 +47,25 @@ describe("embedded agent transcript repair runtime contract", () => {
     });
   });
 
-  it("removes internal completion leaves instead of prepending them to a fresh prompt", () => {
-    const result = mergeOrphanedTrailingUserPrompt({
-      prompt: "newest inbound message",
-      trigger: "user",
-      leafMessage: {
-        content: [{ type: "text", text: "NO_REPLY stale subagent completion" }],
-        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      },
-    });
+  it.each(internalSessionStateSourceTools)(
+    "removes internal %s leaves instead of prepending them to a fresh prompt",
+    (sourceTool) => {
+      const result = mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [{ type: "text", text: `NO_REPLY stale ${sourceTool} completion` }],
+          provenance: { kind: "inter_session", sourceTool },
+        },
+      });
 
-    expect(result).toEqual({
-      merged: false,
-      removeLeaf: true,
-      prompt: "newest inbound message",
-    });
-  });
+      expect(result).toEqual({
+        merged: false,
+        removeLeaf: true,
+        prompt: "newest inbound message",
+      });
+    },
+  );
 
   it("preserves user-directed inter-session leaves in the repaired prompt", () => {
     const result = mergeOrphanedTrailingUserPrompt({
