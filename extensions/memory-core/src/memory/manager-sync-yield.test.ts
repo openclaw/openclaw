@@ -62,6 +62,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
       sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
+    sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
+      `sessions/${agentId}/${sessionId}`,
   };
 });
 

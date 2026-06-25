@@ -3,6 +3,7 @@
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
@@ -121,6 +122,17 @@ export function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
+}
+
+/** Reads transcript events for a live SQLite-backed session identity. */
+export function loadTranscriptEventsSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): unknown[] {
+  return loadAccessorTranscriptEventsSync(params);
 }
 
 /** Patches one session entry by agent/session identity. */

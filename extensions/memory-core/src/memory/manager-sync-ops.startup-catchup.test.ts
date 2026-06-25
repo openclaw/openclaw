@@ -19,6 +19,8 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -262,6 +264,7 @@ describe("session startup catch-up", () => {
     restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -279,6 +282,16 @@ describe("session startup catch-up", () => {
     );
     const stat = await fs.stat(filePath);
     return { filePath, size: stat.size, mtimeMs: stat.mtimeMs };
+  }
+
+  async function upsertTestSessionEntries(
+    storePath: string,
+    entries: Record<string, Parameters<typeof upsertSessionEntry>[1]>,
+  ): Promise<void> {
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    for (const [sessionKey, entry] of Object.entries(entries)) {
+      await upsertSessionEntry({ sessionKey, storePath }, entry);
+    }
   }
 
   it("marks stale indexed session files dirty and schedules catch-up sync", async () => {
@@ -470,16 +483,12 @@ describe("session startup catch-up", () => {
       }) + "\n",
       "utf-8",
     );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:chat:custom": {
-          sessionFile: "custom-thread.jsonl",
-          sessionId: "custom-thread",
-        },
-      }),
-      "utf-8",
-    );
+    await upsertTestSessionEntries(storePath, {
+      "agent:main:chat:custom": {
+        sessionFile: "custom-thread.jsonl",
+        sessionId: "custom-thread",
+      },
+    });
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
     setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
@@ -517,16 +526,12 @@ describe("session startup catch-up", () => {
       }) + "\n",
       "utf-8",
     );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:chat:explicit-target": {
-          sessionFile: "explicit-target.jsonl",
-          sessionId: "explicit-target",
-        },
-      }),
-      "utf-8",
-    );
+    await upsertTestSessionEntries(storePath, {
+      "agent:main:chat:explicit-target": {
+        sessionFile: "explicit-target.jsonl",
+        sessionId: "explicit-target",
+      },
+    });
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
     setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
@@ -561,20 +566,16 @@ describe("session startup catch-up", () => {
       }) + "\n",
       "utf-8",
     );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:cron:job-1:run:run-1": {
-          sessionFile: "cron-thread.jsonl",
-          sessionId: "cron-thread",
-        },
-        "agent:main:chat:other": {
-          sessionFile: "other-thread.jsonl",
-          sessionId: "other-thread",
-        },
-      }),
-      "utf-8",
-    );
+    await upsertTestSessionEntries(storePath, {
+      "agent:main:cron:job-1:run:run-1": {
+        sessionFile: "cron-thread.jsonl",
+        sessionId: "cron-thread",
+      },
+      "agent:main:chat:other": {
+        sessionFile: "other-thread.jsonl",
+        sessionId: "other-thread",
+      },
+    });
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
     setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
@@ -672,16 +673,12 @@ describe("session startup catch-up", () => {
       }) + "\n",
       "utf-8",
     );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:chat:custom-update": {
-          sessionFile: "custom-update.jsonl",
-          sessionId: "custom-update",
-        },
-      }),
-      "utf-8",
-    );
+    await upsertTestSessionEntries(storePath, {
+      "agent:main:chat:custom-update": {
+        sessionFile: "custom-update.jsonl",
+        sessionId: "custom-update",
+      },
+    });
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
     setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();

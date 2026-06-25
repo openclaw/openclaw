@@ -55,7 +55,8 @@ type SessionHookEvent = {
 };
 type PostCompactionSyncParams = {
   reason: string;
-  sessionFiles: string[];
+  sessionFiles?: string[];
+  sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
 type Deferred<T> = {
@@ -1236,7 +1237,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(sync).toHaveBeenCalledTimes(1);
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
-        sessionFiles: ["/tmp/rotated-session.jsonl"],
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "rotated-session",
+            sessionKey: TEST_SESSION_KEY,
+          },
+        ],
       });
     } finally {
       cleanup();
@@ -1710,7 +1717,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       });
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
-        sessionFiles: [TEST_SESSION_FILE],
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+          },
+        ],
       });
     } finally {
       cleanup();

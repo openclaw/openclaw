@@ -205,6 +205,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
+import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -815,6 +817,7 @@ describe("QmdMemoryManager", () => {
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
     resetMemoryCoreDreamingStateForTests();
+    closeOpenClawAgentDatabasesForTest();
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -5601,15 +5604,15 @@ describe("QmdMemoryManager", () => {
       '{"type":"message","message":{"role":"user","content":"hello mapped session"}}\n',
       "utf-8",
     );
-    await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread": {
-          sessionFile: "actual-session-topic-thread.jsonl",
-          sessionId: "actual-session",
-        },
-      }),
-      "utf-8",
+    await upsertSessionEntry(
+      {
+        sessionKey: "agent:main:chat:thread",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      },
+      {
+        sessionFile: "actual-session-topic-thread.jsonl",
+        sessionId: "actual-session",
+      },
     );
 
     const { manager } = await createManager({ mode: "status" });

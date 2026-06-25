@@ -2637,6 +2637,7 @@ async function runEmbeddedAgentInternal(
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
+                    sessionId: activeSessionId,
                     agentId: sessionAgentId,
                     sessionFile: activeSessionFile,
                   });

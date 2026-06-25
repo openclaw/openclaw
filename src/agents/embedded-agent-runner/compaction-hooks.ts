@@ -23,6 +23,7 @@ function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "a
 async function runPostCompactionSessionMemorySync(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   sessionFile: string;
 }): Promise<void> {
@@ -53,9 +54,20 @@ async function runPostCompactionSessionMemorySync(params: {
     if (!manager?.sync) {
       return;
     }
+    const sessionId = params.sessionId?.trim();
     await manager.sync({
       reason: "post-compaction",
-      sessionFiles: [sessionFile],
+      ...(sessionId
+        ? {
+            sessions: [
+              {
+                agentId,
+                sessionId,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              },
+            ],
+          }
+        : { sessionFiles: [sessionFile] }),
     });
   } catch (err) {
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
@@ -65,6 +77,7 @@ async function runPostCompactionSessionMemorySync(params: {
 function syncPostCompactionSessionMemory(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   sessionFile: string;
   mode: "off" | "async" | "await";
@@ -76,6 +89,7 @@ function syncPostCompactionSessionMemory(params: {
   const syncTask = runPostCompactionSessionMemorySync({
     config: params.config,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
     agentId: params.agentId,
     sessionFile: params.sessionFile,
   });
@@ -91,6 +105,7 @@ function syncPostCompactionSessionMemory(params: {
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   sessionFile: string;
 }): Promise<void> {
@@ -106,6 +121,7 @@ export async function runPostCompactionSideEffects(params: {
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
     agentId: params.agentId,
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),

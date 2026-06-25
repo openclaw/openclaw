@@ -516,6 +516,7 @@ export async function compactEmbeddedAgentSession(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
+            sessionId: postCompactionSessionId,
             agentId: sessionAgentId,
             sessionFile: postCompactionSessionFile,
           });

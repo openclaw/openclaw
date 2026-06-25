@@ -20,11 +20,11 @@ import {
   buildSessionEntry,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
+  sessionPathForSessionIdentity,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -149,6 +149,21 @@ type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
+
+function sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
+  return entry.transcriptSource === "sqlite"
+    ? sessionPathForSessionIdentity(entry.agentId, entry.sessionId)
+    : sessionPathForFile(entry.sessionFile);
+}
+
+function buildSessionEntryOptions(entry: SessionTranscriptCorpusEntry) {
+  return {
+    generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+    generatedByCronRun: entry.generatedByCronRun === true,
+    ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+    ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
+  };
+}
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
@@ -1500,8 +1515,8 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
-    const files = await listSessionFilesForAgent(this.agentId);
-    if (files.length === 0 || this.closed) {
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    if (corpusEntries.length === 0 || this.closed) {
       return [];
     }
     const existingRows = loadMemorySourceFileState({
@@ -1510,25 +1525,42 @@ export abstract class MemoryManagerSyncOps {
     }).rows;
     const fileStates = (
       await runWithConcurrency(
-        files.map((file) => async (): Promise<MemorySessionStartupFileState | null> => {
-          try {
-            const stat = await fs.stat(file);
-            if (!stat.isFile()) {
-              return null;
+        corpusEntries.map(
+          (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            if (corpusEntry.transcriptSource === "sqlite") {
+              const entry = await buildSessionEntry(
+                corpusEntry.sessionFile,
+                buildSessionEntryOptions(corpusEntry),
+              );
+              return entry
+                ? {
+                    absPath: corpusEntry.sessionFile,
+                    path: entry.path,
+                    mtimeMs: entry.mtimeMs,
+                    size: entry.size,
+                  }
+                : null;
             }
-            return {
-              absPath: file,
-              path: sessionPathForFile(file),
-              mtimeMs: stat.mtimeMs,
-              size: stat.size,
-            };
-          } catch (err) {
-            if (isFileMissingError(err)) {
-              return null;
+            const file = corpusEntry.sessionFile;
+            try {
+              const stat = await fs.stat(file);
+              if (!stat.isFile()) {
+                return null;
+              }
+              return {
+                absPath: file,
+                path: sessionPathForCorpusEntry(corpusEntry),
+                mtimeMs: stat.mtimeMs,
+                size: stat.size,
+              };
+            } catch (err) {
+              if (isFileMissingError(err)) {
+                return null;
+              }
+              throw err;
             }
-            throw err;
-          }
-        }),
+          },
+        ),
         this.getIndexConcurrency(),
       )
     ).filter((file): file is MemorySessionStartupFileState => file !== null);
@@ -1582,6 +1614,12 @@ export abstract class MemoryManagerSyncOps {
     pending.push(...Array.from(await this.resolveSessionFilesForSyncTargets(pendingTargets)));
     let shouldSync = false;
     for (const sessionFile of pending) {
+      if (!path.isAbsolute(sessionFile)) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       // Usage-counted session archives (`.jsonl.reset.<iso>` and
       // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
       // written once by the archive rotation and then never touched again.
@@ -1797,7 +1835,11 @@ export abstract class MemoryManagerSyncOps {
       return null;
     }
     const normalized = new Set<string>();
-    const corpusPaths = new Set(corpusEntries.map((entry) => path.resolve(entry.sessionFile)));
+    const corpusPaths = new Set(
+      corpusEntries
+        .filter((entry) => entry.transcriptSource !== "sqlite")
+        .map((entry) => path.resolve(entry.sessionFile)),
+    );
     for (const sessionFile of sessionFiles) {
       const trimmed = sessionFile.trim();
       if (!trimmed) {
@@ -1866,7 +1908,9 @@ export abstract class MemoryManagerSyncOps {
         if (sessionKey && entry.sessionKey !== sessionKey) {
           continue;
         }
-        files.add(path.resolve(entry.sessionFile));
+        files.add(
+          entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
+        );
         matchedCorpusEntry = true;
       }
       if (matchedCorpusEntry) {
@@ -2134,7 +2178,10 @@ export abstract class MemoryManagerSyncOps {
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForFile,
+      sessionPathForFile: (file) => {
+        const corpusEntry = corpusEntryByPath.get(file);
+        return corpusEntry ? sessionPathForCorpusEntry(corpusEntry) : sessionPathForFile(file);
+      },
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
@@ -2221,13 +2268,7 @@ export abstract class MemoryManagerSyncOps {
                 const corpusEntry = corpusEntryByPath.get(absPath);
                 const entry = await buildSessionEntry(
                   absPath,
-                  corpusEntry
-                    ? {
-                        generatedByDreamingNarrative:
-                          corpusEntry.generatedByDreamingNarrative === true,
-                        generatedByCronRun: corpusEntry.generatedByCronRun === true,
-                      }
-                    : undefined,
+                  corpusEntry ? buildSessionEntryOptions(corpusEntry) : undefined,
                 );
                 if (!entry) {
                   if (params.progress) {
@@ -2301,12 +2342,7 @@ export abstract class MemoryManagerSyncOps {
         const corpusEntry = corpusEntryByPath.get(absPath);
         const entry = await buildSessionEntry(
           absPath,
-          corpusEntry
-            ? {
-                generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
-                generatedByCronRun: corpusEntry.generatedByCronRun === true,
-              }
-            : undefined,
+          corpusEntry ? buildSessionEntryOptions(corpusEntry) : undefined,
         );
         if (!entry) {
           if (params.progress) {
