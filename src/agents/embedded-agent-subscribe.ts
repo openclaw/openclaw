@@ -180,8 +180,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
+    // Window thinking is presentation: any mode except "on" feeds the channel
+    // rendering hook, and the channel's streaming.progress.thinking flag gates
+    // display. "on" hands the lane to durable 🧠 persistence instead, so the
+    // ephemeral window yields and thoughts never render twice.
     streamReasoning:
-      reasoningMode === "stream" &&
+      reasoningMode !== "on" &&
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
@@ -1167,9 +1171,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (params.silentExpected) {
       return;
     }
-    if (!state.streamReasoning || !params.onReasoningStream) {
-      return;
-    }
     const trimmed = text.trim();
     if (!trimmed) {
       return;
@@ -1183,7 +1184,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     state.lastStreamedReasoning = trimmed;
 
-    // Broadcast thinking event to WebSocket clients in real-time
+    // Emit-always: the thinking stream always reaches the bus and session
+    // archive. /reasoning (streamReasoning) gates only the rendering hook
+    // below; display surfaces (TUI showThinking, webchat isReasoning drops)
+    // gate presentation on their side.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
@@ -1193,9 +1197,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       },
     });
 
-    void params.onReasoningStream({
-      text: trimmed,
-    });
+    if (state.streamReasoning && params.onReasoningStream) {
+      void params.onReasoningStream({
+        text: trimmed,
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {
