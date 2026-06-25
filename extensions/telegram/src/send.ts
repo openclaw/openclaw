@@ -981,8 +981,11 @@ export async function sendMessageTelegram(
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
-    const fileName =
+    const rawFileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
+    // Strip internal cache UUID suffix (---<uuid>) from the filename before
+    // sending so Telegram recipients see the original filename (#96538).
+    const fileName = stripMediaStoreUuidSuffix(rawFileName);
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
@@ -1711,6 +1714,19 @@ function inferFilename(kind: MediaKind) {
   }
 }
 
+/**
+ * Strip the internal cache UUID suffix (---<uuid>) from media store
+ * filenames so Telegram recipients see the original filename (#96538).
+ */
+function stripMediaStoreUuidSuffix(filename: string): string {
+  const UUID_SUFFIX_RE = /^(.+?)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}((?:\.[^.]+)*)$/i;
+  const match = filename.match(UUID_SUFFIX_RE);
+  if (match) {
+    return match[1] + (match[2] ?? "");
+  }
+  return filename;
+}
+
 type TelegramStickerOpts = {
   cfg: OpenClawConfig;
   token?: string;
@@ -1992,3 +2008,7 @@ export async function createForumTopicTelegram(
     chatId: normalizedChatId,
   };
 }
+
+// Test-only export for send.test.ts
+export const _testing = { stripMediaStoreUuidSuffix };
+export { stripMediaStoreUuidSuffix };

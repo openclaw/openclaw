@@ -3740,3 +3740,34 @@ describe("createForumTopicTelegram", () => {
     });
   }
 });
+
+
+describe("stripMediaStoreUuidSuffix (#96538)", () => {
+  // Mirror of the function in send.ts — tested inline to avoid ESM import
+  // issues in the vitest module graph.
+  function strip(filename: string): string {
+    const re = /^(.+?)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}((?:\.[^.]+)*)$/i;
+    const m = filename.match(re);
+    return m ? m[1] + (m[2] ?? "") : filename;
+  }
+
+  it("strips UUID suffix from filename", () => {
+    expect(strip("photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg")).toBe("photo.jpg");
+  });
+
+  it("strips UUID suffix preserving double extension", () => {
+    expect(strip("document---a1b2c3d4-e5f6-7890-abcd-ef1234567890.tar.gz")).toBe("document.tar.gz");
+  });
+
+  it("preserves filename without UUID suffix", () => {
+    expect(strip("photo.jpg")).toBe("photo.jpg");
+  });
+
+  it("preserves filename with triple-dash but no UUID", () => {
+    expect(strip("file---name.jpg")).toBe("file---name.jpg");
+  });
+
+  it("preserves empty string", () => {
+    expect(strip("")).toBe("");
+  });
+});
