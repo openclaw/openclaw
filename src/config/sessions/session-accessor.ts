@@ -65,9 +65,7 @@ import {
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteFileSessionEntryLifecycle,
   applySessionEntryLifecycleMutation as applyFileSessionEntryLifecycleMutation,
-  listSessionEntries as listFileSessionEntries,
   loadSessionStore,
-  applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
@@ -1435,7 +1433,45 @@ export async function applySessionPatchProjection<
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
-  return await applyFileSessionEntryPatchProjection(params);
+  const entries = listSessionEntries({ storePath: params.storePath }).map(
+    ({ sessionKey, entry }) => ({
+      entry: structuredClone(entry),
+      sessionKey,
+    }),
+  );
+  const target = params.resolveTarget({ entries });
+  const existingEntry = resolveProjectionExistingEntry(entries, target);
+  const projected = await params.project({
+    ...target,
+    entries,
+    ...(existingEntry ? { existingEntry } : {}),
+  });
+  if (!projected.ok) {
+    return projected;
+  }
+  await replaceSessionEntry(
+    { sessionKey: target.primaryKey, storePath: params.storePath },
+    projected.entry,
+  );
+  return { ...projected, entry: structuredClone(projected.entry) };
+}
+
+function resolveProjectionExistingEntry(
+  entries: readonly { sessionKey: string; entry: SessionEntry }[],
+  target: SessionPatchProjectionTarget,
+): SessionEntry | undefined {
+  const candidateKeys = target.candidateKeys ?? [target.primaryKey];
+  let freshest: SessionEntry | undefined;
+  for (const candidateKey of candidateKeys) {
+    const entry = entries.find((candidate) => candidate.sessionKey === candidateKey)?.entry;
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
+      freshest = entry;
+    }
+  }
+  return freshest ? structuredClone(freshest) : undefined;
 }
 
 /**
