@@ -405,6 +405,25 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("compact_only");
   });
 
+  it("keeps lightweight shared-history prompts on the shared prompt floor", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("existing shared heartbeat conversation")],
+      systemPrompt: "",
+      prompt: "run heartbeat",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_544,
+        source: "reported_shared_heartbeat",
+      },
+    });
+
+    expect(result.promptBudgetBeforeReserve).toBe(2_048);
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
+  });
+
   it("keeps full-context small models on the shared prompt floor", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [],
