@@ -88,6 +88,31 @@ function isActiveMemoryManagerContext(
   return context !== null && "manager" in context;
 }
 
+type ActiveMemoryManager = ActiveMemoryManagerContext["manager"];
+
+type ActiveMemorySearchOutcome = "ok" | "scope-denied" | "empty-query" | "no-collections";
+type ActiveMemorySearchOutcomeResult = {
+  outcome: ActiveMemorySearchOutcome;
+  hits: MemorySearchResult[];
+  reason?: string;
+};
+
+async function searchActiveMemoryManager(
+  manager: ActiveMemoryManager,
+  query: string,
+  searchOptions: Parameters<ActiveMemoryManager["search"]>[1],
+): Promise<ActiveMemorySearchOutcomeResult & { detailed: boolean }> {
+  if (typeof manager.searchWithOutcome === "function") {
+    const result = await manager.searchWithOutcome(query, searchOptions);
+    return { ...result, detailed: true };
+  }
+  return {
+    outcome: "ok",
+    hits: await manager.search(query, searchOptions),
+    detailed: false,
+  };
+}
+
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
 ): Promise<void> {
@@ -506,8 +531,14 @@ export function createMemorySearchTool(options: {
                     },
                     ...(searchSources ? { sources: searchSources } : {}),
                   };
+                  let searchResult: ActiveMemorySearchOutcomeResult & { detailed: boolean };
                   try {
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                   } catch (error) {
                     if (!isClosedMemoryStoreError(error)) {
                       throw error;
@@ -523,7 +554,12 @@ export function createMemorySearchTool(options: {
                       throw error;
                     }
                     activeMemory = refreshed;
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                   }
                   const statusBeforeRetry = activeMemory.manager.status();
                   pausedIndexIdentityReason =
@@ -531,9 +567,23 @@ export function createMemorySearchTool(options: {
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  if (rawResults.length === 0 && activeMemory.manager.sync) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                  const syncAfterZeroResults = activeMemory.manager.sync?.bind(
+                    activeMemory.manager,
+                  );
+                  const shouldSyncAfterZeroResults =
+                    rawResults.length === 0 &&
+                    syncAfterZeroResults !== undefined &&
+                    (searchResult.detailed
+                      ? searchResult.outcome === "ok" && statusBeforeRetry.dirty === true
+                      : true);
+                  if (shouldSyncAfterZeroResults) {
+                    await syncAfterZeroResults({ reason: "search", force: true });
+                    searchResult = await searchActiveMemoryManager(
+                      activeMemory.manager,
+                      query,
+                      searchOptions,
+                    );
+                    rawResults = searchResult.hits;
                     pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
                       activeMemory.manager.status(),
                     );

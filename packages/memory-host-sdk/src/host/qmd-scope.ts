@@ -102,11 +102,7 @@ function normalizeQmdSessionKey(key?: string): string | undefined {
     return undefined;
   }
   const parsed = parseAgentSessionKey(trimmed);
-  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? trimmed);
-  if (normalized.startsWith("subagent:")) {
-    return undefined;
-  }
-  return normalized;
+  return normalizeLowercaseStringOrEmpty(parsed?.rest ?? trimmed);
 }
 
 function parseAgentSessionKey(sessionKey: string | undefined | null): { rest: string } | null {

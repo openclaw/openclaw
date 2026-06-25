@@ -3,12 +3,25 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+const surfaceBudgetEnvNames = [
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
+  "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT",
+] as const;
+
 function runSurfaceReport(env: Record<string, string>) {
+  const childEnv = { ...process.env };
+  for (const name of surfaceBudgetEnvNames) {
+    delete childEnv[name];
+  }
   return spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--check"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...childEnv,
       ...env,
     },
   });
@@ -23,10 +36,9 @@ type PublicSurfaceCounts = {
 function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
   const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
   const readFallback = (budgetKey: string) => {
-    const match = new RegExp(
-      `${budgetKey}:\\s*readBudgetEnv\\(\\s*"[^"]+",\\s*(\\d+)`,
-      "u",
-    ).exec(source);
+    const match = new RegExp(`${budgetKey}:\\s*readBudgetEnv\\(\\s*"[^"]+",\\s*(\\d+)`, "u").exec(
+      source,
+    );
     if (match === null || match[1] === undefined) {
       throw new Error(`failed to read default ${budgetKey} budget`);
     }
@@ -41,11 +53,11 @@ function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
 
 function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
   const result = runSurfaceReport({});
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr || result.stdout).toBe(0);
   expect(result.stderr).toBe("");
 
   const totalsMatch =
-    /public package SDK entrypoints:[\s\S]*?\n  exports: (\d+)\n  callable exports: (\d+)/u.exec(
+    /public package SDK entrypoints:[\s\S]*?\n {2}exports: (\d+)\n {2}callable exports: (\d+)/u.exec(
       result.stdout,
     );
   const wildcardsMatch = /public wildcard reexports: (\d+)/u.exec(result.stdout);
@@ -129,7 +141,7 @@ describe("plugin SDK surface report", () => {
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(result.stderr).toBe("");
   });
 

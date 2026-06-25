@@ -381,6 +381,135 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+  it("does not force sync for detailed qmd zero hits when the index is clean", async () => {
+    const sync = vi.fn();
+    const search = vi.fn(async () => []);
+    const searchWithOutcome = vi.fn(async () => ({
+      outcome: "ok" as const,
+      hits: [],
+    }));
+    setMemorySearchManagerImpl(async () => ({
+      manager: {
+        search,
+        searchWithOutcome,
+        readFile: vi.fn(),
+        status: () => ({
+          backend: "qmd" as const,
+          dirty: false,
+          workspaceDir: "/workspace",
+          provider: "qmd",
+        }),
+        sync,
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+      },
+    }));
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("clean-zero", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: unknown[] }).results).toEqual([]);
+    expect(searchWithOutcome).toHaveBeenCalledTimes(1);
+    expect(search).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("does not force sync when detailed qmd search reports scope denied", async () => {
+    const sync = vi.fn();
+    const searchWithOutcome = vi.fn(async () => ({
+      outcome: "scope-denied" as const,
+      hits: [],
+      reason: "qmd-scope-denied",
+    }));
+    setMemorySearchManagerImpl(async () => ({
+      manager: {
+        search: vi.fn(async () => []),
+        searchWithOutcome,
+        readFile: vi.fn(),
+        status: () => ({
+          backend: "qmd" as const,
+          dirty: true,
+          workspaceDir: "/workspace",
+          provider: "qmd",
+        }),
+        sync,
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+      },
+    }));
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("scope-denied", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: unknown[] }).results).toEqual([]);
+    expect(searchWithOutcome).toHaveBeenCalledTimes(1);
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("forces sync for detailed qmd zero hits only when the index is dirty", async () => {
+    const sync = vi.fn();
+    const searchWithOutcome = vi
+      .fn()
+      .mockResolvedValueOnce({
+        outcome: "ok" as const,
+        hits: [],
+      })
+      .mockResolvedValueOnce({
+        outcome: "ok" as const,
+        hits: [
+          {
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Thread-hidden codename: ORBIT-22.",
+            source: "memory" as const,
+          },
+        ],
+      });
+    setMemorySearchManagerImpl(async () => ({
+      manager: {
+        search: vi.fn(async () => []),
+        searchWithOutcome,
+        readFile: vi.fn(),
+        status: () => ({
+          backend: "qmd" as const,
+          dirty: true,
+          workspaceDir: "/workspace",
+          provider: "qmd",
+        }),
+        sync,
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+      },
+    }));
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("dirty-zero", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchWithOutcome).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith({ reason: "search", force: true });
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

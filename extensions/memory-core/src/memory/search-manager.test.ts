@@ -999,6 +999,31 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to builtin search outcomes when qmd outcome search fails", async () => {
+    const retryAgentId = "retry-agent-outcome-fallback";
+    const cfg = createQmdCfg(retryAgentId);
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    const first = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    const firstManager = requireManager(first);
+
+    const result = await firstManager.searchWithOutcome?.("hello");
+
+    expect(result).toStrictEqual({
+      outcome: "ok",
+      hits: [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 1,
+          snippet: "fallback",
+          source: "memory",
+        },
+      ],
+    });
+    expect(fallbackSearch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps original qmd error when fallback manager initialization fails", async () => {
     const retryAgentId = "retry-agent-no-fallback-auth";
     const { manager: firstManager } = await createFailedQmdSearchHarness({

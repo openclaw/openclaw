@@ -202,7 +202,7 @@ let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
     publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10382),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10384),
     publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5211),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
@@ -243,6 +243,26 @@ function hasDeprecatedTag(symbol) {
 }
 
 const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
+
+function isGeneratedPluginSdkDeclaration(declaration) {
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  return (
+    relativePath.startsWith("dist/plugin-sdk/") ||
+    relativePath.startsWith("packages/plugin-sdk/dist/") ||
+    relativePath.includes("/dist/plugin-sdk/") ||
+    relativePath.includes("/packages/plugin-sdk/dist/")
+  );
+}
+
+function hasSourceBackedDeclaration(checker, symbol) {
+  const target = unwrapAlias(checker, symbol);
+  const declarations = [...(symbol.declarations ?? []), ...(target.declarations ?? [])];
+  if (declarations.length === 0) {
+    return true;
+  }
+  return declarations.some((declaration) => !isGeneratedPluginSdkDeclaration(declaration));
+}
 
 function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
   if (!generatedLlmCoreValidatorExports.has(exportName)) {
@@ -314,11 +334,16 @@ function collectExportStats(entrypoints) {
     }
     const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
     const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    let exports = 0;
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
     for (const symbol of symbols) {
+      if (!hasSourceBackedDeclaration(checker, symbol)) {
+        continue;
+      }
+      exports += 1;
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
@@ -338,7 +363,7 @@ function collectExportStats(entrypoints) {
       }
     }
     byEntrypoint.set(entrypoint, {
-      exports: symbols.length,
+      exports,
       callableExports,
       deprecatedExports,
       deprecatedCallableExports,
