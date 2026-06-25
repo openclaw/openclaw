@@ -605,7 +605,7 @@ describe("preflightCronModelProvider", () => {
     expect(request.init?.headers).toBeUndefined();
   });
 
-  it("falls through to resolveApiKeyForProvider for Authorization when using header mode", async () => {
+  it("does not fall through to resolveApiKeyForProvider when header mode is used", async () => {
     mockReachableResponse(200);
     resolveApiKeyForProviderMock.mockResolvedValueOnce({
       apiKey: "sk-fallback-key",
@@ -636,11 +636,12 @@ describe("preflightCronModelProvider", () => {
       model: "my-model",
     });
 
-    // resolveApiKeyForProvider should still be called for Authorization header
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalled();
+    // When mode is "header", resolveApiKeyForProvider should NOT be called
+    // The custom header handles auth entirely; no Bearer token should be injected
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
     const request = requireFetchPreflightRequest();
-    expect(request.init?.headers).toHaveProperty("X-Custom", "custom-val");
-    expect(request.init?.headers).toHaveProperty("Authorization", "Bearer sk-fallback-key");
+    // Only the custom header, no Authorization Bearer
+    expect(request.init?.headers).toEqual({ "X-Custom": "custom-val" });
   });
 
   it("sends only custom header (no Authorization) when header mode is used and resolveApiKeyForProvider returns empty", async () => {
@@ -740,5 +741,81 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     // Without prefix, the value should be sent as-is
     expect(request.init?.headers).toHaveProperty("X-Auth", "raw-value");
+  });
+
+  it("does not send Authorization: Bearer when header mode with custom header is configured", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "sk-existing-key",
+      mode: "api-key",
+      source: "config",
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-API-Key",
+                  value: "custom-val",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // Only the custom header should be sent — no Authorization Bearer injected
+    expect(request.init?.headers).toEqual({ "X-API-Key": "custom-val" });
+    expect(request.init?.headers).not.toHaveProperty("Authorization");
+  });
+
+  it("header mode with Authorization headerName and prefix suppresses Bearer", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "sk-existing-key",
+      mode: "api-key",
+      source: "config",
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "Authorization",
+                  value: "my-custom-token",
+                  prefix: "CustomScheme ",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // Only the custom Authorization header with CustomScheme prefix — no Bearer
+    expect(request.init?.headers).toEqual({ Authorization: "CustomScheme my-custom-token" });
   });
 });

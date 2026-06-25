@@ -256,7 +256,8 @@ export async function preflightCronModelProvider(params: {
   }
 
   // 2. Fall through to resolveApiKeyForProvider (full credential chain, handles SecretRef/profile/env/markers)
-  if (!resolvedApiKey) {
+  // Skip when mode is "header" — custom headers already handle auth, no Bearer needed
+  if (!resolvedApiKey && providerConfig?.request?.auth?.mode !== "header") {
     try {
       const resolved = await resolveApiKeyForProvider({
         provider: params.provider,
