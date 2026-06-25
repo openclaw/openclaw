@@ -497,6 +497,157 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
+  it("keeps an accepted sessions_spawn launch successful even when the event is flagged as an error", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "spawned watcher" }];
+    const details = {
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+      mode: "run",
+    };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details });
+  });
+
+  it("still marks a forbidden sessions_spawn as a model-visible failure", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "spawn denied" }];
+    const details = { status: "forbidden", reason: "subagents disabled" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-forbidden",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("still flags an accepted-status sessions_spawn that is missing spawn identity", async () => {
+    // Only the full accepted contract (runId + childSessionKey) is a launch; an
+    // accepted status alone must not clear an error flag.
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "partial" }];
+    const details = { status: "accepted" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-partial",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("does not clear the error flag for a non-spawn tool with accepted-shaped details", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "boom" }];
+    const details = {
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+    };
+
+    const result = await handler?.(
+      {
+        toolName: "exec",
+        toolCallId: "call-exec-accepted-shape",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
   it("does not mark results as errors when status is absent or non-error", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
