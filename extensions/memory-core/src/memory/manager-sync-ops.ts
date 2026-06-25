@@ -304,6 +304,12 @@ export abstract class MemoryManagerSyncOps {
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  // True when the only index-identity issue is a self-healable FTS text-format
+  // mismatch (legacy body-only rows). A clean sessions-only index can be in this
+  // state with dirty/sessionsDirty false, so search uses this to still trigger the
+  // sync that runs the format self-heal. Provider/model/scope mismatches do NOT
+  // set this, so they keep their existing (cli/force-gated) behavior.
+  protected ftsTextFormatSelfHealPending = false;
   // Failed full memory reindexes must retry as full rebuilds, not incremental
   // dirty syncs that can skip unchanged files against the still-live index.
   protected memoryFullRetryDirty = false;
@@ -559,7 +565,7 @@ export abstract class MemoryManagerSyncOps {
         ? initializedProviderIdentities
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
-    return resolveMemoryIndexIdentityState({
+    const identityParams = {
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
       providerKey: configuredProviderKeyKnown
@@ -588,7 +594,13 @@ export abstract class MemoryManagerSyncOps {
           : this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
       ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
-    });
+    };
+    const state = resolveMemoryIndexIdentityState(identityParams);
+    // Track whether the mismatch is purely an FTS text-format issue so search can
+    // trigger the self-heal sync without broadening to provider/model mismatches.
+    this.ftsTextFormatSelfHealPending =
+      state.status === "mismatched" && isMemoryIndexFtsTextFormatOnlyMismatch(identityParams);
+    return state;
   }
 
   protected resetVectorState(): void {

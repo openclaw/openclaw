@@ -640,6 +640,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       enabled: this.settings.sync.onSearch,
       dirty: this.dirty,
       sessionsDirty: this.sessionsDirty,
+      ftsTextFormatSelfHealPending: this.ftsTextFormatSelfHealPending,
       sync: async (params) => await this.sync(params),
       onError: (err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
