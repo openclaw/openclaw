@@ -2454,45 +2454,53 @@ describe("archiveSessionTranscripts", () => {
   });
 
   test("archives legacy-root stale transcript on reset", () => {
-    const oldSessionId = "22222222-2222-4222-8222-222222222222";
-    const currentSessionId = "11111111-1111-4111-8111-111111111111";
-    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
-    fs.mkdirSync(legacyDir, { recursive: true });
-    const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
-    fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
+    withArchiveHome(() => {
+      const oldSessionId = "22222222-2222-4222-8222-222222222222";
+      const currentSessionId = "11111111-1111-4111-8111-111111111111";
+      const agentStorePath = path.join(tmpDir, "agents", "test-agent", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(agentStorePath), { recursive: true });
+      const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+      fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
 
-    const archived = archiveSessionTranscripts({
-      sessionId: currentSessionId,
-      storePath,
-      sessionFile: stalePath,
-      reason: "reset",
+      const archived = archiveSessionTranscripts({
+        sessionId: currentSessionId,
+        storePath: agentStorePath,
+        sessionFile: stalePath,
+        reason: "reset",
+      });
+
+      expect(archived).toHaveLength(1);
+      expect(archived[0]).toContain(".reset.");
+      expect(fs.existsSync(stalePath)).toBe(false);
+      expect(fs.existsSync(archived[0])).toBe(true);
     });
-
-    expect(archived).toHaveLength(1);
-    expect(archived[0]).toContain(".reset.");
-    expect(fs.existsSync(stalePath)).toBe(false);
-    expect(fs.existsSync(archived[0])).toBe(true);
   });
 
   test("archives legacy-root stale transcript on delete", () => {
-    const oldSessionId = "22222222-2222-4222-8222-222222222222";
-    const currentSessionId = "11111111-1111-4111-8111-111111111111";
-    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
-    fs.mkdirSync(legacyDir, { recursive: true });
-    const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
-    fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
+    withArchiveHome(() => {
+      const oldSessionId = "22222222-2222-4222-8222-222222222222";
+      const currentSessionId = "11111111-1111-4111-8111-111111111111";
+      const agentStorePath = path.join(tmpDir, "agents", "test-agent", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(agentStorePath), { recursive: true });
+      const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+      fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
 
-    const archived = archiveSessionTranscripts({
-      sessionId: currentSessionId,
-      storePath,
-      sessionFile: stalePath,
-      reason: "deleted",
+      const archived = archiveSessionTranscripts({
+        sessionId: currentSessionId,
+        storePath: agentStorePath,
+        sessionFile: stalePath,
+        reason: "deleted",
+      });
+
+      expect(archived).toHaveLength(1);
+      expect(archived[0]).toContain(".deleted.");
+      expect(fs.existsSync(stalePath)).toBe(false);
+      expect(fs.existsSync(archived[0])).toBe(true);
     });
-
-    expect(archived).toHaveLength(1);
-    expect(archived[0]).toContain(".deleted.");
-    expect(fs.existsSync(stalePath)).toBe(false);
-    expect(fs.existsSync(archived[0])).toBe(true);
   });
 
   test("does not archive stale transcript outside legacy root", () => {
