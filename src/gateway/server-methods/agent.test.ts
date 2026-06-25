@@ -4048,6 +4048,79 @@ describe("gateway agent handler", () => {
     }
   });
 
+  it("preserves user model overrides when daily rollover rotates a gateway agent session", async () => {
+    const now = Date.parse("2026-06-01T00:01:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "pre-midnight-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+          providerOverride: "ollama-cloud",
+          modelOverride: "deepseek-v4-pro",
+          modelOverrideSource: "user",
+          modelProvider: "minimax",
+          model: "MiniMax-M2.7",
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 0,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "after midnight",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "daily-rollover-preserve-user-model",
+        },
+        { reqId: "daily-rollover-preserve-user-model" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).not.toBe("pre-midnight-session-id");
+      expect(capturedEntry).toMatchObject({
+        sessionId: call.sessionId,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        providerOverride: "ollama-cloud",
+        modelOverride: "deepseek-v4-pro",
+        modelOverrideSource: "user",
+        modelProvider: "minimax",
+        model: "MiniMax-M2.7",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits lifecycle hooks when a committed rotation later fails delivery validation", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
