@@ -448,7 +448,7 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
     const sessionsParent = join(agentDir, "sessions");
     chmodSync(sessionsParent, 0o700);
     // Also repair gateway sessions path (sibling of agentDir under agents/<id>/)
-    const gatewaySessions = join(path.dirname(agentDir), "sessions");
+    const gatewaySessions = join(dirname(agentDir), "sessions");
     chmodSync(gatewaySessions, 0o700);
   } catch {
     /* best effort */
