@@ -131,6 +131,8 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   agentId?: string;
   reason: "reset" | "deleted";
   onArchiveError?: (err: unknown, sourcePath: string) => void;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
     return [];
@@ -142,6 +144,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
     agentId: params.agentId,
     reason: params.reason,
     onArchiveError: params.onArchiveError,
+    timeZone: params.timeZone,
   });
 }
 
@@ -961,6 +964,19 @@ export async function performGatewaySessionReset(params: {
     reason: "session-reset",
   });
 
+  const lifecycleTimeZone = (() => {
+    const tz = cfg.agents?.defaults?.userTimezone?.trim();
+    if (!tz) {
+      return undefined;
+    }
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+      return tz;
+    } catch {
+      return undefined;
+    }
+  })();
+
   const lifecycle = await resetSessionEntryLifecycle({
     agentId: target.agentId,
     storePath,
@@ -968,6 +984,7 @@ export async function performGatewaySessionReset(params: {
       canonicalKey: target.canonicalKey,
       storeKeys: target.storeKeys,
     },
+    timeZone: lifecycleTimeZone,
     buildNextEntry: ({ currentEntry, primaryKey }) => {
       if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
         // A newer owner already replaced or removed the session while cleanup

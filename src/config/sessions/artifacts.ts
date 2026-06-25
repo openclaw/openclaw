@@ -2,11 +2,13 @@
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
+import { formatDateStamp } from "../../agents/date-time.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+const ARCHIVE_TIMESTAMP_RE =
+  /^(?:\d{4}-\d{2}-\d{2}_)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
@@ -134,15 +136,26 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
   return null;
 }
 
-/** Formats an archive timestamp that is safe for filenames. */
-export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
-  return timestampMsToIsoFileStamp(nowMs);
+/**
+ * Formats an archive timestamp that is safe for filenames.
+ * When `timeZone` is provided, prepends a local-date prefix for
+ * timezone-aware session archive discovery (e.g. `2026-06-25_`).
+ */
+export function formatSessionArchiveTimestamp(nowMs = Date.now(), timeZone?: string): string {
+  const iso = timestampMsToIsoFileStamp(nowMs);
+  if (timeZone) {
+    const localDate = formatDateStamp(nowMs, timeZone);
+    return `${localDate}_${iso}`;
+  }
+  return iso;
 }
 
 function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
+  // Strip optional local-date prefix "YYYY-MM-DD_" before parsing UTC timestamp.
+  const unprefixed = raw.includes("_") ? raw.slice(raw.indexOf("_") + 1) : raw;
+  const [datePart, timePart] = unprefixed.split("T");
   if (!datePart || !timePart) {
-    return raw;
+    return unprefixed;
   }
   return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }

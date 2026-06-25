@@ -671,6 +671,8 @@ export type ResetSessionEntryLifecycleParams = {
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
   target: SessionLifecycleStoreTarget;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 };
 
 export type DeleteSessionEntryLifecycleParams = {
@@ -682,6 +684,8 @@ export type DeleteSessionEntryLifecycleParams = {
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
   target: SessionLifecycleStoreTarget;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 };
 
 export type CanonicalizeSessionEntryAliasesResult = {
@@ -2056,8 +2060,9 @@ function normalizeManualCompactTranscriptLines(
 async function replaceTranscriptForManualCompact(
   filePath: string,
   lines: readonly string[],
+  timeZone?: string,
 ): Promise<string> {
-  const archived = `${filePath}.bak.${formatSessionArchiveTimestamp()}`;
+  const archived = `${filePath}.bak.${formatSessionArchiveTimestamp(Date.now(), timeZone)}`;
   const replacement = `${filePath}.compact.${randomUUID()}.tmp`;
   try {
     await writeJsonlLines(replacement, lines, { flag: "wx", mode: 0o600 });

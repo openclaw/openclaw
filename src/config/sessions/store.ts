@@ -713,6 +713,8 @@ async function archiveLifecycleSessionTranscripts(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): Promise<SessionLifecycleArchivedTranscript[]> {
   if (!params.sessionId) {
     return [];
@@ -724,6 +726,7 @@ async function archiveLifecycleSessionTranscripts(params: {
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+    timeZone: params.timeZone,
   });
 }
 
@@ -1151,6 +1154,8 @@ export async function resetSessionEntryLifecycle(params: {
   }) => Promise<SessionEntry> | SessionEntry;
   storePath: string;
   target: SessionLifecycleStoreTarget;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): Promise<ResetSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
@@ -1190,6 +1195,7 @@ export async function resetSessionEntryLifecycle(params: {
       sessionFile: previousSessionFile,
       agentId: params.agentId,
       reason: "reset",
+      timeZone: params.timeZone,
     });
     ensureLifecycleTranscriptHeader({
       sessionFile: nextSessionFile,
@@ -1209,6 +1215,8 @@ export async function deleteSessionEntryLifecycle(params: {
   archiveTranscript: boolean;
   storePath: string;
   target: SessionLifecycleStoreTarget;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
@@ -1234,6 +1242,7 @@ export async function deleteSessionEntryLifecycle(params: {
           sessionFile: deletedSessionFile,
           agentId: params.agentId,
           reason: "deleted",
+          timeZone: params.timeZone,
         })
       : [];
     const result: DeleteSessionEntryLifecycleResult = {
@@ -1632,6 +1641,8 @@ export async function archiveRemovedSessionTranscripts(params: {
   storePath: string;
   reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): Promise<Set<string>> {
   const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -1645,6 +1656,7 @@ export async function archiveRemovedSessionTranscripts(params: {
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
+      timeZone: params.timeZone,
     });
     for (const archivedPath of archived) {
       archivedDirs.add(path.dirname(archivedPath));

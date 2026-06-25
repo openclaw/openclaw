@@ -2275,6 +2275,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         canonicalKey: target.canonicalKey,
         storeKeys: target.storeKeys,
       },
+      timeZone: (() => {
+        const tz = cfg.agents?.defaults?.userTimezone?.trim();
+        if (!tz) {
+          return undefined;
+        }
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+          return tz;
+        } catch {
+          return undefined;
+        }
+      })(),
     });
     const deleted = deletion.deleted;
     const sessionId = deletion.deletedSessionId;

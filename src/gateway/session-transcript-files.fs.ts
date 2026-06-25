@@ -354,8 +354,12 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
-  const ts = formatSessionArchiveTimestamp();
+export function archiveFileOnDisk(
+  filePath: string,
+  reason: ArchiveFileReason,
+  timeZone?: string,
+): string {
+  const ts = formatSessionArchiveTimestamp(Date.now(), timeZone);
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
   clearSessionTranscriptResetArchiveDiscoveryCache();
@@ -384,6 +388,8 @@ export function archiveSessionTranscripts(opts: {
    */
   restrictToStoreDir?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
@@ -404,6 +410,8 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * caller decides whether to log, warn-deliver, or escalate.
    */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
+  /** Optional IANA timezone for local-date prefix in archive filenames. */
+  timeZone?: string;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
   const storeDir =
@@ -429,7 +437,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
     try {
       archived.push({
         sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
+        archivedPath: archiveFileOnDisk(candidatePath, opts.reason, opts.timeZone),
       });
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);

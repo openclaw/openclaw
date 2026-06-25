@@ -140,10 +140,58 @@ describe("session artifact helpers", () => {
 
   it("falls back instead of throwing for out-of-range archive timestamps", () => {
     expect(formatSessionArchiveTimestamp(Number.POSITIVE_INFINITY)).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
+      /^(?:\d{4}-\d{2}-\d{2}_)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
     );
     expect(formatSessionArchiveTimestamp(9_000_000_000_000_000)).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
+      /^(?:\d{4}-\d{2}-\d{2}_)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
     );
+  });
+
+  it("formats archive timestamps with timezone prefix", () => {
+    // A known UTC timestamp: 2026-06-24T17:00:00.000Z = 2026-06-25 01:00 Asia/Shanghai
+    const now = Date.UTC(2026, 5, 24, 17, 0, 0, 0); // June is month 5 in JS
+    const stamp = formatSessionArchiveTimestamp(now, "Asia/Shanghai");
+    expect(stamp).toBe("2026-06-25_2026-06-24T17-00-00.000Z");
+
+    // Without timezone, behavior is unchanged (no prefix)
+    const stampNoTz = formatSessionArchiveTimestamp(now);
+    expect(stampNoTz).toBe("2026-06-24T17-00-00.000Z");
+  });
+
+  it("parses archive timestamps with timezone prefix", () => {
+    const now = Date.UTC(2026, 5, 24, 17, 0, 0, 0);
+    const stamp = formatSessionArchiveTimestamp(now, "Asia/Shanghai");
+    expect(stamp).toBe("2026-06-25_2026-06-24T17-00-00.000Z");
+
+    const file = `abc.jsonl.reset.${stamp}`;
+    expect(parseSessionArchiveTimestamp(file, "reset")).toBe(now);
+    expect(parseSessionArchiveTimestamp(file, "deleted")).toBeNull();
+
+    // Old format (no prefix) still parses correctly
+    const oldFile = "abc.jsonl.reset.2026-06-24T17-00-00.000Z";
+    expect(parseSessionArchiveTimestamp(oldFile, "reset")).toBe(now);
+  });
+
+  it("classifies archived artifact files with timezone prefix", () => {
+    // New format (with local-date prefix)
+    expect(
+      isSessionArchiveArtifactName("abc.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z"),
+    ).toBe(true);
+    expect(
+      isSessionArchiveArtifactName("abc.jsonl.deleted.2026-06-25_2026-06-24T17-00-00.000Z"),
+    ).toBe(true);
+    expect(
+      isSessionArchiveArtifactName("abc.jsonl.bak.2026-06-25_2026-06-24T17-00-00.000Z"),
+    ).toBe(true);
+    // The prefix is pure decoration — a malformed prefix without _ is not accepted
+    expect(
+      isSessionArchiveArtifactName("abc.jsonl.reset.2026-06-25-2026-06-24T17-00-00.000Z"),
+    ).toBe(false);
+  });
+
+  it("handles usage-counted session ids with timezone-prefixed filenames", () => {
+    const prefixed = "abc.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z";
+    expect(isUsageCountedSessionTranscriptFileName(prefixed)).toBe(true);
+    expect(parseUsageCountedSessionIdFromFileName(prefixed)).toBe("abc");
   });
 });
