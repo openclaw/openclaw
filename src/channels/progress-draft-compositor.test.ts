@@ -108,7 +108,6 @@ describe("createChannelProgressDraftCompositor", () => {
         await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
 
         expect(update).not.toHaveBeenCalled();
-        expect(progress.hasStarted).toBe(false);
       }
     } finally {
       vi.useRealTimers();

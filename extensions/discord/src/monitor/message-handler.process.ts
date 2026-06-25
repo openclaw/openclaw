@@ -597,7 +597,6 @@ async function processDiscordMessageInner(
     draftPreview.markFinalReplyDelivered();
     observer?.onFinalReplyDelivered?.();
   };
-<<<<<<< HEAD
   // Per-line quoting survives Discord chunking; blank quote rows render badly.
   const formatDiscordReasoningQuote = (quoteText: string): string | undefined => {
     const lines = quoteText
@@ -855,6 +854,9 @@ async function processDiscordMessageInner(
         pendingProgressBlockReplies.push({ payload: deliverablePayload, info });
         return { visibleReplySent: false };
       }
+    }
+    if (isFinal && pendingProgressBlockReplies.length && !userFacingFinalDelivered) {
+      await deliverPendingProgressBlockRepliesIfNeeded();
     }
     const shouldCollapseProgressDraft =
       draftStream &&

@@ -2849,6 +2849,40 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
+  it("flushes deferred Discord progress blocks before a final reply when no draft is visible", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+      await params?.dispatcher.sendBlockReply({ text: "fast command finished" });
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(2);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "fast command finished" }],
+      kind: "block",
+    });
+    expect(deliverDiscordReply.mock.calls[1]?.[0]).toMatchObject({
+      replies: [{ text: "done" }],
+      kind: "final",
+    });
+  });
+
   it.each([
     // commentary now defaults on; only an explicit false hides it.
     ["false", false],

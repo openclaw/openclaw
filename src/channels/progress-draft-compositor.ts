@@ -282,6 +282,7 @@ export function createChannelProgressDraftCompositor(params: {
         params.mode !== "progress" ||
         !text ||
         progressSuppressed ||
+        finalReplyStarted ||
         finalReplyDelivered ||
         !thinkingProgressEnabled
       ) {
