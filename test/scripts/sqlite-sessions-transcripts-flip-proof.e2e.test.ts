@@ -1,10 +1,10 @@
-// Path 3 SQLite flip proof test runs the script-style gateway lifecycle probe.
+// SQLite sessions/transcripts flip proof test runs the script-style gateway lifecycle probe.
 import { describe, expect, it } from "vitest";
-import { runPath3SqliteFlipProof } from "../../scripts/e2e/path3-sqlite-flip-proof.ts";
+import { runSqliteSessionsTranscriptsFlipProof } from "../../scripts/e2e/sqlite-sessions-transcripts-flip-proof.ts";
 
-describe("Path 3 SQLite flip proof harness", () => {
+describe("SQLite sessions/transcripts flip proof harness", () => {
   it("proves isolated gateway lifecycle state stays SQLite-first", async () => {
-    const report = await runPath3SqliteFlipProof();
+    const report = await runSqliteSessionsTranscriptsFlipProof();
 
     expect(report.failures).toEqual([]);
     expect(report.ok).toBe(true);
