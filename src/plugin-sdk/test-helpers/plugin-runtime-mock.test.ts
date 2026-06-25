@@ -83,6 +83,52 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
+  it("mirrors source actor fields in the inbound context mock", () => {
+    const runtime = createPluginRuntimeMock();
+
+    const ctx = runtime.channel.inbound.buildContext({
+      channel: "test",
+      from: "test:user:u1",
+      sender: {
+        id: "u1",
+        sourceActor: {
+          id: "person-1",
+          peerId: "peer-1",
+          displayName: "User One",
+          role: "participant",
+          context: "test-room",
+        },
+      },
+      conversation: {
+        kind: "group",
+        id: "room-1",
+      },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:test:group:room-1",
+      },
+      reply: {
+        to: "test:room:room-1",
+      },
+      message: {
+        rawBody: "hello",
+      },
+    });
+
+    expect(ctx.SourceActor).toStrictEqual({
+      id: "person-1",
+      peerId: "peer-1",
+      displayName: "User One",
+      role: "participant",
+      context: "test-room",
+    });
+    expect(ctx.SourceActorId).toBe("person-1");
+    expect(ctx.SourceActorPeerId).toBe("peer-1");
+    expect(ctx.SourceActorDisplayName).toBe("User One");
+    expect(ctx.SourceActorRole).toBe("participant");
+    expect(ctx.SourceActorContext).toBe("test-room");
+  });
+
   it("routes untrusted group prompt facts into untrusted structured context", () => {
     const runtime = createPluginRuntimeMock();
 
