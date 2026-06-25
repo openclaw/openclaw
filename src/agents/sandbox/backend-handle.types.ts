@@ -67,7 +67,8 @@ export type SandboxBackendHandle = {
   /**
    * Remote backends own cwd existence checks because valid runtime paths may
    * not exist in the local workspace mirror. Backend validation must be paired
-   * with validateWorkdir so cwd is proved before exec hooks and launch.
+   * with validateWorkdir so cwd is proved after before_tool_call adjustments
+   * and before env resolution, approval, preflight, and launch.
    */
   workdirValidation?: SandboxBackendWorkdirValidation;
   validateWorkdir?: SandboxBackendWorkdirValidator;

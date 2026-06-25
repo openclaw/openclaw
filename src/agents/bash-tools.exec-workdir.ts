@@ -33,6 +33,11 @@ type BackendHostWorkdirCandidate = {
   failIfInvalid: boolean;
 };
 
+type ExistingHostWorkspacePathResult =
+  | { kind: "available"; workdir: SandboxWorkdir }
+  | { kind: "missing" }
+  | { kind: "invalid" };
+
 function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
   if (workdir === undefined) {
     return { kind: "omitted" };
@@ -153,7 +158,7 @@ function resolveBackendContainerWorkdir(params: {
 async function mapExistingHostWorkspacePath(params: {
   hostPath: string;
   sandbox: BashSandboxConfig;
-}): Promise<SandboxWorkdir | null> {
+}): Promise<ExistingHostWorkspacePathResult> {
   let resolved: Awaited<ReturnType<typeof assertSandboxPath>>;
   try {
     resolved = await assertSandboxPath({
@@ -162,17 +167,23 @@ async function mapExistingHostWorkspacePath(params: {
       root: params.sandbox.workspaceDir,
     });
   } catch {
-    return null;
+    return { kind: "invalid" };
   }
-  const hostCwd = resolveExistingHostWorkdir(resolved.resolved);
-  if (!hostCwd) {
-    return null;
+  const stats = safeStatSync(resolved.resolved);
+  if (!stats) {
+    return { kind: "missing" };
+  }
+  if (!stats.isDirectory()) {
+    return { kind: "invalid" };
   }
   const relative = resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "";
   return {
-    hostCwd,
-    containerCwd: joinContainerWorkdir(params.sandbox.containerWorkdir, relative),
-    scriptPreflightCwd: hostCwd,
+    kind: "available",
+    workdir: {
+      hostCwd: resolved.resolved,
+      containerCwd: joinContainerWorkdir(params.sandbox.containerWorkdir, relative),
+      scriptPreflightCwd: resolved.resolved,
+    },
   };
 }
 
@@ -232,13 +243,13 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
       hostPath: hostCandidate.hostPath,
       sandbox: params.sandbox,
     });
-    if (mappedWorkdir) {
+    if (mappedWorkdir.kind === "available") {
       return await validateBackendWorkdir({
-        workdir: mappedWorkdir,
+        workdir: mappedWorkdir.workdir,
         sandbox: params.sandbox,
       });
     }
-    if (hostCandidate.failIfInvalid) {
+    if (hostCandidate.failIfInvalid && mappedWorkdir.kind === "invalid") {
       return null;
     }
   }

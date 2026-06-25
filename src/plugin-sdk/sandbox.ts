@@ -52,7 +52,6 @@ export {
   sanitizeEnvVars,
   shellEscape,
   uploadDirectoryToSshTarget,
-  VALIDATE_REMOTE_WORKDIR_SCRIPT,
 } from "../agents/sandbox.js";
 
 export {
