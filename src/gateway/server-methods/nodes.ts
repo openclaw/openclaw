@@ -26,6 +26,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPairedDevice,
@@ -59,7 +60,8 @@ import {
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
 import { dispatchAttachMcpMessage } from "../attach-relay.js";
-import { mintAttachGrant } from "../mcp-grant-store.js";
+import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { mintAttachGrant, resolveAttachGrant } from "../mcp-grant-store.js";
 import type { JsonRpcRequest } from "../mcp-http.protocol.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
@@ -74,6 +76,8 @@ import type { NodeSession } from "../node-registry.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
+import { readRecentSessionMessagesAsync } from "../session-utils.fs.js";
+import { resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
@@ -924,6 +928,35 @@ export const nodeHandlers: GatewayRequestHandlers = {
       token: grant.token,
       expiresAtMs: grant.expiresAtMs,
     });
+  },
+  // Hydration source (PR7): return the gateway-OWNED conversation for the grant's session so the node
+  // can materialize a local Claude transcript and `claude --resume` it — pick-up-anywhere. Same
+  // assembly chat.history uses: the stored agent turns + the cli-session import, scoped to the grant.
+  "node.attachHydrate": async ({ params, respond, context }) => {
+    const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
+    const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
+    if (!grant) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired attach grant"),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const entry = loadSessionEntry({ sessionKey: grant.sessionKey });
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: grant.sessionKey });
+    const localMessages = entry?.sessionId
+      ? await readRecentSessionMessagesAsync(
+          entry.sessionId,
+          target.storePath,
+          undefined,
+          { maxMessages: 500 },
+          target.agentId,
+        )
+      : [];
+    const messages = augmentChatHistoryWithCliSessionImports({ entry, localMessages });
+    respond(true, { messages });
   },
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {

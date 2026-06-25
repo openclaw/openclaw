@@ -54,4 +54,10 @@ describe("node attach handlers (PR5 node conduit)", () => {
       mcpResponse: { jsonrpc: "2.0", id: 1, result: { ok: true } },
     });
   });
+
+  it("node.attachHydrate rejects an unknown/expired grant before touching the session store", async () => {
+    const respond = vi.fn();
+    await call("node.attachHydrate", { grantToken: "nope" }, respond);
+    expect(respond.mock.calls[0][0]).toBe(false);
+  });
 });
