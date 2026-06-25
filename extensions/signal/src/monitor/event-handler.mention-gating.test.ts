@@ -175,7 +175,13 @@ describe("signal mention gating", () => {
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
+    expect(getCapturedCtx().CanDetectMention).toBe(true);
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
+    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
+    expect(getCapturedCtx().MentionShouldSkip).toBe(false);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
