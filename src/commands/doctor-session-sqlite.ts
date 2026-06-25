@@ -162,6 +162,7 @@ async function inspectOrMigrateTarget(params: {
   };
   if (params.mode === "inspect") {
     report.sqliteEntries = readSqliteEntryCount(params.target);
+    appendActiveSqliteTranscriptFileIssues(params.target, report);
     return report;
   }
   for (const record of records) {
@@ -182,6 +183,7 @@ async function inspectOrMigrateTarget(params: {
     ...referencedTranscriptFiles,
   ]);
   report.sqliteEntries = readSqliteEntryCount(params.target);
+  appendActiveSqliteTranscriptFileIssues(params.target, report);
   return report;
 }
 
@@ -543,6 +545,59 @@ function listUnreferencedJsonlFiles(
     .map((entry) => path.join(sessionsDir, entry))
     .filter((filePath) => !referenced.has(canonicalFilePath(filePath)))
     .toSorted((a, b) => a.localeCompare(b));
+}
+
+function appendActiveSqliteTranscriptFileIssues(
+  target: SessionStoreTarget,
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  for (const summary of listSqliteSessionEntries({
+    agentId: target.agentId,
+    storePath: target.storePath,
+  })) {
+    const transcriptPath = resolveActiveSqliteTranscriptFile(target, summary.entry);
+    if (!transcriptPath) {
+      continue;
+    }
+    report.issues.push({
+      code: "active_sqlite_transcript_jsonl",
+      message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
+      sessionKey: summary.sessionKey,
+    });
+  }
+}
+
+function resolveActiveSqliteTranscriptFile(
+  target: SessionStoreTarget,
+  entry: SessionEntry,
+): string | undefined {
+  let transcriptPath: string;
+  try {
+    transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: target.agentId,
+      sessionsDir: path.dirname(target.storePath),
+    });
+  } catch {
+    return undefined;
+  }
+  if (!transcriptPath.endsWith(".jsonl")) {
+    return undefined;
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(transcriptPath);
+  } catch {
+    return undefined;
+  }
+  if (!stat.isFile()) {
+    return undefined;
+  }
+  const sessionsDir = canonicalFilePath(path.dirname(target.storePath));
+  const activePath = canonicalFilePath(transcriptPath);
+  if (path.dirname(activePath) !== sessionsDir) {
+    return undefined;
+  }
+  return activePath;
 }
 
 function moveImportedTranscriptArtifactsToArchive(
