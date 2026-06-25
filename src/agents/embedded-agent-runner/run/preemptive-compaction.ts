@@ -23,6 +23,11 @@ const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+// Lightweight cron/bootstrap runs have a tiny deterministic prompt but inherit the shared ~20k
+// reserve floor; on small-context models that floor starves the prompt budget and routes to a
+// no-op compact_only (nothing to compact), failing the run. Reserve most of a small window for the
+// prompt instead. The clamp below still leaves large-context lightweight runs at full reserve.
+const LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO = 0.875;
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -250,6 +255,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   unwindowedMessages?: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  contextMode?: "full" | "lightweight";
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -281,10 +287,17 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
+  const baseMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
   );
+  const minPromptBudget =
+    params.contextMode === "lightweight"
+      ? Math.max(
+          baseMinPromptBudget,
+          Math.max(1, Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO)),
+        )
+      : baseMinPromptBudget;
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,

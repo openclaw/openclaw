@@ -346,6 +346,26 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
+  it("keeps lightweight tiny-context prompts out of no-op compact-only recovery", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "sys",
+      prompt: "daily cron briefing",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_544,
+        source: "test_lightweight_cron_boundary",
+      },
+    });
+
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.promptBudgetBeforeReserve).toBeGreaterThanOrEqual(3_544);
+    expect(result.effectiveReserveTokens).toBeLessThan(1_000);
+  });
+
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],
