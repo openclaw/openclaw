@@ -1401,6 +1401,7 @@ export async function runSubagentAnnounceFlow(params: {
                     ? { continuationFanoutMode: toolDelegate.fanoutMode }
                     : {}),
                   drainsContinuationDelegateQueue: true,
+                  ...(toolDelegate.model ? { model: toolDelegate.model } : {}),
                 },
                 {
                   agentSessionKey: targetRequesterSessionKey,
