@@ -119,6 +119,15 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changed;
   }
 
+  function hasLegacyGrpcOtlpSignals(otel: Record<string, unknown>): boolean {
+    const logsExporter = typeof otel.logsExporter === "string" ? otel.logsExporter : undefined;
+    return (
+      otel.traces !== false ||
+      otel.metrics !== false ||
+      (otel.logs === true && logsExporter !== "stdout")
+    );
+  }
+
   function migrate(raw: unknown): { next: Record<string, unknown> | null; changes: string[] } {
     const root = asRecord(raw);
     if (!root) {
@@ -206,6 +215,20 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       sandbox.scope = sandbox.perSession === true ? "session" : "workspace";
       delete sandbox.perSession;
       changes.push("Moved agents.defaults.sandbox.perSession to scope.");
+    }
+
+    const otel = asRecord(asRecord(next.diagnostics)?.otel);
+    if (otel?.protocol === "grpc") {
+      delete otel.protocol;
+      changes.push(
+        'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+      );
+      if (otel.enabled === true && hasLegacyGrpcOtlpSignals(otel)) {
+        otel.enabled = false;
+        changes.push(
+          "Disabled diagnostics.otel.enabled because legacy grpc configs with OTLP signals cannot export telemetry; re-enable it after choosing an OTLP/HTTP collector.",
+        );
+      }
     }
 
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
@@ -402,6 +425,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["agents", "defaults", "sandbox"],
           'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
+        );
+      }
+      const otel = asRecord(asRecord(root.diagnostics)?.otel);
+      if (otel?.protocol === "grpc") {
+        addIssue(
+          issues,
+          ["diagnostics", "otel", "protocol"],
+          'diagnostics.otel.protocol = "grpc" is no longer accepted because gRPC export is not implemented. Run "openclaw doctor --fix", then configure an OTLP/HTTP collector before re-enabling telemetry.',
         );
       }
 
@@ -1993,6 +2024,75 @@ describe("doctor config flow", () => {
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("repairs shipped diagnostics OTel grpc config without enabling export", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        diagnostics: {
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4317",
+            protocol: "grpc",
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+  });
+
+  it("keeps stdout-only diagnostics OTel logs enabled when removing grpc protocol", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        diagnostics: {
+          otel: {
+            enabled: true,
+            traces: false,
+            metrics: false,
+            logs: true,
+            logsExporter: "stdout",
+            protocol: "grpc",
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+  });
+
+  it("keeps disabled diagnostics OTel configs disabled when removing grpc protocol", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        diagnostics: {
+          otel: {
+            enabled: false,
+            endpoint: "http://otel-collector:4317",
+            protocol: "grpc",
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
   });
 
   it("preserves commitments config on repair", async () => {

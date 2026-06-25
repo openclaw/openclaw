@@ -129,6 +129,25 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-diagnostics-otel-grpc-protocol",
+    owner: "config",
+    introduced: "2026-06-15",
+    deprecated: "2026-06-15",
+    warningStarts: "2026-06-15",
+    removeAfter: "2026-09-15",
+    source: 'diagnostics.otel.protocol = "grpc"',
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.diagnostics.ts",
+    replacement: 'diagnostics.otel.protocol = "http/protobuf" with an OTLP/HTTP collector',
+    docsPath: "/gateway/opentelemetry",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrate.test.ts",
+      "src/commands/doctor-config-preflight.test.ts",
+      "src/commands/doctor-config-flow.test.ts",
+    ],
+    notes:
+      "Doctor removes protocol and disables enabled legacy grpc configs only when active OTLP signals would fail; stdout-only logs stay enabled.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-mcp-server-type-alias",
     owner: "config",
     introduced: "2026-04-27",

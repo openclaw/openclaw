@@ -1090,7 +1090,7 @@ Notes:
       tracesEndpoint: "https://traces.example.com/v1/traces",
       metricsEndpoint: "https://metrics.example.com/v1/metrics",
       logsEndpoint: "https://logs.example.com/v1/logs",
-      protocol: "http/protobuf", // http/protobuf | grpc
+      protocol: "http/protobuf",
       headers: { "x-tenant-id": "my-org" },
       serviceName: "openclaw-gateway",
       traces: true,
@@ -1129,8 +1129,8 @@ Notes:
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
-- `otel.protocol`: `"http/protobuf"` (default) or `"grpc"`.
-- `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
+- `otel.protocol`: `"http/protobuf"` (default). gRPC export is not supported yet.
+- `otel.headers`: extra HTTP headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
 - `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.

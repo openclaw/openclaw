@@ -43,7 +43,8 @@ function shouldUseCompatPreflight(path: ReadonlyArray<string>, value: unknown): 
   }
   if (
     joined === "channels.telegram.groupMentionsOnly" ||
-    joined === "agents.defaults.sandbox.perSession"
+    joined === "agents.defaults.sandbox.perSession" ||
+    (joined === "diagnostics.otel.protocol" && value === "grpc")
   ) {
     return true;
   }
