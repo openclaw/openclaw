@@ -135,6 +135,23 @@ export type SqliteRestoreCheckpointSessionParams = {
   checkpointId: string;
 };
 
+/** Internal doctor/migration import target for one legacy session row. */
+export type SqliteSessionImportRowsParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  sessionKey: string;
+  entry: SessionEntry;
+  readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
+};
+
+/** Summary of rows written by an internal doctor/migration import. */
+export type SqliteSessionImportRowsResult = {
+  sessionId: string;
+  sessionKey: string;
+  transcriptEvents: number;
+};
+
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
 /** Loads one session entry from the additive SQLite session store. */
@@ -392,6 +409,40 @@ export async function replaceSqliteTranscriptEvents(
         appendTranscriptEventInTransaction(database, resolved, event);
       }
     }, toDatabaseOptions(resolved));
+  });
+}
+
+/** Imports one legacy session entry and its transcript rows for doctor migration. */
+export async function importSqliteSessionRows(
+  params: SqliteSessionImportRowsParams,
+): Promise<SqliteSessionImportRowsResult> {
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    sessionKey: params.sessionKey,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let transcriptEvents = 0;
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, resolved.sessionKey, params.entry);
+      deleteSqliteTranscriptEventsInTransaction(database, params.entry.sessionId);
+      if (params.readTranscriptEvents) {
+        const transcriptScope = {
+          ...resolved,
+          sessionId: params.entry.sessionId,
+        };
+        params.readTranscriptEvents((event) => {
+          appendTranscriptEventInTransaction(database, transcriptScope, event);
+          transcriptEvents += 1;
+        });
+      }
+    }, toDatabaseOptions(resolved));
+    return {
+      sessionId: params.entry.sessionId,
+      sessionKey: resolved.sessionKey,
+      transcriptEvents,
+    };
   });
 }
 
