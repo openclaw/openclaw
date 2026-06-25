@@ -12,7 +12,10 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { CliOutput } from "./cli-output.js";
@@ -125,12 +128,7 @@ export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
   workspaceDir?: string,
-  options?: { warmStdin?: boolean },
 ): Promise<boolean> {
-  // FIX #96564: Skip the probe entirely for warm-stdin sessions that never write native transcript
-  if (options?.warmStdin) {
-    return true;
-  }
   if (!provider || !isClaudeCliProvider(provider)) {
     return true;
   }
@@ -420,6 +418,12 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channelContext: params.channelContext,
+        }),
       } as const;
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
@@ -553,6 +557,12 @@ export async function runPreparedCliAgent(
       ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
       : {}),
     ...buildAgentHookContextChannelFields(params),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+    }),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
@@ -867,7 +877,6 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
-    isWarmStdin?: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
@@ -892,16 +901,10 @@ export async function runPreparedCliAgent(
     if (resultParams.output.didSendViaMessagingTool) {
       deliveredMessagingSideEffect = true;
     }
-    // FIX #96564: Do NOT clear session binding for warm-stdin sessions that never write native transcript.
-    // The headless warm-stdin claude-cli backend (liveSession: "claude-stdio") never writes native transcript,
-    // so the flush probe always fails. Previously this caused destructive session clearing every turn.
-    // For warm-stdin sessions, we preserve the binding. For others, keep the original behavior.
     const unflushedCliSessionId =
-      resultParams.isWarmStdin && resultParams.bindingFlushOk === false
-        ? undefined
-        : resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
-          ? resultParams.effectiveCliSessionId
-          : undefined;
+      resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
+        ? resultParams.effectiveCliSessionId
+        : undefined;
     const persistedCliSessionId = unflushedCliSessionId
       ? undefined
       : resultParams.effectiveCliSessionId;
@@ -1049,17 +1052,10 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
         });
-        // FIX #96564: Compute warm-stdin flag BEFORE calling isCliBindingFlushed to skip the probe entirely
-        const backend = context.preparedBackend?.backend;
-        const isWarmStdin =
-          backend?.liveSession === "claude-stdio" &&
-          backend?.output === "jsonl" &&
-          backend?.input === "stdin";
         const bindingFlushOk = await isCliBindingFlushed(
           effectiveCliSessionId,
           params.provider,
           context.cwd ?? context.workspaceDir,
-          { warmStdin: isWarmStdin },
         );
         await runCliAgentEndHook(params, {
           event: {
@@ -1075,7 +1071,6 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned,
-          isWarmStdin,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
