@@ -53,7 +53,8 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
     row.failure_alert_cooldown_ms == null &&
     row.failure_alert_include_skipped == null &&
     !row.failure_alert_mode &&
-    !row.failure_alert_account_id
+    !row.failure_alert_account_id &&
+    row.failure_alert_disabled !== 0
   ) {
     return undefined;
   }
