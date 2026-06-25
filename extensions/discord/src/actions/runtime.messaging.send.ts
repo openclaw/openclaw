@@ -240,6 +240,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         if (asVoice) {
           throw new Error("Discord components cannot be sent as voice messages.");
         }
+        if (mediaUrls && mediaUrls.length > 1) {
+          throw new Error(
+            "Discord component messages support a single media file reference. Send multiple attachments without components or use component media-gallery blocks.",
+          );
+        }
         if (embeds?.length) {
           throw new Error("Discord components cannot include embeds.");
         }

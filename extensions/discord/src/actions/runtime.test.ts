@@ -1278,6 +1278,29 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
+  it("rejects multiple mediaUrls with component messages instead of dropping attachments", async () => {
+    sendDiscordComponentMessage.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await expect(
+      handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "gallery",
+          mediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+          components: {
+            blocks: [{ type: "text", text: "Pick one" }],
+          },
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord component messages support a single media file reference.");
+
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
   it("allows media-only message sends", async () => {
     sendMessageDiscord.mockClear();
     await handleMessagingAction(
