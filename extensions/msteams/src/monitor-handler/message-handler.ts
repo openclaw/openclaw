@@ -27,8 +27,7 @@ import {
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
 import { isRecord } from "../attachments/shared.js";
-import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
-import type { StoredConversationReference } from "../conversation-store.js";
+import { buildStoredConversationReference } from "../conversation-reference.js";
 import { formatUnknownError } from "../errors.js";
 import {
   fetchThreadReplies,
@@ -37,6 +36,7 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import { resolveGraphChatId } from "../graph-upload.js";
+import { readMSTeamsInboundDeliveryControl } from "../inbound-delivery-control.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -134,50 +134,6 @@ function formatMSTeamsSenderReason(params: {
   }
 }
 
-function buildStoredConversationReference(params: {
-  activity: MSTeamsTurnContext["activity"];
-  conversationId: string;
-  conversationType: string;
-  teamId?: string;
-  /** Thread root message ID for channel thread messages. */
-  threadId?: string;
-}): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId, threadId } = params;
-  const from = activity.from;
-  const conversation = activity.conversation;
-  const agent = activity.recipient;
-  const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
-    | { timezone?: string }
-    | undefined;
-  // Bot Framework requires `tenantId` on outbound proactive activities so the
-  // connector can route them to the correct Azure AD tenant; missing it causes
-  // HTTP 403. Channel activities often leave `conversation.tenantId` unset, so
-  // prefer the canonical `channelData.tenant.id` source when available.
-  const channelDataTenantId = activity.channelData?.tenant?.id;
-  const tenantId = channelDataTenantId ?? conversation?.tenantId;
-  const aadObjectId = from?.aadObjectId;
-  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  return {
-    activityId: activity.id,
-    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
-    agent,
-    bot: agent ? { id: agent.id, name: agent.name } : undefined,
-    conversation: {
-      id: conversationId,
-      conversationType,
-      tenantId,
-    },
-    ...(tenantId ? { tenantId } : {}),
-    ...(aadObjectId ? { aadObjectId } : {}),
-    teamId,
-    channelId: activity.channelId,
-    ...(serviceUrl ? { serviceUrl } : {}),
-    locale: activity.locale,
-    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    ...(threadId ? { threadId } : {}),
-  };
-}
-
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
@@ -223,7 +179,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     implicitMentionKinds: Array<"reply_to_bot">;
   };
 
-  const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
+  const handleTeamsMessageNow = async (
+    params: MSTeamsDebounceEntry,
+  ): Promise<{ kind: "failed"; error: unknown } | void> => {
     const context = params.context;
     const activity = context.activity;
     const rawText = params.rawText;
@@ -944,6 +902,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       } catch {
         // Best effort.
       }
+      return { kind: "failed", error: err };
     }
   };
 
@@ -1023,13 +982,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ? ["reply_to_bot"]
         : [];
 
-    await inboundDebouncer.enqueue({
+    const entry = {
       context,
       rawText,
       text,
       attachments,
       wasMentioned,
       implicitMentionKinds,
-    });
+    };
+    const deliveryControl = readMSTeamsInboundDeliveryControl(context);
+    if (deliveryControl?.skipDebounce) {
+      try {
+        const result = await handleTeamsMessageNow(entry);
+        if (result?.kind === "failed") {
+          await deliveryControl.release?.(result.error);
+        } else {
+          await deliveryControl.complete?.();
+        }
+      } catch (err) {
+        await deliveryControl.release?.(err);
+        throw err;
+      }
+      return;
+    }
+    await inboundDebouncer.enqueue(entry);
   };
 }

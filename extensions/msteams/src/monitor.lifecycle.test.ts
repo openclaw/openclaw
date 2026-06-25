@@ -54,9 +54,158 @@ const expressControl = vi.hoisted(() => ({
   apps: [] as MockExpressApp[],
 }));
 
+const durableQueueState = vi.hoisted(() => {
+  type FakeDurableRecord = {
+    id: string;
+    channelId: string;
+    accountId: string;
+    queueName: string;
+    payload: unknown;
+    metadata?: unknown;
+    receivedAt: number;
+    updatedAt: number;
+    attempts: number;
+    lastError?: string;
+  };
+  type FakeCompletedRecord = {
+    id: string;
+    channelId: string;
+    accountId: string;
+    queueName: string;
+    completedAt: number;
+    metadata?: unknown;
+  };
+  type FakeFailedRecord = {
+    id: string;
+    channelId: string;
+    accountId: string;
+    queueName: string;
+    failedAt: number;
+    reason: string;
+    message?: string;
+  };
+  const pending = new Map<string, FakeDurableRecord>();
+  const completed = new Map<string, FakeCompletedRecord>();
+  const failed = new Map<string, FakeFailedRecord>();
+  const idFrom = (value: string | { id?: string }) =>
+    typeof value === "string" ? value : (value.id ?? "");
+  const queue = {
+    enqueue: vi.fn(
+      async (
+        id: string,
+        payload: unknown,
+        options?: { metadata?: unknown; receivedAt?: number },
+      ) => {
+        const completedRecord = completed.get(id);
+        if (completedRecord) {
+          return { kind: "completed", duplicate: true, record: completedRecord };
+        }
+        const failedRecord = failed.get(id);
+        if (failedRecord) {
+          return { kind: "failed", duplicate: true, record: failedRecord };
+        }
+        const pendingRecord = pending.get(id);
+        if (pendingRecord) {
+          return { kind: "pending", duplicate: true, record: pendingRecord };
+        }
+        const receivedAt = options?.receivedAt ?? Date.now();
+        const record: FakeDurableRecord = {
+          id,
+          channelId: "msteams",
+          accountId: "default",
+          queueName: "msteams:default",
+          payload,
+          ...(options?.metadata === undefined ? {} : { metadata: options.metadata }),
+          receivedAt,
+          updatedAt: receivedAt,
+          attempts: 0,
+        };
+        pending.set(id, record);
+        return { kind: "accepted", duplicate: false, record };
+      },
+    ),
+    listPending: vi.fn(async () => Array.from(pending.values())),
+    listClaims: vi.fn(async () => []),
+    claimNext: vi.fn(async () => null),
+    claim: vi.fn(async () => null),
+    complete: vi.fn(
+      async (idOrClaim: string | { id?: string }, options?: { metadata?: unknown }) => {
+        const id = idFrom(idOrClaim);
+        const record = pending.get(id);
+        if (!record) {
+          return false;
+        }
+        pending.delete(id);
+        completed.set(id, {
+          id,
+          channelId: record.channelId,
+          accountId: record.accountId,
+          queueName: record.queueName,
+          completedAt: Date.now(),
+          ...(options?.metadata === undefined ? {} : { metadata: options.metadata }),
+        });
+        return true;
+      },
+    ),
+    release: vi.fn(
+      async (idOrClaim: string | { id?: string }, options?: { lastError?: string }) => {
+        const record = pending.get(idFrom(idOrClaim));
+        if (!record) {
+          return false;
+        }
+        record.attempts += 1;
+        record.updatedAt = Date.now();
+        if (options?.lastError !== undefined) {
+          record.lastError = options.lastError;
+        }
+        return true;
+      },
+    ),
+    fail: vi.fn(
+      async (
+        idOrClaim: string | { id?: string },
+        options: { reason: string; message?: string; failedAt?: number },
+      ) => {
+        const id = idFrom(idOrClaim);
+        const record = pending.get(id);
+        if (!record) {
+          return false;
+        }
+        pending.delete(id);
+        failed.set(id, {
+          id,
+          channelId: record.channelId,
+          accountId: record.accountId,
+          queueName: record.queueName,
+          failedAt: options.failedAt ?? Date.now(),
+          reason: options.reason,
+          ...(options.message === undefined ? {} : { message: options.message }),
+        });
+        return true;
+      },
+    ),
+    delete: vi.fn(async (idOrClaim: string | { id?: string }) => pending.delete(idFrom(idOrClaim))),
+    recoverStaleClaims: vi.fn(async () => 0),
+    prune: vi.fn(async () => 0),
+  };
+  return {
+    pending,
+    completed,
+    failed,
+    queue,
+    reset: () => {
+      pending.clear();
+      completed.clear();
+      failed.clear();
+      Object.values(queue).forEach((fn) => fn.mockClear());
+    },
+  };
+});
+
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
 
 vi.mock("../runtime-api.js", () => ({
+  DEFAULT_ACCOUNT_ID: "default",
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
   isDangerousNameMatchingEnabled,
   normalizeSecretInputString: (value: unknown) =>
@@ -208,6 +357,10 @@ vi.mock("./runtime.js", () => ({
         resolveTextChunkLimit: () => 4000,
       },
     },
+    state: {
+      resolveStateDir: () => "/tmp/openclaw-msteams-test-state",
+      openChannelIngressQueue: () => durableQueueState.queue,
+    },
   }),
 }));
 
@@ -215,6 +368,11 @@ vi.mock("./sso-token-store.js", () => ({
   createMSTeamsSsoTokenStoreFs: () => ssoTokenStore,
 }));
 
+import {
+  buildMSTeamsDurableCardActionPayload,
+  MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS,
+  MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS_REASON,
+} from "./durable-inbound.js";
 import { monitorMSTeamsProvider } from "./monitor.js";
 
 function createConfig(port: number): OpenClawConfig {
@@ -275,6 +433,30 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   return registered.cfg;
 }
 
+type TestMSTeamsActivity = Parameters<typeof buildMSTeamsDurableCardActionPayload>[0];
+
+function createNonPollCardActionActivity(id: string): TestMSTeamsActivity {
+  return {
+    id,
+    type: "invoke",
+    name: "adaptiveCard/action",
+    channelId: "msteams",
+    serviceUrl: "https://smba.trafficmanager.net/teams/",
+    from: { id: "29:user", aadObjectId: "aad-user", name: "User" },
+    recipient: { id: "28:bot", name: "Bot" },
+    conversation: {
+      id: "19:channel@thread.tacv2",
+      conversationType: "channel",
+      tenantId: "tenant-id",
+    },
+    channelData: {
+      team: { id: "team-id" },
+      tenant: { id: "tenant-id" },
+    },
+    value: { action: { data: { action: "nonPoll" } } },
+  };
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -285,6 +467,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
+    durableQueueState.reset();
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
@@ -778,6 +961,276 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(run).toHaveBeenCalledTimes(1);
     releaseDispatch?.();
     await dispatchWork;
+    await vi.waitFor(() => {
+      expect(durableQueueState.queue.complete).toHaveBeenCalledTimes(1);
+    });
+
+    abort.abort();
+    await task;
+  });
+
+  it("does not dispatch duplicate pending non-poll card actions twice", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const cardActionHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "card.action",
+    )?.[1];
+    if (typeof cardActionHandler !== "function") {
+      throw new Error("expected card.action handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchWork = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
+
+    const activity = createNonPollCardActionActivity("duplicate-card-action");
+    const firstResponse = await cardActionHandler({ activity });
+    const duplicateResponse = await cardActionHandler({ activity });
+
+    expect(firstResponse).toMatchObject({ statusCode: 200, value: "OK" });
+    expect(duplicateResponse).toMatchObject({ statusCode: 200, value: "OK" });
+    expect(durableQueueState.queue.enqueue).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(durableQueueState.pending.size).toBe(1);
+
+    releaseDispatch?.();
+    await dispatchWork;
+    await vi.waitFor(() => {
+      expect(durableQueueState.queue.complete).toHaveBeenCalledTimes(1);
+    });
+
+    abort.abort();
+    await task;
+  });
+
+  it("replays pending durable non-poll card actions on startup", async () => {
+    const durableId = "pending-card-action";
+    const activity = createNonPollCardActionActivity("replay-card-action");
+    durableQueueState.pending.set(durableId, {
+      id: durableId,
+      channelId: "msteams",
+      accountId: "default",
+      queueName: "msteams:default",
+      payload: buildMSTeamsDurableCardActionPayload(activity),
+      receivedAt: 10,
+      updatedAt: 10,
+      attempts: 2,
+    });
+    const run = vi.fn(async (_context: unknown) => undefined);
+    registerMSTeamsHandlers.mockImplementationOnce((handler) => {
+      handler.run = run as typeof handler.run;
+      return handler;
+    });
+
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+    const replayContext = run.mock.calls[0]?.[0] as {
+      activity?: { id?: string };
+      sendActivity?: unknown;
+    };
+    expect(replayContext.activity?.id).toBe("replay-card-action");
+    expect(typeof replayContext.sendActivity).toBe("function");
+    await vi.waitFor(() => {
+      expect(durableQueueState.queue.complete).toHaveBeenCalledWith(
+        durableId,
+        expect.objectContaining({ metadata: { completedKind: "card-action" } }),
+      );
+    });
+    expect(durableQueueState.pending.has(durableId)).toBe(false);
+    expect(durableQueueState.completed.has(durableId)).toBe(true);
+
+    abort.abort();
+    await task;
+  });
+
+  it("continues startup replay after one pending card action fails", async () => {
+    const firstId = "first-pending-card-action";
+    const secondId = "second-pending-card-action";
+    durableQueueState.pending.set(firstId, {
+      id: firstId,
+      channelId: "msteams",
+      accountId: "default",
+      queueName: "msteams:default",
+      payload: buildMSTeamsDurableCardActionPayload(
+        createNonPollCardActionActivity("first-replay-card-action"),
+      ),
+      receivedAt: 10,
+      updatedAt: 10,
+      attempts: 0,
+    });
+    durableQueueState.pending.set(secondId, {
+      id: secondId,
+      channelId: "msteams",
+      accountId: "default",
+      queueName: "msteams:default",
+      payload: buildMSTeamsDurableCardActionPayload(
+        createNonPollCardActionActivity("second-replay-card-action"),
+      ),
+      receivedAt: 11,
+      updatedAt: 11,
+      attempts: 0,
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first replay failed"))
+      .mockResolvedValueOnce(undefined);
+    registerMSTeamsHandlers.mockImplementationOnce((handler) => {
+      handler.run = run as typeof handler.run;
+      return handler;
+    });
+
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+    expect(durableQueueState.queue.release).toHaveBeenCalledWith(
+      firstId,
+      expect.objectContaining({ lastError: expect.stringContaining("first replay failed") }),
+    );
+    expect(durableQueueState.queue.complete).toHaveBeenCalledWith(
+      secondId,
+      expect.objectContaining({ metadata: { completedKind: "card-action" } }),
+    );
+    expect(durableQueueState.pending.get(firstId)?.attempts).toBe(1);
+    expect(durableQueueState.completed.has(secondId)).toBe(true);
+
+    abort.abort();
+    await task;
+  });
+
+  it("releases durable non-poll card actions for retry when dispatch fails after ack", async () => {
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+    if (!sdkResultPromise) {
+      throw new Error("expected loadMSTeamsSdkWithAuth result");
+    }
+    const app = (await sdkResultPromise).app;
+    const cardActionHandler = app.on.mock.calls.find(
+      (call: [string, unknown]) => call[0] === "card.action",
+    )?.[1];
+    if (typeof cardActionHandler !== "function") {
+      throw new Error("expected card.action handler");
+    }
+    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    if (!registeredHandler) {
+      throw new Error("expected registered Teams handler");
+    }
+    const run = vi
+      .spyOn(registeredHandler, "run")
+      .mockRejectedValueOnce(new Error("card action dispatch failed"));
+
+    const response = await cardActionHandler({
+      activity: {
+        type: "invoke",
+        name: "adaptiveCard/action",
+        value: { action: { data: { action: "nonPoll" } } },
+      },
+    });
+
+    expect(response).toMatchObject({ statusCode: 200, value: "OK" });
+    expect(durableQueueState.queue.enqueue).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(durableQueueState.queue.release).toHaveBeenCalledTimes(1);
+    });
+    expect(durableQueueState.queue.complete).not.toHaveBeenCalled();
+    const pending = Array.from(durableQueueState.pending.values());
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.attempts).toBe(1);
+    expect(pending[0]?.lastError).toContain("card action dispatch failed");
+
+    abort.abort();
+    await task;
+  });
+
+  it("marks poison durable card actions failed after max replay attempts", async () => {
+    const durableId = "poison-card-action";
+    const activity = createNonPollCardActionActivity("poison-card-action");
+    durableQueueState.pending.set(durableId, {
+      id: durableId,
+      channelId: "msteams",
+      accountId: "default",
+      queueName: "msteams:default",
+      payload: buildMSTeamsDurableCardActionPayload(activity),
+      receivedAt: 10,
+      updatedAt: 10,
+      attempts: MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS - 1,
+      lastError: "previous dispatch failed",
+    });
+    registerMSTeamsHandlers.mockImplementationOnce((handler) => {
+      vi.spyOn(handler, "run").mockRejectedValueOnce(new Error("poison dispatch failed"));
+      return handler;
+    });
+
+    const abort = new AbortController();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfig(0),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(durableQueueState.queue.fail).toHaveBeenCalledTimes(1);
+    });
+    expect(durableQueueState.queue.release).not.toHaveBeenCalled();
+    expect(durableQueueState.pending.has(durableId)).toBe(false);
+    expect(durableQueueState.failed.get(durableId)).toMatchObject({
+      reason: MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS_REASON,
+      message: expect.stringContaining("poison dispatch failed"),
+    });
 
     abort.abort();
     await task;
