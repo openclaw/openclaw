@@ -178,7 +178,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason,
       };
     }
-    if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+    if (
+      params.harnessOwnsTransport &&
+      params.failoverReason === "timeout" &&
+      !params.fallbackConfigured
+    ) {
       return {
         action: "surface_error",
         reason: params.failoverReason,

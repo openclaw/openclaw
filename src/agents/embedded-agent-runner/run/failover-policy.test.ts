@@ -563,7 +563,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+  it("falls back on harness-owned prompt timeouts when fallback is configured", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -576,7 +576,7 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: true,
       }),
     ).toEqual({
-      action: "surface_error",
+      action: "fallback_model",
       reason: "timeout",
     });
   });
