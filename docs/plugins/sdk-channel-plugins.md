@@ -752,7 +752,7 @@ Write colocated tests in `src/channel.test.ts`:
     describeMessageTool and action discovery
   </Card>
   <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
-    inferTargetChatType, looksLikeId, resolveTarget
+    inferTargetChatType, looksLikeId, reservedLiterals, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime

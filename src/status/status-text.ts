@@ -49,6 +49,7 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -352,27 +353,35 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     params.workspaceDir ??
     sessionEntry?.spawnedWorkspaceDir ??
     resolveAgentWorkspaceDir(cfg, statusAgentId);
+  const selectedProvider = sessionEntry?.providerOverride?.trim() ?? provider;
+  const selectedModel = sessionEntry?.modelOverride?.trim() ?? model;
+  const parseSelectedProvider = Boolean(
+    sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
+  );
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
+    selectedProvider,
+    selectedModel,
     sessionEntry,
+    parseSelectedProvider,
   });
+  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
+  const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
   const effectiveHarness =
     params.resolvedHarness ??
     (await resolveStatusHarnessId({
       cfg,
-      provider,
-      model,
+      provider: selectedLookupProvider,
+      model: selectedLookupModel,
       agentId: statusAgentId,
       sessionKey,
       sessionEntry,
     }));
   const selectedStatusProvider = resolveStatusRuntimeProvider({
-    provider,
+    provider: selectedLookupProvider,
     effectiveHarness,
   });
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider,
+    provider: selectedLookupProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -415,6 +424,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     modelRefs.active.label,
     { config: cfg },
   );
+  const fallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    config: cfg,
+    state: sessionEntry,
+  });
   if (
     shouldPreferActiveRuntimeAliasAuthLabel({
       runtimeAliasModelEquivalent,
@@ -426,11 +441,20 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     // labels differ; prefer the active auth label so status matches execution.
     selectedModelAuth = activeModelAuth;
   }
-  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const activeRuntimeIsAuthoritative =
+    !modelRefs.activeDiffers ||
+    fallbackState.active ||
+    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
+    runtimeAliasModelEquivalent;
+  const usageAuthLabel = activeRuntimeIsAuthoritative ? activeModelAuth : selectedModelAuth;
+  const usageStatusProvider = activeRuntimeIsAuthoritative
+    ? activeStatusProvider
+    : selectedStatusProvider;
+  const usageProvider = activeRuntimeIsAuthoritative ? activeProvider : selectedLookupProvider;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
     shouldUseCodexSyntheticUsage({
-      provider: activeStatusProvider,
+      provider: usageStatusProvider,
       effectiveHarness,
     }) &&
     (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
@@ -443,8 +467,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     : undefined;
   const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
-    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
+    resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
@@ -590,24 +614,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const selectedContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: selectedStatusProvider,
-    model,
+    model: modelRefs.selected.model || selectedLookupModel,
   });
-  const runtimeSnapshotHasFallbackProvenance =
-    !modelRefs.activeDiffers ||
-    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
-    areRuntimeModelRefsEquivalent(modelRefs.active.label, modelRefs.selected.label, {
-      config: cfg,
-    });
   const statusAgentContextTokens =
     typeof contextTokens === "number" &&
     contextTokens > 0 &&
-    (runtimeSnapshotHasFallbackProvenance ||
+    (activeRuntimeIsAuthoritative ||
       contextTokens === configuredContextTokens ||
       contextTokens === selectedContextTokens)
       ? contextTokens
       : undefined;
-  const statusRuntimeContextTokens = runtimeSnapshotHasFallbackProvenance
-    ? runtimeContextTokens
+  const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
+    ? (runtimeContextTokens ??
+      (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
+        ? contextTokens
+        : undefined))
     : undefined;
   return buildStatusMessage({
     config: cfg,

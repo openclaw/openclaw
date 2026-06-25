@@ -856,6 +856,12 @@ export function createOpenClawCodingTools(options?: {
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,
+              workdirValidation: sandbox.backend?.workdirValidation,
+              validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
+              discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(
+                sandbox.backend,
+              ),
+              workdirRoots: sandbox.backend?.workdirRoots,
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),

@@ -418,7 +418,7 @@ type TestTelegramUpdate = {
   update_id: number;
   message: {
     text: string;
-    chat: { id: number; type: "supergroup" };
+    chat: { id: number; type: "private" | "supergroup" };
     message_thread_id?: number;
     is_topic_message?: boolean;
   };
@@ -432,6 +432,16 @@ function topicUpdate(updateId: number, threadId: number, text: string): TestTele
       message_thread_id: threadId,
       is_topic_message: true,
       chat: { id: -100, type: "supergroup" },
+    },
+  };
+}
+
+function directUpdate(updateId: number, chatId: number, text: string): TestTelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      text,
+      chat: { id: chatId, type: "private" },
     },
   };
 }
@@ -1794,6 +1804,93 @@ describe("TelegramPollingSession", () => {
       await runPromise;
     });
   });
+
+  for (const scenario of [
+    {
+      name: "topic",
+      conflict: topicUpdate(42, 10, "retryable session init conflict"),
+      blocked: topicUpdate(43, 10, "same topic must wait behind retry backoff"),
+      other: topicUpdate(44, 11, "other topic can continue"),
+      conflictEvent: "topic10:conflict",
+      blockedEvent: "topic10:overtook",
+      otherEvent: "topic11",
+      error: "reply session initialization conflicted for agent:main:telegram:group:-100:topic:10",
+    },
+    {
+      name: "direct message",
+      conflict: directUpdate(42, 100, "retryable session init conflict"),
+      blocked: directUpdate(43, 100, "same DM must wait behind retry backoff"),
+      other: directUpdate(44, 101, "other DM can continue"),
+      conflictEvent: "dm100:conflict",
+      blockedEvent: "dm100:overtook",
+      otherEvent: "dm101",
+      error: "reply session initialization conflicted for agent:main:telegram:direct:100",
+    },
+  ]) {
+    it(`backs off retryable reply session init conflicts for ${scenario.name} lanes`, async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await withTempSpool(async (tempDir) => {
+          const abort = new AbortController();
+          const log = vi.fn();
+          let attempts = 0;
+          const events: string[] = [];
+          await writeSpooledTestUpdates(tempDir, [
+            scenario.conflict,
+            scenario.blocked,
+            scenario.other,
+          ]);
+
+          const { runPromise, stopWorker } = startIsolatedIngressSession({
+            abort,
+            spoolDir: tempDir,
+            log,
+            drainIntervalMs: 100,
+            handleUpdate: async (update) => {
+              if (update.update_id === scenario.conflict.update_id) {
+                attempts += 1;
+                events.push(`${scenario.conflictEvent}:${attempts}`);
+                throw new Error(scenario.error);
+              }
+              if (update.update_id === scenario.blocked.update_id) {
+                events.push(scenario.blockedEvent);
+                return;
+              }
+              if (update.update_id === scenario.other.update_id) {
+                events.push(scenario.otherEvent);
+              }
+            },
+          });
+
+          await vi.waitFor(() => expect(attempts).toBe(1));
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(attempts).toBe(1);
+          await vi.waitFor(() =>
+            expect(events).toEqual([`${scenario.conflictEvent}:1`, scenario.otherEvent]),
+          );
+          expect(await pendingUpdateIds(tempDir, "all")).toEqual([
+            scenario.conflict.update_id,
+            scenario.blocked.update_id,
+          ]);
+          expect(await failedUpdateIds(tempDir)).toEqual([]);
+
+          await vi.advanceTimersByTimeAsync(4_500);
+          await vi.waitFor(() => expect(attempts).toBe(2));
+          expect(events).not.toContain(scenario.blockedEvent);
+          expectLogIncludes(
+            log,
+            `spooled update ${scenario.conflict.update_id} failed; keeping for retry`,
+          );
+
+          abort.abort();
+          stopWorker();
+          await runPromise;
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  }
 
   it("dead-letters wrapped missing harness failures", async () => {
     await withTempSpool(async (tempDir) => {
