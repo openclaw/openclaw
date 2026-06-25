@@ -855,12 +855,10 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   }
   if (mode === "progress") {
     const progress = resolveChannelProgressDraftConfig(entry);
-    if (
-      progress.label === false &&
-      (options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry)) ===
-        false &&
-      resolveChannelStreamingProgressCommentary(entry) === false
-    ) {
+    const toolProgressEnabled =
+      options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
+    const commentaryEnabled = resolveChannelStreamingProgressCommentary(entry);
+    if (progress.label === false && !toolProgressEnabled && !commentaryEnabled) {
       return false;
     }
     return true;
