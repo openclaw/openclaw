@@ -178,6 +178,7 @@ export async function cleanupSessionLifecycleArtifacts(
     });
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath,
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
     transcriptContentMarker: params.transcriptContentMarker,
@@ -195,13 +196,6 @@ export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/s
  * migrate away from resolving transcript file paths directly.
  */
 export { resolveSessionFilePath } from "../config/sessions/paths.js";
-/**
- * @deprecated Use patchSessionEntry/upsertSessionEntry to persist session
- * metadata by agent/session identity. This file-path helper is kept only during
- * the transition before SQLite migration. Callers must migrate away from
- * persisting transcript file paths directly.
- */
-export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,

@@ -56,6 +56,7 @@ import {
   capEntryCount,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
+  type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -282,6 +283,7 @@ export async function patchSqliteSessionEntry(
       applySqliteSessionEntryMaintenance(writeDatabase, {
         activeSessionKey: resolved.sessionKey,
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+        maintenanceConfig: options.maintenanceConfig,
         skipMaintenance: options.skipMaintenance,
       });
       result = cloneSessionEntry(next);
@@ -341,7 +343,10 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
 
-  const resolved = resolveSqliteReadScope({ storePath: params.storePath });
+  const resolved = resolveSqliteReadScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    storePath: params.storePath,
+  });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let result: SessionLifecycleArtifactCleanupResult = {
       removedEntries: 0,
@@ -1199,12 +1204,17 @@ function deleteLegacySessionEntryRows(
 
 function applySqliteSessionEntryMaintenance(
   database: OpenClawAgentDatabase,
-  params: { activeSessionKey: string; archiveDirectory: string; skipMaintenance?: boolean },
+  params: {
+    activeSessionKey: string;
+    archiveDirectory: string;
+    maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+    skipMaintenance?: boolean;
+  },
 ): void {
   if (params.skipMaintenance) {
     return;
   }
-  const maintenance = resolveMaintenanceConfig();
+  const maintenance = params.maintenanceConfig ?? resolveMaintenanceConfig();
   if (maintenance.mode === "warn") {
     return;
   }

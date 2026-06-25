@@ -233,6 +233,8 @@ type SessionEntryWorkflowOptions = {
 };
 
 export type SessionLifecycleArtifactCleanupParams = {
+  /** Agent owner used by SQLite-backed cleanup when the store path is custom. */
+  agentId?: string;
   /** Session store to clean. */
   storePath: string;
   /** Archive exact transcripts referenced by removed entries before the orphan marker scan. */
