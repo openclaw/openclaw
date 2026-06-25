@@ -129,6 +129,57 @@ describe("createPluginRuntimeMock", () => {
     expect(ctx.SourceActorContext).toBe("test-room");
   });
 
+  it("mirrors mention fields in the inbound context mock", () => {
+    const runtime = createPluginRuntimeMock();
+
+    const ctx = runtime.channel.inbound.buildContext({
+      channel: "test",
+      from: "test:user:u1",
+      sender: { id: "u1" },
+      conversation: {
+        kind: "group",
+        id: "room-1",
+      },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:test:group:room-1",
+      },
+      reply: {
+        to: "test:room:room-1",
+      },
+      message: {
+        rawBody: "hello",
+      },
+      access: {
+        mentions: {
+          canDetectMention: true,
+          wasMentioned: true,
+          hasAnyMention: true,
+          explicitlyMentionedBot: true,
+          mentionedUserIds: ["bot-1"],
+          mentionedSubteamIds: ["team-1"],
+          implicitMentionKinds: ["reply_to_bot"],
+          requireMention: true,
+          effectiveWasMentioned: true,
+          shouldSkip: false,
+          mentionSource: "mention_pattern",
+        },
+      },
+    });
+
+    expect(ctx.CanDetectMention).toBe(true);
+    expect(ctx.WasMentioned).toBe(true);
+    expect(ctx.HasAnyMention).toBe(true);
+    expect(ctx.ExplicitlyMentionedBot).toBe(true);
+    expect(ctx.MentionedUserIds).toEqual(["bot-1"]);
+    expect(ctx.MentionedSubteamIds).toEqual(["team-1"]);
+    expect(ctx.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+    expect(ctx.RequireMention).toBe(true);
+    expect(ctx.EffectiveWasMentioned).toBe(true);
+    expect(ctx.MentionShouldSkip).toBe(false);
+    expect(ctx.MentionSource).toBe("mention_pattern");
+  });
+
   it("routes untrusted group prompt facts into untrusted structured context", () => {
     const runtime = createPluginRuntimeMock();
 
