@@ -1549,6 +1549,56 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
 
+  it("does not let provider target aliases override source routes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            id: "slack",
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            actions: {
+              messageActionTargetAliases: {
+                reply: {
+                  aliases: ["chatGuid"],
+                  deliveryTargetAliases: ["chatGuid"],
+                },
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:c1",
+      currentMessagingTarget: "channel:c1",
+      currentMessageId: "provider-guid-854",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      chatGuid: "Channel:C2",
+      messageId: "854",
+      message: "cross-chat reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "slack",
+        to: "channel:c2",
+        text: "cross-chat reply",
+      }),
+    ]);
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",

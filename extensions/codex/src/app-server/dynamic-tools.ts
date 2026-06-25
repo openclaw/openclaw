@@ -305,15 +305,19 @@ function hasExplicitNonSourceMessageRoute(
   ) {
     return true;
   }
+  if (
+    messagingTarget?.to !== undefined &&
+    !routeTokenMatchesSource(messagingTarget.to, hookContext)
+  ) {
+    return true;
+  }
   if (targetValues.length === 0) {
     return false;
   }
   if (targetValues.some((value) => !routeTokenMatchesSource(value, hookContext))) {
     return true;
   }
-  return (
-    messagingTarget?.to !== undefined && !routeTokenMatchesSource(messagingTarget.to, hookContext)
-  );
+  return false;
 }
 
 /** Runtime bridge returned to Codex app-server attempt code. */
