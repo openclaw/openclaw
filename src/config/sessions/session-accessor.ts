@@ -330,6 +330,7 @@ export type SessionTranscriptTurnWriteContext = {
   sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
+  storePath?: string;
 };
 
 export type SessionTranscriptTurnPersistOptions = {
@@ -2335,24 +2336,28 @@ async function appendTranscriptTurnMessages(
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<TranscriptMessageAppendResult<unknown>[]> {
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
-  const appendMessages = async (appendMessage: SessionTranscriptTurnAppendRunner) => {
-    for (const append of options.messages) {
-      const shouldAppend = append.shouldAppend
-        ? await append.shouldAppend({
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-            sessionFile: target.sessionFile,
-            ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-            ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-          })
-        : true;
-      if (!shouldAppend) {
-        continue;
-      }
-      const result = await appendMessage({
-        transcriptPath: target.sessionFile,
-        message: append.message,
+  for (const append of options.messages) {
+    const shouldAppend = append.shouldAppend
+      ? await append.shouldAppend({
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+          sessionFile: target.sessionFile,
+          ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+          ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+          ...(target.storePath ? { storePath: target.storePath } : {}),
+        })
+      : true;
+    if (!shouldAppend) {
+      continue;
+    }
+    const result = await appendTranscriptMessage(
+      {
+        ...(target.agentId ? { agentId: target.agentId } : {}),
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+        ...(target.storePath ? { storePath: target.storePath } : {}),
+      },
+      {
+        message: append.message,
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
         ...(append.idempotencyLookup ? { idempotencyLookup: append.idempotencyLookup } : {}),
@@ -2360,56 +2365,14 @@ async function appendTranscriptTurnMessages(
         ...(append.prepareMessageAfterIdempotencyCheck
           ? { prepareMessageAfterIdempotencyCheck: append.prepareMessageAfterIdempotencyCheck }
           : {}),
-        onHeaderCreated: (header) => {
-          publishedEntries.push({ kind: "header", serialized: header });
-        },
         ...(append.useRawWhenLinear !== undefined
           ? { useRawWhenLinear: append.useRawWhenLinear }
           : {}),
-      });
-      if (result) {
-        appendedMessages.push(result);
-        if (result.appended) {
-          publishedEntries.push({ kind: "id", id: result.messageId });
-        }
-      }
+      },
+    );
+    if (result) {
+      appendedMessages.push(result);
     }
-  };
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: target.sessionFile,
-    sessionKey: target.sessionKey,
-  });
-  const runBatchWithOwnedLock = async () =>
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile: target.sessionFile,
-        sessionKey: target.sessionKey,
-        withSessionWriteLock: async (run) => await run(),
-      },
-      async () => await appendMessages(appendSessionTranscriptMessageWithOwnedWriteLock),
-    );
-  if (activeLockRunner) {
-    await activeLockRunner(
-      () => withSessionTranscriptAppendQueue(target.sessionFile, runBatchWithOwnedLock),
-      {
-        publishOwnedWrite: true,
-        resolvePublishedEntries: () => publishedEntries,
-        resolvePublishedEntriesAfterFailure: () => publishedEntries,
-      },
-    );
-  } else {
-    await withSessionTranscriptAppendQueue(target.sessionFile, async () => {
-      const lock = await acquireSessionWriteLock({
-        sessionFile: target.sessionFile,
-        ...resolveSessionWriteLockOptions(options.config),
-        allowReentrant: true,
-      });
-      try {
-        await runBatchWithOwnedLock();
-      } finally {
-        await lock.release();
-      }
-    });
   }
   return appendedMessages;
 }
@@ -2431,22 +2394,31 @@ async function persistExpectedSessionTranscriptTurn(
   if (!scope.storePath || !sessionKey) {
     throw new Error("Cannot guard a transcript turn without a session store and key");
   }
+  const storePath = scope.storePath;
   const expectedSessionId = options.expectedSessionId;
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
   const store =
-    scope.sessionStore ?? loadSessionStore(scope.storePath, { skipCache: true, clone: false });
+    scope.sessionStore ??
+    Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   let appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
   let target: SessionTranscriptTurnWriteContext = {
     agentId,
     sessionFile:
       scope.sessionFile ??
-      resolveSessionTranscriptPathInDir(expectedSessionId, path.dirname(scope.storePath)),
+      formatSqliteSessionFileTarget({
+        agentId,
+        sessionId: expectedSessionId,
+        storePath,
+      }),
     sessionId: expectedSessionId,
     sessionKey: resolved.normalizedKey,
+    storePath,
   };
   let rejectedEntry: SessionEntry | undefined;
   let touchUpdatedAt: number | undefined;
@@ -2454,7 +2426,7 @@ async function persistExpectedSessionTranscriptTurn(
   const updated = await updateSessionEntry(
     {
       sessionKey: resolved.normalizedKey,
-      storePath: scope.storePath,
+      storePath,
     },
     async (currentEntry) => {
       if (currentEntry.sessionId !== expectedSessionId) {
@@ -2463,19 +2435,17 @@ async function persistExpectedSessionTranscriptTurn(
       }
       const sessionFile =
         scope.sessionFile ??
-        resolveSessionFilePath(
-          currentEntry.sessionId,
-          currentEntry,
-          resolveSessionFilePathOptions({
-            agentId,
-            storePath: scope.storePath,
-          }),
-        );
+        formatSqliteSessionFileTarget({
+          agentId,
+          sessionId: currentEntry.sessionId,
+          storePath,
+        });
       target = {
         agentId,
         sessionFile,
         sessionId: currentEntry.sessionId,
         sessionKey: resolved.normalizedKey,
+        storePath,
       };
       appendedMessages = await appendTranscriptTurnMessages(target, options);
       const appendedCount = countAppendedTranscriptMessages(appendedMessages);
@@ -2908,6 +2878,7 @@ async function resolveTranscriptTurnTarget(
       sessionFile: scope.sessionFile,
       ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+      ...(scope.storePath ? { storePath: scope.storePath } : {}),
       sessionEntry: scope.sessionEntry,
     };
   }
@@ -2923,25 +2894,29 @@ async function resolveTranscriptTurnTarget(
   }
   const store =
     scope.sessionStore ??
-    (scope.storePath ? loadSessionStore(scope.storePath, { skipCache: true }) : undefined);
+    (scope.storePath
+      ? Object.fromEntries(
+          listSessionEntries({ storePath: scope.storePath }).map(({ sessionKey, entry }) => [
+            sessionKey,
+            entry,
+          ]),
+        )
+      : undefined);
   const resolved = store ? resolveSessionStoreEntry({ store, sessionKey }) : undefined;
   const sessionEntry =
     resolved?.existing ?? scope.sessionEntry ?? loadSessionEntry({ ...scope, sessionKey });
-  const resolvedFile = await resolveSessionTranscriptFile({
+  const sessionFile = formatSqliteSessionFileTarget({
     agentId,
-    sessionEntry,
     sessionId: scope.sessionId,
-    sessionKey,
-    ...(store ? { sessionStore: store } : {}),
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
+    storePath: scope.storePath ?? "",
   });
   return {
     agentId,
-    sessionFile: resolvedFile.sessionFile,
+    sessionFile,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
-    sessionEntry: resolvedFile.sessionEntry,
+    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+    sessionEntry,
   };
 }
 

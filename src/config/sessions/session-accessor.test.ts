@@ -2255,15 +2255,12 @@ describe("session accessor file-backed seam", () => {
       updatedAt: 10,
     });
     const updates: Array<{
-      lineCount: number;
       sessionFile: string | undefined;
       updatedAt: number | undefined;
     }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => {
-      const lines = fs.readFileSync(update.sessionFile, "utf8").trim().split("\n");
       updates.push({
-        lineCount: lines.length,
-        sessionFile: loadSessionEntry(scope)?.sessionFile,
+        sessionFile: update.sessionFile,
         updatedAt: loadSessionEntry(scope)?.updatedAt,
       });
     });
@@ -2293,6 +2290,7 @@ describe("session accessor file-backed seam", () => {
     unsubscribe();
 
     expect(result.appendedCount).toBe(2);
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(3);
     expect(loadSessionEntry(scope)).toMatchObject({
       sessionFile: result.sessionFile,
       sessionId: scope.sessionId,
@@ -2301,14 +2299,13 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
     expect(updates).toEqual([
       {
-        lineCount: 3,
         sessionFile: result.sessionFile,
         updatedAt: expect.any(Number),
       },
     ]);
   });
 
-  it("queues transcript turn appends before taking the file write lock", async () => {
+  it("allows concurrent SQLite transcript turn and direct appends", async () => {
     const scope = {
       agentId: "main",
       sessionId: "session-1",
@@ -2370,7 +2367,7 @@ describe("session accessor file-backed seam", () => {
     await results;
   });
 
-  it("rejects expected-session transcript turns after a queued session rebind", async () => {
+  it("rejects expected-session transcript turns after a session rebind", async () => {
     const scope = {
       agentId: "main",
       sessionId: "session-original",
@@ -2381,30 +2378,19 @@ describe("session accessor file-backed seam", () => {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
-    let releaseReset = () => {};
-    const resetGate = new Promise<void>((resolve) => {
-      releaseReset = resolve;
-    });
-    let markResetStarted = () => {};
-    const resetStarted = new Promise<void>((resolve) => {
-      markResetStarted = resolve;
-    });
-    const replacementSessionFile = path.join(tempDir, "session-replacement.jsonl");
-    const reset = updateSessionStoreEntry({
-      storePath,
-      sessionKey: scope.sessionKey,
-      update: async () => {
-        markResetStarted();
-        await resetGate;
-        return {
-          sessionFile: replacementSessionFile,
-          sessionId: "session-replacement",
-        };
+    await updateSessionEntry(
+      {
+        sessionKey: scope.sessionKey,
+        storePath,
       },
-    });
-    await resetStarted;
+      () => ({
+        sessionFile: "sqlite:main:session-replacement",
+        sessionId: "session-replacement",
+      }),
+      { skipMaintenance: true },
+    );
 
-    const turn = persistSessionTranscriptTurn(scope, {
+    const result = await persistSessionTranscriptTurn(scope, {
       expectedSessionId: scope.sessionId,
       messages: [
         {
@@ -2419,23 +2405,15 @@ describe("session accessor file-backed seam", () => {
       touchSessionEntry: true,
       updateMode: "file-only",
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    releaseReset();
-
-    await reset;
-    const result = await turn;
 
     expect(result).toMatchObject({
       appendedCount: 0,
       rejectedReason: "session-rebound",
     });
-    expect(fs.existsSync(path.join(tempDir, "session-original.jsonl"))).toBe(false);
-    expect(fs.existsSync(replacementSessionFile)).toBe(false);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("publishes transcript turn appends through an active owned write lock", async () => {
+  it("does not route SQLite transcript turn appends through an active owned file lock", async () => {
     const scope = {
       agentId: "main",
       sessionFile: transcriptPath,
@@ -2475,12 +2453,9 @@ describe("session accessor file-backed seam", () => {
         }),
     );
 
-    expect(publishOptions).toEqual([true]);
-    expect(publishedEntryBatches).toHaveLength(1);
-    expect(publishedEntryBatches[0]).toEqual([
-      expect.objectContaining({ kind: "header" }),
-      expect.objectContaining({ kind: "id" }),
-    ]);
+    expect(publishOptions).toEqual([]);
+    expect(publishedEntryBatches).toEqual([]);
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
   it("honors thread fallback paths when resolving transcript scope from the store", async () => {
