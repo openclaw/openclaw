@@ -1381,7 +1381,14 @@ export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
-  const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+  // Use persisted shape (skills + promptRef), not hydrated in-memory prompt text.
+  // Writer-cache loads hydrate prompt blobs; comparing hydrated vs persisted revisions
+  // causes false stale-snapshot conflicts on the second inbound turn.
+  const store = loadSessionStore(params.storePath, {
+    skipCache: true,
+    clone: false,
+    hydrateSkillPromptRefs: false,
+  });
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const entries = cloneSessionEntries(store);
@@ -1422,7 +1429,20 @@ export async function commitReplySessionInitialization(params: {
     async (store): Promise<ReplySessionInitializationCommitResult> => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
       const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
-      const revision = createReplySessionInitializationRevision(currentEntry);
+      // Writer `store` may carry hydrated skillsSnapshot.prompt; revision must use the
+      // same persisted shape as loadReplySessionInitializationSnapshot().
+      const persistedStore = loadSessionStore(params.storePath, {
+        skipCache: true,
+        clone: false,
+        hydrateSkillPromptRefs: false,
+      });
+      const persistedEntry = resolveSessionStoreEntry({
+        store: persistedStore,
+        sessionKey: params.sessionKey,
+      }).existing;
+      const revision = createReplySessionInitializationRevision(
+        persistedEntry ? { ...persistedEntry } : undefined,
+      );
       if (revision !== params.expectedRevision) {
         return {
           ok: false,
