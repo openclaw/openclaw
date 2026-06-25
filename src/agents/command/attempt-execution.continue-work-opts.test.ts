@@ -411,6 +411,54 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     );
   });
 
+  it("induces the issue #973 chain-depth reject from a bracket token without mutating protected config", async () => {
+    // #973 proof gap: the live gateway tool must keep maxChainLength protected,
+    // but the runtime still needs a deterministic way to behaviorally exercise
+    // the reject branch. This seeds a test session already at the cap and emits
+    // a terminal bracket continue_work token; no config.patch, raw file edit, or
+    // gateway restart is involved.
+    sessionEntry.continuationChainCount = 1;
+    sessionStore[sessionKey] = sessionEntry;
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
+    setRuntimeConfigSnapshot(makeAtCapContinuationConfig());
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done\n[[CONTINUE_WORK]]" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "done",
+        agentMeta: {
+          sessionId: "session-embedded",
+          provider: "anthropic",
+          model: "claude-sonnet-4.7",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        },
+      },
+    } satisfies EmbeddedAgentRunResult);
+
+    const result = await runEmbeddedAttempt(makeAtCapContinuationConfig());
+
+    expect(result.payloads?.[0]?.text).toBe("done");
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
+  });
+
+  it("keeps gateway-tool maxChainLength protected while runtime tests can still induce #973", async () => {
+    const { assertGatewayConfigMutationAllowedForTest } = await import("../tools/gateway-tool.js");
+
+    expect(() =>
+      assertGatewayConfigMutationAllowedForTest({
+        action: "config.patch",
+        currentConfig: {
+          agents: { defaults: { continuation: { enabled: true, maxChainLength: 200 } } },
+        },
+        raw: JSON.stringify({ agents: { defaults: { continuation: { maxChainLength: 2 } } } }),
+      }),
+    ).toThrow(/protected config paths: agents\.defaults\.continuation\.maxChainLength/);
+  });
+
   it("does not strip bracket continue_delegate markers while peeking for spawn-init continue_work", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done\n[[CONTINUE_DELEGATE: next hop]]" }],
@@ -442,7 +490,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       ).continueWorkOpts;
       opts?.requestContinuation({ reason: "tool delay should not win", delaySeconds: 30 });
       return {
-        payloads: [{ text: "done\nCONTINUE_WORK" }],
+        payloads: [{ text: "done\n[[CONTINUE_WORK]]" }],
         meta: {
           durationMs: 1,
           finalAssistantVisibleText: "done",
@@ -466,9 +514,9 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     });
   });
 
-  it("schedules one same-session wake for a CONTINUE_WORK token when no tool call exists", async () => {
+  it("schedules one same-session wake for a bracket CONTINUE_WORK token when no tool call exists", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done\nCONTINUE_WORK:60" }],
+      payloads: [{ text: "done\n[[CONTINUE_WORK:60]]" }],
       meta: {
         durationMs: 1,
         finalAssistantVisibleText: "done",

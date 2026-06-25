@@ -22,6 +22,21 @@ describe("parseContinuationSignal", () => {
     expect(signal).toEqual({ kind: "work", delayMs: 0 });
   });
 
+  it("parses bracket CONTINUE_WORK", () => {
+    const signal = parseContinuationSignal("Some reply text\n[[CONTINUE_WORK]]");
+    expect(signal).toEqual({ kind: "work", delayMs: undefined });
+  });
+
+  it("parses bracket CONTINUE_WORK with delay", () => {
+    const signal = parseContinuationSignal("Reply\n[[CONTINUE_WORK:30]]");
+    expect(signal).toEqual({ kind: "work", delayMs: 30_000 });
+  });
+
+  it("parses bracket CONTINUE_WORK:0 as zero delay", () => {
+    const signal = parseContinuationSignal("[[CONTINUE_WORK:0]]");
+    expect(signal).toEqual({ kind: "work", delayMs: 0 });
+  });
+
   it("parses simple delegate bracket", () => {
     const signal = parseContinuationSignal(
       "Here is my reply.\n\n[[CONTINUE_DELEGATE: check CI status]]",
@@ -270,6 +285,18 @@ describe("stripContinuationSignal", () => {
   it("strips CONTINUE_WORK:N from end", () => {
     const result = stripContinuationSignal("Reply\nCONTINUE_WORK:15");
     expect(result.signal?.kind).toBe("work");
+    expect(result.text).toBe("Reply");
+  });
+
+  it("strips bracket CONTINUE_WORK from end", () => {
+    const result = stripContinuationSignal("My reply\n[[CONTINUE_WORK]]");
+    expect(result.signal).toEqual({ kind: "work", delayMs: undefined });
+    expect(result.text).toBe("My reply");
+  });
+
+  it("strips bracket CONTINUE_WORK:N from end without leaking delimiters", () => {
+    const result = stripContinuationSignal("Reply\n[[CONTINUE_WORK:15]]");
+    expect(result.signal).toEqual({ kind: "work", delayMs: 15_000 });
     expect(result.text).toBe("Reply");
   });
 
