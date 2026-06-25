@@ -77,7 +77,8 @@ import UIKit
             let root = RootTabsPhoneControlHub(
                 groups: RootTabs.phoneControlGroups,
                 initialDestination: nil,
-                openRootDestination: { _ in })
+                openRootDestination: { _ in },
+                openSettingsRoute: { _ in })
                 .environment(appModel)
 
             _ = Self.host(root)
@@ -89,7 +90,8 @@ import UIKit
         let root = RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            openRootDestination: { _ in },
+            openSettingsRoute: { _ in })
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
@@ -101,7 +103,7 @@ import UIKit
         let appModel = NodeAppModel()
         let screens: [AnyView] = [
             AnyView(CommandCenterTab(openChat: {}, openSettings: {})),
-            AnyView(IPadActivityScreen(openChat: {}, openSettings: {})),
+            AnyView(IPadActivityScreen(openChat: {}, openSettings: {}, openApprovals: {})),
             AnyView(OpenClawDocsScreen()),
             AnyView(IPadWorkboardScreen(openChat: {}, openSettings: {})),
             AnyView(IPadSkillWorkshopScreen(openSettings: {})),

@@ -4,8 +4,8 @@ import OpenClawProtocol
 
 enum AppleReviewDemoMode {
     static let setupCode = "APPLE-REVIEW-DEMO"
-    static let gatewayName = "Apple Review Demo Gateway"
-    static let gatewayAddress = "Local demo mode"
+    static let gatewayName = "OpenClaw Preview"
+    static let gatewayAddress = "Local preview mode"
     static let gatewayID = "apple-review-demo"
 
     static func isSetupCode(_ value: String) -> Bool {
@@ -14,7 +14,7 @@ enum AppleReviewDemoMode {
     }
 
     static var agents: [AgentSummary] {
-        LocalChatFixture.appleReviewDemo.agents
+        LocalChatFixture.openClawPreview.agents
     }
 }
 
@@ -41,33 +41,57 @@ struct LocalChatFixture {
     let seedMessages: [String]
     let agents: [AgentSummary]
 
-    static let appleReviewDemo = LocalChatFixture(
+    static let openClawPreview = LocalChatFixture(
         sessionKey: "main",
         sessionIDPrefix: "apple-review-demo",
-        displayName: "Apple Review Demo",
-        subject: "Gateway review flow",
-        workspace: "Apple Review Demo",
+        displayName: "Morning Ops Check",
+        subject: "Preview workspace tour",
+        workspace: "OpenClaw Preview Workspace",
         modelProvider: "demo",
         modelID: "local-demo",
-        modelName: "Apple Review Demo",
-        responsePrefix: "Demo mode is active.",
+        modelName: "OpenClaw Preview",
+        responsePrefix: "Preview mode is active.",
         seedMessages: [
             """
-            Apple Review demo mode is active. This local chat transport lets reviewers inspect the iOS app \
-            without a private Gateway.
+            Here is your morning OpenClaw preview: overnight automation finished, two workboard cards need \
+            review, and one terminal approval is waiting before a deploy check can continue.
+            """,
+            """
+            You can explore chat, activity, skills, scheduled jobs, approvals, and workboard planning with \
+            sample data. Connect a Gateway when you are ready to use OpenClaw for real.
             """,
         ],
         agents: [
             AgentSummary(
                 id: "main",
-                name: "Main",
-                identity: ["emoji": AnyCodable("OC")],
-                workspace: "Apple Review Demo",
+                name: "Molty",
+                identity: ["emoji": AnyCodable("M")],
+                workspace: "OpenClaw Preview Workspace",
                 model: ["provider": AnyCodable("demo"), "model": AnyCodable("local-demo")],
                 agentruntime: ["kind": AnyCodable("local")],
                 thinkinglevels: nil,
-                thinkingoptions: ["auto", "low", "medium"],
+                thinkingoptions: ["auto", "low", "medium", "high"],
                 thinkingdefault: "auto"),
+            AgentSummary(
+                id: "ops",
+                name: "Ops",
+                identity: ["emoji": AnyCodable("OP")],
+                workspace: "OpenClaw Preview Workspace",
+                model: ["provider": AnyCodable("demo"), "model": AnyCodable("local-demo")],
+                agentruntime: ["kind": AnyCodable("local")],
+                thinkinglevels: nil,
+                thinkingoptions: ["auto", "low", "medium", "high"],
+                thinkingdefault: "medium"),
+            AgentSummary(
+                id: "review",
+                name: "Review",
+                identity: ["emoji": AnyCodable("RV")],
+                workspace: "OpenClaw Preview Workspace",
+                model: ["provider": AnyCodable("demo"), "model": AnyCodable("local-demo")],
+                agentruntime: ["kind": AnyCodable("local")],
+                thinkinglevels: nil,
+                thinkingoptions: ["auto", "low", "medium", "high"],
+                thinkingdefault: "medium"),
         ])
 
     static let appScreenshots = LocalChatFixture(
@@ -203,7 +227,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 }
 
 struct AppleReviewDemoChatTransport: OpenClawChatTransport {
-    private let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+    private let transport = LocalFixtureChatTransport(fixture: .openClawPreview)
 
     func createSession(
         key: String,

@@ -340,7 +340,7 @@ private struct SettingsGatewayStatesPreview: View {
                 Divider()
                 self.factRow("Discovered", value: discovered)
                 Divider()
-                self.factRow("Default Agent", value: agent)
+                self.factRow("Default Assistant", value: agent)
             }
         }
     }

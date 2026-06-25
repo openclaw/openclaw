@@ -515,7 +515,7 @@ struct IPadSkillWorkshopScreen: View {
     }
 
     private var canRead: Bool {
-        self.appModel.isOperatorGatewayConnected
+        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
     }
 
     private var canWrite: Bool {
@@ -764,6 +764,11 @@ struct IPadSkillWorkshopScreen: View {
             self.errorText = nil
             return
         }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            self.proposals = IPadSkillProposal.openClawPreviewProposals
+            self.syncSelectedProposalIDForVisibleProposals()
+            return
+        }
         guard !self.isLoading else { return }
 
         self.isLoading = true
@@ -794,6 +799,11 @@ struct IPadSkillWorkshopScreen: View {
 
     private func inspect(proposalID: String, force: Bool) async {
         guard self.canRead else { return }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            guard let proposal = IPadSkillProposal.openClawPreviewProposal(id: proposalID) else { return }
+            self.merge(proposal)
+            return
+        }
         guard force || self.proposals.first(where: { $0.id == proposalID })?.content == nil else { return }
         guard self.inspectingProposalID == nil else { return }
 
@@ -1187,5 +1197,77 @@ struct IPadSkillProposal: Identifiable {
         let pattern = #"(?s)^---\r?\n.*?\r?\n---\r?\n?"#
         return value.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension IPadSkillProposal {
+    static var openClawPreviewProposals: [Self] {
+        [
+            self.previewProposal(
+                id: "preview-skill-gateway-health",
+                status: "pending",
+                title: "Add Gateway health sweep",
+                description: "Checks Gateway reachability, stale auth, and recent failed channel deliveries.",
+                skillName: "gateway-health-sweep",
+                skillKey: "gateway-health-sweep",
+                minutesAgo: 11),
+            self.previewProposal(
+                id: "preview-skill-channel-summary",
+                status: "needs-review",
+                title: "Summarize channel health",
+                description: "Adds a compact morning summary for Discord, Telegram, and Slack routing.",
+                skillName: "channel-health-summary",
+                skillKey: "channel-health-summary",
+                minutesAgo: 38),
+            self.previewProposal(
+                id: "preview-skill-mobile-qa",
+                status: "applied",
+                title: "Mobile QA checklist",
+                description: "Generates repeatable iPhone and iPad checks before a mobile PR.",
+                skillName: "mobile-qa-checklist",
+                skillKey: "mobile-qa-checklist",
+                minutesAgo: 96),
+        ]
+    }
+
+    static func openClawPreviewProposal(id: String) -> Self? {
+        self.openClawPreviewProposals.first { $0.id == id }
+    }
+
+    private static func previewProposal(
+        id: String,
+        status: String,
+        title: String,
+        description: String,
+        skillName: String,
+        skillKey: String,
+        minutesAgo: Int) -> Self
+    {
+        let updatedAt = Date().addingTimeInterval(Double(-minutesAgo * 60))
+        let createdAt = updatedAt.addingTimeInterval(-36 * 60 * 60)
+        let formatter = ISO8601DateFormatter()
+        var proposal = Self(entry: IPadSkillProposalManifestEntry(
+            id: id,
+            kind: "skill",
+            status: status,
+            title: title,
+            description: description,
+            skillName: skillName,
+            skillKey: skillKey,
+            createdAt: formatter.string(from: createdAt),
+            updatedAt: formatter.string(from: updatedAt),
+            scanState: "clean"), previous: nil)
+        proposal.content = """
+        # \(title)
+
+        \(description)
+
+        This preview proposal shows how OpenClaw can draft, review, and apply useful workspace skills from a
+        Gateway-backed setup.
+        """
+        proposal.supportFiles = [
+            IPadSkillProposalSupportFile(path: "skills/\(skillName)/SKILL.md", content: proposal.content),
+        ]
+        return proposal
     }
 }

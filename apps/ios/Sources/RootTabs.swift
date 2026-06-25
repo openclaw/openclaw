@@ -139,16 +139,17 @@ struct RootTabs: View {
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
                 initialDestination: Self.requestedInitialSidebarDestination,
-                openRootDestination: { self.selectSidebarDestination($0) })
+                openRootDestination: { self.openRootDestination($0) },
+                openSettingsRoute: { self.selectSettingsRoute($0) })
                 .tabItem { Label("Control", systemImage: "square.grid.2x2") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
-            ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            ChatProTab(openSettings: { self.openGatewayEntryPoint() })
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
 
-            TalkProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            TalkProTab(openSettings: { self.openGatewayEntryPoint() })
                 .tabItem {
                     Label(
                         "Talk",
@@ -159,7 +160,7 @@ struct RootTabs: View {
             NavigationStack {
                 AgentProTab(
                     directRoute: .agents,
-                    openSettings: { self.selectSidebarDestination(.gateway) })
+                    openSettings: { self.openGatewayEntryPoint() })
             }
             .tabItem { Label("Agent", systemImage: "person.2.fill") }
             .tag(AppTab.agent)
@@ -372,7 +373,7 @@ struct RootTabs: View {
         title: String? = nil) -> some View
     {
         Button {
-            self.selectSidebarDestination(destination)
+            self.openRootDestination(destination)
         } label: {
             Label(title ?? destination.sidebarTitle, systemImage: destination.systemImage)
                 .lineLimit(1)
@@ -398,45 +399,48 @@ struct RootTabs: View {
                 headerTitle: "Chat",
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .talk:
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .overview:
             CommandCenterTab(
                 headerTitle: "Overview",
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
+                ownsNavigationStack: false,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() },
+                openSessions: { self.selectSidebarDestination(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() },
+                openApprovals: { self.selectSettingsRoute(.approvals) })
         case .workboard:
             IPadWorkboardScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .agents:
             AgentProTab(
                 directRoute: .agents,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Agents",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Instances",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .sessions:
             CommandSessionsScreen(
@@ -447,26 +451,26 @@ struct RootTabs: View {
                 directRoute: .dreaming,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Dreaming",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Usage",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                gatewayAction: { self.selectSidebarDestination(.gateway) })
+                gatewayAction: { self.openGatewayEntryPoint() })
         case .settings:
             if let selectedSettingsRoute {
                 SettingsProTab(
@@ -573,6 +577,14 @@ struct RootTabs: View {
 
     private func rootOverlays(_ content: some View) -> some View {
         content
+            .overlay(alignment: .top) {
+                if self.appModel.isAppleReviewDemoModeEnabled {
+                    RootTabsPreviewModeBanner(action: { self.openGatewayEntryPoint() })
+                        .padding(.horizontal, 12)
+                        .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 10 : 86)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .overlay(alignment: .top) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem,
                    self.gatewayStatus != .connected
@@ -703,7 +715,10 @@ struct RootTabs: View {
             .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                if newValue != nil {
+                if OnboardingStateStore.shouldMarkCompleted(
+                    gatewayServerName: newValue,
+                    isLocalGatewayFixtureEnabled: self.appModel.isLocalGatewayFixtureEnabled)
+                {
                     self.onboardingComplete = true
                     self.hasConnectedOnce = true
                     OnboardingStateStore.markCompleted(mode: nil)
@@ -775,8 +790,14 @@ struct RootTabs: View {
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
-                    onClose: {
+                    onClose: { reason in
                         self.showOnboarding = false
+                        switch reason {
+                        case .dismissed:
+                            break
+                        case .explore:
+                            self.selectSidebarDestination(.overview)
+                        }
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
@@ -925,6 +946,26 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
+    private func openRootDestination(_ destination: SidebarDestination) {
+        if destination == .gateway {
+            self.openGatewayEntryPoint()
+        } else {
+            self.selectSidebarDestination(destination)
+        }
+    }
+
+    private func openGatewayEntryPoint() {
+        guard !self.appModel.isOperatorGatewayConnected else {
+            self.selectSidebarDestination(.gateway)
+            return
+        }
+
+        self.presentedSheet = nil
+        self.showGatewayProblemDetails = false
+        self.onboardingAllowSkip = true
+        self.showOnboarding = true
+    }
+
     private func selectSidebarDestination(_ destination: SidebarDestination) {
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
@@ -1159,6 +1200,40 @@ private struct RootTabsHomeCanvasAgentCard: Codable {
     var badge: String
     var caption: String
     var isActive: Bool
+}
+
+private struct RootTabsPreviewModeBanner: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: self.action) {
+            HStack(spacing: 8) {
+                OpenClawProMark(size: 18, shadowRadius: 2)
+                    .accessibilityHidden(true)
+                Text("Demo")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text("Set up OpenClaw")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(OpenClawBrand.accent)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(0.08))
+            }
+            .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: 380)
+        .accessibilityLabel("Demo mode. Set up OpenClaw.")
+    }
 }
 
 private struct RootCameraFlashOverlay: View {

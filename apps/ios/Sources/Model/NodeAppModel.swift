@@ -230,7 +230,7 @@ final class NodeAppModel {
 
     var localChatFixture: LocalChatFixture? {
         if self.isScreenshotFixtureModeEnabled { return .appScreenshots }
-        if self.isAppleReviewDemoModeEnabled { return .appleReviewDemo }
+        if self.isAppleReviewDemoModeEnabled { return .openClawPreview }
         return nil
     }
 
@@ -2956,6 +2956,9 @@ extension NodeAppModel {
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = AppleReviewDemoMode.agents
+        self.pendingExecApprovalPrompt = nil
+        self.pendingExecApprovalPromptResolving = false
+        self.pendingExecApprovalPromptErrorText = nil
         self.focusedChatSessionKey = nil
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         self.homeCanvasRevision &+= 1

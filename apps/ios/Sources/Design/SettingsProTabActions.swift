@@ -218,7 +218,7 @@ extension SettingsProTab {
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.stagedGatewaySetupLink = nil
             self.setupCode = ""
-            self.setupStatusText = "Apple Review demo mode enabled."
+            self.setupStatusText = "OpenClaw preview mode enabled."
             self.appModel.enterAppleReviewDemoMode()
             return false
         }
@@ -280,7 +280,7 @@ extension SettingsProTab {
         self.showQRScanner = false
         self.setupCode = ""
         self.stagedGatewaySetupLink = nil
-        self.setupStatusText = "Apple Review demo mode enabled."
+        self.setupStatusText = "OpenClaw preview mode enabled."
         self.appModel.enterAppleReviewDemoMode()
     }
 
@@ -661,7 +661,7 @@ extension SettingsProTab {
     }
 
     var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "OpenClaw preview mode" }
         return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
     }
 
@@ -729,6 +729,9 @@ extension SettingsProTab {
     }
 
     var approvalsDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return self.showPreviewApprovalExample ? "Example request showing" : "Example available"
+        }
         if self.notificationsNeedAttention {
             return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
         }
@@ -745,6 +748,24 @@ extension SettingsProTab {
     }
 
     var approvalItems: [SettingsApprovalItem] {
+        if self.appModel.isAppleReviewDemoModeEnabled, self.showPreviewApprovalExample {
+            return [
+                SettingsApprovalItem(
+                    id: "preview-approval-command",
+                    icon: "terminal.fill",
+                    title: "Run iOS checks and verify Gateway health",
+                    detail: "Agent: Ops",
+                    priority: "High",
+                    color: OpenClawBrand.danger),
+                SettingsApprovalItem(
+                    id: "preview-approval-context",
+                    icon: "doc.text.fill",
+                    title: "One-time approval",
+                    detail: "Preview request",
+                    priority: "Review",
+                    color: OpenClawBrand.warn),
+            ]
+        }
         guard let pendingApproval else { return [] }
         return [
             SettingsApprovalItem(

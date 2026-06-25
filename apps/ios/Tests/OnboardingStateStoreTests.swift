@@ -58,6 +58,18 @@ import Testing
             hasSavedGatewayConnection: false))
     }
 
+    @Test func localGatewayFixtureDoesNotQualifyAsCompletedOnboarding() {
+        #expect(OnboardingStateStore.shouldMarkCompleted(
+            gatewayServerName: "OpenClaw Preview",
+            isLocalGatewayFixtureEnabled: true) == false)
+        #expect(OnboardingStateStore.shouldMarkCompleted(
+            gatewayServerName: "gateway.local",
+            isLocalGatewayFixtureEnabled: false))
+        #expect(OnboardingStateStore.shouldMarkCompleted(
+            gatewayServerName: nil,
+            isLocalGatewayFixtureEnabled: false) == false)
+    }
+
     @Test func firstRunIntroDefaultsToVisibleThenPersists() {
         let testDefaults = self.makeDefaults()
         let defaults = testDefaults.defaults

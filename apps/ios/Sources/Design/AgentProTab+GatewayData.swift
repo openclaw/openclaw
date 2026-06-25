@@ -117,6 +117,12 @@ extension AgentProTab {
     @MainActor
     func refreshOverview(force: Bool) async {
         guard self.scenePhase == .active else { return }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            self.overview = .openClawPreview(activeAgentId: self.activeAgentID)
+            self.overviewErrorText = nil
+            self.overviewLoading = false
+            return
+        }
         guard self.liveGatewayConnected else {
             self.overview = nil
             self.overviewErrorText = nil

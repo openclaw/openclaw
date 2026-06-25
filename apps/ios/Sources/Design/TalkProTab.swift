@@ -345,7 +345,7 @@ struct TalkProTab: View {
     private var heroSubtitle: String {
         if self.state
             .prefersPermissionCopy { return "Gateway approval is required before this phone can capture voice." }
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Voice is disabled in Apple Review demo mode." }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Voice is disabled in OpenClaw preview mode." }
         if !self.gatewayConnected { return "Connect to your gateway to start a voice conversation." }
         if !self.appModel.talkMode.gatewayTalkConfigLoaded {
             return "Open Voice settings after the gateway loads Talk configuration."

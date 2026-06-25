@@ -13,8 +13,10 @@ struct CommandCenterTab: View {
     var headerTitle: String = "OpenClaw"
     var headerLeadingAction: OpenClawSidebarHeaderAction?
     var showsHeaderMark: Bool = true
+    var ownsNavigationStack: Bool = true
     var openChat: () -> Void
     var openSettings: () -> Void
+    var openSessions: (() -> Void)?
 
     enum WorkRoute {
         case chat(String?)
@@ -34,43 +36,53 @@ struct CommandCenterTab: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { geometry in
-                ZStack {
-                    CommandControlBackground()
-                    self.commandAmbientOverlay
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 14) {
-                            self.header
-                            self.gatewayCard
-                            if Self.usesSplitSectionsLayout(
-                                horizontalSizeClass: self.horizontalSizeClass,
-                                containerWidth: geometry.size.width)
-                            {
-                                HStack(alignment: .top, spacing: 12) {
-                                    self.defaultChatSessionSection
-                                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                                    self.recentSessions
-                                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                                }
-                                .padding(.horizontal, OpenClawProMetric.pagePadding)
-                            } else {
-                                self.defaultChatSessionSection
-                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
-                                self.recentSessions
-                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
-                            }
-                        }
-                        .padding(.top, 18)
-                        .padding(.bottom, 18)
-                    }
-                    .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+        Group {
+            if self.ownsNavigationStack {
+                NavigationStack {
+                    self.content
+                        .navigationBarHidden(true)
                 }
+            } else {
+                self.content
             }
-            .navigationBarHidden(true)
         }
         .task(id: self.recentSessionsRefreshID) {
             await self.refreshRecentSessionsIfNeeded()
+        }
+    }
+
+    private var content: some View {
+        GeometryReader { geometry in
+            ZStack {
+                CommandControlBackground()
+                self.commandAmbientOverlay
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        self.header
+                        self.gatewayCard
+                        if Self.usesSplitSectionsLayout(
+                            horizontalSizeClass: self.horizontalSizeClass,
+                            containerWidth: geometry.size.width)
+                        {
+                            HStack(alignment: .top, spacing: 12) {
+                                self.defaultChatSessionSection
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                                self.recentSessions
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                            }
+                            .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        } else {
+                            self.defaultChatSessionSection
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                            self.recentSessions
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        }
+                    }
+                    .padding(.top, 18)
+                    .padding(.bottom, 18)
+                }
+                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+            }
         }
     }
 
@@ -244,12 +256,19 @@ struct CommandCenterTab: View {
                         }
 
                         if self.hasMoreRecentSessions {
-                            NavigationLink {
-                                CommandSessionsScreen(openChat: self.openChat)
-                            } label: {
-                                CommandViewMoreRow()
+                            if let openSessions {
+                                Button(action: openSessions) {
+                                    CommandViewMoreRow()
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                NavigationLink {
+                                    CommandSessionsScreen(openChat: self.openChat)
+                                } label: {
+                                    CommandViewMoreRow()
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }

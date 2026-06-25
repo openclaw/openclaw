@@ -8,13 +8,23 @@ import UIKit
 private enum OnboardingStep: Int, CaseIterable {
     case intro
     case welcome
+    case setupGateway
     case mode
     case connect
     case auth
     case success
 
     var previous: Self? {
-        Self(rawValue: self.rawValue - 1)
+        switch self {
+        case .intro, .welcome, .success:
+            nil
+        case .setupGateway, .mode:
+            .welcome
+        case .connect:
+            .mode
+        case .auth:
+            .connect
+        }
     }
 
     /// Progress label for the manual setup flow (mode → connect → auth → success).
@@ -27,7 +37,8 @@ private enum OnboardingStep: Int, CaseIterable {
     var title: String {
         switch self {
         case .intro: "Welcome"
-        case .welcome: "Connect Gateway"
+        case .welcome: "Get Started"
+        case .setupGateway: "Set up OpenClaw"
         case .mode: "Connection Mode"
         case .connect: "Connect"
         case .auth: "Authentication"
@@ -41,6 +52,11 @@ private enum OnboardingStep: Int, CaseIterable {
 }
 
 struct OnboardingWizardView: View {
+    enum CloseReason {
+        case dismissed
+        case explore
+    }
+
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase
@@ -74,12 +90,12 @@ struct OnboardingWizardView: View {
 
     let allowSkip: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
-    let onClose: () -> Void
+    let onClose: (CloseReason) -> Void
 
     init(
         allowSkip: Bool,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
-        onClose: @escaping () -> Void)
+        onClose: @escaping (CloseReason) -> Void)
     {
         self.allowSkip = allowSkip
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
@@ -89,7 +105,7 @@ struct OnboardingWizardView: View {
     }
 
     private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .welcome || self.step == .setupGateway || self.step == .success
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -104,6 +120,8 @@ struct OnboardingWizardView: View {
                     self.introStep
                 case .welcome:
                     self.welcomeStep
+                case .setupGateway:
+                    self.setupGatewayStep
                 case .success:
                     self.successStep
                 default:
@@ -145,7 +163,7 @@ struct OnboardingWizardView: View {
                         }
                     } else if self.allowSkip {
                         Button("Close") {
-                            self.onClose()
+                            self.onClose(.dismissed)
                         }
                     }
                 }
@@ -277,7 +295,10 @@ struct OnboardingWizardView: View {
                 self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
             }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                guard newValue != nil else { return }
+                guard OnboardingStateStore.shouldMarkCompleted(
+                    gatewayServerName: newValue,
+                    isLocalGatewayFixtureEnabled: self.appModel.isLocalGatewayFixtureEnabled)
+                else { return }
                 self.showQRScanner = false
                 self.statusLine = "Connected."
                 if !self.didMarkCompleted, let selectedMode {
@@ -301,12 +322,20 @@ struct OnboardingWizardView: View {
 
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
-            statusLine: self.statusLine,
-            onScanQRCode: {
-                self.statusLine = "Opening QR scanner…"
-                self.showQRScanner = true
+            onConnectGateway: {
+                self.step = .mode
             },
-            onManualSetup: {
+            onExploreOpenClaw: {
+                self.enterExploreMode()
+            },
+            onSetupGateway: {
+                self.step = .setupGateway
+            })
+    }
+
+    private var setupGatewayStep: some View {
+        OnboardingGatewaySetupStep(
+            onConnectGateway: {
                 self.step = .mode
             })
     }
@@ -604,7 +633,7 @@ struct OnboardingWizardView: View {
             Spacer()
 
             Button {
-                self.onClose()
+                self.onClose(.dismissed)
             } label: {
                 Text("Open OpenClaw")
                     .frame(maxWidth: .infinity)
@@ -620,6 +649,13 @@ struct OnboardingWizardView: View {
 extension OnboardingWizardView {
     private var setupCodeSection: some View {
         Section {
+            Button {
+                self.openQRScannerFromOnboarding()
+            } label: {
+                Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+            }
+            .disabled(self.connectingGatewayID != nil)
+
             TextField("Paste setup code", text: self.$setupCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -652,7 +688,7 @@ extension OnboardingWizardView {
         } header: {
             Text("Setup Code")
         } footer: {
-            Text("Use this if you received a setup code instead of a QR code.")
+            Text("Use this if you already have a Gateway QR code or setup code.")
         }
     }
 
@@ -704,7 +740,7 @@ extension OnboardingWizardView {
 
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.setupCode = ""
-            self.setupCodeStatus = "Apple Review demo mode enabled."
+            self.setupCodeStatus = "OpenClaw preview mode enabled."
             self.handleScannedSetupCode(raw)
             return
         }
@@ -760,12 +796,17 @@ extension OnboardingWizardView {
 
     private func handleScannedSetupCode(_ code: String) {
         guard AppleReviewDemoMode.isSetupCode(code) else { return }
+        self.enterExploreMode()
+    }
+
+    private func enterExploreMode() {
         self.showQRScanner = false
         self.connectingGatewayID = nil
-        self.connectMessage = "Apple Review demo mode enabled."
-        self.statusLine = "Apple Review demo mode enabled."
+        self.connectMessage = "OpenClaw preview mode enabled."
+        self.statusLine = "Demo mode is on. Pair a Gateway when you're ready for your workspace."
         self.selectedMode = .homeNetwork
         self.appModel.enterAppleReviewDemoMode()
+        self.onClose(.explore)
     }
 
     private func openQRScannerFromOnboarding() {

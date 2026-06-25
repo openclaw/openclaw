@@ -45,6 +45,119 @@ struct AgentOverviewSnapshot {
     }
 }
 
+extension AgentOverviewSnapshot {
+    static func openClawPreview(activeAgentId: String) -> Self {
+        let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+        return Self(
+            skills: SkillStatusReportLite(
+                workspaceDir: "~/Projects/openclaw-preview",
+                managedSkillsDir: "~/.openclaw/skills",
+                agentId: activeAgentId,
+                agentSkillFilter: ["gateway-health-sweep", "mobile-qa-checklist", "channel-health-summary"],
+                skills: [
+                    SkillStatusEntryLite(
+                        name: "gateway-health-sweep",
+                        description: "Checks Gateway status, stale credentials, and recent connection failures.",
+                        source: "managed",
+                        filePath: nil,
+                        skillKey: "gateway-health-sweep",
+                        primaryEnv: nil,
+                        emoji: nil,
+                        homepage: nil,
+                        disabled: false,
+                        blockedByAllowlist: false,
+                        blockedByAgentFilter: false,
+                        missing: nil,
+                        install: nil),
+                    SkillStatusEntryLite(
+                        name: "mobile-qa-checklist",
+                        description: "Builds a focused iPhone/iPad proof checklist before a mobile PR.",
+                        source: "managed",
+                        filePath: nil,
+                        skillKey: "mobile-qa-checklist",
+                        primaryEnv: nil,
+                        emoji: nil,
+                        homepage: nil,
+                        disabled: false,
+                        blockedByAllowlist: false,
+                        blockedByAgentFilter: false,
+                        missing: nil,
+                        install: nil),
+                    SkillStatusEntryLite(
+                        name: "release-notes",
+                        description: "Prepares release-note context from landed work and proof runs.",
+                        source: "clawhub",
+                        filePath: nil,
+                        skillKey: "release-notes",
+                        primaryEnv: nil,
+                        emoji: nil,
+                        homepage: nil,
+                        disabled: true,
+                        blockedByAllowlist: false,
+                        blockedByAgentFilter: false,
+                        missing: nil,
+                        install: nil),
+                ]),
+            presence: [],
+            cronStatus: CronStatusLite(enabled: true, jobs: 3, nextwakeatms: nowMs + 18 * 60 * 1000),
+            cronJobs: [
+                self.previewCronJob(
+                    id: "preview-cron-health",
+                    name: "Gateway health sweep",
+                    description: "Checks local reachability and summarizes issues every morning.",
+                    nextRunAtMs: nowMs + 18 * 60 * 1000,
+                    schedule: ["expr": AnyCodable("0 9 * * 1-5")]),
+                self.previewCronJob(
+                    id: "preview-cron-workboard",
+                    name: "Workboard grooming",
+                    description: "Groups stale cards and suggests next actions.",
+                    nextRunAtMs: nowMs + 53 * 60 * 1000,
+                    schedule: ["everyMs": AnyCodable(3_600_000)]),
+                self.previewCronJob(
+                    id: "preview-cron-digest",
+                    name: "Evening activity digest",
+                    description: "Prepares a short summary of sessions, approvals, and completed work.",
+                    nextRunAtMs: nowMs + 7 * 60 * 60 * 1000,
+                    schedule: ["expr": AnyCodable("30 17 * * 1-5")]),
+            ],
+            dreaming: nil,
+            dreamDiary: nil,
+            usage: nil,
+            activeAgentId: activeAgentId,
+            agentSkillFilter: ["gateway-health-sweep", "mobile-qa-checklist", "channel-health-summary"],
+            loadedAt: Date())
+    }
+
+    private static func previewCronJob(
+        id: String,
+        name: String,
+        description: String,
+        nextRunAtMs: Int,
+        schedule: [String: AnyCodable]) -> CronJob
+    {
+        CronJob(
+            id: id,
+            agentid: "ops",
+            sessionkey: "main",
+            name: name,
+            description: description,
+            enabled: true,
+            deleteafterrun: false,
+            createdatms: nextRunAtMs - 7 * 24 * 60 * 60 * 1000,
+            updatedatms: nextRunAtMs - 12 * 60 * 1000,
+            schedule: AnyCodable(schedule),
+            sessiontarget: AnyCodable(["kind": AnyCodable("main")]),
+            wakemode: AnyCodable(["kind": AnyCodable("foreground-allowed")]),
+            payload: AnyCodable(["prompt": AnyCodable(description)]),
+            delivery: nil,
+            failurealert: nil,
+            state: [
+                "nextRunAtMs": AnyCodable(nextRunAtMs),
+                "lastStatus": AnyCodable("ok"),
+            ])
+    }
+}
+
 struct SkillStatusReportLite: Decodable {
     let workspaceDir: String?
     let managedSkillsDir: String?

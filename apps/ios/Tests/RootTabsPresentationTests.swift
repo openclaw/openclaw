@@ -251,6 +251,77 @@ import UIKit
         #expect(!CommandCenterTab.shouldShowHeaderMark(hasLeadingAction: false, showsHeaderMark: false))
     }
 
+    @Test func embeddedOverviewDefersNavigationStackOwnership() throws {
+        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let phoneControlSource = try String(contentsOf: Self.phoneControlHubSourceURL(), encoding: .utf8)
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(commandCenterSource.contains("var ownsNavigationStack: Bool = true"))
+        #expect(commandCenterSource.contains("var openSessions: (() -> Void)?"))
+        #expect(commandCenterSource.contains("if let openSessions"))
+        #expect(phoneControlSource.contains("ownsNavigationStack: false"))
+        #expect(phoneControlSource.contains("openSessions: { self.navigationPath.append(.sessions) }"))
+        #expect(rootTabsSource.contains("ownsNavigationStack: false"))
+        #expect(rootTabsSource.contains("openSessions: { self.selectSidebarDestination(.sessions) }"))
+    }
+
+    @Test func exploreModeReturnsToControlOverview() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingSource.contains("case explore"))
+        #expect(onboardingSource.contains("self.onClose(.explore)"))
+        #expect(rootTabsSource.contains("case .explore:"))
+        #expect(rootTabsSource.contains("self.selectSidebarDestination(.overview)"))
+    }
+
+    @Test func gatewayOnboardingWelcomeKeepsHumanPreviewChoices() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("OnboardingPreviewStrip()"))
+        #expect(onboardingStepsSource.contains("OnboardingGatewayExplainer()"))
+        #expect(onboardingStepsSource.contains("Mobile connects to your Gateway"))
+        #expect(onboardingStepsSource.contains("OpenClaw runs on a computer or server."))
+        #expect(onboardingStepsSource.contains("Try a demo"))
+        #expect(onboardingStepsSource.contains("Preview chat, tasks, and approvals with sample data."))
+        #expect(onboardingStepsSource.contains("Enter a setup code"))
+        #expect(onboardingStepsSource.contains("Preview uses sample data."))
+        #expect(onboardingStepsSource.contains("OnboardingChoiceDivider()"))
+        #expect(onboardingStepsSource.contains(".fill(Color(uiColor: .secondarySystemGroupedBackground))"))
+        #expect(!onboardingStepsSource.contains(".fill(self.isPrimary ? OpenClawBrand.accent"))
+    }
+
+    @Test func gatewaySetupEducationKeepsNumberedStepsAndUnlocks() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("GatewaySetupNoteCard()"))
+        #expect(onboardingStepsSource.contains("Gateway runs the work"))
+        #expect(onboardingStepsSource.contains("Mobile stays lightweight"))
+        #expect(onboardingStepsSource.contains("GatewaySetupStepRow(index: index + 1, title: step)"))
+        #expect(onboardingStepsSource.contains("GatewayUnlockRow(icon: \"person.2.fill\""))
+        #expect(onboardingStepsSource.contains("After pairing"))
+        #expect(!onboardingStepsSource.contains("let onBack: () -> Void"))
+        #expect(!onboardingStepsSource.contains("Label(\"Back\", systemImage: \"chevron.left\")"))
+    }
+
+    @Test func gatewaySetupCommandCanBeCopiedOrShared() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("UIPasteboard.general.string = self.platform.command"))
+        #expect(onboardingStepsSource.contains("ShareLink("))
+        #expect(onboardingStepsSource.contains("openclaw qr"))
+        #expect(onboardingStepsSource.contains("Open the mobile app and scan or paste the code."))
+    }
+
+    @Test func previewModeBannerStaysCompactAndActionable() throws {
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(rootTabsSource.contains("Text(\"Demo\")"))
+        #expect(rootTabsSource.contains("Text(\"Set up OpenClaw\")"))
+        #expect(rootTabsSource.contains(".background(.regularMaterial, in: Capsule())"))
+        #expect(rootTabsSource.contains(".frame(maxWidth: 380)"))
+    }
+
     @Test func chatSidebarDestinationCanUseRouteHeaderInsteadOfAgentBranding() {
         let standalone = ChatProTab()
         let routed = ChatProTab(
@@ -467,5 +538,36 @@ import UIKit
     @Test func phoneHubLeavesRoomForFloatingTabBar() {
         #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .regular) == 112)
         #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .compact) == 72)
+    }
+
+    private static func rootTabsSourceURL() -> URL {
+        self.iosSourcesURL().appendingPathComponent("RootTabs.swift")
+    }
+
+    private static func phoneControlHubSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Design/RootTabsPhoneControlHub.swift")
+    }
+
+    private static func commandCenterSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Design/CommandCenterTab.swift")
+    }
+
+    private static func onboardingWizardSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func onboardingWizardStepsSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Onboarding/OnboardingWizardSteps.swift")
+    }
+
+    private static func iosSourcesURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources")
     }
 }

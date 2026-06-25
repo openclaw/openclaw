@@ -11,15 +11,18 @@ struct IPadActivityScreen: View {
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let openChat: () -> Void
     let openSettings: () -> Void
+    let openApprovals: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         openChat: @escaping () -> Void,
-        openSettings: @escaping () -> Void)
+        openSettings: @escaping () -> Void,
+        openApprovals: @escaping () -> Void)
     {
         self.headerLeadingAction = headerLeadingAction
         self.openChat = openChat
         self.openSettings = openSettings
+        self.openApprovals = openApprovals
     }
 
     var body: some View {
@@ -80,6 +83,16 @@ struct IPadActivityScreen: View {
                         color: OpenClawBrand.warn,
                         actionTitle: nil,
                         action: nil)
+                    Divider().padding(.leading, 58)
+                } else if self.appModel.isAppleReviewDemoModeEnabled {
+                    ProStatusRow(
+                        icon: "hand.raised.fill",
+                        title: "Example approval",
+                        detail: "Open Approvals to preview what a terminal request looks like.",
+                        value: "preview",
+                        color: OpenClawBrand.warn,
+                        actionTitle: "Approvals",
+                        action: self.openApprovals)
                     Divider().padding(.leading, 58)
                 }
 
