@@ -262,7 +262,7 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(steps).toBe(977);
   });
 
-  it("event-loop-safe for 1ms interval with never-active window", () => {
+  it("bounded at 604k iterations for 1ms interval with never-active window", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
@@ -274,8 +274,58 @@ describe("seekNextActivePhaseDueMs", () => {
     const elapsedMs = performance.now() - t0;
 
     expect(result).toBe(startMs);
-    // 1M iterations in V8 should complete well within 50ms
+    // Batched at 1s steps → 604,800 iterations. Trivial predicate: ~3ms.
     expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it("returns startMs directly when already active for sub-second intervals", () => {
+    // 500ms interval, batched at 1s (multiplier=2). startMs at 16:59:59.500
+    // is within the 09-17 active window — function returns it without
+    // backward walk because the first candidate is already active.
+    const startMs = Date.parse("2026-01-01T16:59:59.500Z");
+    const intervalMs = 500;
+    const isActive = (ms: number) => {
+      const hour = new Date(ms).getUTCHours();
+      return hour >= 9 && hour < 17;
+    };
+
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs,
+      phaseMs: 0,
+      isActive,
+    });
+
+    // startMs itself is active → return it directly (no backward walk)
+    expect(result).toBe(startMs);
+    const steps = (result - startMs) / intervalMs;
+    expect(Number.isInteger(steps)).toBe(true);
+  });
+
+  it("backward walk returns earliest active slot for sub-second batch transition", () => {
+    // 500ms interval, batched at 1s. Start at 08:59:59.500 (inactive).
+    // Next batch candidate at 09:00:00.500 is active — backward walk
+    // over the gap finds the true first active slot at 09:00:00.000.
+    const startMs = Date.parse("2026-01-01T08:59:59.500Z");
+    const intervalMs = 500;
+    const isActive = (ms: number) => {
+      const hour = new Date(ms).getUTCHours();
+      return hour >= 9 && hour < 17;
+    };
+
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs,
+      phaseMs: 0,
+      isActive,
+    });
+
+    // The first active phase slot is the first phase candidate >= 09:00
+    // 09:00:00.000 - 08:59:59.500 = 500ms = 1 * intervalMs
+    expect(result).toBe(Date.parse("2026-01-01T09:00:00.000Z"));
+    const steps = (result - startMs) / intervalMs;
+    expect(Number.isInteger(steps)).toBe(true);
+    expect(steps).toBe(1);
   });
 
   it("falls back to startMs after 7-day horizon for intervals without active slot", () => {

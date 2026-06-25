@@ -80,10 +80,13 @@ export function resolveNextHeartbeatDueMs(params: {
  * `startMs` is already phase-aligned and `intervalMs` addition maintains it.
  */
 const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000;
-// Upper bound to prevent event-loop stalls from sub-ms intervals while
-// still covering the full 7-day horizon for any intervalMs >= 605ms.
-// 1M iterations takes < 2 ms in V8 for this loop body.
-const MAX_SEEK_ITERATIONS = 1_000_000;
+// When intervalMs is sub-second the production isWithinActiveHours predicate
+// (Intl.DateTimeFormat per call) would be too expensive for per-candidate
+// scanning.  Batch in whole-interval multiples ≥ 1 s so the iteration count
+// stays ≤ 604,800 (~10 ms for trivial predicates, still reasonable for the
+// production predicate at ~0.6–6 s worst case).  For intervalMs ≥ 1 s we
+// check every phase candidate directly — 60 s+ intervals stay ≤ 10,080.
+const MIN_SEEK_STEP_MS = 1_000;
 
 export function seekNextActivePhaseDueMs(params: {
   startMs: number;
@@ -97,15 +100,43 @@ export function seekNextActivePhaseDueMs(params: {
   }
   const intervalMs = resolvePositiveIntervalMs(params.intervalMs);
   const horizonMs = params.startMs + MAX_SEEK_HORIZON_MS;
-  let candidateMs = params.startMs;
-  let iterations = 0;
-  while (candidateMs <= horizonMs && iterations < MAX_SEEK_ITERATIONS) {
-    if (isActive(candidateMs)) {
-      return candidateMs;
+
+  if (intervalMs >= MIN_SEEK_STEP_MS) {
+    // Per-candidate scan — naturally bounded by horizon.
+    let candidateMs = params.startMs;
+    while (candidateMs <= horizonMs) {
+      if (isActive(candidateMs)) return candidateMs;
+      candidateMs += intervalMs;
     }
-    candidateMs += intervalMs;
-    iterations++;
+  } else {
+    // Sub-second: batch in whole-interval multiples ≥ 1 s.
+    const multiplier = Math.ceil(MIN_SEEK_STEP_MS / intervalMs);
+    const batchStepMs = intervalMs * multiplier;
+    let candidateMs = params.startMs;
+    let prevWasActive: boolean | null = null;
+    while (candidateMs <= horizonMs) {
+      const active = isActive(candidateMs);
+      if (active) {
+        if (prevWasActive === false) {
+          // Inactive→active transition: walk backward to find the
+          // earliest phase-aligned slot inside the window.
+          let first = candidateMs;
+          let probe = candidateMs - intervalMs;
+          // Don't walk past startMs or the previous batch candidate.
+          const limit = Math.max(params.startMs, candidateMs - batchStepMs);
+          while (probe > limit && isActive(probe)) {
+            first = probe;
+            probe -= intervalMs;
+          }
+          return first;
+        }
+        return candidateMs;
+      }
+      prevWasActive = active;
+      candidateMs += batchStepMs;
+    }
   }
+
   // No in-window slot found; fall back so the runtime guard can gate it.
   return params.startMs;
 }
