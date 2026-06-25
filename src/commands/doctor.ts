@@ -22,7 +22,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       );
       for (const target of report.targets) {
         outputRuntime.log(
-          `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
+          `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, archived-unreferenced-jsonl=${target.archivedUnreferencedJsonlFiles.length}, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
         );
         for (const issue of target.issues.slice(0, 10)) {
           outputRuntime.log(

@@ -62,6 +62,8 @@ describe("doctorCommand", () => {
       mode: "inspect",
       targets: [],
       totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
         importedEntries: 0,
         importedTranscriptEvents: 0,
         issues: 0,
