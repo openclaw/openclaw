@@ -1110,8 +1110,8 @@ describe("sessions tools", () => {
     const fireDetails = sessionsSendDetails(fire.details);
     expect(fireDetails.status).toBe("accepted");
     expect(fireDetails.runId).toBe("run-1");
-    expect(fireDetails.delivery?.status).toBe("pending");
-    expect(fireDetails.delivery?.mode).toBe("announce");
+    // delivery is omitted when A2A runs asynchronously — "pending" provides no value (#96020)
+    expect(fireDetails.delivery).toBeUndefined();
     await waitForCalls(() => agentCallCount, 3);
     await waitForCalls(() => waitCallCount, 3);
     await waitForCalls(() => historyCallCount, 3);
@@ -1125,8 +1125,8 @@ describe("sessions tools", () => {
     const waitedDetails = sessionsSendDetails(waited.details);
     expect(waitedDetails.status).toBe("ok");
     expect(waitedDetails.reply).toBe("done");
-    expect(waitedDetails.delivery?.status).toBe("pending");
-    expect(waitedDetails.delivery?.mode).toBe("announce");
+    // delivery is omitted when A2A runs asynchronously — "pending" provides no value (#96020)
+    expect(waitedDetails.delivery).toBeUndefined();
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
@@ -1225,7 +1225,8 @@ describe("sessions tools", () => {
     expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
     expect(details.runId).toBe("run-pending-model-error");
     expect(details.sentBeforeError).toBe(true);
-    expect(details.delivery?.status).toBe("pending");
+    // delivery is omitted when A2A runs asynchronously — "pending" provides no value (#96020)
+    expect(details.delivery).toBeUndefined();
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
     await vi.waitFor(() =>
       expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(2),
@@ -1477,8 +1478,8 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(targetKey);
-    expect(details.delivery?.status).toBe("pending");
-    expect(details.delivery?.mode).toBe("announce");
+    // delivery is omitted when A2A runs asynchronously — "pending" provides no value (#96020)
+    expect(details.delivery).toBeUndefined();
 
     await vi.waitFor(
       () => {
@@ -1569,6 +1570,8 @@ describe("sessions tools", () => {
     expect(details.error).toContain("queue_message_failed reason=runtime_rejected");
     expect(details.error).toContain("caller-active-session");
     expect(details.error).not.toContain("fallback_failed");
+    // delivery is omitted when A2A runs asynchronously — "pending" provides no value (#96020)
+    expect(details.delivery).toBeUndefined();
     const queuedText = queueMessage.mock.calls[0]?.[0];
     expect(queuedText).toContain("[Inter-session message]");
     expect(queuedText).toContain("[TASK-COMPLETE] re-portal occupancy ready");
