@@ -192,6 +192,7 @@ export function normalizePostCompactionDelegate(
       : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+    ...(delegate.model ? { model: delegate.model } : {}),
   };
 }
 
@@ -580,6 +581,7 @@ export async function deliverQueuedPostCompactionDelegate(
         : {}),
       ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
       drainsContinuationDelegateQueue: true,
+      ...(params.entry.model ? { model: params.entry.model } : {}),
       ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
     },
     {

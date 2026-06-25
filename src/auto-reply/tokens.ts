@@ -341,6 +341,7 @@ type DelegateDirectiveState = {
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
   traceparent?: string;
+  model?: string;
 };
 
 function splitDirectiveAssignment(segment: string): { key: string; value: string } | null {
@@ -442,6 +443,21 @@ function parseDelegateDirective(
     return { status: "applied" };
   }
 
+  if (assignment.key === "model") {
+    // Provider/model override forwarded to the spawned delegate. The model ref
+    // is not validated here; unknown models resolve downstream at spawn time,
+    // mirroring sessions_spawn. An empty value is malformed and rejects the token.
+    // The "default" sentinel means "inherit the parent model" (no override),
+    // matching the tool form's normalizeToolModelOverride so both surfaces agree.
+    if (!assignment.value) {
+      return { status: "invalid" };
+    }
+    if (assignment.value.toLowerCase() !== "default") {
+      state.model = assignment.value;
+    }
+    return { status: "applied" };
+  }
+
   return { status: "unknown" };
 }
 
@@ -525,6 +541,7 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
       targetSessionKeys,
       fanoutMode,
       traceparent,
+      model,
     } = parsedBody.directives;
 
     // Parse optional +Ns delay suffix (e.g. "+30s", "+5s")
@@ -551,6 +568,7 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode } : {}),
         ...(traceparent ? { traceparent } : {}),
+        ...(model ? { model } : {}),
       };
     }
   }

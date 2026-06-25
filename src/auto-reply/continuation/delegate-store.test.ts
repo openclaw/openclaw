@@ -286,6 +286,26 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegate.traceparent).toBeUndefined();
   });
 
+  it("preserves model override through TaskFlow round-trip", () => {
+    enqueuePendingDelegate("session-1", {
+      task: "model task",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    expect(consumePendingDelegates("session-1")[0]).toMatchObject({
+      task: "model task",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+  });
+
+  it("omits model when the TaskFlow row has no override", () => {
+    enqueuePendingDelegate("session-1", { task: "modelless task" });
+
+    const delegate = consumePendingDelegates("session-1")[0];
+    expect(delegate.task).toBe("modelless task");
+    expect(delegate.model).toBeUndefined();
+  });
+
   it("decodes legacy silent and silentWake dual-flag rows as silent-wake", () => {
     const flowId = queueRawPendingFlow("session-1", {
       kind: "continuation_delegate",

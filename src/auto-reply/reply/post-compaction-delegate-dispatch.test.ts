@@ -45,6 +45,7 @@ function delegate(
     ...(overrides?.silent != null ? { silent: overrides.silent } : {}),
     ...(overrides?.silentWake != null ? { silentWake: overrides.silentWake } : {}),
     ...(overrides?.traceparent ? { traceparent: overrides.traceparent } : {}),
+    ...(overrides?.model ? { model: overrides.model } : {}),
   };
 }
 
@@ -485,6 +486,36 @@ describe("post-compaction delegate dispatch extraction", () => {
     );
   });
 
+  it("threads the delegate model override into queued post-compaction deliveries", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      pendingPostCompactionDelegates: [],
+    };
+    const { deps, enqueuePostCompactionDelegateDelivery } = createDispatchDeps({
+      staged: [delegate("staged", { model: "github-copilot/claude-haiku-4.5" })],
+    });
+
+    const result = await dispatchPostCompactionDelegates(
+      {
+        cfg,
+        compactionCount: 3,
+        followupRun: createFollowupRun(),
+        postCompactionDelegatesToPreserve: [],
+        sessionEntry,
+        sessionKey: "main",
+      },
+      deps,
+    );
+    await flushMicrotasks();
+
+    expect(result).toEqual({ queuedDelegates: 1, droppedDelegates: 0 });
+    expect(enqueuePostCompactionDelegateDelivery.mock.calls[0][0].delegate).toMatchObject({
+      task: "staged",
+      model: "github-copilot/claude-haiku-4.5",
+    });
+  });
+
   it("preserves delegate-specific traceparent over request_compaction traceparent", async () => {
     const delegateTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const sessionEntry: SessionEntry = {
@@ -830,6 +861,26 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: queued delegate",
         { sessionKey: "main", traceparent },
+      );
+    });
+  });
+
+  it("threads the delegate model override when queued post-compaction replay spawns a child", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const { deps, spawnSubagentDirect } = createDeliveryDeps({ storePath });
+
+      await deliverQueuedPostCompactionDelegate(
+        {
+          entry: createQueuedEntry({ model: "github-copilot/claude-sonnet-4.6" }),
+        },
+        deps,
+      );
+
+      expect(spawnSubagentDirect).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "github-copilot/claude-sonnet-4.6" }),
+        expect.any(Object),
       );
     });
   });

@@ -172,11 +172,12 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
       "targetSessionKeys",
       "fanoutMode",
       "traceparent",
+      "model",
     ].toSorted();
     const actualKeys = Object.keys(properties).toSorted();
     expect(
       actualKeys,
-      `continue_delegate descriptor must advertise exactly [task, delaySeconds, mode, targetSessionKey, targetSessionKeys, fanoutMode, traceparent]; got [${actualKeys.join(", ")}]`,
+      `continue_delegate descriptor must advertise exactly [task, delaySeconds, mode, targetSessionKey, targetSessionKeys, fanoutMode, traceparent, model]; got [${actualKeys.join(", ")}]`,
     ).toEqual(expectedKeys);
 
     // task is required (model-facing contract).

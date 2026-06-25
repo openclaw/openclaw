@@ -515,6 +515,31 @@ describe("tool delegate dispatch contract", () => {
     );
   });
 
+  it("threads the persisted model override into spawned continuation runs", async () => {
+    const sessionKey = "session-delegate-model";
+    enqueuePendingDelegate(sessionKey, {
+      task: "continue on a specific model",
+      model: "github-copilot/claude-haiku-4.5",
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.stringContaining("continue on a specific model"),
+        model: "github-copilot/claude-haiku-4.5",
+      }),
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+      }),
+    );
+  });
+
   it("resolves persisted logical traceparents before spawning continuation runs", async () => {
     const sessionKey = "session-delegate-exported-traceparent";
     const logicalTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";

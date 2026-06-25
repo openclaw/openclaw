@@ -39,7 +39,7 @@ export {
 //
 // Downstream callers (agent-runner persist path, delivery queue) speak
 // SessionPostCompactionDelegate { task, createdAt, firstArmedAt?, silent?,
-// silentWake?, targetSessionKey?, targetSessionKeys?, fanoutMode?, traceparent? }.
+// silentWake?, targetSessionKey?, targetSessionKeys?, fanoutMode?, traceparent?, model? }.
 // The canonical store speaks StagedPostCompactionDelegate { task, stagedAt, firstArmedAt? }
 // and returns PendingContinuationDelegate { task, mode?, firstArmedAt? }.
 // ---------------------------------------------------------------------------
@@ -57,6 +57,7 @@ export function stagePostCompactionDelegate(
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+    ...(delegate.model ? { model: delegate.model } : {}),
   });
 }
 
@@ -84,6 +85,9 @@ export function consumeStagedPostCompactionDelegates(
     }
     if (d.traceparent) {
       delegate.traceparent = d.traceparent;
+    }
+    if (d.model) {
+      delegate.model = d.model;
     }
     return delegate;
   });

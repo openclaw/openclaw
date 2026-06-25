@@ -140,6 +140,7 @@ export type QueuedSessionDeliveryPayload = (
       targetSessionKey?: string;
       targetSessionKeys?: string[];
       fanoutMode?: "tree" | "all";
+      model?: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     }
@@ -222,6 +223,7 @@ export function buildPostCompactionDelegateDeliveryPayload(params: {
       ? { targetSessionKeys: params.delegate.targetSessionKeys }
       : {}),
     ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
+    ...(params.delegate.model ? { model: params.delegate.model } : {}),
     ...(params.delegate.traceparent ? { traceparent: params.delegate.traceparent } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
     idempotencyKey:

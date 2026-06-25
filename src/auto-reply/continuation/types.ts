@@ -44,6 +44,12 @@ export type ContinuationSignal =
       targetSessionKeys?: string[];
       fanoutMode?: ContinuationDelegateFanoutMode;
       traceparent?: string;
+      /**
+       * Optional provider/model override for the spawned delegate. Omitted =>
+       * the delegate inherits the dispatching session's model (existing
+       * behavior). Same contract as `sessions_spawn(model)`.
+       */
+      model?: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -68,6 +74,11 @@ export type PendingContinuationDelegate = {
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
   traceparent?: string;
+  /**
+   * Optional provider/model override forwarded to the spawned delegate.
+   * Omitted => inherit the dispatching session's model.
+   */
+  model?: string;
   /**
    * Internal TaskFlow metadata carried from consume → dispatch so downstream
    * spawn/release failures can flip the row from succeeded → failed without
@@ -145,6 +156,8 @@ export type StagedPostCompactionDelegate = {
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
   traceparent?: string;
+  /** Optional provider/model override; omitted => inherit parent. */
+  model?: string;
 };
 
 // ---------------------------------------------------------------------------

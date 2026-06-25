@@ -80,6 +80,7 @@ const PendingDelegateStateSchema = z
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
     traceparent: TraceparentStateSchema,
+    model: z.string().min(1).optional(),
     releasedAt: z.number().int().nonnegative().optional(),
     childSessionKey: z.string().min(1).optional(),
   })
@@ -160,6 +161,7 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(traceparent ? { traceparent } : {}),
+    ...(delegate.model ? { model: delegate.model } : {}),
   };
 }
 
@@ -405,6 +407,7 @@ function flowToDelegate(
       : {}),
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
+    ...(state.model ? { model: state.model } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -669,6 +672,7 @@ export function stagePostCompactionDelegate(
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+    ...(delegate.model ? { model: delegate.model } : {}),
   });
 }
 

@@ -466,4 +466,70 @@ describe("continue_delegate tool", () => {
       }),
     ]);
   });
+
+  it("threads a model override into the enqueued delegate", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "route to a cheaper model",
+      model: "github-copilot/claude-haiku-4.5",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      model: "github-copilot/claude-haiku-4.5",
+    });
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "route to a cheaper model",
+        model: "github-copilot/claude-haiku-4.5",
+      }),
+    ]);
+  });
+
+  it("omits the model override when none is provided (inherits the parent model)", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, { task: "inherit parent model" });
+
+    expect(result).not.toHaveProperty("model");
+    const delegates = consumePendingDelegates("test-session");
+    expect(delegates).toHaveLength(1);
+    expect(delegates[0].model).toBeUndefined();
+  });
+
+  it('treats model="default" as no override (inherits the parent model)', async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "explicit default model",
+      model: "default",
+    });
+
+    expect(result).not.toHaveProperty("model");
+    const delegates = consumePendingDelegates("test-session");
+    expect(delegates).toHaveLength(1);
+    expect(delegates[0].model).toBeUndefined();
+  });
+
+  it("threads the model override into staged post-compaction delegates", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "carry compacted state to a specific model",
+      mode: "post-compaction",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    expect(result).toMatchObject({
+      status: "queued-for-compaction",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+    expect(consumeStagedPostCompactionDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "carry compacted state to a specific model",
+        model: "github-copilot/claude-sonnet-4.6",
+      }),
+    ]);
+  });
 });

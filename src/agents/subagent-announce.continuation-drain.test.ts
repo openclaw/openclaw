@@ -42,6 +42,18 @@ const dispatchToolDelegatesMock = vi.fn(
     rejected: 0,
   }),
 );
+
+// In-function tool-delegate chain-hop coverage: feed consumePendingDelegates so
+// runSubagentAnnounceFlow's own drain loop (sibling to drainChildContinuationQueue)
+// runs, and capture the spawn it issues to assert model propagation.
+type ConsumedToolDelegate = { task: string; model?: string };
+const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
+const markPendingDelegateFailedMock = vi.fn();
+const spawnSubagentDirectMock = vi.fn(async (_params: Record<string, unknown>, _ctx: unknown) => ({
+  status: "accepted" as const,
+  childSessionKey: "agent:main:subagent:grandchild",
+  runId: "run-grandchild",
+}));
 const resolveContinuationRuntimeConfigMock = vi.fn((_cfg?: unknown) => ({
   enabled: true,
   defaultDelayMs: 15_000,
@@ -193,6 +205,21 @@ vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
   dispatchToolDelegates: (params: unknown) => dispatchToolDelegatesMock(params),
 }));
 
+// Feed the in-function tool-delegate drain (subagent-announce.ts) and capture
+// its spawn. `consumePendingDelegates` is mocked on the canonical store module
+// (not the barrel shim) because the forks pool does not intercept barrel
+// re-exports; the shim forwards the canonical binding.
+vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
+  consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
+  markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+}));
+
+vi.mock("./subagent-spawn.js", () => ({
+  spawnSubagentDirect: (params: Record<string, unknown>, ctx: unknown) =>
+    spawnSubagentDirectMock(params, ctx),
+}));
+
 vi.mock("../auto-reply/continuation/config.js", () => ({
   resolveContinuationRuntimeConfig: (cfg?: unknown) => resolveContinuationRuntimeConfigMock(cfg),
 }));
@@ -268,6 +295,13 @@ describe("subagent-announce continuation drain (F7)", () => {
     deliverSubagentAnnouncementMock
       .mockReset()
       .mockResolvedValue({ delivered: true, path: "direct" });
+    consumePendingDelegatesMock.mockReset().mockReturnValue([]);
+    markPendingDelegateFailedMock.mockReset();
+    spawnSubagentDirectMock.mockReset().mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:grandchild",
+      runId: "run-grandchild",
+    });
   });
 
   it("drains the child session's continue_delegate queue using inherited chain state", async () => {
@@ -845,5 +879,90 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(deliverSubagentAnnouncementMock).toHaveBeenCalledWith(
       expect.objectContaining({ continuationTriggerOverride: "delegate-return" }),
     );
+  });
+
+  // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
+  // already propagates model) must forward an explicit continue_delegate model
+  // override to the grandchild spawn so a tool-delegated hop honors the requested
+  // provider/model instead of silently inheriting the parent's.
+  it("propagates a tool-delegate model override into the in-function chain-hop spawn", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    consumePendingDelegatesMock.mockReturnValue([
+      { task: "investigate the failing shard", model: "github-copilot/claude-sonnet-4.6" },
+    ]);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-chain-hop",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Tool-delegated from sub-agent (depth 1): prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    // The chain-hop spawn is fire-and-forget inside the drain loop; flush the
+    // microtask/timer queue so the spawn lands before asserting.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(consumePendingDelegatesMock).toHaveBeenCalledWith("agent:main:subagent:test");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0];
+    expect(spawnParams.task).toEqual(
+      expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
+    );
+    expect(spawnParams.drainsContinuationDelegateQueue).toBe(true);
+    expect(spawnParams.model).toBe("github-copilot/claude-sonnet-4.6");
+  });
+
+  it("omits model from the in-function chain-hop spawn when the tool delegate has none", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    consumePendingDelegatesMock.mockReturnValue([{ task: "inherit the parent model" }]);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-chain-hop",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Tool-delegated from sub-agent (depth 1): prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0];
+    expect(spawnParams.task).toEqual(
+      expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
+    );
+    // Backward-compat: omitted model => no key => grandchild inherits parent model.
+    expect("model" in spawnParams).toBe(false);
   });
 });
