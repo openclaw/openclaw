@@ -234,9 +234,41 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
     // Must be near-instant — not stall on unbounded iteration
     expect(elapsedMs).toBeLessThan(100);
+    // Returned candidate must be reachable from startMs by whole intervalMs steps
+    const steps = (result - startMs) / intervalMs;
+    expect(Number.isInteger(steps)).toBe(true);
   });
 
-  it("stays bounded for 1ms interval with never-active window", () => {
+  it("preserves phase alignment for non-divisor sub-minute intervals (45s)", () => {
+    // 45s interval — MIN_SEEK_STEP_MS (60s) is NOT a multiple of 45s.
+    // The seek must batch in multiples of 45s (90s = 2×45s) so every
+    // candidate remains on the phase-aligned sequence.
+    const startMs = Date.parse("2026-01-01T17:00:00.000Z");
+    const intervalMs = 45_000;
+    const isActive = (ms: number) => {
+      const hour = new Date(ms).getUTCHours();
+      return hour >= 9 && hour < 17;
+    };
+
+    const t0 = performance.now();
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs,
+      phaseMs: 0,
+      isActive,
+    });
+    const elapsedMs = performance.now() - t0;
+
+    // First active slot at 09:00 next day
+    expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
+    // Must be bounded despite non-divisor step floor
+    expect(elapsedMs).toBeLessThan(100);
+    // Must be reachable by whole 45s steps from startMs (09:00 - 17:00 = 16h = 960min = 57,600s)
+    const steps = (result - startMs) / intervalMs;
+    expect(Number.isInteger(steps)).toBe(true);
+  });
+
+  it("returns a phase-aligned candidate for 1ms interval with never-active window", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
@@ -248,7 +280,7 @@ describe("seekNextActivePhaseDueMs", () => {
     const elapsedMs = performance.now() - t0;
 
     expect(result).toBe(startMs);
-    // With 60s seek floor, max ~10,080 iterations — sub-millisecond
+    // With batched 60s steps, max ~10,080 iterations — sub-millisecond
     expect(elapsedMs).toBeLessThan(50);
   });
 
