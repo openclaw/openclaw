@@ -87,6 +87,11 @@ export function createDiscordDraftPreviewController(params: {
       previewToolProgressEnabled,
     });
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
+  // Single source of truth for the Discord window-thinking gate (default-off).
+  // Drives both the compositor render gate AND the subscriber opt-in, so that
+  // when reasoning is off no reasoning callback side effects (status reaction,
+  // counters, render) occur unless the operator opts in via this config.
+  const reasoningProgressEnabled = resolveChannelStreamingProgressThinking(params.discordConfig);
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
     mode: discordStreamMode,
@@ -97,7 +102,7 @@ export function createDiscordDraftPreviewController(params: {
     // channels keep their existing window render until they adopt this feature.
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
-    reasoningGate: resolveChannelStreamingProgressThinking(params.discordConfig),
+    reasoningGate: reasoningProgressEnabled,
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -138,6 +143,7 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
+    reasoningProgressEnabled,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {

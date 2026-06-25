@@ -1170,7 +1170,13 @@ async function processDiscordMessageInner(
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
-        streamReasoningInNonStreamModes: true,
+        // Opt into non-stream reasoning ONLY when this Discord channel enables
+        // the window-thinking lane (channels.discord.streaming.progress.thinking,
+        // default-off). Gating the opt-in — not just the compositor render —
+        // ensures no reasoning callback side effects (e.g. the thinking status
+        // reaction) fire in plain mode when the config is off. In stream mode the
+        // subscriber keeps main's behavior regardless of this flag.
+        streamReasoningInNonStreamModes: draftPreview.reasoningProgressEnabled,
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;
