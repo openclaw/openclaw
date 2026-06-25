@@ -2856,6 +2856,42 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
+  it("resolves auth-profile before loading active provider quota windows", async () => {
+    mockCopilotQuotaWindows();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        requestShaping: {
+          authMode: "auth-profile",
+        },
+        agentMeta: {
+          provider: "github-copilot",
+          model: "gpt-5.5",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      config: copilotTokenConfig,
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(loadProviderUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: ["github-copilot"],
+        timeoutMs: 2500,
+      }),
+    );
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("Premium 86% left · Chat 100% left");
+  });
+
   it("keeps the full usage footer when provider quota loading fails", async () => {
     loadProviderUsageSummaryMock.mockRejectedValueOnce(new Error("usage endpoint unavailable"));
     runEmbeddedAgentMock.mockResolvedValueOnce({

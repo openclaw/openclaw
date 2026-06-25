@@ -46,6 +46,28 @@ function resolveReplyFooterUsageCredentialType(
   return undefined;
 }
 
+function resolveReplyFooterUsageAuthLabel(params: {
+  provider?: string;
+  authMode?: string;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): string | undefined {
+  if (resolveReplyFooterUsageCredentialType(params.authMode)) {
+    return params.authMode;
+  }
+
+  const configuredProviders = params.config.models?.providers;
+  if (!configuredProviders || !params.provider || !(params.provider in configuredProviders)) {
+    return undefined;
+  }
+
+  return (
+    resolveModelAuthMode(params.provider, params.config, undefined, {
+      workspaceDir: params.workspaceDir,
+    }) ?? undefined
+  );
+}
+
 async function loadReplyFooterUsageWindowLine(params: {
   provider?: string;
   authLabel?: string;
@@ -201,16 +223,12 @@ export const resolveResponseUsageLine = async (params: {
     return undefined;
   }
 
-  const configuredProviders = params.config.models?.providers;
-  const hasConfiguredProvider =
-    configuredProviders && params.provider && params.provider in configuredProviders;
-  const authLabel =
-    params.authMode ??
-    (hasConfiguredProvider
-      ? (resolveModelAuthMode(params.provider, params.config, undefined, {
-          workspaceDir: params.workspaceDir,
-        }) ?? undefined)
-      : undefined);
+  const authLabel = resolveReplyFooterUsageAuthLabel({
+    provider: params.provider,
+    authMode: params.authMode,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
   const providerUsageLine = await loadReplyFooterUsageWindowLine({
     provider: params.provider,
     authLabel,
