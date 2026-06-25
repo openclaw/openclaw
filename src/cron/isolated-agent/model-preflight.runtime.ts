@@ -4,8 +4,10 @@ import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 /** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { logDebug } from "../../logger.js";
 import { resolveApiKeyForProvider } from "../../plugin-sdk/provider-auth-runtime.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
@@ -134,7 +136,7 @@ function formatUnavailableReason(params: {
   return [
     `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
     `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
+    `Last error: ${formatErrorMessage(params.error)}`,
   ].join(" ");
 }
 
@@ -163,13 +165,18 @@ async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
   apiKey?: string;
+  extraHeaders?: Record<string, string>;
 }): Promise<void> {
-  const headers: Record<string, string> | undefined = params.apiKey
-    ? { Authorization: `Bearer ${params.apiKey}` }
-    : undefined;
+  const headers: Record<string, string> = {};
+  if (params.apiKey) {
+    headers["Authorization"] = `Bearer ${params.apiKey}`;
+  }
+  if (params.extraHeaders) {
+    Object.assign(headers, params.extraHeaders);
+  }
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET", ...(headers ? { headers } : {}) },
+    init: { method: "GET", ...(Object.keys(headers).length > 0 ? { headers } : {}) },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
@@ -189,6 +196,8 @@ export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentDir?: string;
+  workspaceDir?: string;
   nowMs?: number;
 }): Promise<CronModelProviderPreflightResult> {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
@@ -223,11 +232,26 @@ export async function preflightCronModelProvider(params: {
   // Auth resolution for preflight probe
   let resolvedApiKey: string | undefined;
 
+  let extraHeaders: Record<string, string> | undefined;
+
   // 1. Check request.auth config override (user-specified token takes highest precedence)
   if (providerConfig?.request?.auth?.mode === "authorization-bearer") {
     const requestToken = providerConfig.request.auth.token;
     if (typeof requestToken === "string" && requestToken.trim().length > 0) {
       resolvedApiKey = requestToken.trim();
+    }
+  } else if (providerConfig?.request?.auth?.mode === "header") {
+    const headerAuth = providerConfig.request.auth;
+    const headerName = headerAuth.headerName;
+    const value = headerAuth.value;
+    if (
+      typeof headerName === "string" &&
+      headerName.trim().length > 0 &&
+      typeof value === "string" &&
+      value.trim().length > 0
+    ) {
+      const prefix = typeof headerAuth.prefix === "string" ? headerAuth.prefix : "";
+      extraHeaders = { [headerName.trim()]: `${prefix}${value.trim()}` };
     }
   }
 
@@ -247,9 +271,10 @@ export async function preflightCronModelProvider(params: {
       ) {
         resolvedApiKey = resolved.apiKey;
       }
-    } catch {
-      // Missing credentials is non-fatal for preflight
-      // The model runner will produce a proper auth error
+    } catch (err) {
+      logDebug(
+        `[preflight] resolveApiKeyForProvider failed: ${String(err)} (non-fatal for preflight)`,
+      );
     }
   }
   let result: EndpointPreflightResult;
@@ -258,6 +283,7 @@ export async function preflightCronModelProvider(params: {
       api,
       baseUrl,
       apiKey: resolvedApiKey,
+      extraHeaders,
     });
     result = { status: "available" };
   } catch (error) {

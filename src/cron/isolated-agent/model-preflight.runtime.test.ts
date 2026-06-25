@@ -428,8 +428,8 @@ describe("preflightCronModelProvider", () => {
     if (result.status !== "unavailable") {
       throw new Error(`expected unavailable, got ${result.status}`);
     }
-    expect(result.reason).toContain("[REDACTED]");
     expect(result.reason).not.toContain("sk-test-secret-99999");
+    expect(result.reason).toContain("sk-tes");
   });
 
   it("caches preflight result independently of auth variations", async () => {
@@ -474,5 +474,271 @@ describe("preflightCronModelProvider", () => {
     expect(second).toEqual({ status: "available" });
     // fetchWithSsrFGuard should only have been called once (first call only)
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ── header mode auth tests ──
+
+  it("sends custom headers when request.auth.mode is header", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-API-Key",
+                  value: "my-secret-key",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("X-API-Key", "my-secret-key");
+  });
+
+  it("includes prefix in header value when request.auth.mode is header with a prefix", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "Authorization",
+                  value: "my-custom-token",
+                  prefix: "CustomBearer ",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("Authorization", "CustomBearer my-custom-token");
+  });
+
+  it("skips header mode auth when headerName is empty or whitespace-only", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "   ",
+                  value: "some-value",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // No custom headers should be set when headerName is empty
+    expect(request.init?.headers).toBeUndefined();
+  });
+
+  it("skips header mode auth when value is empty or whitespace-only", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-API-Key",
+                  value: "   ",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // No custom headers should be set when value is whitespace-only
+    expect(request.init?.headers).toBeUndefined();
+  });
+
+  it("falls through to resolveApiKeyForProvider for Authorization when using header mode", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "sk-fallback-key",
+      mode: "api-key",
+      source: "config",
+    });
+
+    await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-Custom",
+                  value: "custom-val",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    // resolveApiKeyForProvider should still be called for Authorization header
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalled();
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("X-Custom", "custom-val");
+    expect(request.init?.headers).toHaveProperty("Authorization", "Bearer sk-fallback-key");
+  });
+
+  it("sends only custom header (no Authorization) when header mode is used and resolveApiKeyForProvider returns empty", async () => {
+    mockReachableResponse(200);
+    // Default mock returns { mode: "api-key" } with no apiKey
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-Custom",
+                  value: "custom-val",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // Only the custom header, no Authorization, because resolveApiKeyForProvider returned empty
+    expect(request.init?.headers).toEqual({ "X-Custom": "custom-val" });
+  });
+
+  it("uses authorization-bearer over header mode (else-if exclusivity)", async () => {
+    mockReachableResponse(200);
+    // Config sets mode to authorization-bearer, not header
+    // Even if headerName/value are present, they should be ignored
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "bearer-token",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toEqual({
+      Authorization: "Bearer bearer-token",
+    });
+  });
+
+  it("defaults prefix to empty string when not provided in header mode", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            mylocal: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: {
+                auth: {
+                  mode: "header",
+                  headerName: "X-Auth",
+                  value: "raw-value",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "mylocal",
+      model: "my-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    // Without prefix, the value should be sent as-is
+    expect(request.init?.headers).toHaveProperty("X-Auth", "raw-value");
   });
 });
