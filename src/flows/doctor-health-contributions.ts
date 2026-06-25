@@ -503,18 +503,14 @@ async function runCoreContributionHealthRepair(
   );
   ctx.cfg = result.config;
   // Detection-only checks (no repair, e.g. default-account-routing) report through
-  // `findings` and have nothing in `changes`/`warnings`; surface those so
-  // `doctor --fix` keeps printing the warning the direct doctor-config-flow path
-  // used to. Repairable checks (e.g. browser-clawd-profile-residue) report
-  // outcomes via `changes`/`warnings`, so their pre-repair `findings` must NOT be
-  // re-rendered here or `--fix` would warn about residue it just archived.
-  const detectionOnlyCheckIds = new Set(
-    checks.filter((check) => check.repair === undefined).map((check) => check.id),
-  );
-  renderStructuredHealthFindings(
-    ctx,
-    result.findings.filter((finding) => detectionOnlyCheckIds.has(finding.checkId)),
-  );
+  // `findings`; surface those so `doctor --fix` keeps printing the warning the
+  // direct doctor-config-flow path used to. Repairable checks (browser-clawd
+  // residue) report via `changes`/`warnings`, and their pre-repair `findings`
+  // linger after a successful fix — rendering those would warn about something
+  // `--fix` just repaired, so skip findings whenever the batch can repair.
+  if (checks.every((check) => check.repair === undefined)) {
+    renderStructuredHealthFindings(ctx, result.findings);
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
