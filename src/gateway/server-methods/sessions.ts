@@ -45,6 +45,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { reconcilePersistedRunningSession } from "../../agents/session-running-reconciliation.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -137,13 +138,6 @@ import { assertValidParams } from "./validation.js";
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
-const STALE_NO_ACTIVE_RUN_SESSION_STATUSES = new Set([
-  "running",
-  "processing",
-  "timeout",
-  "killed",
-]);
-
 async function clearPersistedNoActiveRunSessionState(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -153,28 +147,19 @@ async function clearPersistedNoActiveRunSessionState(params: {
   if (!params.storePath) {
     return false;
   }
-  const now = Date.now();
-  return await updateSessionStore(
+  let candidateSessionKeys: string[] = [];
+  const target = await updateSessionStore(
     params.storePath,
     async (store) => {
-      const target = resolveGatewaySessionStoreTarget({
+      const resolvedTarget = resolveGatewaySessionStoreTarget({
         cfg: params.cfg,
         key: params.key,
         store,
         agentId: params.agentId,
       });
-      const targetEntry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
-      const entry = targetEntry as (SessionEntry & Record<string, unknown>) | undefined;
-      if (!entry) {
-        return false;
-      }
-      const status = typeof entry.status === "string" ? entry.status : undefined;
-      const hasBlockingStatus = Boolean(status && STALE_NO_ACTIVE_RUN_SESSION_STATUSES.has(status));
-      const hasRestartRecoveryState =
-        entry.restartRecoveryDeliveryRunId !== undefined ||
-        entry.restartRecoveryDeliveryContext !== undefined;
-      if (!hasBlockingStatus && !hasRestartRecoveryState) {
-        return false;
+      const targetEntry = resolveFreshestSessionEntryFromStoreKeys(store, resolvedTarget.storeKeys);
+      if (!targetEntry) {
+        return undefined;
       }
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
         cfg: params.cfg,
@@ -182,20 +167,23 @@ async function clearPersistedNoActiveRunSessionState(params: {
         store,
         agentId: params.agentId,
       });
-      const writableEntry = store[primaryKey] as
-        | (SessionEntry & Record<string, unknown>)
-        | undefined;
-      if (!writableEntry) {
-        return false;
-      }
-      delete writableEntry.status;
-      delete writableEntry.restartRecoveryDeliveryRunId;
-      delete writableEntry.restartRecoveryDeliveryContext;
-      writableEntry.updatedAt = now;
-      return true;
+      candidateSessionKeys = resolvedTarget.storeKeys;
+      return { primaryKey, storeKeys: resolvedTarget.storeKeys };
     },
-    { skipSaveWhenResult: (changed) => !changed },
+    { skipSaveWhenResult: (value) => value === undefined },
   );
+  if (!target?.primaryKey) {
+    return false;
+  }
+  const result = await reconcilePersistedRunningSession({
+    storePath: params.storePath,
+    sessionKey: target.primaryKey,
+    candidateSessionKeys,
+    activeRunPresent: false,
+    reason: "sessions_abort_no_active_run",
+    safeFallbackDelivered: false,
+  });
+  return result.changed;
 }
 
 function filterSessionStoreToConfiguredAgents(

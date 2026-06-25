@@ -289,7 +289,7 @@ describe("sessions.abort agent scope", () => {
     );
   });
 
-  it("clears stale persisted session state when abort finds no active run", async () => {
+  it("reconciles stale persisted running state when abort finds no active run", async () => {
     const sessionKey = "agent:main:main";
     const originalUpdatedAt = Date.now() - 60_000;
     await withSessionStore(
@@ -337,10 +337,14 @@ describe("sessions.abort agent scope", () => {
           undefined,
         );
         const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-        expect(stored?.status).toBeUndefined();
+        expect(stored?.status).toBe("failed");
+        expect(stored?.abortedLastRun).toBe(true);
+        expect(stored?.recoveredFromStaleRunning).toBe(true);
+        expect(stored?.staleRunningRecoveryReason).toBe("sessions_abort_no_active_run");
         expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
         expect(stored?.sessionId).toBe("session-stale-no-active-run");
+        expect(stored?.endedAt).toEqual(expect.any(Number));
         expect(stored?.updatedAt).toBeGreaterThan(originalUpdatedAt);
         expect(broadcastToConnIds).toHaveBeenCalledWith(
           "sessions.changed",

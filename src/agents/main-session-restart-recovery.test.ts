@@ -1279,6 +1279,41 @@ describe("main-session-restart-recovery", () => {
     const customStore = readSessionStoreForTest(customStorePath);
     expect(defaultStore["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(customStore["agent:main:main"]?.abortedLastRun).toBe(false);
+    expect(customStore["agent:main:main"]?.status).toBe("running");
+    expect(customStore["agent:main:main"]?.recoveredFromStaleRunning).toBeUndefined();
+  });
+
+  it("reconciles startup stale running rows that are not resumable recovery targets", async () => {
+    const sessionsDir = await makeSessionsDir("openclaw");
+    const sessionKey = "agent:openclaw:telegram:group:-1003789377335:topic:25537";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "telegram-topic-stale-running",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        subagentRole: "leaf",
+      },
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      activeSessionIds: [],
+      activeSessionKeys: [],
+      updatedBeforeMs: Date.now(),
+    });
+
+    expect(result).toMatchObject({
+      marked: 0,
+      recovered: 0,
+      failed: 0,
+      reconciledStale: 1,
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
+    expect(store[sessionKey]?.status).toBe("failed");
+    expect(store[sessionKey]?.recoveredFromStaleRunning).toBe(true);
+    expect(store[sessionKey]?.staleRunningRecoveryReason).toBe("startup_stale_running_session");
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {

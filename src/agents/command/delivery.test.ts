@@ -138,6 +138,7 @@ type DeliveryStatusLike = {
   errorMessage?: unknown;
   resultCount?: unknown;
   sentBeforeError?: unknown;
+  safeFallbackDelivered?: unknown;
   payloadOutcomes?: Array<Record<string, unknown>>;
 };
 
@@ -877,6 +878,60 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         hookEffect: { cancelReason: "owned-by-other-agent" },
       },
     ]);
+  });
+
+  it("delivers a safe fallback when a safety hook blocks the native final", async () => {
+    deliverOutboundPayloadsMock
+      .mockImplementationOnce(async (params: unknown) => {
+        (
+          params as {
+            onPayloadDeliveryOutcome?: (outcome: {
+              index: number;
+              status: "suppressed";
+              reason: "cancelled_by_message_sending_hook";
+              hookEffect: { cancelReason: string; metadata: Record<string, unknown> };
+            }) => void;
+          }
+        ).onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          hookEffect: {
+            cancelReason: "presend-telegram-guard internal filesystem/runtime leak",
+            metadata: { reason: "internal_path_leak" },
+          },
+        });
+        return [];
+      })
+      .mockImplementationOnce(async (params: unknown) => {
+        const payload = (params as { payloads: ReplyPayload[] }).payloads[0];
+        return [{ channel: "slack", messageId: `safe:${payload?.text ?? ""}` }];
+      });
+
+    const delivered = await deliverMediaReplyForTest({
+      key: "agent:tester:slack:direct:alice",
+      agentId: "tester",
+    } as never);
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(2);
+    const firstCall = deliverOutboundPayloadsMock.mock.calls[0];
+    const secondCall = deliverOutboundPayloadsMock.mock.calls[1];
+    expect(firstCall).toBeDefined();
+    expect(secondCall).toBeDefined();
+    const originalPayload = (firstCall[0] as { payloads: ReplyPayload[] }).payloads[0];
+    const fallbackPayload = (secondCall[0] as { payloads: ReplyPayload[] }).payloads[0];
+    expect(originalPayload?.text).toBe("here you go");
+    expect(fallbackPayload?.text).toBe("I couldn't send that reply safely. Please try again.");
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(delivered.safeFallbackDelivered).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      reason: "safety_hook_blocked_fallback_delivered",
+      safeFallbackDelivered: true,
+    });
   });
 
   it("surfaces durable partial failures without clearing delivery retry state", async () => {
