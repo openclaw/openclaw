@@ -17,6 +17,7 @@ import {
   isLinkLocalIpAddress,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -509,13 +510,14 @@ export function buildGuardedModelFetch(
       record.cause && typeof record.cause === "object"
         ? (record.cause as Record<string, unknown>)
         : undefined;
-    const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+    const read = (value: unknown) =>
+      typeof value === "string" ? redactSensitiveUrlLikeString(value) : typeof value;
     return [
       `name=${read(record.name)}`,
       `code=${read(record.code)}`,
       `causeName=${read(cause?.name)}`,
       `causeCode=${read(cause?.code)}`,
-      `message=${error instanceof Error ? error.message : read(record.message)}`,
+      `message=${read(error instanceof Error ? error.message : record.message)}`,
     ].join(" ");
   };
   return async (input, init) => {
@@ -572,12 +574,15 @@ export function buildGuardedModelFetch(
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     const fetchStartedAt = Date.now();
     const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
+    const requestMethod = (requestInit ?? init)?.method ?? "GET";
+    const debugUrl = formatModelTransportDebugUrl(url);
+    const proxyMode = dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none";
+    const policyMode = policy ? "custom" : "default";
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
-        `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
-        `policy=${policy ? "custom" : "default"}`,
+        `method=${requestMethod} url=${debugUrl} timeoutMs=${requestTimeoutMs} ` +
+        `proxy=${proxyMode} policy=${policyMode}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
@@ -593,7 +598,9 @@ export function buildGuardedModelFetch(
     } catch (error) {
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          `method=${requestMethod} url=${debugUrl} timeoutMs=${requestTimeoutMs} ` +
+          `proxy=${proxyMode} policy=${policyMode} elapsedMs=${Date.now() - fetchStartedAt} ` +
+          summarizeError(error),
       );
       localServiceLease?.release();
       throw error;

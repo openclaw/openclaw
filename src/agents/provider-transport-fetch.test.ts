@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
@@ -127,6 +128,47 @@ describe("buildGuardedModelFetch", () => {
         model: "gpt-5.4",
       },
     });
+  });
+
+  it("logs request diagnostics when guarded model fetch fails", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-provider-transport-fetch-test");
+    try {
+      fetchWithSsrFGuardMock.mockRejectedValueOnce(
+        new Error(
+          "request timed out for https://api.openai.com/v1/responses?token=super-secret-value&safe=ok",
+        ),
+      );
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+
+      const fetcher = buildGuardedModelFetch(model, 12_345);
+      await expect(
+        fetcher("https://api.openai.com/v1/responses?token=super-secret-value&safe=ok", {
+          method: "POST",
+        }),
+      ).rejects.toThrow("request timed out");
+
+      const warning = await warnLogs.findText("[model-fetch] error provider=openai");
+      expect(warning).toBeDefined();
+      expect(warning).toContain("api=openai-responses");
+      expect(warning).toContain("model=gpt-5.4");
+      expect(warning).toContain("method=POST");
+      expect(warning).toContain("url=https://api.openai.com/v1/responses");
+      expect(warning).not.toContain("url=https://api.openai.com/v1/responses?");
+      expect(warning).toContain("timeoutMs=12345");
+      expect(warning).toContain("proxy=none");
+      expect(warning).toContain("policy=custom");
+      expect(warning).toContain(
+        "message=request timed out for https://api.openai.com/v1/responses?token=***&safe=ok",
+      );
+      expect(warning).not.toContain("super-secret-value");
+    } finally {
+      warnLogs.cleanup();
+    }
   });
 
   it("ensures configured local services before the model request", async () => {
