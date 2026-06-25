@@ -883,14 +883,21 @@ export function resolveTelegramTransport(
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
     forceFallback: (reason: string, err?: unknown) => {
+      // EADDRNOTAVAIL is a local socket allocation failure -- the kernel cannot
+      // assign a source address/port. Rotating the remote IP cannot fix this, so
+      // any fallback would be wasted work and produce misleading diagnostics.
       if (err !== undefined) {
         const codes = collectErrorCodes(err);
         if (isLocalSocketAllocationError(codes)) {
+          log.warn(
+            `telegram transport error: local socket allocation failure (EADDRNOTAVAIL) ` +
+              `-- check ephemeral port range / network extensions; remote IP rotation ` +
+              `will not help (codes=${formatErrorCodes(err)})`,
+          );
           return false;
         }
       }
-      promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason);
-      return true;
+      return promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason);
     },
     close,
   };
