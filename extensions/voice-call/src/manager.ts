@@ -18,6 +18,8 @@ import {
 } from "./manager/outbound.js";
 import {
   getCallHistoryFromStore,
+  getPersistedCallByCallId,
+  getPersistedCallByProviderCallId,
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./manager/store.js";
@@ -446,6 +448,23 @@ export class CallManager {
       providerCallIdMap: this.providerCallIdMap,
       providerCallId,
     });
+  }
+
+  /**
+   * Find a persisted call record by call id, falling back to the on-disk store
+   * when the in-memory manager has evicted the call (issue #96586).
+   */
+  async getPersistedCallByCallId(callId: string): Promise<CallRecord | null> {
+    return getPersistedCallByCallId(this.storePath, callId);
+  }
+
+  /**
+   * Find a persisted call record by provider call id (e.g. Twilio CallSid),
+   * falling back to the on-disk store when the in-memory manager has evicted
+   * the call (issue #96586).
+   */
+  async getPersistedCallByProviderCallId(providerCallId: string): Promise<CallRecord | null> {
+    return getPersistedCallByProviderCallId(this.storePath, providerCallId);
   }
 
   /**

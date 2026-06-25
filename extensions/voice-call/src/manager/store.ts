@@ -394,3 +394,52 @@ export async function getCallHistoryFromStore(
   }
   return [];
 }
+
+/**
+ * Find a persisted call record by call id. Used as a fallback when the
+ * in-memory manager has evicted a completed call but its transcript is still
+ * stored (see issue #96586).
+ */
+export async function getPersistedCallByCallId(
+  storePath: string,
+  callId: string,
+): Promise<CallRecord | null> {
+  if (!callId) {
+    return null;
+  }
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) {
+    return null;
+  }
+  try {
+    const events = readCallRecordEvents(stores);
+    return events.find((call) => call.callId === callId) ?? null;
+  } catch (err) {
+    console.error("[voice-call] Failed to read persisted call by callId:", err);
+    return null;
+  }
+}
+
+/**
+ * Find a persisted call record by provider call id (e.g. Twilio CallSid).
+ * Fallback for status lookups once the in-memory manager evicts the call.
+ */
+export async function getPersistedCallByProviderCallId(
+  storePath: string,
+  providerCallId: string,
+): Promise<CallRecord | null> {
+  if (!providerCallId) {
+    return null;
+  }
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) {
+    return null;
+  }
+  try {
+    const events = readCallRecordEvents(stores);
+    return events.find((call) => call.providerCallId === providerCallId) ?? null;
+  } catch (err) {
+    console.error("[voice-call] Failed to read persisted call by providerCallId:", err);
+    return null;
+  }
+}
