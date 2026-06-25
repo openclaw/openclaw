@@ -179,6 +179,25 @@ describe("deliverReplies identity passthrough", () => {
     expect(blocks[1]?.elements?.[0]?.value).toBe("approve");
   });
 
+  it("propagates threaded text delivery confirmation failures", async () => {
+    sendMock.mockRejectedValueOnce(
+      new Error("Slack delivery did not confirm thread 1712345678.123456 for C123"),
+    );
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [{ text: "threaded update" }],
+          replyThreadTs: "1712345678.123456",
+          replyToMode: "all",
+        }),
+      ),
+    ).rejects.toThrow(/did not confirm thread 1712345678\.123456/i);
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(requireSendCall()[2].threadTs).toBe("1712345678.123456");
+  });
+
   it("rejects replies when merged Slack blocks exceed the platform limit", async () => {
     sendMock.mockResolvedValue(undefined);
 

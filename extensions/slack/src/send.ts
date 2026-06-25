@@ -35,6 +35,7 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget } from "./targets.js";
+import { assertSlackThreadDeliveryResult } from "./thread-delivery-confirmation.js";
 import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
@@ -718,6 +719,9 @@ export async function sendMessageSlack(
       blocks,
     }),
   );
+  if (!opts.mediaUrl) {
+    assertSlackThreadDeliveryResult({ result, to, threadTs: opts.threadTs });
+  }
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
   if (threadTs && result.channelId && account.accountId) {
     recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);

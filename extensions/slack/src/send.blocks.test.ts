@@ -99,6 +99,14 @@ describe("sendMessageSlack thread participation", () => {
   it("records participation after a successful threaded send", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({
+      ts: "171234.567",
+      channel: "C123",
+      message: {
+        ts: "171234.567",
+        thread_ts: "1712345678.123456",
+      },
+    });
 
     const result = await sendMessageSlack("channel:C123", "hello thread", {
       token: "xoxb-test",
@@ -108,12 +116,12 @@ describe("sendMessageSlack thread participation", () => {
     });
 
     expect(result.threadTs).toBe("1712345678.123456");
-    expect(result.confirmedThreadTs).toBeUndefined();
+    expect(result.confirmedThreadTs).toBe("1712345678.123456");
     expect(result.receipt.threadId).toBe("1712345678.123456");
     expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
   });
 
-  it("records canonical Slack response thread participation instead of requested child thread", async () => {
+  it("rejects threaded sends when Slack confirms a different thread", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
     client.chat.postMessage.mockResolvedValueOnce({
@@ -125,19 +133,34 @@ describe("sendMessageSlack thread participation", () => {
       },
     });
 
-    const result = await sendMessageSlack("channel:C123", "hello thread", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "1781932168.648159",
-    });
+    await expect(
+      sendMessageSlack("channel:C123", "hello thread", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "1781932168.648159",
+      }),
+    ).rejects.toThrow(/did not confirm thread 1781932168\.648159/i);
 
-    expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
-    expect(result.threadTs).toBe("1781803536.235489");
-    expect(result.confirmedThreadTs).toBe("1781803536.235489");
-    expect(result.receipt.threadId).toBe("1781803536.235489");
-    expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
+    expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(false);
+  });
+
+  it("rejects threaded sends when Slack omits confirmed thread evidence", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello thread", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "1712345678.123456",
+      }),
+    ).rejects.toThrow(/did not confirm thread 1712345678\.123456/i);
+
+    expect(postedMessage(client).thread_ts).toBe("1712345678.123456");
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(false);
   });
 
   it("does not record participation for unthreaded sends", async () => {
@@ -157,12 +180,14 @@ describe("sendMessageSlack thread participation", () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
 
-    await sendMessageSlack("channel:C123", "hello invalid thread", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "not-a-slack-thread",
-    });
+    await expect(
+      sendMessageSlack("channel:C123", "hello invalid thread", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "not-a-slack-thread",
+      }),
+    ).rejects.toThrow(/did not confirm thread not-a-slack-thread/i);
 
     expect(hasSlackThreadParticipation("default", "C123", "not-a-slack-thread")).toBe(false);
   });
@@ -214,7 +239,7 @@ describe("sendMessageSlack chunking", () => {
         channel: "C123",
         message: {
           ts: "1781932190.115869",
-          thread_ts: "1781803536.235489",
+          thread_ts: "1781932168.648159",
         },
       })
       .mockResolvedValueOnce({
@@ -233,11 +258,10 @@ describe("sendMessageSlack chunking", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
     expect(postedMessage(client, 1).thread_ts).toBe("1781932168.648159");
-    expect(result.threadTs).toBe("1781803536.235489");
-    expect(result.confirmedThreadTs).toBe("1781803536.235489");
-    expect(result.receipt.threadId).toBe("1781803536.235489");
-    expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
-    expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
+    expect(result.threadTs).toBe("1781932168.648159");
+    expect(result.confirmedThreadTs).toBe("1781932168.648159");
+    expect(result.receipt.threadId).toBe("1781932168.648159");
+    expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(true);
   });
 });
 
@@ -267,7 +291,7 @@ describe("sendMessageSlack blocks", () => {
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
-  it("uses canonical Slack response thread for block receipts and participation", async () => {
+  it("uses confirmed Slack response thread for block receipts and participation", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
     client.chat.postMessage.mockResolvedValueOnce({
@@ -275,7 +299,7 @@ describe("sendMessageSlack blocks", () => {
       channel: "C123",
       message: {
         ts: "1781932190.115869",
-        thread_ts: "1781803536.235489",
+        thread_ts: "1781932168.648159",
       },
     });
 
@@ -288,12 +312,11 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
-    expect(result.threadTs).toBe("1781803536.235489");
-    expect(result.confirmedThreadTs).toBe("1781803536.235489");
-    expect(result.receipt.threadId).toBe("1781803536.235489");
+    expect(result.threadTs).toBe("1781932168.648159");
+    expect(result.confirmedThreadTs).toBe("1781932168.648159");
+    expect(result.receipt.threadId).toBe("1781932168.648159");
     expect(result.receipt.parts[0]?.kind).toBe("card");
-    expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
-    expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
+    expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(true);
   });
 
   it("posts user-target block messages directly without conversations.open", async () => {
@@ -341,6 +364,14 @@ describe("sendMessageSlack blocks", () => {
     client.conversations.open
       .mockRejectedValueOnce(slackDnsRequestError())
       .mockResolvedValueOnce({ channel: { id: "D123" } });
+    client.chat.postMessage.mockResolvedValueOnce({
+      ts: "171234.567",
+      channel: "D123",
+      message: {
+        ts: "171234.567",
+        thread_ts: "171234.100",
+      },
+    });
 
     const result = await sendMessageSlack("user:U123", "hello", {
       token: "xoxb-test",
@@ -355,11 +386,19 @@ describe("sendMessageSlack blocks", () => {
     expect(result.messageId).toBe("171234.567");
     expect(result.channelId).toBe("D123");
     expect(result.receipt.threadId).toBe("171234.100");
-    expect(result.confirmedThreadTs).toBeUndefined();
+    expect(result.confirmedThreadTs).toBe("171234.100");
   });
 
   it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
     const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({
+      ts: "171234.567",
+      channel: "C123",
+      message: {
+        ts: "171234.567",
+        thread_ts: "171234.100",
+      },
+    });
 
     await sendMessageSlack("channel:C123", "a".repeat(8500), {
       token: "xoxb-test",

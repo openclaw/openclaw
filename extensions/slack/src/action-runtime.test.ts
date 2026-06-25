@@ -332,6 +332,39 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("does not mark first reply used when threaded send confirmation fails", async () => {
+    const cfg = slackConfig();
+    const hasRepliedRef = { value: false };
+    sendSlackMessage.mockRejectedValueOnce(
+      new Error("Slack delivery did not confirm thread 1234567890.123456 for channel:C123"),
+    );
+
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          content: "Hello thread",
+          threadTs: "1234567890.123456",
+        },
+        cfg,
+        {
+          currentChannelId: "C123",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      ),
+    ).rejects.toThrow(/did not confirm thread 1234567890\.123456/i);
+
+    expectSlackSendCall(0, "channel:C123", "Hello thread", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+      blocks: undefined,
+    });
+    expect(hasRepliedRef.value).toBe(false);
+  });
+
   it("passes replyBroadcast to sendSlackMessage for thread replies", async () => {
     const cfg = slackConfig();
     await handleSlackAction(
