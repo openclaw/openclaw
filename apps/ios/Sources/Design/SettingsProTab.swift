@@ -64,6 +64,7 @@ struct SettingsProTab: View {
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
+    let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
@@ -71,12 +72,14 @@ struct SettingsProTab: View {
         directRoute: SettingsRoute? = nil,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
+        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
+        self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
     }
 
@@ -249,6 +252,10 @@ struct SettingsProTab: View {
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
+        if !self.ownsNavigationStack, let navigateToRoute {
+            navigateToRoute(.notifications)
+            return
+        }
         self.navigationPath = [.notifications]
     }
 

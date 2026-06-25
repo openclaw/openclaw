@@ -490,11 +490,13 @@ struct RootTabs: View {
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             }
         case .gateway:
@@ -502,6 +504,7 @@ struct RootTabs: View {
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
+                navigateToRoute: self.pushSidebarSettingsRoute,
                 onRouteChange: self.handleSettingsRouteChange)
         }
     }
@@ -972,6 +975,11 @@ extension RootTabs {
         withAnimation(.easeInOut(duration: 0.22)) {
             self.setSidebarVisible(false)
         }
+    }
+
+    private func pushSidebarSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath = [route]
+        self.handleSettingsRouteChange(route)
     }
 
     private func handleSettingsRouteChange(_ route: SettingsRoute?) {
