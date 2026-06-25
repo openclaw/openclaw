@@ -3,6 +3,7 @@
  * The server manages auth and proxies requests to LLM providers.
  */
 
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 // Internal import for JSON parsing utility
 import type {
   AssistantMessage,
@@ -124,6 +125,8 @@ function sanitizeProxyModel(model: Model): Model {
   return safeModel as Model;
 }
 
+const PROXY_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
 export function streamProxy(
   model: Model,
   context: Context,
@@ -152,9 +155,12 @@ export function streamProxy(
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let guard: ReturnType<typeof createSseByteGuard> | undefined;
 
     const abortHandler = () => {
-      if (reader) {
+      if (guard) {
+        guard.cancel("Request aborted by user").catch(() => {});
+      } else if (reader) {
         reader.cancel("Request aborted by user").catch(() => {});
       }
     };
@@ -192,6 +198,11 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
+      guard = createSseByteGuard(reader, {
+        maxBytes: PROXY_STREAM_BODY_MAX_BYTES,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Proxy stream body exceeded ${maxBytes} bytes (received ${size})`),
+      });
       const decoder = new TextDecoder();
       let buffer = "";
       let terminalEventSeen = false;
@@ -214,7 +225,7 @@ export function streamProxy(
       };
 
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await guard.read();
         if (done) {
           break;
         }
@@ -256,6 +267,9 @@ export function streamProxy(
       });
       stream.end();
     } finally {
+      try {
+        await guard?.cancel();
+      } catch {}
       try {
         reader?.releaseLock();
       } catch {}

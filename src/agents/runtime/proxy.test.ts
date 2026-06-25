@@ -189,4 +189,47 @@ describe("streamProxy", () => {
       errorMessage: "Proxy stream ended before terminal event",
     });
   });
+
+  it("bounds streamed proxy success bodies without content-length", async () => {
+    // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before
+    // draining the full 32 MiB advertised body.
+    const CHUNK = 1024 * 1024;
+    const TOTAL = 32;
+    let pullCount = 0;
+    let cancelReason: unknown;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull(controller) {
+                pullCount += 1;
+                if (pullCount > TOTAL) {
+                  controller.close();
+                  return;
+                }
+                controller.enqueue(new Uint8Array(CHUNK));
+              },
+              cancel(reason) {
+                cancelReason = reason;
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+
+    const result = await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(/Proxy stream body exceeded \d+ bytes/);
+    expect(cancelReason).toBeInstanceOf(Error);
+    // 16 MiB + a couple of overshoot pulls, well under 32.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
+  });
 });
