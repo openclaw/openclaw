@@ -368,8 +368,9 @@ export async function buildTelegramInboundContextPayload(params: {
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
+  const threadLabel = isForum && topicName ? topicName : undefined;
   const conversationLabel = isGroup
-    ? (groupLabel ?? `group:${chatId}`)
+    ? (threadLabel ?? groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = await resolveTelegramMessageContextStorePath({
@@ -549,6 +550,13 @@ export async function buildTelegramInboundContextPayload(params: {
           : undefined,
     media: currentMediaFacts,
     supplemental: {
+      thread: threadLabel
+        ? {
+            id: threadSpec.id != null ? String(threadSpec.id) : undefined,
+            label: threadLabel,
+            senderAllowed: true,
+          }
+        : undefined,
       quote:
         replyHead || visibleReplyTarget
           ? {
