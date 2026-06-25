@@ -7663,12 +7663,21 @@ module.exports = {
     });
 
     expect(registry.typedHooks).toStrictEqual([]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+    // agent_end is now a state hook (STATE_HOOK_NAMES), not a conversation hook.
+    // Conversation hooks (6) are blocked with the allowConversationAccess message.
+    const blockedConversationDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(7);
+    expect(blockedConversationDiagnostics).toHaveLength(6);
+    // agent_end is blocked with the state hook message (allowStateAccess or allowConversationAccess).
+    const blockedStateDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowStateAccess=true",
+      ),
+    );
+    expect(blockedStateDiagnostics).toHaveLength(1);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -7710,6 +7719,59 @@ module.exports = {
       "agent_end",
       "before_agent_run",
     ]);
+  });
+
+  it("allows state hooks for non-bundled plugins when allowStateAccess is enabled", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "state-hooks-allowed",
+      filename: "state-hooks-allowed.cjs",
+      body: `module.exports = { id: "state-hooks-allowed", register(api) {
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["state-hooks-allowed"],
+        entries: {
+          "state-hooks-allowed": {
+            hooks: {
+              allowStateAccess: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["agent_end"]);
+  });
+
+  it("blocks state hooks for non-bundled plugins when neither allowStateAccess nor allowConversationAccess is set", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "state-hooks-blocked",
+      filename: "state-hooks-blocked.cjs",
+      body: `module.exports = { id: "state-hooks-blocked", register(api) {
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["state-hooks-blocked"],
+      },
+    });
+
+    expect(registry.typedHooks).toStrictEqual([]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.state-hooks-blocked.hooks.allowStateAccess=true",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(1);
   });
 
   it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {

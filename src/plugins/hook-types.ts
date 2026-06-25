@@ -229,9 +229,19 @@ export const CONVERSATION_HOOK_NAMES = [
   "llm_input",
   "llm_output",
   "before_agent_finalize",
-  "agent_end",
   "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
+
+/** Hooks that receive agent lifecycle state (run id, outcome, duration)
+ *  but NOT raw conversation content. State-only access is gated by
+ *  `allowStateAccess` rather than the broader `allowConversationAccess`. */
+export const STATE_HOOK_NAMES = ["agent_end"] as const satisfies readonly PluginHookName[];
+
+export type StateHookName = (typeof STATE_HOOK_NAMES)[number];
+
+const stateHookNameSet = new Set<PluginHookName>(STATE_HOOK_NAMES);
+
+export const isStateHookName = (hookName: PluginHookName): boolean => stateHookNameSet.has(hookName);
 
 export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
 

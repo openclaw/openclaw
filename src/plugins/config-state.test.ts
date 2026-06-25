@@ -74,6 +74,7 @@ describe("normalizePluginsConfig", () => {
         hooks: {
           allowPromptInjection: false,
           allowConversationAccess: true,
+          allowStateAccess: true,
           timeoutMs: 250,
           timeouts: {
             before_prompt_build: 90_000,
@@ -84,11 +85,23 @@ describe("normalizePluginsConfig", () => {
       expectedHooks: {
         allowPromptInjection: false,
         allowConversationAccess: true,
+        allowStateAccess: true,
         timeoutMs: 250,
         timeouts: {
           before_prompt_build: 90_000,
           agent_end: 60_000,
         },
+      },
+    },
+    {
+      name: "normalizes allowStateAccess without allowConversationAccess",
+      entry: {
+        hooks: {
+          allowStateAccess: true,
+        },
+      },
+      expectedHooks: {
+        allowStateAccess: true,
       },
     },
     {

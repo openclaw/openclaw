@@ -1643,6 +1643,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it.each([
     ["conversation access", { allowConversationAccess: true }],
     ["prompt injection", { allowPromptInjection: true }],
+    ["state access", { allowStateAccess: true }],
   ] as const)("loads hook-policy plugins with only %s enabled", (_name, hooks) => {
     expectStartupPluginIdsCase({
       config: {

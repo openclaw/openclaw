@@ -93,6 +93,7 @@ export type PluginInspectReport = {
   policy: {
     allowPromptInjection?: boolean;
     allowConversationAccess?: boolean;
+    allowStateAccess?: boolean;
     hookTimeoutMs?: number;
     hookTimeouts?: Record<string, number>;
     allowModelOverride?: boolean;
@@ -433,6 +434,7 @@ export function buildPluginInspectReport(params: {
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
       allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
+      allowStateAccess: policyEntry?.hooks?.allowStateAccess,
       hookTimeoutMs: policyEntry?.hooks?.timeoutMs,
       hookTimeouts: policyEntry?.hooks?.timeouts ? { ...policyEntry.hooks.timeouts } : undefined,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
