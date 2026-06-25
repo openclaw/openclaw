@@ -14,19 +14,72 @@ function runSurfaceReport(env: Record<string, string>) {
   });
 }
 
-function readDefaultPublicFunctionExportBudget() {
-  const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
-  const match =
-    /publicFunctionExports:\s*readBudgetEnv\("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",\s*(\d+)\)/u.exec(
-      source,
-    );
-  if (match === null || match[1] === undefined) {
-    throw new Error("failed to read default public function export budget");
+function readCurrentPublicFunctionExportCount() {
+  const result = runSurfaceReport({});
+  expect(result.status).toBe(0);
+  expect(result.stderr).toBe("");
+
+  return parseCurrentPublicCounts(result.stdout).functionExports;
+}
+
+function parseCurrentPublicCounts(stdout: string) {
+  const match = /public package SDK entrypoints:[\s\S]*?\n  exports: (\d+)\n  callable exports: (\d+)/u
+    .exec(stdout);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    throw new Error("failed to read current public export counts");
   }
-  return Number(match[1]);
+  return {
+    exports: Number(match[1]),
+    functionExports: Number(match[2]),
+  };
+}
+
+function readDefaultBudget(envName: string): number {
+  const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
+  const match = new RegExp(
+    `readBudgetEnv\\("${envName}",\\s*(\\d+)\\)`,
+    "u",
+  );
+  const result = match.exec(source);
+  if (result === null || result[1] === undefined) {
+    throw new Error(`failed to read default budget for ${envName}`);
+  }
+  return Number(result[1]);
 }
 
 describe("plugin SDK surface report", () => {
+  it("rejects unknown CLI options before collecting SDK stats", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/plugin-sdk-surface-report.mjs", "--chekc"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown plugin SDK surface report option: --chekc");
+    expect(result.stderr).not.toContain("at ");
+  });
+
+  it("prints help before collecting SDK stats", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/plugin-sdk-surface-report.mjs", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node scripts/plugin-sdk-surface-report.mjs");
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("all SDK entrypoints:");
+  });
+
   it("rejects loose numeric budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "1e9",
@@ -62,8 +115,20 @@ describe("plugin SDK surface report", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("keeps default public budgets tight to the current source surface", () => {
+    const result = runSurfaceReport({});
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+
+    const counts = parseCurrentPublicCounts(result.stdout);
+    expect(readDefaultBudget("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS")).toBe(counts.exports);
+    expect(readDefaultBudget("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS")).toBe(
+      counts.functionExports,
+    );
+  });
+
   it("keeps generated package declarations out of source surface counts", () => {
-    const budget = readDefaultPublicFunctionExportBudget();
+    const budget = readCurrentPublicFunctionExportCount();
     const result = runSurfaceReport({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
     });

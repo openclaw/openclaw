@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -29,14 +30,25 @@ function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
 }
 
+function readReleaseChecksWorkflow() {
+  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function readAndroidCompileSdk(path: string): number {
-  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+function readTrackedText(relativePath: string): string {
+  if (existsSync(relativePath)) {
+    return readFileSync(relativePath, "utf8");
+  }
+  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+}
+
+function readAndroidCompileSdk(relativePath: string): number {
+  const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
-    throw new Error(`Missing compileSdk in ${path}`);
+    throw new Error(`Missing compileSdk in ${relativePath}`);
   }
   return Number(match[1]);
 }
@@ -212,6 +224,18 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
+    const source = readCriticalQualityWorkflow();
+    const workflow = parse(source);
+    const blacksmithJobs = Object.entries(workflow.jobs)
+      .filter(([, job]) => job && typeof job === "object")
+      .filter(([, job]) => (job as Record<string, unknown>)["runs-on"] !== "ubuntu-24.04")
+      .map(([name]) => name);
+
+    expect(blacksmithJobs).toEqual([]);
+    expect(source).not.toContain("blacksmith-");
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -374,7 +398,7 @@ describe("ci workflow guards", () => {
   it("bounds platform checkout fetches without GNU timeout", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
@@ -571,6 +595,7 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "ios-build",
       "android",
     ]);
     expect(timingJob.if).toContain("always()");
@@ -608,9 +633,38 @@ describe("ci workflow guards", () => {
     const publishJob = maturityWorkflow.jobs.publish;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
+    expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
+      qa_evidence_run_id: {
+        description: "Optional workflow run id containing qa-evidence.json",
+        required: false,
+        default: "",
+        type: "string",
+      },
+      ref: {
+        description: "OpenClaw branch, tag, or SHA containing the maturity score source",
+        required: true,
+        type: "string",
+      },
+      expected_sha: {
+        description: "Optional full SHA that ref must resolve to",
+        required: false,
+        default: "",
+        type: "string",
+      },
+    });
+    expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
+    expect(
+      maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
+        .required,
+    ).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
+      false,
+    );
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
       (step) => step.name === "Validate QA profile input",
@@ -626,10 +680,19 @@ describe("ci workflow guards", () => {
     expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      // Keep the caller's ref while the callee verifies it against expected_sha.
+      ref: "${{ inputs.ref }}",
+      expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+
+    const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Validate selected ref",
+    );
+    expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
+    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
+    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -651,6 +714,8 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Validate QA evidence manifest",
     );
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
+    expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
@@ -671,17 +736,117 @@ describe("ci workflow guards", () => {
 
     const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
     expect(qaFailStep.if).toBe("always()");
+
+    const createTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR app token",
+    );
+    const createFallbackTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR fallback app token",
+    );
+    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
+    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    expect(createFallbackTokenStep.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    );
+    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+  });
+
+  it("keeps maturity scorecard release docs opt-in from release checks", () => {
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const job = releaseWorkflow.jobs.maturity_scorecard_release_checks;
+    const summaryJob = releaseWorkflow.jobs.summary;
+    const verifyStep = summaryJob.steps.find(
+      (step) => step.name === "Verify release check results",
+    );
+    const inputs = releaseWorkflow.on.workflow_dispatch.inputs;
+    const resolveJob = releaseWorkflow.jobs.resolve_target;
+    const summarizeStep = resolveJob.steps.find((step) => step.name === "Summarize validated ref");
+
+    expect(releaseWorkflow.jobs).not.toHaveProperty("qa_profile_release_evidence_release_checks");
+    expect(inputs.run_maturity_scorecard).toMatchObject({
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(resolveJob.outputs.run_maturity_scorecard).toBe(
+      "${{ steps.inputs.outputs.run_maturity_scorecard }}",
+    );
+    expect(summarizeStep.env.RUN_MATURITY_SCORECARD).toBe(
+      "${{ steps.inputs.outputs.run_maturity_scorecard }}",
+    );
+    expect(summarizeStep.run).toContain("- Maturity scorecard docs:");
+    expect(job.name).toBe("Render maturity scorecard release docs");
+    expect(job.if).toBe(
+      "contains(fromJSON('[\"all\",\"qa\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.run_maturity_scorecard == 'true'",
+    );
+    expect(job.permissions).toMatchObject({
+      actions: "read",
+      contents: "read",
+    });
+    expect(job.uses).toBe("./.github/workflows/maturity-scorecard.yml");
+    expect(job.with).toMatchObject({
+      ref: "${{ needs.resolve_target.outputs.ref }}",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+    });
+    expect(job.with).not.toHaveProperty("qa_profile");
+    expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.run).toContain(
+      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+    );
+    expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
+    const preflightStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Build CI manifest",
+    );
+    const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
+      profiles: Array<{ id: string; categoryIds: string[] }>;
+    };
+    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
+    if (!smokeProfile) {
+      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
+    }
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    const uploadStep = fastCoreJob.steps.find(
+      (step) => step.name === "Upload QA smoke profile evidence",
+    );
 
+    const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(preflightStep.run).not.toContain("qa-smoke-profile");
+    expect(preflightStep.run).not.toContain("qa_category");
+    expect(smokeProfile.categoryIds).toHaveLength(30);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+    }
+    expect(runStep.run).toContain("bundled-protocol)");
+    expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(ciWorkflowText).toContain(
+      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
+    );
+    expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain("--concurrency 8");
+    expect(runStep.run).not.toContain("--category");
+    expect(runStep.run).not.toContain("--allow-failures");
+    expect(runStep.run).toContain("qa_exit_code=0");
+    expect(runStep.run).toContain('exit "$qa_exit_code"');
+    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).not.toContain("OPENAI_API_KEY");
+    expect(runStep.run).toMatch(
+      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
+    );
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
+    expect(uploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+      "if-no-files-found": "warn",
+    });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

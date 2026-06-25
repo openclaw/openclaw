@@ -34,6 +34,16 @@ type Options = {
   quiet: boolean;
 };
 
+const VALUE_FLAGS = new Set([
+  "--iters",
+  "--batches",
+  "--snap-dir",
+  "--mode",
+  "--max-rss-growth-mb",
+  "--max-tracked-retention",
+  "--scope-bytes",
+]);
+
 function readValue(raw: string | undefined, flag: string): string {
   const value = raw?.trim() ?? "";
   if (!value || value.startsWith("-")) {
@@ -53,9 +63,16 @@ function parseArgs(argv: string[]): Options {
     scopeBytes: 2_000_000,
     quiet: false,
   };
+  const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
+    if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        fail(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
+    }
     switch (arg) {
       case "--iters":
         opts.iters = parsePositiveInt(next, arg);

@@ -801,8 +801,7 @@ export class AcpGatewayAgent implements Agent {
         const promptKey = this.pendingPromptKey(params.sessionId, runId);
         if (
           isGatewayCloseError(err) &&
-          (this.getPendingPrompt(params.sessionId, runId) ||
-            this.settlingPromptKeys.has(promptKey))
+          (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
         ) {
           return;
         }
@@ -1592,7 +1591,7 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch?: Record<string, string | boolean>;
+    patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1630,11 +1629,13 @@ export class AcpGatewayAgent implements Agent {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
-      case ACP_RESPONSE_USAGE_CONFIG_ID:
+      case ACP_RESPONSE_USAGE_CONFIG_ID: {
+        const next = value === "inherit" ? null : value;
         return {
-          patch: { responseUsage: value },
-          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+          patch: { responseUsage: next },
+          overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
+      }
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },

@@ -46,6 +46,8 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
@@ -551,6 +553,23 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  // runGatewayLoop calls this after closing the previous server on both fresh
+  // and in-process restarts, making retired plugin generations safe to remove.
+  try {
+    const installRecords = loadInstalledPluginIndexInstallRecordsSync();
+    const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
+      activeInstallPaths: Object.values(installRecords).flatMap((record) =>
+        record.installPath ? [record.installPath] : [],
+      ),
+      onError: (error, projectRoot) =>
+        log.warn(`failed to clean retained npm generation ${projectRoot}: ${String(error)}`),
+    });
+    if (removedGenerations > 0) {
+      log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`);
+    }
+  } catch (error) {
+    log.warn(`retained npm generation cleanup unavailable: ${String(error)}`);
+  }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 

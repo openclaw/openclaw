@@ -21,6 +21,12 @@ type EmbeddedAgentArgs = {
   provider?: string;
   model?: string;
   sessionKey?: string;
+  sessionTarget?: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  };
   sandboxSessionKey?: string;
   agentDir?: string;
   agentId?: string;
@@ -313,7 +319,6 @@ describe("generateVoiceResponse", () => {
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
       resolveStorePath,
-      resolveSessionFilePath,
       sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
     const coreConfig = {} as CoreConfig;
@@ -336,19 +341,18 @@ describe("generateVoiceResponse", () => {
     if (!defaultSessionEntry) {
       throw new Error("Expected default voice session entry");
     }
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      defaultSessionEntry.sessionId,
-      defaultSessionEntry,
-      {
-        agentId: "main",
-      },
-    );
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
     expect(args.agentId).toBe("main");
+    expect(args.sessionTarget).toStrictEqual({
+      agentId: "main",
+      sessionId: defaultSessionEntry.sessionId,
+      sessionKey: "voice:15550001111",
+      storePath: "/tmp/openclaw/main/sessions.json",
+    });
     expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
-    expect(args.sessionFile).toBe("/tmp/openclaw/main/sessions/session.jsonl");
+    expect(args.sessionFile).toBeUndefined();
   });
 
   it("uses the configured voice response agent workspace", async () => {
@@ -359,7 +363,6 @@ describe("generateVoiceResponse", () => {
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
       resolveStorePath,
-      resolveSessionFilePath,
       sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
     const coreConfig = {} as CoreConfig;
@@ -386,19 +389,18 @@ describe("generateVoiceResponse", () => {
     if (!voiceSessionEntry) {
       throw new Error("Expected routed voice session entry");
     }
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      voiceSessionEntry.sessionId,
-      voiceSessionEntry,
-      {
-        agentId: "voice",
-      },
-    );
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
     expect(args.agentId).toBe("voice");
+    expect(args.sessionTarget).toStrictEqual({
+      agentId: "voice",
+      sessionId: voiceSessionEntry.sessionId,
+      sessionKey: "voice:15550001111",
+      storePath: "/tmp/openclaw/voice/sessions.json",
+    });
     expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
-    expect(args.sessionFile).toBe("/tmp/openclaw/voice/sessions/session.jsonl");
+    expect(args.sessionFile).toBeUndefined();
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {

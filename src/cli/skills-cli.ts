@@ -415,7 +415,7 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("update")
     .description("Update ClawHub-installed skills in the active or shared managed directory")
-    .argument("[slug]", "Single skill slug")
+    .argument("[skill-ref]", "Single ClawHub skill ref (@owner/slug)")
     .option("--all", "Update all tracked ClawHub skills", false)
     .option(
       "--force-install",
@@ -487,7 +487,7 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("verify")
     .description("Verify a ClawHub skill with ClawHub")
-    .argument("<slug>", "ClawHub skill slug")
+    .argument("<skill-ref>", "ClawHub skill ref (@owner/slug)")
     .option("--version <version>", "Verify a specific version")
     .option("--tag <tag>", "Verify a dist tag")
     .option("--card", "Print the generated Skill Card Markdown", false)
@@ -497,6 +497,7 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .addHelpText("after", "\nExamples:\n  openclaw skills verify @owner/weather\n")
     .action(
       async (
         slug: string,
