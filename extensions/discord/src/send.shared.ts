@@ -24,6 +24,7 @@ import {
   createUserDmChannel,
   getChannel,
   RequestClient,
+  type MessagePayloadFile,
 } from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
