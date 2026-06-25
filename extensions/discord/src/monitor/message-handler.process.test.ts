@@ -2821,6 +2821,34 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
+  it("keeps default progress-mode fast block replies when no Discord draft is visible", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+      await params?.dispatcher.sendBlockReply({ text: "fast command finished" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "fast command finished" }],
+      kind: "block",
+    });
+  });
+
   it.each([
     // commentary now defaults on; only an explicit false hides it.
     ["false", false],

@@ -585,13 +585,19 @@ async function processDiscordMessageInner(
   let pendingToolWarningFinal:
     | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
     | undefined;
+  let pendingProgressBlockReplies: Array<{
+    payload: ReplyPayload;
+    info: { kind: ReplyDispatchKind };
+  }> = [];
   const markUserFacingFinalDelivered = () => {
     userFacingFinalDelivered = true;
     userFacingFinalDeliveryFailed = false;
     pendingToolWarningFinal = undefined;
+    pendingProgressBlockReplies = [];
     draftPreview.markFinalReplyDelivered();
     observer?.onFinalReplyDelivered?.();
   };
+<<<<<<< HEAD
   // Per-line quoting survives Discord chunking; blank quote rows render badly.
   const formatDiscordReasoningQuote = (quoteText: string): string | undefined => {
     const lines = quoteText
@@ -686,6 +692,21 @@ async function processDiscordMessageInner(
     ];
     return `-# ${parts.join(" · ")}`;
   };
+  const isDeferrableProgressBlockReply = (
+    payload: ReplyPayload,
+    info: { kind: ReplyDispatchKind },
+  ) => {
+    if (
+      !draftPreview.draftStream ||
+      !draftPreview.isProgressMode ||
+      !draftPreview.shouldDeferProgressBlockReplies ||
+      info.kind !== "block"
+    ) {
+      return false;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    return !reply.hasMedia && !payload.isError;
+  };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
@@ -724,7 +745,10 @@ async function processDiscordMessageInner(
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
-    options?: { allowFallbackOnlyToolWarning?: boolean },
+    options?: {
+      allowDeferredProgressBlockFallback?: boolean;
+      allowFallbackOnlyToolWarning?: boolean;
+    },
   ) => {
     if (isProcessAborted(abortSignal)) {
       // Surface so operators don't chase missing replies when an abort
@@ -823,14 +847,12 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const draftStream = draftPreview.draftStream;
-    if (
-      draftStream &&
-      draftPreview.isProgressMode &&
-      draftPreview.shouldSuppressBlockReplies &&
-      info.kind === "block"
-    ) {
-      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
-      if (!reply.hasMedia && !deliverablePayload.isError) {
+    if (draftStream && isDeferrableProgressBlockReply(deliverablePayload, info)) {
+      if (draftPreview.shouldSuppressBlockReplies) {
+        return { visibleReplySent: false };
+      }
+      if (!options?.allowDeferredProgressBlockFallback) {
+        pendingProgressBlockReplies.push({ payload: deliverablePayload, info });
         return { visibleReplySent: false };
       }
     }
@@ -1128,6 +1150,38 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
   };
+  const deliverPendingProgressBlockRepliesIfNeeded = async () => {
+    if (!pendingProgressBlockReplies.length) {
+      return undefined;
+    }
+    const pending = pendingProgressBlockReplies;
+    pendingProgressBlockReplies = [];
+    if (
+      userFacingFinalDelivered ||
+      isProcessAborted(abortSignal) ||
+      draftPreview.shouldSuppressBlockReplies ||
+      draftPreview.hasProgressDraftStarted
+    ) {
+      return undefined;
+    }
+    let lastResult: { visibleReplySent: boolean } | undefined;
+    for (const pendingReply of pending) {
+      try {
+        lastResult = await deliverDiscordPayload(pendingReply.payload, pendingReply.info, {
+          allowDeferredProgressBlockFallback: true,
+        });
+      } catch (err) {
+        dispatchError = true;
+        onDiscordDeliveryError(err, pendingReply.info);
+        lastResult = { visibleReplySent: false };
+      }
+    }
+    return lastResult;
+  };
+  const deliverPendingFreshDiscordDeliveries = async () => {
+    await deliverPendingProgressBlockRepliesIfNeeded();
+    return await deliverPendingToolWarningFinalIfNeeded();
+  };
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -1149,7 +1203,7 @@ async function processDiscordMessageInner(
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         beforeDeliver: beforeDiscordPayloadDelivery,
         onReplyStart: onDiscordReplyStart,
-        onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
+        onFreshSettledDelivery: deliverPendingFreshDiscordDeliveries,
       },
       delivery: {
         deliver: deliverDiscordPayload,

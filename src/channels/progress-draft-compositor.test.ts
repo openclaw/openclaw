@@ -16,11 +16,37 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
-    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
 
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
 
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+  });
+
+  it("suppresses default tool messages only after progress drafts become visible", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+
+    await progress.pushToolProgress("Exec started");
+
+    expect(update).not.toHaveBeenCalled();
+    expect(progress.hasStarted).toBe(false);
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+
+    await progress.pushToolProgress("Exec finished");
+
+    expect(update).toHaveBeenCalled();
+    expect(progress.hasStarted).toBe(true);
+    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
   });
 
   it("does not suppress default tool messages when progress drafts stay empty", async () => {

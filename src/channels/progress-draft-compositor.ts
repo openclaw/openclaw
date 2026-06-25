@@ -64,7 +64,7 @@ export function createChannelProgressDraftCompositor(params: {
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
   const thinkingProgressEnabled =
     params.active && (params.reasoningGate ?? previewToolProgressEnabled);
-  const suppressDefaultToolProgressMessages =
+  const canSuppressDefaultToolProgressMessages =
     params.active &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
       draftStreamActive: true,
@@ -215,7 +215,9 @@ export function createChannelProgressDraftCompositor(params: {
       return commentaryProgressEnabled;
     },
     get suppressDefaultToolProgressMessages() {
-      return suppressDefaultToolProgressMessages;
+      return (
+        canSuppressDefaultToolProgressMessages && (params.mode !== "progress" || gate.hasStarted)
+      );
     },
     get hasStarted() {
       return gate.hasStarted;
