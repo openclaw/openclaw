@@ -2,21 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
-import {
-  isDangerousHostEnvOverrideVarName,
-  isDangerousHostEnvVarName,
-  normalizeEnvVarKey,
-} from "../infra/host-env-security.js";
+import { isDangerousHostEnvVarName, normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
+// `~/.openclaw/.env` is an operator-curated, owner-only durable service env
+// source. Keys that are blocked only as agent request-overrides
+// (`isDangerousHostEnvOverrideVarName`, e.g. `GH_TOKEN`, `AWS_*`, `NPM_TOKEN`)
+// are intentionally allowed here; the gateway exec layer decides whether to
+// inherit them per its trusted-mode allowlist. Keys that are dangerous
+// everywhere (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`, `DYLD_*`, `GIT_DIR`,
+// etc.) stay blocked.
 function isBlockedServiceEnvVar(key: string): boolean {
   return (
     key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
-    isDangerousHostEnvVarName(key) ||
-    isDangerousHostEnvOverrideVarName(key)
+    isDangerousHostEnvVarName(key)
   );
 }
 
