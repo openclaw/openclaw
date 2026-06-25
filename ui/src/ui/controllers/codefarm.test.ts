@@ -1,6 +1,7 @@
 // Control UI tests cover Code Farm controller behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  archiveCodefarmProject,
   getCodefarmState,
   loadCodefarmJobs,
   loadCodefarmProject,
@@ -63,6 +64,105 @@ describe("codefarm controller", () => {
     expect(getCodefarmState(host).jobs).toEqual([
       expect.objectContaining({ id: "cf_20260625_001" }),
     ]);
+  });
+
+  it("can include archived repos in discovery", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.showArchived = true;
+    const client = createClient({
+      "codefarm.repos": {
+        repos: [
+          {
+            repo: "/Users/me/old-project",
+            name: "old-project",
+            status: "archived",
+            archived: true,
+            archivedAt: "2026-06-25T14:00:00.000Z",
+            totalJobs: 1,
+            activeJobs: 0,
+            reviewJobs: 1,
+            blockedJobs: 0,
+            statuses: { ready_for_review: 1 },
+          },
+        ],
+      },
+      "codefarm.project": {
+        repo: "/Users/me/old-project",
+        name: "old-project",
+        archived: true,
+        contextFiles: [],
+        gsd: { available: false, files: [] },
+      },
+      "codefarm.list": { jobs: [] },
+    });
+
+    await loadCodefarmRepos({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.repos", { includeArchived: true });
+    expect(state.repos).toEqual([
+      expect.objectContaining({ repo: "/Users/me/old-project", archived: true }),
+    ]);
+  });
+
+  it("archives and unarchives the selected project through write gateway methods", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.selectedRepo = "/Users/me/agent-space";
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "agent-space",
+      status: "active",
+      archived: false,
+      jobs: { totalJobs: 1, activeJobs: 0, statuses: { ready_for_review: 1 } },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+    };
+    const client = createClient({
+      "codefarm.project.archive": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        status: "archived",
+        archived: true,
+        archivedAt: "2026-06-25T14:00:00.000Z",
+        jobs: { totalJobs: 1, activeJobs: 0, statuses: { ready_for_review: 1 } },
+        contextFiles: [],
+        gsd: { available: false, files: [] },
+      },
+      "codefarm.project.unarchive": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        status: "active",
+        archived: false,
+        jobs: { totalJobs: 1, activeJobs: 0, statuses: { ready_for_review: 1 } },
+        contextFiles: [],
+        gsd: { available: false, files: [] },
+      },
+    });
+
+    await archiveCodefarmProject({
+      host,
+      client: client as never,
+      repo: "/Users/me/agent-space",
+      archived: true,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project.archive", {
+      repo: "/Users/me/agent-space",
+    });
+    expect(state.project).toEqual(expect.objectContaining({ archived: true }));
+
+    await archiveCodefarmProject({
+      host,
+      client: client as never,
+      repo: "/Users/me/agent-space",
+      archived: false,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project.unarchive", {
+      repo: "/Users/me/agent-space",
+    });
+    expect(state.project).toEqual(expect.objectContaining({ archived: false }));
   });
 
   it("selects a repo and loads its jobs without requiring a manual path", async () => {

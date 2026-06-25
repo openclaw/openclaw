@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
+  archiveCodefarmProject,
   getCodefarmState,
   loadCodefarmJobs,
   loadCodefarmProject,
@@ -77,6 +78,7 @@ function renderRepoButton(props: CodefarmRenderProps, repo: CodefarmRepoSummary)
         <span>${formatCount(repo.activeJobs, "active")}</span>
         <span>${formatCount(repo.reviewJobs, "review")}</span>
         <span>${formatCount(repo.blockedJobs, "blocked")}</span>
+        ${repo.archived ? html`<span>archived</span>` : nothing}
       </span>
       <span class="codefarm-repo__time">${latestLabel(repo.latestUpdatedAt)}</span>
     </button>
@@ -282,6 +284,21 @@ function renderProjectDetail(props: CodefarmRenderProps) {
         </div>
         <button
           type="button"
+          class="btn btn--sm codefarm-project-archive"
+          ?disabled=${state.projectLoading || !props.connected}
+          @click=${() =>
+            void archiveCodefarmProject({
+              host: props.host,
+              client: props.client,
+              repo: project.repo,
+              archived: !project.archived,
+              requestUpdate: props.onRequestUpdate,
+            })}
+        >
+          ${project.archived ? "Unarchive" : "Archive"}
+        </button>
+        <button
+          type="button"
           class="btn btn--sm"
           ?disabled=${state.projectLoading || !props.connected}
           @click=${() =>
@@ -468,6 +485,21 @@ export function renderCodefarm(props: CodefarmRenderProps) {
           <span>${formatCount(totalJobs, "job")}</span>
           <span>${formatCount(activeJobs, "active")}</span>
         </div>
+        <button
+          type="button"
+          class="btn btn--sm"
+          ?disabled=${state.loading || !props.connected}
+          @click=${() => {
+            state.showArchived = !state.showArchived;
+            void loadCodefarmRepos({
+              host: props.host,
+              client: props.client,
+              requestUpdate: props.onRequestUpdate,
+            });
+          }}
+        >
+          ${state.showArchived ? "Hide archived" : "Show archived"}
+        </button>
         <button
           type="button"
           class="btn btn--sm"

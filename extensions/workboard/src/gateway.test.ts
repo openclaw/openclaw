@@ -98,6 +98,8 @@ describe("workboard gateway methods", () => {
       "workboard.cards.export",
       "codefarm.repos",
       "codefarm.project",
+      "codefarm.project.archive",
+      "codefarm.project.unarchive",
       "codefarm.list",
       "codefarm.observe",
       "workboard.codefarm.list",
@@ -111,6 +113,8 @@ describe("workboard gateway methods", () => {
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.repos")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.project")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.project.archive")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("codefarm.project.unarchive")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("codefarm.list")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.observe")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.codefarm.list")?.opts).toEqual({ scope: "operator.read" });
@@ -550,6 +554,130 @@ describe("workboard gateway methods", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("hides archived Code Farm repos unless archived projects are requested", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-archived-"));
+    try {
+      const repo = join(root, "agent-space");
+      mkdirSync(join(repo, ".codefarm", "jobs", "cf_20260625_001"), { recursive: true });
+      writeFileSync(
+        join(repo, ".codefarm", "index.json"),
+        JSON.stringify({ jobs: [{ id: "cf_20260625_001" }] }),
+      );
+      writeFileSync(
+        join(repo, ".codefarm", "project.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          name: "agent-space",
+          status: "archived",
+          archived: true,
+          archivedAt: "2026-06-25T14:00:00.000Z",
+        }),
+      );
+      writeFileSync(
+        join(repo, ".codefarm", "jobs", "cf_20260625_001", "JOB.json"),
+        JSON.stringify({
+          id: "cf_20260625_001",
+          status: "ready_for_review",
+          updatedAt: "2026-06-25T13:00:00.000Z",
+        }),
+      );
+
+      await expect(discoverCodefarmReposFromRoots({ roots: [root], maxDepth: 3 })).resolves.toEqual(
+        expect.objectContaining({ repos: [] }),
+      );
+
+      await expect(
+        discoverCodefarmReposFromRoots({ roots: [root], maxDepth: 3, includeArchived: true }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          repos: [
+            expect.objectContaining({
+              repo,
+              status: "archived",
+              archived: true,
+              archivedAt: "2026-06-25T14:00:00.000Z",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("archives Code Farm projects through write gateway methods", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const archiveCodefarm = vi.fn(async (params: { repo: string; archived: boolean }) => ({
+      schemaVersion: 1,
+      repo: params.repo,
+      status: params.archived ? "archived" : "active",
+      archived: params.archived,
+    }));
+    const projectCodefarm = vi.fn(async (params: { repo: string }) => ({
+      schemaVersion: 1,
+      repo: params.repo,
+      name: "repo",
+      status: archiveCodefarm.mock.calls.at(-1)?.[0]?.archived === true ? "archived" : "active",
+      archived: archiveCodefarm.mock.calls.at(-1)?.[0]?.archived === true,
+      jobs: {
+        totalJobs: 1,
+        activeJobs: 0,
+        reviewJobs: 1,
+        blockedJobs: 0,
+        statuses: { ready_for_review: 1 },
+      },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+      projectTerminal: { running: false, persistent: true },
+    }));
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({
+      api,
+      store: new WorkboardStore(createMemoryStore()),
+      archiveCodefarm,
+      projectCodefarm,
+    } as never);
+
+    const archiveRespond = vi.fn();
+    await methods.get("codefarm.project.archive")?.handler({
+      params: { repo: "/Users/me/repo" },
+      respond: archiveRespond,
+    } as never);
+
+    expect(archiveCodefarm).toHaveBeenCalledWith({ repo: "/Users/me/repo", archived: true });
+    expect(projectCodefarm).toHaveBeenCalledWith({ repo: "/Users/me/repo" });
+    expect(archiveRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(archiveRespond.mock.calls[0]?.[1]).toMatchObject({
+      archived: true,
+      jobs: expect.objectContaining({ totalJobs: 1 }),
+    });
+
+    const unarchiveRespond = vi.fn();
+    await methods.get("codefarm.project.unarchive")?.handler({
+      params: { repo: "/Users/me/repo" },
+      respond: unarchiveRespond,
+    } as never);
+
+    expect(archiveCodefarm).toHaveBeenCalledWith({ repo: "/Users/me/repo", archived: false });
+    expect(unarchiveRespond.mock.calls[0]?.[1]).toMatchObject({ archived: false });
   });
 
   it("reads project context, GSD state, and project terminal identity for a Code Farm repo", async () => {

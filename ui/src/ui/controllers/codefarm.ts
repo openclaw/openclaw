@@ -7,6 +7,9 @@ const CODEFARM_MAX_LINES = 1000;
 export type CodefarmRepoSummary = {
   repo: string;
   name: string;
+  status?: "active" | "archived";
+  archived?: boolean;
+  archivedAt?: string;
   totalJobs: number;
   activeJobs: number;
   reviewJobs: number;
@@ -77,6 +80,9 @@ export type CodefarmProjectFile = {
 export type CodefarmProject = {
   repo: string;
   name: string;
+  status?: "active" | "archived";
+  archived?: boolean;
+  archivedAt?: string;
   jobs: {
     totalJobs: number;
     activeJobs: number;
@@ -104,6 +110,7 @@ export type CodefarmState = {
   loaded: boolean;
   loading: boolean;
   error: string | null;
+  showArchived: boolean;
   repos: CodefarmRepoSummary[];
   selectedRepo: string | null;
   repoInput: string;
@@ -128,6 +135,7 @@ function createDefaultCodefarmState(): CodefarmState {
     loaded: false,
     loading: false,
     error: null,
+    showArchived: false,
     repos: [],
     selectedRepo: null,
     repoInput: "",
@@ -213,6 +221,9 @@ function normalizeCodefarmRepo(value: unknown): CodefarmRepoSummary | null {
   return {
     repo,
     name: typeof value.name === "string" && value.name.trim() ? value.name.trim() : repo,
+    ...(value.status === "active" || value.status === "archived" ? { status: value.status } : {}),
+    ...(typeof value.archived === "boolean" ? { archived: value.archived } : {}),
+    ...(typeof value.archivedAt === "string" ? { archivedAt: value.archivedAt } : {}),
     totalJobs: normalizeNumber(value.totalJobs),
     activeJobs: normalizeNumber(value.activeJobs),
     reviewJobs: normalizeNumber(value.reviewJobs),
@@ -352,6 +363,11 @@ function normalizeProjectPayload(payload: unknown, fallback: { repo: string }): 
       typeof record.name === "string" && record.name.trim()
         ? record.name.trim()
         : repo.split("/").filter(Boolean).at(-1) || repo,
+    ...(record.status === "active" || record.status === "archived"
+      ? { status: record.status }
+      : {}),
+    ...(typeof record.archived === "boolean" ? { archived: record.archived } : {}),
+    ...(typeof record.archivedAt === "string" ? { archivedAt: record.archivedAt } : {}),
     jobs: {
       totalJobs: normalizeNumber(jobs.totalJobs),
       activeJobs: normalizeNumber(jobs.activeJobs),
@@ -412,6 +428,7 @@ export async function loadCodefarmRepos(params: {
     }
     const payload = await params.client.request("codefarm.repos", {
       ...(params.roots ? { roots: params.roots } : {}),
+      ...(state.showArchived ? { includeArchived: true } : {}),
     });
     const repos = normalizeReposPayload(payload);
     const selectedRepo =
@@ -445,6 +462,36 @@ export async function loadCodefarmRepos(params: {
     state.loaded = true;
     state.loading = false;
     state.error = formatError(error);
+    state.updatedAt = Date.now();
+  } finally {
+    params.requestUpdate?.();
+  }
+}
+
+export async function archiveCodefarmProject(params: {
+  host: object;
+  client: GatewayBrowserClient | null;
+  repo: string;
+  archived: boolean;
+  requestUpdate?: () => void;
+}) {
+  const state = getCodefarmState(params.host);
+  state.projectLoading = true;
+  state.projectError = null;
+  params.requestUpdate?.();
+  try {
+    if (!params.client) {
+      throw new Error("Gateway client is not connected.");
+    }
+    const method = params.archived ? "codefarm.project.archive" : "codefarm.project.unarchive";
+    const payload = await params.client.request(method, { repo: params.repo });
+    state.project = normalizeProjectPayload(payload, { repo: params.repo });
+    state.projectLoading = false;
+    state.projectError = null;
+    state.updatedAt = Date.now();
+  } catch (error) {
+    state.projectLoading = false;
+    state.projectError = formatError(error);
     state.updatedAt = Date.now();
   } finally {
     params.requestUpdate?.();

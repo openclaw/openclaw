@@ -44,14 +44,23 @@ export type CodefarmProjectParams = {
   repo: string;
 };
 
+export type CodefarmProjectArchiveParams = {
+  repo: string;
+  archived: boolean;
+};
+
 export type CodefarmReposParams = {
   roots?: string[];
   maxDepth?: number;
+  includeArchived?: boolean;
 };
 
 export type CodefarmRepoSummary = {
   repo: string;
   name: string;
+  status: "active" | "archived";
+  archived: boolean;
+  archivedAt?: string;
   totalJobs: number;
   activeJobs: number;
   reviewJobs: number;
@@ -63,6 +72,9 @@ export type CodefarmRepoSummary = {
 export type CodefarmObserveRunner = (params: CodefarmObserveParams) => Promise<unknown>;
 export type CodefarmListRunner = (params: CodefarmListParams) => Promise<unknown>;
 export type CodefarmProjectRunner = (params: CodefarmProjectParams) => Promise<unknown>;
+export type CodefarmProjectArchiveRunner = (
+  params: CodefarmProjectArchiveParams,
+) => Promise<unknown>;
 export type CodefarmReposRunner = (params: CodefarmReposParams) => Promise<unknown>;
 
 function respondError(respond: GatewayRespond, error: unknown) {
@@ -158,8 +170,13 @@ function readCodefarmReposParams(params: Record<string, unknown>): CodefarmRepos
         })
       : undefined;
   const rawDepth = params.maxDepth;
+  const includeArchived =
+    typeof params.includeArchived === "boolean" ? params.includeArchived : undefined;
   if (rawDepth === undefined || rawDepth === null || rawDepth === "") {
-    return roots ? { roots } : {};
+    return {
+      ...(roots ? { roots } : {}),
+      ...(includeArchived !== undefined ? { includeArchived } : {}),
+    };
   }
   if (typeof rawDepth !== "number" || !Number.isFinite(rawDepth)) {
     throw new Error("maxDepth must be a finite number.");
@@ -168,7 +185,11 @@ function readCodefarmReposParams(params: Record<string, unknown>): CodefarmRepos
   if (maxDepth < 0 || maxDepth > CODEFARM_DISCOVER_MAX_DEPTH) {
     throw new Error(`maxDepth must be between 0 and ${CODEFARM_DISCOVER_MAX_DEPTH}.`);
   }
-  return roots ? { roots, maxDepth } : { maxDepth };
+  return {
+    ...(roots ? { roots } : {}),
+    maxDepth,
+    ...(includeArchived !== undefined ? { includeArchived } : {}),
+  };
 }
 
 function parseCodefarmJsonOutput(stdout: string | Buffer, emptyMessage: string): unknown {
@@ -204,6 +225,22 @@ export async function observeCodefarmJobWithCli(params: CodefarmObserveParams): 
     maxBuffer: CODEFARM_OBSERVE_MAX_BUFFER,
   });
   return parseCodefarmJsonOutput(stdout, "codefarm observe returned no JSON output.");
+}
+
+export async function archiveCodefarmProjectWithCli(
+  params: CodefarmProjectArchiveParams,
+): Promise<unknown> {
+  const bin = process.env.OPENCLAW_CODEFARM_BIN?.trim() || "codefarm";
+  const command = params.archived ? "archive" : "unarchive";
+  const { stdout } = await execFileAsync(
+    bin,
+    ["project", command, "--repo", params.repo, "--json"],
+    {
+      timeout: CODEFARM_OBSERVE_TIMEOUT_MS,
+      maxBuffer: CODEFARM_OBSERVE_MAX_BUFFER,
+    },
+  );
+  return parseCodefarmJsonOutput(stdout, `codefarm project ${command} returned no JSON output.`);
 }
 
 function normalizeDiscoveryRoot(root: string): string | null {
@@ -255,6 +292,28 @@ async function readJsonFile(file: string): Promise<unknown | null> {
   }
 }
 
+type CodefarmProjectMetadata = {
+  status: "active" | "archived";
+  archived: boolean;
+  archivedAt?: string;
+  name?: string;
+};
+
+async function readCodefarmProjectMetadata(repo: string): Promise<CodefarmProjectMetadata | null> {
+  const raw = await readJsonFile(path.join(repo, ".codefarm", "project.json"));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const archived = record.archived === true || record.status === "archived";
+  return {
+    status: archived ? "archived" : "active",
+    archived,
+    ...(archived && typeof record.archivedAt === "string" ? { archivedAt: record.archivedAt } : {}),
+    ...(typeof record.name === "string" && record.name.trim() ? { name: record.name.trim() } : {}),
+  };
+}
+
 function jobIdFromIndexEntry(entry: unknown): string | null {
   if (typeof entry === "string" && entry.trim()) {
     return entry.trim();
@@ -267,14 +326,19 @@ function jobIdFromIndexEntry(entry: unknown): string | null {
 }
 
 async function summarizeCodefarmRepo(repo: string): Promise<CodefarmRepoSummary | null> {
+  const metadata = await readCodefarmProjectMetadata(repo);
   const index = await readJsonFile(path.join(repo, ".codefarm", "index.json"));
-  if (!index || typeof index !== "object" || Array.isArray(index)) {
+  if ((!index || typeof index !== "object" || Array.isArray(index)) && !metadata) {
     return null;
   }
-  const jobIds = Array.isArray((index as { jobs?: unknown }).jobs)
-    ? ((index as { jobs: unknown[] }).jobs.map(jobIdFromIndexEntry).filter(Boolean) as string[])
-    : [];
-  if (jobIds.length === 0) {
+  const jobIds =
+    index &&
+    typeof index === "object" &&
+    !Array.isArray(index) &&
+    Array.isArray((index as { jobs?: unknown }).jobs)
+      ? ((index as { jobs: unknown[] }).jobs.map(jobIdFromIndexEntry).filter(Boolean) as string[])
+      : [];
+  if (jobIds.length === 0 && !metadata) {
     return null;
   }
   const statuses: Record<string, number> = {};
@@ -295,7 +359,10 @@ async function summarizeCodefarmRepo(repo: string): Promise<CodefarmRepoSummary 
   }
   return {
     repo,
-    name: path.basename(repo) || repo,
+    name: metadata?.name ?? path.basename(repo) ?? repo,
+    status: metadata?.status ?? "active",
+    archived: metadata?.archived ?? false,
+    ...(metadata?.archivedAt ? { archivedAt: metadata.archivedAt } : {}),
     totalJobs: jobIds.length,
     activeJobs: (statuses.running ?? 0) + (statuses.preparing ?? 0),
     reviewJobs: statuses.ready_for_review ?? 0,
@@ -418,6 +485,9 @@ export async function readCodefarmProject(params: CodefarmProjectParams): Promis
   schemaVersion: 1;
   repo: string;
   name: string;
+  status: "active" | "archived";
+  archived: boolean;
+  archivedAt?: string;
   jobs: {
     totalJobs: number;
     activeJobs: number;
@@ -444,6 +514,9 @@ export async function readCodefarmProject(params: CodefarmProjectParams): Promis
     schemaVersion: 1,
     repo,
     name: summary?.name ?? path.basename(repo) ?? repo,
+    status: summary?.status ?? "active",
+    archived: summary?.archived ?? false,
+    ...(summary?.archivedAt ? { archivedAt: summary.archivedAt } : {}),
     jobs: {
       totalJobs: summary?.totalJobs ?? 0,
       activeJobs: summary?.activeJobs ?? 0,
@@ -504,7 +577,7 @@ export async function discoverCodefarmReposFromRoots(params: CodefarmReposParams
       return;
     }
     const summary = await summarizeCodefarmRepo(dir);
-    if (summary) {
+    if (summary && (params.includeArchived || !summary.archived)) {
       repos.set(summary.repo, summary);
       return;
     }
@@ -580,6 +653,7 @@ export function registerWorkboardGatewayMethods(params: {
   projectCodefarm?: CodefarmProjectRunner;
   listCodefarm?: CodefarmListRunner;
   observeCodefarm?: CodefarmObserveRunner;
+  archiveCodefarm?: CodefarmProjectArchiveRunner;
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
@@ -587,6 +661,7 @@ export function registerWorkboardGatewayMethods(params: {
   const projectCodefarm = params.projectCodefarm ?? readCodefarmProject;
   const listCodefarm = params.listCodefarm ?? listCodefarmJobsWithCli;
   const observeCodefarm = params.observeCodefarm ?? observeCodefarmJobWithCli;
+  const archiveCodefarm = params.archiveCodefarm ?? archiveCodefarmProjectWithCli;
 
   api.registerGatewayMethod(
     "workboard.cards.list",
@@ -1235,6 +1310,34 @@ export function registerWorkboardGatewayMethods(params: {
       }
     },
     { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.project.archive",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const projectParams = readCodefarmProjectParams(requestParams);
+        await archiveCodefarm({ ...projectParams, archived: true });
+        respond(true, await projectCodefarm(projectParams));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.project.unarchive",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const projectParams = readCodefarmProjectParams(requestParams);
+        await archiveCodefarm({ ...projectParams, archived: false });
+        respond(true, await projectCodefarm(projectParams));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
   );
 
   api.registerGatewayMethod(

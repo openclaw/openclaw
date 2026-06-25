@@ -188,4 +188,49 @@ describe("renderCodefarm", () => {
       "Add pool-lazy proof",
     );
   });
+
+  it("renders project archive controls in the Projects tab", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.loaded = true;
+    state.activeSection = "projects";
+    state.selectedRepo = "/Users/me/agent-space";
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "agent-space",
+      status: "active",
+      archived: false,
+      jobs: { totalJobs: 1, activeJobs: 0, statuses: { ready_for_review: 1 } },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+    };
+    const request = vi.fn(async () => ({
+      repo: "/Users/me/agent-space",
+      name: "agent-space",
+      status: "archived",
+      archived: true,
+      jobs: { totalJobs: 1, activeJobs: 0, statuses: { ready_for_review: 1 } },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+    }));
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      onRequestUpdate: () => renderInto(container, props),
+    } satisfies CodefarmRenderProps;
+
+    renderInto(container, props);
+    const archive = container.querySelector<HTMLButtonElement>(".codefarm-project-archive");
+    expect(archive?.textContent).toContain("Archive");
+
+    archive?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("codefarm.project.archive", {
+      repo: "/Users/me/agent-space",
+    });
+  });
 });
