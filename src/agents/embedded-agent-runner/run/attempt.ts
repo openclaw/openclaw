@@ -1541,6 +1541,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
+          agentDir,
           cfg: params.config,
         })
       : undefined;
