@@ -624,6 +624,7 @@ export async function runSshSandboxCommand(
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
+      windowsHide: true,
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -723,11 +724,13 @@ export async function uploadDirectoryToSshTarget(params: {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,
+      windowsHide: true,
     });
     const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
+      windowsHide: true,
     });
     const tarStderr: Buffer[] = [];
     const sshStdout: Buffer[] = [];
