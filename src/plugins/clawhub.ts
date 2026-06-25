@@ -877,11 +877,42 @@ async function resolveCompatiblePackageVersion(params: {
   }
   const artifactVersion = readArtifactResolverVersion(artifactResponse, requestedVersion);
   const resolvedVersion = normalizeOptionalString(artifactVersion.version) ?? requestedVersion;
+  const latestVersion = resolveLatestVersionFromPackage(params.detail);
+  // Only fall back to package-level compatibility when the resolved version is the
+  // package latest. Older pinned versions should not inherit the latest version's
+  // compatibility requirements.
+  const packageCompatibilityFallback =
+    resolvedVersion === latestVersion ? (params.detail.package?.compatibility ?? null) : null;
+  // When the artifact endpoint returns sparse metadata (no compatibility) for a
+  // pinned older version, fetch the version endpoint which may have the real
+  // version-specific compatibility data.
+  let versionEndpointCompatibility: ClawHubPackageCompatibility | null = null;
+  if (!artifactVersion.compatibility && resolvedVersion !== latestVersion) {
+    try {
+      const selectedVersion = await fetchClawHubPackageVersion({
+        name: params.detail.package?.name ?? "",
+        version: resolvedVersion,
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      });
+      versionEndpointCompatibility = selectedVersion.version?.compatibility ?? null;
+    } catch (error) {
+      return mapClawHubRequestError(error, {
+        stage: "version",
+        name: params.detail.package?.name ?? "unknown",
+        version: resolvedVersion,
+      });
+    }
+  }
   if (params.detail.package?.family === "skill") {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility: artifactVersion.compatibility ?? params.detail.package?.compatibility ?? null,
+      compatibility:
+        artifactVersion.compatibility ??
+        versionEndpointCompatibility ??
+        packageCompatibilityFallback,
       verification: null,
       clawpack:
         artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
@@ -930,7 +961,9 @@ async function resolveCompatiblePackageVersion(params: {
       ok: true,
       version: resolvedVersion,
       compatibility:
-        versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+        versionDetail.version?.compatibility ??
+        versionEndpointCompatibility ??
+        packageCompatibilityFallback,
       verification: null,
       clawpack,
     };
@@ -942,7 +975,9 @@ async function resolveCompatiblePackageVersion(params: {
     ok: true,
     version: resolvedVersion,
     compatibility:
-      versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+      versionDetail.version?.compatibility ??
+      versionEndpointCompatibility ??
+      packageCompatibilityFallback,
     verification: verificationState.verification ?? topLevelLegacyVerification,
     clawpack,
   };
