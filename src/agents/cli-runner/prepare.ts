@@ -265,9 +265,10 @@ export async function prepareCliRunContext(
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   if (params.toolsAllow !== undefined) {
-    throw new Error(
-      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
+    cliBackendLog.warn(
+      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; ignoring tool policy and running with full backend tools (session=${redactedSessionKey})`,
     );
+    params.toolsAllow = undefined;
   }
   const sideQuestionDisablesNativeTools =
     isSideQuestion && backendResolved.sideQuestionToolMode === "disabled";

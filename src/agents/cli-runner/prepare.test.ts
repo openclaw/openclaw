@@ -2343,7 +2343,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
+  it("warns and ignores toolsAllow for CLI backends (run proceeds with full backend tools)", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2355,24 +2355,25 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         getActiveMcpLoopbackRuntime,
       });
 
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-tools-allow",
-          config: createCliBackendConfig({ bundleMcp: true }),
-          toolsAllow: ["read", "web_search"],
-        }),
-      ).rejects.toThrow(
-        "CLI backend test-cli cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy",
-      );
+      // Pre-2026.6.10 behavior restored: CLI backends cannot enforce per-run tool
+      // restriction, so toolsAllow is silently dropped (with a warning log) and the
+      // run proceeds instead of hard-failing.
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-tools-allow",
+        config: createCliBackendConfig({ bundleMcp: true }),
+        toolsAllow: ["read", "web_search"],
+      });
 
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      // Run must succeed and toolsAllow must be cleared from the prepared params.
+      expect(context).toBeDefined();
+      expect(context.params.toolsAllow).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
