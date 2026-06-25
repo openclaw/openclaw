@@ -753,7 +753,7 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
-  it("attaches turn-scoped developer instructions without changing thread config", () => {
+  it("moves turn-scoped developer instructions out of turn collaboration mode", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
@@ -761,12 +761,8 @@ describe("Codex app-server turn input image sanitizing", () => {
       turnScopedDeveloperInstructions: "SOUL.md turn-only context",
     });
 
-    expect(request.collaborationMode?.settings.developer_instructions).toContain(
-      "# Collaboration Mode: Default",
-    );
-    expect(request.collaborationMode?.settings.developer_instructions).toContain(
-      "SOUL.md turn-only context",
-    );
+    expect(request.collaborationMode).toBeDefined();
+    expect(request.collaborationMode?.settings.developer_instructions).toBeNull();
   });
 
   it("places memory collaboration instructions before skills", () => {
@@ -774,15 +770,11 @@ describe("Codex app-server turn input image sanitizing", () => {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,
-      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
       memoryCollaborationInstructions: "MEMORY.md pointer",
       skillsCollaborationInstructions: "<available_skills>",
     });
     const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
 
-    expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
-      developerInstructions.indexOf("MEMORY.md pointer"),
-    );
     expect(developerInstructions.indexOf("MEMORY.md pointer")).toBeLessThan(
       developerInstructions.indexOf("<available_skills>"),
     );
@@ -908,12 +900,12 @@ describe("Codex app-server turn params", () => {
         heartbeatCollaborationInstructions:
           "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
       }).settings.developer_instructions,
-    ).toContain("Turn-only workspace instructions.");
+    ).toBeNull();
     expect(
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
       }).settings.developer_instructions,
-    ).toContain("# Collaboration Mode: Default");
+    ).toBeNull();
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
@@ -937,7 +929,7 @@ describe("Codex app-server turn params", () => {
     expect(cronCollaborationMode.settings.developer_instructions).toContain(
       "Use context already provided by the runtime",
     );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+    expect(cronCollaborationMode.settings.developer_instructions).not.toContain(
       "Turn-only workspace instructions.",
     );
   });

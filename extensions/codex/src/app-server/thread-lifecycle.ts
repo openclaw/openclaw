@@ -1466,7 +1466,6 @@ function buildTurnScopedCollaborationInstructions(
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
-    options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,
   );

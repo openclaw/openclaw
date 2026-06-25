@@ -258,6 +258,7 @@ async function buildCodexTurnContextForTest(
   const threadDeveloperInstructions = [
     testing.buildDeveloperInstructions(params, { dynamicTools }),
     workspaceBootstrapContext.developerInstructions,
+    workspaceBootstrapContext.turnScopedDeveloperInstructions,
   ]
     .filter((section) => section?.trim())
     .join("\n\n");
@@ -2435,23 +2436,24 @@ describe("runCodexAppServerAttempt", () => {
     } = await buildCodexTurnContextForTest(params, workspaceDir);
 
     expect(threadDeveloperInstructions).toContain("OpenClaw Workspace Instructions");
-    expect(threadDeveloperInstructions).not.toContain(soulGuidance);
-    expect(threadDeveloperInstructions).not.toContain(identityGuidance);
+    expect(threadDeveloperInstructions).toContain(soulGuidance);
+    expect(threadDeveloperInstructions).toContain(identityGuidance);
     expect(threadDeveloperInstructions).toContain(toolGuidance);
-    expect(threadDeveloperInstructions).not.toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadDeveloperInstructions).toContain("<AGENT_SOUL>");
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
 
     expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("request_user_input availability");
-    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
-    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
-    expect(collaborationInstructions).toContain(soulGuidance);
-    expect(collaborationInstructions).toContain(identityGuidance);
+    expect(collaborationInstructions).not.toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).not.toContain("<AGENT_SOUL>");
+    expect(collaborationInstructions).not.toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain(identityGuidance);
     expect(collaborationInstructions).not.toContain(toolGuidance);
-    expect(collaborationInstructions).toContain(userProfile);
+    expect(collaborationInstructions).not.toContain(userProfile);
     expect(collaborationInstructions).toContain("## Memory Recall");
     expect(collaborationInstructions).toContain("MEMORY.md + memory/*.md");
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
@@ -2615,9 +2617,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadStartParams.developerInstructions).toContain(toolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(userProfile);
+    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
@@ -2630,20 +2633,20 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
-    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
-    expect(collaborationInstructions).toContain(soulGuidance);
-    expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).toContain(userProfile);
+    expect(collaborationInstructions).not.toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).not.toContain("<AGENT_SOUL>");
+    expect(collaborationInstructions).not.toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain(identityGuidance);
+    expect(collaborationInstructions).not.toContain(userProfile);
     expect(collaborationInstructions).not.toContain(toolGuidance);
 
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
-      [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
-        .length,
+      [threadStartParams.developerInstructions ?? "", collaborationInstructions]
+        .filter((s) => s?.trim())
+        .join("\n\n").length,
     );
   });
 

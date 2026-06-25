@@ -882,6 +882,7 @@ export async function runCodexAppServerAttempt(
       dynamicTools: toolBridge.availableSpecs,
     }),
     workspaceBootstrapContext.developerInstructions,
+    workspaceBootstrapContext.turnScopedDeveloperInstructions,
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
