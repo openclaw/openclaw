@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
+  recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
   resolveCodexTrajectoryAppendFlags,
   resolveCodexTrajectoryPointerFlags,
@@ -80,7 +81,9 @@ describe("Codex trajectory recorder", () => {
     expect(content).not.toContain("secret");
     expect(content).not.toContain("sk-test-secret-token");
     expect(content).not.toContain("sk-other-secret-token");
-    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    }
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
@@ -252,5 +255,62 @@ describe("Codex trajectory recorder", () => {
     ) as { data?: { truncated?: boolean; reason?: string } };
     expect(parsed.data?.truncated).toBe(true);
     expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
+  });
+
+  it("preserves usage when truncating oversized model completion events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+    } as never;
+    const usage = {
+      input: 384_954,
+      output: 5_624,
+      cacheRead: 333_824,
+      reasoningTokens: 2_038,
+      total: 724_402,
+    };
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        aborted: false,
+        attemptUsage: usage,
+        assistantTexts: ["done"],
+        messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message-${index} ${"x".repeat(32_000)}`,
+        })),
+      } as never,
+    });
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.type).toBe("model.completed");
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      usage,
+    });
+    expect(parsed.data.messagesSnapshot).toBeUndefined();
+    expect(parsed.data.droppedFields).toContain("messagesSnapshot");
+    expect(Buffer.byteLength(JSON.stringify(parsed), "utf8")).toBeLessThanOrEqual(256 * 1024);
   });
 });
