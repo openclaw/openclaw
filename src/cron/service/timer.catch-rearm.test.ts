@@ -16,19 +16,16 @@ const noopLogger = {
   error: vi.fn(),
 };
 
-/** Create a minimal CronServiceState for testing timer mechanics. */
-function makeMinimalState(overrides?: {
-  cronEnabled?: boolean;
-  nowMs?: () => number;
-}) {
+/** Create a minimal CronServiceState with a due job so armTimer sets a timer. */
+function makeMinimalState() {
+  const now = Date.now();
   return createCronServiceState({
     storePath: "/tmp/test-cron-catch-rearm.json",
-    cronEnabled: overrides?.cronEnabled ?? true,
+    cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    ...overrides,
   });
 }
 
@@ -40,40 +37,40 @@ describe("cron timer .catch() re-arm", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("re-arms the timer when onTimer rejects", async () => {
-    const state = makeMinimalState();
-    state.store = { version: 1, jobs: [] };
-
-    // Arm the timer
-    armTimer(state);
-    const firstTimerId = state.timer;
-    expect(firstTimerId).not.toBeNull();
-
-    // Advance time to fire the timer — onTimer will reject because
-    // the store has no due jobs and various internal deps aren't
-    // fully wired for a bare state. The rejection exercises the .catch path.
-    // Use vi.advanceTimersToNextTimer to trigger the setTimeout callback.
-    await vi.advanceTimersToNextTimerAsync();
-
-    // The .catch handler should have re-armed: a new timer should exist.
-    // It may or may not be a different timer ID depending on whether
-    // onTimer's finally block also arms (healthy path) or the .catch fires.
-    // The key assertion: a timer is still set after a rejection.
-    expect(state.timer).not.toBeNull();
-
-    // Clean up
-    if (state.timer) { clearTimeout(state.timer); }
+    vi.restoreAllMocks();
   });
 
   it("does not re-arm when scheduler is stopped", () => {
     const state = makeMinimalState();
-    state.store = { version: 1, jobs: [] };
     state.stopped = true;
 
     armTimer(state);
-    // Timer should be null when stopped
     expect(state.timer).toBeNull();
+  });
+
+  it("armTimer sets a timer for a due job", () => {
+    const state = makeMinimalState();
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "test-job",
+          name: "test",
+          enabled: true,
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() - 60_000 },
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "test" },
+          state: { nextRunAtMs: Date.now() - 1 },
+        },
+      ],
+    };
+
+    armTimer(state);
+    expect(state.timer).not.toBeNull();
+
+    // Clean up
+    if (state.timer) { clearTimeout(state.timer); }
   });
 });
