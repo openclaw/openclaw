@@ -54,7 +54,7 @@ console.log("pub: ", privToXOnlyPub(priv));
 ### 2. Install dependencies
 
 ```bash
-npm install
+npm install @noble/curves
 ```
 
 ### 3. Set environment variables

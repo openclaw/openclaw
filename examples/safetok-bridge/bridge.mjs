@@ -5,6 +5,7 @@
 // routes them to a dedicated OpenClaw session, and publishes the encrypted reply back.
 //
 // Usage:
+//   npm install @noble/curves   ← one-time install
 //   OPENCLAW_TOKEN=<gateway-token> SAFETOK_PRIVATE_KEY=<hex> node bridge.mjs
 //
 // Environment variables:
