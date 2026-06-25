@@ -51,6 +51,7 @@ const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 const REFRESH_LOCK_TIMEOUT_MS = 60_000;
 const REFRESH_LOCK_STALE_MS = 120_000;
 const REFRESH_LOCK_POLL_MS = 100;
+const REFRESH_REQUEST_TIMEOUT_MS = 90_000;
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
@@ -176,6 +177,44 @@ async function parseRefreshResponseTokens(
 ): Promise<OAuthTokens> {
   const payload = (await response.clone().json()) as OAuthTokens;
   return { refresh_token: refreshToken, ...payload };
+}
+
+async function fetchRefreshTokenWithDeadline(
+  fetchFn: FetchLike,
+  input: Parameters<FetchLike>[0],
+  init: Parameters<FetchLike>[1] | undefined,
+): Promise<Response> {
+  const controller = new AbortController();
+  const callerSignal = init?.signal;
+  if (callerSignal?.aborted) {
+    controller.abort(callerSignal.reason);
+    throw new Error("MCP OAuth token refresh was aborted.");
+  }
+
+  const abortFromCaller = () => {
+    controller.abort(callerSignal?.reason);
+  };
+  callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new Error("Timed out refreshing MCP OAuth tokens."));
+    }, REFRESH_REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([
+      fetchFn(input, { ...init, signal: controller.signal }),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    callerSignal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
@@ -316,7 +355,7 @@ export function createMcpOAuthClientProvider(params: {
             return responseFromTokens(currentTokens);
           }
 
-          const response = await (fetchFn ?? fetch)(input, init);
+          const response = await fetchRefreshTokenWithDeadline(fetchFn ?? fetch, input, init);
           if (!response.ok) {
             return response;
           }
@@ -325,7 +364,8 @@ export function createMcpOAuthClientProvider(params: {
           // Persisting the clone before releasing the lock lets concurrent callers
           // observe the rotated refresh token instead of replaying the stale one.
           const tokens = await parseRefreshResponseTokens(response, refreshToken);
-          await writeStore(filePath, { ...store, tokens });
+          const latestStore = await readStore(filePath);
+          await writeStore(filePath, { ...latestStore, tokens });
           return response;
         } finally {
           await lock.release();

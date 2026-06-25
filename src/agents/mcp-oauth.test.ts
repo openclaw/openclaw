@@ -194,6 +194,152 @@ describe("MCP OAuth provider", () => {
     );
   });
 
+  it("preserves OAuth metadata saved while a refresh is in flight", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+          token_type: "Bearer",
+        });
+
+        let resolveRefresh: (() => void) | undefined;
+        const fetchFn = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            resolveRefresh = resolve;
+          });
+          return new Response(
+            JSON.stringify({
+              access_token: "new-access",
+              refresh_token: "new-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+
+        const pendingRefresh = provider.wrapFetchForTokenRefresh(fetchFn)(
+          new URL("https://auth.example.com/token"),
+          {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          },
+        );
+        await vi.waitFor(() => {
+          expect(fetchFn).toHaveBeenCalledOnce();
+        });
+
+        expect(provider.saveClientInformation).toBeDefined();
+        await provider.saveClientInformation?.({ client_id: "client-after-refresh-started" });
+        expect(resolveRefresh).toBeDefined();
+        resolveRefresh?.();
+        await expect(pendingRefresh.then((response) => response.json())).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+
+        expect(await provider.clientInformation()).toMatchObject({
+          client_id: "client-after-refresh-started",
+        });
+        await expect(provider.tokens()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-refresh-store-merge-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("releases the refresh lock when the token endpoint exceeds the refresh deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempHome(
+        async () => {
+          const provider = createMcpOAuthClientProvider({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          });
+          await provider.saveTokens({
+            access_token: "old-access",
+            refresh_token: "old-refresh",
+            token_type: "Bearer",
+          });
+
+          const fetchFn = vi
+            .fn()
+            .mockImplementationOnce(
+              () =>
+                new Promise<Response>(() => {
+                  // Simulates a provider that never completes the refresh request.
+                }),
+            )
+            .mockResolvedValueOnce(
+              new Response(
+                JSON.stringify({
+                  access_token: "new-access",
+                  refresh_token: "new-refresh",
+                  token_type: "Bearer",
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+            );
+          const wrappedFetch = provider.wrapFetchForTokenRefresh(fetchFn);
+          const refreshInit = () => ({
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          });
+
+          const stalledRefresh = wrappedFetch(
+            new URL("https://auth.example.com/token"),
+            refreshInit(),
+          );
+          await vi.waitFor(() => {
+            expect(fetchFn).toHaveBeenCalledOnce();
+          });
+          await vi.advanceTimersByTimeAsync(90_000);
+          await expect(stalledRefresh).rejects.toThrow(/timed out refreshing/i);
+
+          const recoveredRefresh = await wrappedFetch(
+            new URL("https://auth.example.com/token"),
+            refreshInit(),
+          );
+          await expect(recoveredRefresh.json()).resolves.toMatchObject({
+            access_token: "new-access",
+            refresh_token: "new-refresh",
+          });
+          expect(fetchFn).toHaveBeenCalledTimes(2);
+        },
+        {
+          prefix: "openclaw-mcp-oauth-refresh-deadline-",
+          skipSessionCleanup: true,
+          env: {
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_STATE_DIR: undefined,
+          },
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the legacy loopback redirect as the default for upgrade compatibility", () => {
     const provider = createMcpOAuthClientProvider({
       serverName: "Calendly",
