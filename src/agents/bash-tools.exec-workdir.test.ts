@@ -474,6 +474,29 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("maps missing absolute host workspace paths before backend validation", async () => {
+    await withTempDir(async (workspaceDir) => {
+      const missingRemoteDir = path.join(workspaceDir, "generated");
+      const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "sandbox",
+          workdir: missingRemoteDir,
+          sandbox: backendSandboxConfig(workspaceDir, {
+            validateWorkdir,
+          }),
+        }),
+      ).resolves.toEqual({
+        kind: "sandbox",
+        hostCwd: workspaceDir,
+        containerCwd: "/remote/workspace/generated",
+        scriptPreflightCwd: null,
+      });
+      expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
+    });
+  });
+
   it("rejects backend-validated sandbox host paths that symlink outside the workspace", async () => {
     await withTempDir(async (workspaceDir) => {
       await withTempDir(async (outsideDir) => {

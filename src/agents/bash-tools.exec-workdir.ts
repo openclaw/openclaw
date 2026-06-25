@@ -35,7 +35,7 @@ type BackendHostWorkdirCandidate = {
 
 type ExistingHostWorkspacePathResult =
   | { kind: "available"; workdir: SandboxWorkdir }
-  | { kind: "missing" }
+  | { kind: "missing"; relative: string }
   | { kind: "invalid" };
 
 function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
@@ -171,7 +171,10 @@ async function mapExistingHostWorkspacePath(params: {
   }
   const stats = safeStatSync(resolved.resolved);
   if (!stats) {
-    return { kind: "missing" };
+    return {
+      kind: "missing",
+      relative: resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "",
+    };
   }
   if (!stats.isDirectory()) {
     return { kind: "invalid" };
@@ -246,6 +249,19 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
     if (mappedWorkdir.kind === "available") {
       return await validateBackendWorkdir({
         workdir: mappedWorkdir.workdir,
+        sandbox: params.sandbox,
+      });
+    }
+    if (mappedWorkdir.kind === "missing") {
+      return await validateBackendWorkdir({
+        workdir: {
+          hostCwd: workspaceHostCwd,
+          containerCwd: joinContainerWorkdir(
+            params.sandbox.containerWorkdir,
+            mappedWorkdir.relative,
+          ),
+          scriptPreflightCwd: null,
+        },
         sandbox: params.sandbox,
       });
     }
