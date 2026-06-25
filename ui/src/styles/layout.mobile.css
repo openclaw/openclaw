@@ -685,9 +685,9 @@
     padding: 0 8px 12px;
   }
 
-  .chat-msg {
-    max-width: 90%;
-  }
+  /* On mobile, let .chat-group-messages control the width constraint.
+     This single max-width rule is redundant with grouped.css and can
+     actually conflict with the group-level max-width on narrow screens. */
 
   .chat-bubble {
     padding: 8px 12px;
