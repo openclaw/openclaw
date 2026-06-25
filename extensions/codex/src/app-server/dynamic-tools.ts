@@ -19,6 +19,7 @@ import {
   getPluginToolMeta,
   type EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
   isReplaySafeToolCall,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
@@ -600,6 +601,13 @@ export function createCodexDynamicToolBridge(params: {
           ) === "reply" &&
           !resultIsError &&
           !blocksSourceReplyTermination &&
+          isDeliveredMessagingToolResult({
+            toolName,
+            args: executedArgs,
+            result,
+            hookResult: rawResult,
+            isError: resultIsError,
+          }) &&
           (replyReceiptMatchesCurrentMessage(rawResult, params.hookContext) ||
             replyReceiptMatchesCurrentMessage(result, params.hookContext));
         const toolConfirmedSourceReply =
