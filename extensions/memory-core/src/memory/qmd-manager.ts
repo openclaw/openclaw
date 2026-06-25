@@ -75,6 +75,15 @@ import {
 } from "../qmd-session-artifacts.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 import {
+  readQmdCollectionValidationCache,
+  readQmdMultiCollectionProbeCache,
+  writeQmdCollectionValidationCache,
+  writeQmdMultiCollectionProbeCache,
+  type QmdRuntimeCollectionValidationCacheContext,
+  type QmdRuntimeManagedCollection,
+  type QmdRuntimeMultiCollectionProbeCacheContext,
+} from "./qmd-runtime-cache.js";
+import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureWarningState,
   warnIfMemoryWatchPressureHigh,
@@ -324,6 +333,14 @@ type ManagedCollection = {
   kind: "memory" | "custom" | "sessions";
 };
 
+type QmdCollectionValidationDebug = NonNullable<
+  NonNullable<MemorySearchRuntimeDebug["qmd"]>["collectionValidation"]
+>;
+type QmdMultiCollectionProbeDebug = NonNullable<
+  NonNullable<MemorySearchRuntimeDebug["qmd"]>["multiCollectionProbe"]
+>;
+type QmdSearchPlanDebug = NonNullable<NonNullable<MemorySearchRuntimeDebug["qmd"]>["searchPlan"]>;
+
 type QmdManagerMode = "full" | "status" | "cli";
 type QmdManagerRuntimeConfig = {
   workspaceDir: string;
@@ -453,6 +470,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
+  private pendingCollectionValidationDebug: QmdCollectionValidationDebug | undefined;
+  private currentSearchMultiCollectionProbeDebug: QmdMultiCollectionProbeDebug | undefined;
+  private currentSearchPlanDebug: QmdSearchPlanDebug | undefined;
 
   private constructor(params: {
     agentId: string;
@@ -612,11 +632,118 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async ensureCollections(): Promise<void> {
+  private qmdRuntimeCacheSources(): string[] {
+    return [...this.sources].toSorted();
+  }
+
+  private qmdRuntimeCacheCollections(): QmdRuntimeManagedCollection[] {
+    return this.qmd.collections.map((collection) => ({
+      name: collection.name,
+      kind: collection.kind,
+      path: collection.path,
+      pattern: collection.pattern,
+    }));
+  }
+
+  private buildQmdCollectionValidationCacheContext(): QmdRuntimeCollectionValidationCacheContext {
+    return {
+      workspaceDir: this.workspaceDir,
+      agentId: this.agentId,
+      qmdCommand: this.qmd.command,
+      qmdIndexPath: this.indexPath,
+      searchMode: this.qmd.searchMode,
+      collections: this.qmdRuntimeCacheCollections(),
+      sources: this.qmdRuntimeCacheSources(),
+    };
+  }
+
+  private buildQmdMultiCollectionProbeCacheContext(): QmdRuntimeMultiCollectionProbeCacheContext {
+    return {
+      workspaceDir: this.workspaceDir,
+      agentId: this.agentId,
+      qmdCommand: this.qmd.command,
+      qmdIndexPath: this.indexPath,
+      searchMode: this.qmd.searchMode,
+      sources: this.qmdRuntimeCacheSources(),
+    };
+  }
+
+  private recordSearchPlanDebug(params: {
+    command: "query" | "search" | "vsearch";
+    collectionNames: string[];
+    collectionGroups: string[][];
+  }): void {
+    const sources = uniqueValues(
+      params.collectionNames
+        .map((collectionName) => this.collectionRoots.get(collectionName)?.kind)
+        .filter((source): source is MemorySource => Boolean(source)),
+    );
+    this.currentSearchPlanDebug = {
+      command: params.command,
+      collectionCount: params.collectionNames.length,
+      groupCount: params.collectionGroups.length,
+      sources,
+    };
+  }
+
+  private resetQmdSearchRuntimeDebug(): void {
+    this.currentSearchMultiCollectionProbeDebug = undefined;
+    this.currentSearchPlanDebug = undefined;
+  }
+
+  private consumeQmdRuntimeDebug(): MemorySearchRuntimeDebug["qmd"] | undefined {
+    const debug: NonNullable<MemorySearchRuntimeDebug["qmd"]> = {};
+    if (this.pendingCollectionValidationDebug) {
+      debug.collectionValidation = this.pendingCollectionValidationDebug;
+    }
+    if (this.currentSearchMultiCollectionProbeDebug) {
+      debug.multiCollectionProbe = this.currentSearchMultiCollectionProbeDebug;
+    }
+    if (this.currentSearchPlanDebug) {
+      debug.searchPlan = this.currentSearchPlanDebug;
+    }
+    this.pendingCollectionValidationDebug = undefined;
+    this.currentSearchMultiCollectionProbeDebug = undefined;
+    this.currentSearchPlanDebug = undefined;
+    return Object.keys(debug).length > 0 ? debug : undefined;
+  }
+
+  private async ensureCollectionPathsBestEffort(): Promise<void> {
+    for (const collection of this.qmd.collections) {
+      try {
+        await this.ensureCollectionPath(collection);
+      } catch (err) {
+        log.warn(
+          `qmd collection path prepare failed for ${collection.name}: ${formatErrorMessage(err)}`,
+        );
+      }
+    }
+  }
+
+  private async ensureCollections(options?: { force?: boolean }): Promise<void> {
+    const startedAt = Date.now();
+    const cacheContext = this.buildQmdCollectionValidationCacheContext();
+    if (!options?.force) {
+      const cached = await readQmdCollectionValidationCache(cacheContext);
+      if (cached.state === "hit") {
+        await this.ensureCollectionPathsBestEffort();
+        this.pendingCollectionValidationDebug = {
+          cacheState: "hit",
+          elapsedMs: Math.max(0, Date.now() - startedAt),
+          collectionCount: cached.value.validation.collectionCount,
+          listCalls: 0,
+          showCalls: 0,
+        };
+        return;
+      }
+    }
+
+    const stats = { listCalls: 0, showCalls: 0 };
+    let validationComplete = true;
     // QMD collections are persisted inside the index database and must be created
     // via the CLI. Prefer listing existing collections when supported, otherwise
     // fall back to best-effort idempotent `qmd collection add`.
-    const existing = await this.listCollectionsBestEffort();
+    const existing = await this.listCollectionsBestEffort(stats);
 
     await this.migrateLegacyUnscopedCollections(existing);
 
@@ -631,6 +758,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         } catch (err) {
           const message = formatErrorMessage(err);
           if (!this.isCollectionMissingError(message)) {
+            validationComplete = false;
             log.warn(`qmd collection remove failed for ${collection.name}: ${message}`);
           }
         }
@@ -661,13 +789,31 @@ export class QmdMemoryManager implements MemorySearchManager {
               pattern: collection.pattern,
             });
           } else {
+            validationComplete = false;
             log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
           }
           continue;
         }
+        validationComplete = false;
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+    const wroteCache = validationComplete
+      ? await writeQmdCollectionValidationCache(cacheContext)
+      : false;
+    this.pendingCollectionValidationDebug = {
+      cacheState: validationComplete
+        ? options?.force
+          ? "bypass-force"
+          : wroteCache
+            ? "write"
+            : "error"
+        : "error",
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      collectionCount: this.qmd.collections.length,
+      listCalls: stats.listCalls,
+      showCalls: stats.showCalls,
+    };
   }
 
   private async tryRebindSameNameCollection(params: {
@@ -713,9 +859,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
   }
 
-  private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
+  private async listCollectionsBestEffort(stats?: {
+    listCalls: number;
+    showCalls: number;
+  }): Promise<Map<string, ListedCollection>> {
     const existing = new Map<string, ListedCollection>();
     try {
+      if (stats) {
+        stats.listCalls += 1;
+      }
       const result = await this.runQmd(["collection", "list", "--json"], {
         timeoutMs: this.qmd.update.commandTimeoutMs,
       });
@@ -737,6 +889,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
+        if (stats) {
+          stats.showCalls += 1;
+        }
         const showResult = await this.runQmd(["collection", "show", collection.name], {
           timeoutMs: this.qmd.update.commandTimeoutMs,
         });
@@ -963,7 +1118,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.warn(
       "qmd search failed because a managed collection is missing; repairing collections and retrying once",
     );
-    await this.ensureCollections();
+    await this.ensureCollections({ force: true });
     return true;
   }
 
@@ -1318,6 +1473,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (searchSignal?.aborted) {
       throw asAbortError(searchSignal);
     }
+    this.resetQmdSearchRuntimeDebug();
     const trimmed = query.trim();
     if (!trimmed) {
       return [];
@@ -1403,6 +1559,11 @@ export class QmdMemoryManager implements MemorySearchManager {
           collectionNames,
           searchSignal,
         );
+        this.recordSearchPlanDebug({
+          command: qmdSearchCommand,
+          collectionNames,
+          collectionGroups,
+        });
         if (collectionGroups.length > 1) {
           return await this.runQueryAcrossCollectionGroups(
             trimmed,
@@ -1434,6 +1595,11 @@ export class QmdMemoryManager implements MemorySearchManager {
               collectionNames,
               searchSignal,
             );
+            this.recordSearchPlanDebug({
+              command: "query",
+              collectionNames,
+              collectionGroups,
+            });
             if (collectionGroups.length > 1) {
               return await this.runQueryAcrossCollectionGroups(
                 trimmed,
@@ -1512,6 +1678,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       configuredMode: qmdSearchCommand,
       effectiveMode: effectiveSearchMode,
       fallback: searchFallbackReason,
+      qmd: this.consumeQmdRuntimeDebug(),
     });
     let ranked = results;
     if (opts?.sources?.length) {
@@ -3387,6 +3554,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.multiCollectionFilterSupported !== null) {
       return this.multiCollectionFilterSupported;
     }
+    const startedAt = Date.now();
+    const cacheContext = this.buildQmdMultiCollectionProbeCacheContext();
+    const cached = await readQmdMultiCollectionProbeCache(cacheContext);
+    if (cached.state === "hit") {
+      this.multiCollectionFilterSupported = cached.value.multiCollectionProbe.supported;
+      this.currentSearchMultiCollectionProbeDebug = {
+        cacheState: "hit",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        supported: this.multiCollectionFilterSupported,
+      };
+      return this.multiCollectionFilterSupported;
+    }
     try {
       const result = await this.runQmd(["--help"], {
         timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
@@ -3395,12 +3574,26 @@ export class QmdMemoryManager implements MemorySearchManager {
       const helpText = `${result.stdout}\n${result.stderr}`;
       this.multiCollectionFilterSupported =
         /\b(?:one or more collections|collection\(s\)|multiple -c flags)\b/i.test(helpText);
+      const wroteCache = await writeQmdMultiCollectionProbeCache(
+        cacheContext,
+        this.multiCollectionFilterSupported,
+      );
+      this.currentSearchMultiCollectionProbeDebug = {
+        cacheState: wroteCache ? "write" : "error",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        supported: this.multiCollectionFilterSupported,
+      };
     } catch (err) {
       // Cancellation says nothing about QMD capabilities; leave the probe uncached.
       if (signal?.aborted) {
         throw asAbortError(signal);
       }
       this.multiCollectionFilterSupported = false;
+      this.currentSearchMultiCollectionProbeDebug = {
+        cacheState: "error",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        supported: false,
+      };
       log.debug(`qmd multi-collection filter probe failed: ${String(err)}`);
     }
     return this.multiCollectionFilterSupported;

@@ -422,6 +422,14 @@ describe("memory_search unavailable payloads", () => {
         configuredMode: opts.qmdSearchModeOverride ?? "query",
         effectiveMode: "query",
         fallback: "unsupported-search-flags",
+        qmd: {
+          searchPlan: {
+            command: "query",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
       });
       return [
         {
@@ -470,6 +478,18 @@ describe("memory_search unavailable payloads", () => {
         fallback?: unknown;
         hits?: unknown;
         searchMs?: number;
+        toolMs?: number;
+        managerMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: unknown;
+        qmd?: {
+          searchPlan?: {
+            command?: unknown;
+            collectionCount?: unknown;
+            groupCount?: unknown;
+            sources?: unknown;
+          };
+        };
       };
     };
     expect(details.mode).toBe("query");
@@ -479,6 +499,94 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBeUndefined();
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "query",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
+  });
+
+  it("includes manager acquisition timing and cache-state debug payload", async () => {
+    setMemorySearchManagerImpl(
+      async () =>
+        ({
+          manager: {
+            search: vi.fn(async () => {
+              return [
+                {
+                  path: "MEMORY.md",
+                  startLine: 1,
+                  endLine: 2,
+                  score: 0.9,
+                  snippet: "ramen",
+                  source: "memory",
+                },
+              ];
+            }),
+            readFile: vi.fn(),
+            status: vi.fn(() => ({
+              backend: "qmd",
+              provider: "qmd",
+              model: "qmd",
+              requestedProvider: "qmd",
+              files: 0,
+              chunks: 0,
+              dirty: false,
+              workspaceDir: "/tmp/workspace",
+              dbPath: "/tmp/workspace/index.sqlite",
+              sources: ["memory"],
+              sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+            })),
+            sync: vi.fn(async () => {}),
+            probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+            probeVectorAvailability: vi.fn(async () => true),
+          },
+          debug: {
+            managerMs: 17,
+            managerCacheState: "cached-full-hit",
+          },
+        }) as any,
+    );
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "ramen",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd" },
+      },
+    });
+    const result = await tool.execute("manager-debug", { query: "favorite food" });
+    const details = result.details as {
+      debug?: {
+        backend?: string;
+        managerMs?: number;
+        toolMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: string;
+        hits?: number;
+        searchMs?: number;
+      };
+    };
+
+    expect(details.debug?.backend).toBe("qmd");
+    expect(details.debug?.managerMs).toBe(17);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBe("cached-full-hit");
   });
 });
 
