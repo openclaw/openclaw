@@ -195,14 +195,13 @@ describe("resolveNpmChannelTag", () => {
   });
 
   it("uses the public registry when no npm command is available", async () => {
+    const body = JSON.stringify({ version: "2026.6.8", engines: { node: ">=22.19.0" } });
     const fetch = vi.fn(async () => {
       return {
         ok: true,
-        json: async () => ({
-          version: "2026.6.8",
-          engines: { node: ">=22.19.0" },
-        }),
-      } as Response;
+        json: async () => JSON.parse(body),
+        arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+      } as unknown as Response;
     });
     vi.stubGlobal("fetch", fetch);
 
@@ -217,6 +216,31 @@ describe("resolveNpmChannelTag", () => {
       "https://registry.npmjs.org/openclaw/latest",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("rejects oversized npm registry JSON responses at the 512 KB cap", async () => {
+    // Create a streaming Response that emits more than the cap.
+    const cap = 512 * 1024;
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        pulled++;
+        ctrl.enqueue(new Uint8Array(65536));
+      },
+    });
+    const fetch = vi.fn(
+      async () =>
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 2000 });
+    expect(result.version).toBeNull();
+    expect(result.error).toContain("exceeds");
+    expect(pulled).toBeLessThan(15);
   });
 
   it("cancels public registry HTTP failure bodies", async () => {
