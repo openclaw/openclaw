@@ -1322,39 +1322,47 @@ export async function loadShortTermPromotionDreamingStats(params: {
   };
 }
 
-async function shortTermRecallSourceExists(params: {
-  workspaceDir: string;
-  entry: Pick<ShortTermRecallEntry, "path">;
-}): Promise<boolean> {
-  const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) {
-    return false;
-  }
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
-    try {
-      const stat = await fs.stat(sourcePath);
-      if (stat.isFile()) {
-        return true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw err;
+async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(sourcePath);
+    return stat.isFile();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
     }
+    throw err;
   }
-  return false;
 }
 
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const checkSourceFile = (sourcePath: string): Promise<boolean> => {
+    const existing = sourceFileChecks.get(sourcePath);
+    if (existing) {
+      return existing;
+    }
+    const check = shortTermRecallSourceIsFile(sourcePath);
+    sourceFileChecks.set(sourcePath, check);
+    return check;
+  };
   const results = await Promise.all(
-    params.entries.map(async (entry) => ({
-      entry,
-      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
-    })),
+    params.entries.map(async (entry) => {
+      let exists = false;
+      for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
+        if (await checkSourceFile(sourcePath)) {
+          exists = true;
+          break;
+        }
+      }
+      return { entry, exists };
+    }),
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
@@ -2613,10 +2621,14 @@ export async function auditShortTermPromotionArtifacts(params: {
     danglingRefCount = 0;
     for (const key of danglingEntryKeys) {
       const entry = store.entries[key];
-      const sourceExists = await shortTermRecallSourceExists({
-        workspaceDir: params.workspaceDir,
-        entry: { path: entry.path },
-      });
+      const sourcePaths = resolveShortTermSourcePathCandidates(params.workspaceDir, entry.path);
+      let sourceExists = false;
+      for (const sourcePath of sourcePaths) {
+        if (await shortTermRecallSourceIsFile(sourcePath)) {
+          sourceExists = true;
+          break;
+        }
+      }
       if (!sourceExists) {
         danglingRefCount++;
       }
