@@ -1238,6 +1238,7 @@ export async function updateNpmInstalledPlugins(params: {
   timeoutMs?: number;
   dryRun?: boolean;
   updateChannel?: UpdateChannel;
+  officialPluginUpdateChannel?: UpdateChannel;
   dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -1314,6 +1315,7 @@ export async function updateNpmInstalledPlugins(params: {
     const officialClawHubSpec = params.syncOfficialPluginInstalls
       ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
       : undefined;
+    const officialSyncUpdateChannel = params.officialPluginUpdateChannel ?? params.updateChannel;
 
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
@@ -1347,7 +1349,7 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             specOverride: params.specOverrides?.[pluginId],
             officialSpecOverride: officialNpmSpec,
-            updateChannel: params.updateChannel,
+            updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
           })
         : undefined;
     const clawhubSpecs =
@@ -1355,7 +1357,7 @@ export async function updateNpmInstalledPlugins(params: {
         ? resolveClawHubUpdateSpecs({
             record,
             officialSpecOverride: officialClawHubSpec,
-            updateChannel: params.updateChannel,
+            updateChannel: officialClawHubSpec ? officialSyncUpdateChannel : params.updateChannel,
           })
         : undefined;
     const effectiveSpec =
@@ -1377,7 +1379,9 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             effectiveClawHubSpec: effectiveSpec,
             recordClawHubSpec: recordSpec,
-            updateChannel: params.updateChannel,
+            updateChannel: params.syncOfficialPluginInstalls
+              ? officialSyncUpdateChannel
+              : params.updateChannel,
           })
         : null;
     let officialNpmFallbackInstallSpec = officialNpmFallbackSpecs?.installSpec;
