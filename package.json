@@ -1751,7 +1751,7 @@
     "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
-    "test:anti-sycophancy-detection": "node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts test/scripts/trusted-critic/anti-sycophancy-detection.test.ts",
+    "test:anti-sycophancy-detection": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts test/scripts/trusted-critic/anti-sycophancy-detection.test.ts",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts && node scripts/run-vitest.mjs run packages/gateway-protocol/src/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:build:status-message-runtime": "node scripts/test-built-status-message-runtime.mjs",
