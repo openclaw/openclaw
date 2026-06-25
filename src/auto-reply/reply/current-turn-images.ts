@@ -98,6 +98,23 @@ export async function resolveCurrentTurnImages(params: {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
 }> {
+  // Consume extracted current-turn images (e.g., PDF page images from file extraction).
+  const currentTurnImages = params.ctx.CurrentTurnImages;
+  if (currentTurnImages && currentTurnImages.length > 0) {
+    // Clear so they are consumed once.
+    delete params.ctx.CurrentTurnImages;
+    const mergedImages = [
+      ...(Array.isArray(params.images) ? params.images : []),
+      ...currentTurnImages,
+    ];
+    if (mergedImages.length > 0) {
+      return {
+        images: mergedImages,
+        imageOrder: mergedImages.map(() => "inline" as const),
+      };
+    }
+  }
+
   if (Array.isArray(params.images) && params.images.length > 0) {
     return { images: params.images, imageOrder: params.imageOrder };
   }

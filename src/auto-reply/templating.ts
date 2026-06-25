@@ -5,6 +5,7 @@ import type {
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
+import type { ImageContent } from "../llm/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
@@ -217,6 +218,8 @@ export type MsgContext = {
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */
   MediaRemoteHost?: string;
   Transcript?: string;
+  /** Extracted PDF page images from file extraction, forwarded as current-turn image inputs for vision-capable model paths. */
+  CurrentTurnImages?: ImageContent[];
   MediaUnderstanding?: MediaUnderstandingOutput[];
   MediaUnderstandingDecisions?: MediaUnderstandingDecision[];
   LinkUnderstanding?: string[];

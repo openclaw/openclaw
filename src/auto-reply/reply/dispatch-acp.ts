@@ -558,20 +558,38 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
+
+    // Consume extracted current-turn images (e.g., PDF page images from file extraction)
+    // forwarded by applyMediaUnderstanding via ctx.CurrentTurnImages.
+    const currentTurnImages = params.ctx.CurrentTurnImages;
+    if (currentTurnImages && currentTurnImages.length > 0) {
+      delete params.ctx.CurrentTurnImages;
+    }
+
     const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
     });
     const mediaAttachments = resolvedTurnAttachments.attachments;
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
+    // Merge extracted current-turn images (PDF page rasters) into inline attachments.
+    const allInlineAttachments = currentTurnImages && currentTurnImages.length > 0
+      ? [
+          ...inlineAttachments,
+          ...currentTurnImages.map((img) => ({
+            mediaType: img.mimeType,
+            data: img.data,
+          })),
+        ]
+      : inlineAttachments;
     const mediaAttachmentsAreOnlyRecentHistory =
       mediaAttachments.length > 0 &&
       mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
     const attachments =
       mediaAttachments.length > 0 &&
-      !(mediaAttachmentsAreOnlyRecentHistory && inlineAttachments.length > 0)
+      !(mediaAttachmentsAreOnlyRecentHistory && allInlineAttachments.length > 0)
         ? mediaAttachments
-        : inlineAttachments;
+        : allInlineAttachments;
     const turnPromptText =
       attachments === mediaAttachments
         ? appendRecentHistoryImageContext({
