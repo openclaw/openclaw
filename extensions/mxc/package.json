@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/mxc",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw MXC sandbox execution plugin for MXC-capable hosts",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "dependencies": {
+    "@microsoft/mxc-sdk": "0.7.0",
+    "zod": "4.4.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./src/mxc-spawn-launcher.mjs",
+          "output": "mxc-spawn-launcher.mjs"
+        }
+      ]
+    }
+  }
+}

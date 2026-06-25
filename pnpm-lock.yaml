@@ -1164,6 +1164,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mxc:
+    dependencies:
+      '@microsoft/mxc-sdk':
+        specifier: 0.7.0
+        version: 0.7.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nextcloud-talk:
     dependencies:
       zod:
@@ -2950,6 +2963,10 @@ packages:
 
   '@mdx-js/mdx@3.1.1':
     resolution: {integrity: sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ==}
+
+  '@microsoft/mxc-sdk@0.7.0':
+    resolution: {integrity: sha512-EWhz2pKkcPluZHAOI1yneV+JK0NO/3hdh7nABBb0x4PjyUWMeSWPTBAjtIu+BhtMYOqlaijSPZMZ0Hs/J4ZL4A==}
+    engines: {node: '>=18.0.0'}
 
   '@microsoft/teams.api@2.0.12':
     resolution: {integrity: sha512-LQSCwRONUl09pdszTdgsRLQ0ZZcdq16goaBckzM/zKGuQkfSIT3u+3V1X2FVeND4sGt0wn+E/v29cZfhJAW4ZA==}
@@ -6380,6 +6397,9 @@ packages:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
 
+  node-addon-api@7.1.1:
+    resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
+
   node-addon-api@8.8.0:
     resolution: {integrity: sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA==}
     engines: {node: ^18 || ^20 || >= 21}
@@ -6422,6 +6442,9 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  node-pty@1.2.0-beta.13:
+    resolution: {integrity: sha512-ZbbJ7aJdmvRA53bw30D6YSJJKqo1IXTojD0kJeHZ/xZIxr7p1DCmvOmrOnjUo/rn1z4MDwKQGpx0C7K+cRKETw==}
 
   node-sarif-builder@3.4.0:
     resolution: {integrity: sha512-tGnJW6OKRii9u/b2WiUViTJS+h7Apxx17qsMUjsUeNDiMMX5ZFf8F8Fcz7PAQ6omvOxHZtvDTmOYKJQwmfpjeg==}
@@ -7484,6 +7507,10 @@ packages:
   undici@7.28.0:
     resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
+
+  undici@8.3.0:
+    resolution: {integrity: sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==}
+    engines: {node: '>=22.19.0'}
 
   undici@8.5.0:
     resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
@@ -9006,6 +9033,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@microsoft/mxc-sdk@0.7.0':
+    dependencies:
+      node-pty: 1.2.0-beta.13
+      semver: 7.8.4
+
   '@microsoft/teams.api@2.0.12':
     dependencies:
       '@microsoft/teams.cards': 2.0.12
@@ -9210,6 +9242,10 @@ snapshots:
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.16
+
+  '@openclaw/proxyline@0.3.3(undici@8.3.0)':
+    dependencies:
+      undici: 8.3.0
 
   '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
@@ -12223,7 +12259,7 @@ snapshots:
 
   make-dir@4.0.0:
     dependencies:
-      semver: 7.8.2
+      semver: 7.8.4
 
   make-fetch-happen@15.0.6:
     dependencies:
@@ -12701,6 +12737,8 @@ snapshots:
 
   negotiator@1.0.0: {}
 
+  node-addon-api@7.1.1: {}
+
   node-addon-api@8.8.0: {}
 
   node-api-headers@1.9.0:
@@ -12778,6 +12816,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
     optional: true
+
+  node-pty@1.2.0-beta.13:
+    dependencies:
+      node-addon-api: 7.1.1
 
   node-sarif-builder@3.4.0:
     dependencies:
@@ -13980,6 +14022,8 @@ snapshots:
   undici-types@7.24.6: {}
 
   undici@7.28.0: {}
+
+  undici@8.3.0: {}
 
   undici@8.5.0: {}
 
