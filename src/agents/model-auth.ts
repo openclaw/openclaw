@@ -1424,6 +1424,17 @@ export async function resolveApiKeyForProvider(params: {
       secretSentinels: params.secretSentinels,
     });
     if (runtimeCustomKey) {
+      // Managed (file/exec) SecretRef provider keys are config-backed inline
+      // credentials too, so they must honor the inline-key cooldown gate just
+      // like the literal/env paths below — otherwise a 402 cooldown is recorded
+      // but never enforced for these keys.
+      scopedStore ??= resolveScopedAuthProfileStore({
+        agentDir,
+        cfg,
+        provider,
+        preferredProfile,
+      });
+      assertInlineProviderApiKeyUsable({ store: scopedStore, provider });
       return runtimeCustomKey;
     }
     const customKey = resolveUsableCustomProviderApiKey({
@@ -1648,6 +1659,21 @@ export async function resolveApiKeyForProvider(params: {
     secretSentinels: params.secretSentinels,
   });
   if (syntheticLocalAuth) {
+    // Managed (file/exec) SecretRef provider keys resolve through this synthetic
+    // runtime path; gate them on the inline-key cooldown like the literal/env
+    // paths above. Local no-auth markers are not config-backed inline keys, so
+    // isConfigBackedInlineProviderApiKey leaves them untouched.
+    if (
+      syntheticLocalAuth.mode === "api-key" &&
+      isConfigBackedInlineProviderApiKey({
+        cfg,
+        provider,
+        source: syntheticLocalAuth.source,
+        store,
+      })
+    ) {
+      assertInlineProviderApiKeyUsable({ store, provider });
+    }
     return syntheticLocalAuth;
   }
 
@@ -1816,7 +1842,17 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveUsableCustomProviderApiKey({ cfg, provider }) && inlineProviderApiKeyUsable) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (
+    syntheticLocalAuth &&
+    (!isConfigBackedInlineProviderApiKey({
+      cfg,
+      provider,
+      source: syntheticLocalAuth.source,
+      store,
+    }) ||
+      inlineProviderApiKeyUsable)
+  ) {
     return true;
   }
   if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
