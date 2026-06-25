@@ -891,7 +891,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         });
 
         const result = await resolveCommandSecretRefsViaGateway({
-          config: config as OpenClawConfig,
+          config,
           commandName: "reply",
           targetIds: new Set(["talk.providers.*.apiKey", inactiveExecRefPath]),
         });
