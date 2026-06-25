@@ -767,7 +767,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    const mentionSource = nativeMentionFacts.mentionsBot
+    const mentionSource: "mention_pattern" | "native" | undefined = nativeMentionFacts.mentionsBot
       ? "native"
       : textWasMentioned
         ? "mention_pattern"
