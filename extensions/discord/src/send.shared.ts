@@ -39,6 +39,7 @@ const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
 
 type DiscordRequest = RetryRunner;
+type DiscordReplyToInput = string | (() => string | undefined) | undefined;
 
 export {
   buildDiscordMessagePayload,
@@ -365,7 +366,7 @@ async function sendDiscordMedia(
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
-  replyTo: string | undefined,
+  replyTo: DiscordReplyToInput,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   components?: DiscordSendComponents,
@@ -448,7 +449,7 @@ async function sendDiscordMediaBatch(
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
-  replyTo: string | undefined,
+  replyTo: DiscordReplyToInput,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   components?: DiscordSendComponents,
@@ -468,6 +469,7 @@ async function sendDiscordMediaBatch(
   const caption = chunks[0] ?? "";
   const platformMessageIds: string[] = [];
   let res: { id: string; channel_id: string } | undefined;
+  const resolveReplyTo = () => (typeof replyTo === "function" ? replyTo() : replyTo);
   for (const [batchIndex, batch] of chunkDiscordMediaUrls(normalizedMediaUrls).entries()) {
     const isFirstBatch = batchIndex === 0;
     const captionComponents = resolveDiscordSendComponents({
@@ -493,7 +495,7 @@ async function sendDiscordMediaBatch(
       components: captionComponents,
       embeds: captionEmbeds,
       flags,
-      replyTo,
+      replyTo: resolveReplyTo(),
       files,
     });
     res = (await request(
@@ -512,7 +514,7 @@ async function sendDiscordMediaBatch(
       rest,
       channelId,
       chunk,
-      replyTo,
+      resolveReplyTo(),
       request,
       maxLinesPerMessage,
       undefined,

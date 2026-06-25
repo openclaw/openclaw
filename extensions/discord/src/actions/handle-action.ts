@@ -101,12 +101,17 @@ export async function handleDiscordMessageAction(
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
     // Support media, path, and filePath for media URL
+    const mediaUrls =
+      readStringArrayParam(params, "mediaUrls") ??
+      (Array.isArray(params.media) ? readStringArrayParam(params, "media") : undefined);
     const mediaUrl =
+      mediaUrls?.[0] ??
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
+    const hasMedia = Boolean(mediaUrl || mediaUrls?.length);
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl,
+      required: !asVoice && !hasComponents && !hasMedia,
       allowEmpty: true,
     });
     const filename = readStringParam(params, "filename");
@@ -125,7 +130,8 @@ export async function handleDiscordMessageAction(
         to,
         content: content ?? "",
         ...(threadName ? { threadName } : {}),
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl: mediaUrls ? undefined : (mediaUrl ?? undefined),
+        mediaUrls: mediaUrls ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,

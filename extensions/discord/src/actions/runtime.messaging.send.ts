@@ -215,12 +215,15 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)
           : undefined;
+      const mediaUrls = readStringArrayParam(ctx.params, "mediaUrls");
       const mediaUrl =
+        mediaUrls?.[0] ??
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
+      const hasMedia = Boolean(mediaUrl || mediaUrls?.length);
       const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
+        required: !asVoice && !componentSpec && !components && !hasMedia,
         allowEmpty: true,
       });
       const filename = readStringParam(ctx.params, "filename");
@@ -271,6 +274,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       }
 
       if (asVoice) {
+        if (mediaUrls && mediaUrls.length > 1) {
+          throw new Error("Voice messages require a single media file reference.");
+        }
         if (!mediaUrl) {
           throw new Error(
             "Voice messages require a media file reference (mediaUrl, path, or filePath).",
@@ -299,7 +305,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const result = await discordMessagingActionRuntime.sendMessageDiscord(to, content ?? "", {
         ...ctx.withOpts(),
         mediaAccess: ctx.options?.mediaAccess,
-        mediaUrl,
+        mediaUrl: mediaUrls ? undefined : mediaUrl,
+        mediaUrls: mediaUrls ?? undefined,
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,

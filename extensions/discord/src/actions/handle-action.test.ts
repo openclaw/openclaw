@@ -446,6 +446,47 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("maps mediaUrls arrays to Discord sendMessage", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "channel:123",
+        message: "gallery",
+        mediaUrls: ["/tmp/agent-root/one.png", "/tmp/agent-root/two.png"],
+        replyTo: "message-1",
+      },
+      cfg,
+      mediaLocalRoots: ["/tmp/agent-root"],
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "gallery",
+        mediaUrl: undefined,
+        mediaUrls: ["/tmp/agent-root/one.png", "/tmp/agent-root/two.png"],
+        filename: undefined,
+        replyTo: "message-1",
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: {
+        mediaAccess: undefined,
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile: undefined,
+      },
+    });
+  });
+
   it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({

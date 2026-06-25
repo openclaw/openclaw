@@ -45,7 +45,7 @@ type DiscordSendOpts = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
-  replyTo?: string;
+  replyTo?: string | (() => string | undefined);
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -120,6 +120,10 @@ function resolveDiscordSendMediaUrls(opts: Pick<DiscordSendOpts, "mediaUrl" | "m
     const normalized = normalizeOptionalString(mediaUrl);
     return normalized ? [normalized] : [];
   });
+}
+
+function resolveDiscordSendReplyTo(replyTo: DiscordSendOpts["replyTo"]): string | undefined {
+  return typeof replyTo === "function" ? replyTo() : replyTo;
 }
 
 function toDiscordSendResult(
@@ -375,7 +379,7 @@ export async function sendMessageDiscord(
         rest,
         channelId,
         textWithMentions,
-        opts.replyTo,
+        resolveDiscordSendReplyTo(opts.replyTo),
         request,
         maxLinesPerMessage,
         opts.components,
@@ -403,7 +407,7 @@ export async function sendMessageDiscord(
   });
   return toDiscordSendResult(result, channelId, {
     kind: mediaUrls.length > 0 ? "media" : opts.components || opts.embeds ? "card" : "text",
-    replyToId: opts.replyTo,
+    replyToId: typeof opts.replyTo === "string" ? opts.replyTo : undefined,
   });
 }
 

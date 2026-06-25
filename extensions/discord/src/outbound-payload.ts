@@ -42,6 +42,12 @@ function resolveDiscordDeliveryOptions(
 ) {
   return {
     replyTo: sendContext.resolveReplyTo(),
+    ...resolveDiscordBaseDeliveryOptions(ctx),
+  };
+}
+
+function resolveDiscordBaseDeliveryOptions(ctx: DiscordOutboundPayloadContext) {
+  return {
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -54,6 +60,16 @@ function resolveDiscordFormattedDeliveryOptions(
 ) {
   return {
     ...resolveDiscordDeliveryOptions(ctx, sendContext),
+    ...sendContext.formatting,
+  };
+}
+
+function resolveDiscordFormattedDeliveryOptionsWithoutReply(
+  ctx: DiscordOutboundPayloadContext,
+  sendContext: DiscordPayloadSendContext,
+) {
+  return {
+    ...resolveDiscordBaseDeliveryOptions(ctx),
     ...sendContext.formatting,
   };
 }
@@ -82,7 +98,8 @@ function resolveDiscordMultiMediaDeliveryOptions(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
-    ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+    ...resolveDiscordFormattedDeliveryOptionsWithoutReply(ctx, sendContext),
+    replyTo: sendContext.resolveReplyTo,
   };
 }
 
@@ -101,29 +118,15 @@ async function sendDiscordPlainMultiMediaPayload(params: {
           ...resolveDiscordFormattedDeliveryOptions(params.ctx, params.sendContext),
         }),
     );
-    return await params.sendContext.withRetry(
-      async () =>
-        await params.sendContext.send(params.sendContext.target, "", {
-          verbose: false,
-          ...resolveDiscordMultiMediaDeliveryOptions(
-            params.ctx,
-            params.sendContext,
-            params.mediaUrls,
-          ),
-        }),
-    );
+    return await params.sendContext.send(params.sendContext.target, "", {
+      verbose: false,
+      ...resolveDiscordMultiMediaDeliveryOptions(params.ctx, params.sendContext, params.mediaUrls),
+    });
   }
-  return await params.sendContext.withRetry(
-    async () =>
-      await params.sendContext.send(params.sendContext.target, text, {
-        verbose: false,
-        ...resolveDiscordMultiMediaDeliveryOptions(
-          params.ctx,
-          params.sendContext,
-          params.mediaUrls,
-        ),
-      }),
-  );
+  return await params.sendContext.send(params.sendContext.target, text, {
+    verbose: false,
+    ...resolveDiscordMultiMediaDeliveryOptions(params.ctx, params.sendContext, params.mediaUrls),
+  });
 }
 
 export async function sendDiscordOutboundPayload(params: {
@@ -189,16 +192,13 @@ export async function sendDiscordOutboundPayload(params: {
     const filename = normalizeOptionalString(discordData.filename);
     if (nativeComponents || embeds?.length || filename) {
       if (mediaUrls.length > 1) {
-        const result = await sendContext.withRetry(
-          async () =>
-            await sendContext.send(sendContext.target, payload.text ?? "", {
-              verbose: false,
-              ...resolveDiscordMultiMediaDeliveryOptions(ctx, sendContext, mediaUrls),
-              components: nativeComponents,
-              embeds,
-              filename,
-            }),
-        );
+        const result = await sendContext.send(sendContext.target, payload.text ?? "", {
+          verbose: false,
+          ...resolveDiscordMultiMediaDeliveryOptions(ctx, sendContext, mediaUrls),
+          components: nativeComponents,
+          embeds,
+          filename,
+        });
         return attachChannelToResult("discord", result);
       }
       const result = await sendPayloadMediaSequenceOrFallback({
