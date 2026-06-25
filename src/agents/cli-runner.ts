@@ -877,6 +877,7 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    isWarmStdin?: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
@@ -901,10 +902,16 @@ export async function runPreparedCliAgent(
     if (resultParams.output.didSendViaMessagingTool) {
       deliveredMessagingSideEffect = true;
     }
+    // Warm-stdin claude-cli (liveSession: "claude-stdio") never writes a native
+    // transcript, so the post-turn flush probe always reports false. Clearing the
+    // binding here would destroy continuity every turn; instead leave it intact and
+    // let the next prepare re-detect the missing transcript and arm raw reseed.
     const unflushedCliSessionId =
-      resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
-        ? resultParams.effectiveCliSessionId
-        : undefined;
+      resultParams.isWarmStdin && resultParams.bindingFlushOk === false
+        ? undefined
+        : resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
+          ? resultParams.effectiveCliSessionId
+          : undefined;
     const persistedCliSessionId = unflushedCliSessionId
       ? undefined
       : resultParams.effectiveCliSessionId;
@@ -1066,11 +1073,21 @@ export async function runPreparedCliAgent(
           ctx: hookContext,
           hookRunner,
         });
+        // Warm-stdin claude-cli never flushes a native transcript, so its flush
+        // probe is expected to fail; mirror shouldUseClaudeLiveSession's eligibility
+        // so buildCliRunResult preserves the binding instead of clearing it.
+        const backend = context.preparedBackend.backend;
+        const isWarmStdin =
+          context.backendResolved.id === "claude-cli" &&
+          backend.liveSession === "claude-stdio" &&
+          backend.output === "jsonl" &&
+          backend.input === "stdin";
         return buildCliRunResult({
           output,
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned,
+          isWarmStdin,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
