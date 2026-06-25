@@ -393,6 +393,40 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("passes source actor context to corpus supplement searches", async () => {
+    const search = vi.fn(async () => [
+      {
+        corpus: "wiki",
+        path: "entities/alice.md",
+        title: "Alice",
+        kind: "entity",
+        score: 4,
+        snippet: "Alice wiki entry",
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search,
+      get: async () => null,
+    });
+
+    const sourceActor = {
+      id: "signal:+15550001",
+      peerId: "signal:uuid-1",
+      displayName: "Alice",
+      role: "participant",
+      context: "signal",
+    };
+    const tool = createMemorySearchToolOrThrow({ sourceActor });
+    await tool.execute("call_wiki_actor", { query: "alice", corpus: "wiki" });
+
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "alice",
+        sourceActor,
+      }),
+    );
+  });
+
   it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
     // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
     // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
@@ -628,5 +662,44 @@ describe("memory tools", () => {
       fromLine: 3,
       lineCount: 5,
     });
+  });
+
+  it("passes source actor context to corpus supplement reads", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("path required");
+    });
+    const get = vi.fn(async () => ({
+      corpus: "wiki",
+      path: "entities/alice.md",
+      title: "Alice",
+      kind: "entity",
+      content: "Alice wiki entry",
+      fromLine: 1,
+      lineCount: 1,
+    }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get,
+    });
+
+    const sourceActor = {
+      id: "signal:+15550001",
+      peerId: "signal:uuid-1",
+      displayName: "Alice",
+      role: "participant",
+      context: "signal",
+    };
+    const tool = createMemoryGetToolOrThrow(createDefaultMemoryToolConfig(), { sourceActor });
+    await tool.execute("call_get_actor", {
+      path: "entities/alice.md",
+      corpus: "all",
+    });
+
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "entities/alice.md",
+        sourceActor,
+      }),
+    );
   });
 });

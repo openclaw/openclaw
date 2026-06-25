@@ -27,6 +27,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sourceActor?: OpenClawPluginToolContext["sourceActor"];
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
 };
@@ -153,6 +154,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     getConfig,
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
+    sourceActor: ctx.sourceActor,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
   };

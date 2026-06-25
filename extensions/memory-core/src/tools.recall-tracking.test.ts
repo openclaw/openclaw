@@ -15,6 +15,7 @@ type RecordShortTermRecallsFn = (params: {
   results: MemorySearchResult[];
   nowMs?: number;
   timezone?: string;
+  sourceActor?: unknown;
 }) => Promise<void>;
 
 const recallTrackingMock = vi.hoisted(() => ({

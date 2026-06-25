@@ -112,6 +112,7 @@ function buildDescriptorContextCacheKey(params: {
     agentAccountId: ctx.agentAccountId ?? null,
     deliveryContext: ctx.deliveryContext ?? null,
     requesterSenderId: ctx.requesterSenderId ?? null,
+    sourceActor: ctx.sourceActor ?? null,
     sandboxed: ctx.sandboxed ?? null,
   });
 }

@@ -20,6 +20,7 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { OpenClawPluginSourceActorContext } from "../plugins/tool-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -492,6 +493,7 @@ export function createOpenClawCodingTools(options?: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  sourceActor?: OpenClawPluginSourceActorContext;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -945,6 +947,7 @@ export function createOpenClawCodingTools(options?: {
             config: options?.config,
             fsPolicy,
             requesterSenderId: options?.senderId,
+            sourceActor: options?.sourceActor,
             sessionId: options?.sessionId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
@@ -1062,6 +1065,7 @@ export function createOpenClawCodingTools(options?: {
           ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
           requesterAgentIdOverride: agentId,
           requesterSenderId: options?.senderId,
+          sourceActor: options?.sourceActor,
           senderIsOwner: options?.senderIsOwner,
           authProfileStore: options?.authProfileStore,
           sessionId: options?.sessionId,

@@ -52,6 +52,7 @@ describe("buildPromptSection", () => {
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("then use memory_get");
     expect(result[1]).toContain("indexed session transcripts");
+    expect(result.join("\n")).toContain("preserve that participant attribution");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -180,7 +181,9 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(plan?.prompt).toContain("memory/");
     expect(plan?.prompt).toContain("MEMORY.md");
+    expect(plan?.prompt).toContain("preserve participant attribution");
     expect(plan?.systemPrompt).toContain("MEMORY.md");
+    expect(plan?.systemPrompt).toContain("preserve participant attribution");
   });
 
   it("respects disable flag", () => {
@@ -255,6 +258,7 @@ describe("buildMemoryFlushPlan", () => {
   it("keeps overwrite guards in the default prompt", () => {
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toMatch(/APPEND/i);
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("do not overwrite");
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("preserve participant attribution");
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
   });

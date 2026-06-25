@@ -11,6 +11,14 @@ export type OpenClawPluginActiveModelContext = {
   modelRef?: string;
 };
 
+export type OpenClawPluginSourceActorContext = {
+  id: string;
+  peerId?: string;
+  displayName?: string;
+  role?: string;
+  context?: string;
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
@@ -46,6 +54,8 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Runtime-provided actor for the current inbound source message, when known. */
+  sourceActor?: OpenClawPluginSourceActorContext;
   sandboxed?: boolean;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned

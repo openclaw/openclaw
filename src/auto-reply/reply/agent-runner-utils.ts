@@ -302,12 +302,34 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
 }
 
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+  const sourceActor = normalizeSourceActorContext(sessionCtx.SourceActor);
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     channelContext: sessionCtx.ChannelContext,
     senderName: normalizeOptionalString(sessionCtx.SenderName),
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
+    ...(sourceActor ? { sourceActor } : {}),
+  };
+}
+
+function normalizeSourceActorContext(
+  sourceActor: TemplateContext["SourceActor"],
+): TemplateContext["SourceActor"] | undefined {
+  const id = normalizeOptionalString(sourceActor?.id);
+  if (!id) {
+    return undefined;
+  }
+  const peerId = normalizeOptionalString(sourceActor?.peerId);
+  const displayName = normalizeOptionalString(sourceActor?.displayName);
+  const role = normalizeOptionalString(sourceActor?.role);
+  const context = normalizeOptionalString(sourceActor?.context);
+  return {
+    id,
+    ...(peerId ? { peerId } : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(role ? { role } : {}),
+    ...(context ? { context } : {}),
   };
 }
 

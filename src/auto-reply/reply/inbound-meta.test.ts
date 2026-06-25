@@ -271,6 +271,28 @@ describe("buildInboundUserContextPrefix", () => {
     expect(parseConversationInfoPayload(text)["source_modality"]).toBe("voice");
   });
 
+  it("includes source actor fields in per-turn conversation metadata", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      SourceActor: {
+        id: "signal:+15550001",
+        peerId: "signal:uuid-1",
+        displayName: "Alice",
+        role: "participant",
+        context: "signal",
+      },
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)).toMatchObject({
+      source_actor_id: "signal:+15550001",
+      source_actor_peer_id: "signal:uuid-1",
+      source_actor_display_name: "Alice",
+      source_actor_role: "participant",
+      source_actor_context: "signal",
+    });
+  });
+
   it("derives a source modality from media when the channel does not provide one", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",

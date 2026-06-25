@@ -25,6 +25,9 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
   }
 
   const lines = ["## Memory Recall", toolGuidance];
+  lines.push(
+    "When current turn metadata includes source_actor/source actor fields, preserve that participant attribution in recalled or newly written memories; do not merge another participant's facts, preferences, or decisions into the operator/user profile unless the message explicitly says so.",
+  );
   if (citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",

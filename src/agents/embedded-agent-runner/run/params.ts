@@ -8,6 +8,7 @@ import type {
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import type { SourceActorContext } from "../../../auto-reply/templating.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
@@ -87,6 +88,8 @@ export type RunEmbeddedAgentParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /** Runtime-provided actor for the current inbound source message, when known. */
+  sourceActor?: SourceActorContext;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
