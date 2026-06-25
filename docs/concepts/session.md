@@ -66,7 +66,7 @@ Verify your setup with `openclaw security audit`.
 
 Sessions are reused until they expire:
 
-- **Daily reset** (default for direct and group sessions) -- new session at
+- **Daily reset** (default for direct, group, and thread sessions) -- new session at
   4:00 AM local time on the gateway host. Daily freshness is based on when the
   current `sessionId` started, not on later metadata writes.
 - **Idle reset** (optional) -- new session after a period of inactivity. Set
