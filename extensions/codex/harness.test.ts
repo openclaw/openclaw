@@ -91,6 +91,7 @@ describe("Codex agent harness supports()", () => {
     if (!harness.checkReadiness) {
       throw new Error("expected Codex readiness probe");
     }
+    const signal = new AbortController().signal;
 
     await expect(
       harness.checkReadiness({
@@ -101,10 +102,13 @@ describe("Codex agent harness supports()", () => {
         provider: "openai",
         modelId: "gpt-5.5",
         providerAuthAvailable: true,
+        signal,
       }),
     ).resolves.toEqual(expected);
 
-    expect(mocks.createClient).toHaveBeenCalledOnce();
+    expect(mocks.createClient).toHaveBeenCalledWith(
+      expect.objectContaining({ abandonSignal: signal }),
+    );
     expect(mocks.request).toHaveBeenCalledWith(
       "account/read",
       { refreshToken: false },

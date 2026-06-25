@@ -86,6 +86,7 @@ export function createCodexAppServerAgentHarness(options?: {
           timeoutMs: runtime.requestTimeoutMs,
           agentDir: ctx.agentDir,
           config: ctx.config,
+          abandonSignal: ctx.signal,
         });
         const response = await client.request<CodexGetAccountResponse>(
           "account/read",

@@ -277,6 +277,24 @@ describe("shared Codex app-server client", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
+  it("aborts isolated app-server startup and waits for shutdown", async () => {
+    const harness = createClientHarness();
+    const abortController = new AbortController();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const closeAndWait = vi.spyOn(harness.client, "closeAndWait");
+
+    const clientPromise = createIsolatedCodexAppServerClient({
+      timeoutMs: 1_000,
+      abandonSignal: abortController.signal,
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    abortController.abort();
+
+    await expect(clientPromise).rejects.toThrow("codex app-server startup aborted");
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
   it("passes the selected auth profile through the bridge helper", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
