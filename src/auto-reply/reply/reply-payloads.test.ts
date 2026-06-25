@@ -414,18 +414,35 @@ describe("isPostToolSendMetaCommentary", () => {
     "Copy that",
     "Replying above",
     "Answer below",
-    // Compound meta-acks with short trailing comments
-    "OK, that's the fix.",
-    "已发, 不再追加.",
-    "已发. 不再追加.",
     // Case insensitivity + emoji stripping
     "OK 👍",
     "  sent  ",
+    // Punctuation-heavy forms
+    "OK...",
+    "已发.",
   ])("returns true for meta-commentary %j", (text) => {
     expect(isPostToolSendMetaCommentary(text)).toBe(true);
   });
 
   it.each([
+    // ClawSweeper-flagged false positives — prefix-only matches must NOT be
+    // suppressed (the ack must stand alone as the entire text).
+    "Oklahoma weather",
+    "sentence fixed",
+    "已发现问题",
+    "已发现",
+    "已收到消息",
+    "sentry deployed",
+    "okay let's go",
+    // Compound meta-acks: NOT auto-suppressed (trade-off — see PR description).
+    // These could legitimately be a real reply or a meta-ack; the filter
+    // errs on the side of preserving short user-visible replies.
+    "OK, that's the fix.",
+    "OK. Done.",
+    "Sent. Replied in thread.",
+    "已发, 不再追加",
+    "已发. 不再追加.",
+    "Roger, copy.",
     // Real reply content (must never be suppressed)
     "已发 now let me explain the actual fix in detail: the dedupe threshold is 10.",
     "Here is my analysis of the situation.",

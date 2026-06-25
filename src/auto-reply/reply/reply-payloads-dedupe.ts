@@ -7,6 +7,8 @@ import {
   isMessagingToolDuplicate,
   isPostToolSendMetaCommentary,
 } from "../../agents/embedded-agent-helpers.js";
+
+export { isPostToolSendMetaCommentary };
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
