@@ -488,6 +488,7 @@ export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): SessionMcpRuntime {
@@ -610,7 +611,10 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
+          const resolved = resolveMcpTransport(serverName, rawServer, {
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+          });
           if (!resolved) {
             continue;
           }
@@ -861,6 +865,7 @@ export function createSessionMcpRuntime(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     configFingerprint,
     createdAt,
     get lastUsedAt() {
@@ -992,6 +997,7 @@ function createSessionMcpRuntimeManager(
     {
       promise: Promise<SessionMcpRuntime>;
       workspaceDir: string;
+      agentDir?: string;
       configFingerprint: string;
     }
   >();
@@ -1080,6 +1086,7 @@ function createSessionMcpRuntimeManager(
       if (existing) {
         if (
           existing.workspaceDir !== params.workspaceDir ||
+          existing.agentDir !== params.agentDir ||
           existing.configFingerprint !== nextFingerprint
         ) {
           runtimesBySessionId.delete(params.sessionId);
@@ -1094,6 +1101,7 @@ function createSessionMcpRuntimeManager(
       if (inFlight) {
         if (
           inFlight.workspaceDir === params.workspaceDir &&
+          inFlight.agentDir === params.agentDir &&
           inFlight.configFingerprint === nextFingerprint
         ) {
           return inFlight.promise;
@@ -1109,6 +1117,7 @@ function createSessionMcpRuntimeManager(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
           cfg: params.cfg,
           configFingerprint: nextFingerprint,
         }),
@@ -1121,6 +1130,7 @@ function createSessionMcpRuntimeManager(
       createInFlight.set(params.sessionId, {
         promise: created,
         workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
         configFingerprint: nextFingerprint,
       });
       try {
@@ -1192,6 +1202,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);

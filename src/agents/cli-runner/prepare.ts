@@ -443,6 +443,7 @@ export async function prepareCliRunContext(
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
+    agentDir,
     additionalConfig: mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined,

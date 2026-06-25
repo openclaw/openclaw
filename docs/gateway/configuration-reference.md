@@ -114,6 +114,7 @@ target server during config edits.
         },
         auth: "oauth",
         oauth: {
+          authProfileId: "remote-tools:mcp",
           scope: "docs.read",
         },
         sslVerify: true,

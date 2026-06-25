@@ -411,6 +411,7 @@ const McpServerSchema = z
     auth: z.literal("oauth").optional(),
     oauth: z
       .object({
+        authProfileId: z.string().trim().min(1).optional(),
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
         clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
