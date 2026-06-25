@@ -1,6 +1,10 @@
 # safeTok ↔ OpenClaw Bridge
 
-A bidirectional DM bridge that connects [safeTok](https://safetok.app) to OpenClaw via the Gateway WebSocket API. Incoming safeTok DMs are routed to a dedicated OpenClaw session; the assistant's reply is encrypted and published back to the Nostr relays.
+> **Using a Claude monthly subscription and want to DM your AI agent from your phone?**
+> This bridge lets you do exactly that — via safeTok, a privacy-first Nostr client.
+> No API keys required beyond what OpenClaw already has.
+
+A bidirectional DM bridge that connects [safeTok](https://safetok.app) to OpenClaw via the Gateway WebSocket API. Incoming safeTok DMs are routed to a dedicated OpenClaw session; the assistant's reply is encrypted and published back to the Nostr relays — end-to-end encrypted, decentralized, no middleman.
 
 ![safeTok DMs appearing in OpenClaw Control UI](docs/preview.png)
 
