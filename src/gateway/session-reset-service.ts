@@ -1173,7 +1173,7 @@ export async function performGatewaySessionReset(params: {
     storePath,
     sessionFile: oldSessionFile,
     agentId: target.agentId,
-    reason: params.reason === "new" ? "new" : "reset",
+    reason: params.reason,
     archivedTranscripts,
     nextSessionId: next.sessionId,
   });
