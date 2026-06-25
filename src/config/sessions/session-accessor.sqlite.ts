@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { Selectable } from "kysely";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,7 +24,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type {
   ExactSessionEntry,
+  DeleteSessionEntryLifecycleParams,
+  DeleteSessionEntryLifecycleResult,
+  DeletedAgentSessionEntryPurgeParams,
+  ResetSessionEntryLifecycleParams,
+  ResetSessionEntryLifecycleResult,
   SessionAccessScope,
+  SessionEntryLifecycleMutationResult,
+  SessionEntryLifecycleRemoval,
+  SessionEntryLifecycleUpsert,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntrySummary,
@@ -45,6 +55,7 @@ import {
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
 } from "./store-maintenance.js";
+import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
@@ -340,6 +351,174 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
       });
     }, toDatabaseOptions(resolved));
     return result;
+  });
+}
+
+/** Resets one persisted session entry using SQLite session rows. */
+export async function resetSqliteSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<ResetSessionEntryLifecycleResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const current = resolveSqliteLifecyclePrimaryEntry(database, params.target);
+    const nextEntry = await params.buildNextEntry({
+      currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
+      primaryKey: params.target.canonicalKey,
+    });
+    const mutation: ResetSessionEntryLifecycleMutation = {
+      nextEntry: cloneSessionEntry(nextEntry),
+      ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
+      ...(current?.entry.sessionFile ? { previousSessionFile: current.entry.sessionFile } : {}),
+      ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
+    };
+    runOpenClawAgentWriteTransaction((database) => {
+      deleteSqliteLifecycleTargetRows(database, params.target);
+      writeSessionEntry(database, params.target.canonicalKey, nextEntry);
+    }, toDatabaseOptions(resolved));
+    await params.afterEntryMutation?.(mutation);
+    return {
+      ...mutation,
+      archivedTranscripts: [],
+    };
+  });
+}
+
+/** Deletes one persisted session entry using SQLite session rows. */
+export async function deleteSqliteSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: DeleteSessionEntryLifecycleResult = {
+      archivedTranscripts: [],
+      deleted: false,
+    };
+    runOpenClawAgentWriteTransaction((database) => {
+      const current = resolveSqliteLifecyclePrimaryEntry(database, params.target);
+      if (!current) {
+        return;
+      }
+      deleteSqliteLifecycleTargetRows(database, params.target);
+      result = {
+        archivedTranscripts: [],
+        deleted: true,
+        deletedEntry: cloneSessionEntry(current.entry),
+        ...(current.entry.sessionFile ? { deletedSessionFile: current.entry.sessionFile } : {}),
+        ...(current.entry.sessionId ? { deletedSessionId: current.entry.sessionId } : {}),
+      };
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+/** Applies exact lifecycle removals/upserts using SQLite session rows. */
+export async function applySqliteSessionEntryLifecycleMutation(params: {
+  storePath: string;
+  removals?: Iterable<SessionEntryLifecycleRemoval>;
+  upserts?: Iterable<SessionEntryLifecycleUpsert>;
+  activeSessionKey?: string;
+  skipMaintenance?: boolean;
+}): Promise<SessionEntryLifecycleMutationResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const store = readSqliteSessionEntryStore(database);
+    const removedSessionKeys: string[] = [];
+    const upsertedEntries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+    let afterCount = 0;
+    for (const removal of params.removals ?? []) {
+      const sessionKey = removal.sessionKey.trim();
+      if (!sessionKey) {
+        continue;
+      }
+      const entry = store[sessionKey];
+      if (!shouldRemoveSqliteSessionEntry(entry, removal)) {
+        continue;
+      }
+      delete store[sessionKey];
+      removedSessionKeys.push(sessionKey);
+    }
+    for (const upsert of params.upserts ?? []) {
+      const sessionKey = upsert.sessionKey.trim();
+      if (!sessionKey) {
+        continue;
+      }
+      const entry =
+        upsert.buildEntry === undefined
+          ? upsert.entry
+          : await upsert.buildEntry({
+              currentEntry: store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined,
+              sessionKey,
+              store,
+            });
+      if (!entry) {
+        continue;
+      }
+      const cloned = cloneSessionEntry(entry);
+      store[sessionKey] = cloned;
+      upsertedEntries.push({ sessionKey, entry: cloned });
+    }
+    runOpenClawAgentWriteTransaction((database) => {
+      for (const sessionKey of removedSessionKeys) {
+        deleteSqliteSessionEntryRows(database, sessionKey);
+      }
+      for (const { sessionKey, entry } of upsertedEntries) {
+        writeSessionEntry(database, sessionKey, entry);
+      }
+      applySqliteSessionEntryMaintenance(database, {
+        activeSessionKey: params.activeSessionKey ?? "",
+        skipMaintenance: params.skipMaintenance,
+      });
+      afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
+    }, toDatabaseOptions(resolved));
+    return {
+      removedEntries: removedSessionKeys.length,
+      removedSessionKeys,
+      archivedTranscriptDirectories: [],
+      unreferencedArtifacts: null,
+      maintenanceReport: null,
+      afterCount,
+    };
+  });
+}
+
+/** Purges entries owned by a deleted agent from SQLite session rows. */
+export async function purgeSqliteDeletedAgentSessionEntries(
+  params: DeletedAgentSessionEntryPurgeParams,
+): Promise<SessionEntryLifecycleMutationResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const removedSessionKeys: string[] = [];
+    let afterCount = 0;
+    runOpenClawAgentWriteTransaction((database) => {
+      const store = readSqliteSessionEntryStore(database);
+      for (const sessionKey of Object.keys(store)) {
+        const ownerAgentId = resolveStoredSessionOwnerAgentId({
+          cfg: params.cfg,
+          agentId: params.storeAgentId,
+          sessionKey,
+        });
+        if (ownerAgentId !== params.agentId) {
+          continue;
+        }
+        deleteSqliteSessionEntryRows(database, sessionKey);
+        delete store[sessionKey];
+        removedSessionKeys.push(sessionKey);
+      }
+      applySqliteSessionEntryMaintenance(database, {
+        activeSessionKey: "",
+      });
+      afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
+    }, toDatabaseOptions(resolved));
+    return {
+      removedEntries: removedSessionKeys.length,
+      removedSessionKeys,
+      archivedTranscriptDirectories: [],
+      unreferencedArtifacts: null,
+      maintenanceReport: null,
+      afterCount,
+    };
   });
 }
 
@@ -683,6 +862,10 @@ function resolveSqliteReadScope(
   };
 }
 
+function resolveSqliteStoreScope(storePath: string): ResolvedSqliteScope {
+  return resolveSqliteScope({ sessionKey: "", storePath });
+}
+
 function resolveSqliteTargetFromSessionStorePath(storePath: string): ResolvedSqliteStoreTarget {
   const resolved = path.resolve(storePath);
   if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
@@ -890,6 +1073,81 @@ function readExactSessionEntryRow(
   }
   const entry = parseSessionEntryRow(row);
   return entry ? { entry, legacyKeys: [], row } : undefined;
+}
+
+function readSqliteSessionEntryStore(
+  database: OpenClawAgentDatabase,
+): Record<string, SessionEntry> {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select(["session_key", "entry_json"]).orderBy("session_key"),
+  ).rows;
+  const store: Record<string, SessionEntry> = {};
+  for (const row of rows) {
+    const entry = parseSessionEntryRow(row);
+    if (entry) {
+      store[row.session_key] = entry;
+    }
+  }
+  return store;
+}
+
+function resolveSqliteLifecyclePrimaryEntry(
+  database: OpenClawAgentDatabase,
+  target: { canonicalKey: string; storeKeys: string[] },
+): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of target.storeKeys) {
+    const row = readExactSessionEntryRow(database, key.trim());
+    if (!row) {
+      continue;
+    }
+    if (!freshest || (row.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = { key, entry: row.entry };
+    }
+  }
+  return freshest ?? undefined;
+}
+
+function deleteSqliteSessionEntryRows(database: OpenClawAgentDatabase, sessionKey: string): void {
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_routes").where("session_key", "=", sessionKey),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_entries").where("session_key", "=", sessionKey),
+  );
+}
+
+function deleteSqliteLifecycleTargetRows(
+  database: OpenClawAgentDatabase,
+  target: { canonicalKey: string; storeKeys: string[] },
+): void {
+  for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
+    const trimmed = sessionKey.trim();
+    if (trimmed) {
+      deleteSqliteSessionEntryRows(database, trimmed);
+    }
+  }
+}
+
+function shouldRemoveSqliteSessionEntry(
+  entry: SessionEntry | undefined,
+  removal: SessionEntryLifecycleRemoval,
+): entry is SessionEntry {
+  if (!entry) {
+    return false;
+  }
+  if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
+    return false;
+  }
+  if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
+    return false;
+  }
+  return true;
 }
 
 function deleteLegacySessionEntryRows(

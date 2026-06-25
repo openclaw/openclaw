@@ -42,15 +42,19 @@ import {
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
+  applySqliteSessionEntryLifecycleMutation,
   cleanupSqliteSessionLifecycleArtifacts,
+  deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   patchSqliteSessionEntry,
   publishSqliteTranscriptUpdate,
+  purgeSqliteDeletedAgentSessionEntries,
   readSqliteSessionUpdatedAt,
   replaceSqliteSessionEntry,
+  resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
@@ -1564,14 +1568,14 @@ export async function cleanupSessionLifecycleArtifacts(
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
-  return await resetFileSessionEntryLifecycle(params);
+  return await resetSqliteSessionEntryLifecycle(params);
 }
 
 /** Deletes one persisted session entry and transitions its transcript state. */
 export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteFileSessionEntryLifecycle(params);
+  return await deleteSqliteSessionEntryLifecycle(params);
 }
 
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
@@ -1594,14 +1598,14 @@ export async function applySessionEntryLifecycleMutation(params: {
   };
   captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
-  return await applyFileSessionEntryLifecycleMutation(params);
+  return await applySqliteSessionEntryLifecycleMutation(params);
 }
 
 /** Purges session entries owned by a deleted agent at the storage boundary. */
 export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<SessionEntryLifecycleMutationResult> {
-  return await purgeFileDeletedAgentSessionEntries(params);
+  return await purgeSqliteDeletedAgentSessionEntries(params);
 }
 
 /**
