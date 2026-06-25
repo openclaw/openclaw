@@ -377,7 +377,7 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("releases the refresh lock when the token endpoint exceeds the refresh deadline", async () => {
+  it("keeps refresh followers waiting until a stalled token request releases the lock", async () => {
     vi.useFakeTimers();
     try {
       await withTempHome(
@@ -426,14 +426,17 @@ describe("MCP OAuth provider", () => {
           await vi.waitFor(() => {
             expect(fetchFn).toHaveBeenCalledOnce();
           });
-          await vi.advanceTimersByTimeAsync(90_000);
-          await expect(stalledRefresh).rejects.toThrow(/timed out refreshing/i);
-
-          const recoveredRefresh = await wrappedFetch(
+          const waitingRefresh = wrappedFetch(
             new URL("https://auth.example.com/token"),
             refreshInit(),
           );
-          await expect(recoveredRefresh.json()).resolves.toMatchObject({
+          await vi.advanceTimersByTimeAsync(90_000);
+          await expect(stalledRefresh).rejects.toThrow(/timed out refreshing/i);
+          await vi.waitFor(() => {
+            expect(fetchFn).toHaveBeenCalledTimes(2);
+          });
+
+          await expect(waitingRefresh.then((response) => response.json())).resolves.toMatchObject({
             access_token: "new-access",
             refresh_token: "new-refresh",
           });
