@@ -18,6 +18,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
@@ -475,6 +476,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  // Policy priority: memory flush and workspace-only fs hard blocks come before
+  // sandbox/native allowlist checks because native Codex tools cannot enforce
+  // OpenClaw's workspace-only filesystem wrapper.
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
@@ -499,6 +503,27 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   );
 }
 
+type WorkspaceOnlyPolicyConfig = {
+  tools?: { fs?: { workspaceOnly?: unknown } };
+  agents?: {
+    list?: Array<{
+      id?: unknown;
+      default?: unknown;
+      tools?: { fs?: { workspaceOnly?: unknown } };
+    }>;
+  };
+};
+type WorkspaceOnlyPolicyAgent = NonNullable<
+  NonNullable<WorkspaceOnlyPolicyConfig["agents"]>["list"]
+>[number];
+
+/** Returns true when workspace-only filesystem policy must disable native Codex tools.
+ *
+ * Per-agent `workspaceOnly` is authoritative: `true` blocks native tools and
+ * `false` explicitly opts that agent out even when global config is true.
+ * When no matching agent policy exists, the default agent policy is consulted
+ * before falling back to global `tools.fs.workspaceOnly`.
+ */
 function isCodexNativeExecutionBlockedByWorkspaceOnlyFs(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -506,18 +531,7 @@ function isCodexNativeExecutionBlockedByWorkspaceOnlyFs(
     runtimeSessionKey?: string;
   } = {},
 ): boolean {
-  const config = params.config as
-    | {
-        tools?: { fs?: { workspaceOnly?: unknown } };
-        agents?: {
-          list?: Array<{
-            id?: unknown;
-            default?: unknown;
-            tools?: { fs?: { workspaceOnly?: unknown } };
-          }>;
-        };
-      }
-    | undefined;
+  const config = params.config as WorkspaceOnlyPolicyConfig | undefined;
   const agent = resolveWorkspaceOnlyPolicyAgent(config, params, options);
   const agentWorkspaceOnly = readWorkspaceOnlyFs(agent?.tools?.fs);
   if (agentWorkspaceOnly !== undefined) {
@@ -536,26 +550,16 @@ function readWorkspaceOnlyFs(
 }
 
 function resolveWorkspaceOnlyPolicyAgent(
-  config:
-    | {
-        agents?: {
-          list?: Array<{
-            id?: unknown;
-            default?: unknown;
-            tools?: { fs?: { workspaceOnly?: unknown } };
-          }>;
-        };
-      }
-    | undefined,
+  config: WorkspaceOnlyPolicyConfig | undefined,
   params: EmbeddedRunAttemptParams,
   options: { agentId?: string; runtimeSessionKey?: string },
-): { id?: unknown; default?: unknown; tools?: { fs?: { workspaceOnly?: unknown } } } | undefined {
+): WorkspaceOnlyPolicyAgent | undefined {
   const agents = Array.isArray(config?.agents?.list) ? config?.agents?.list : [];
   const agentId = normalizeWorkspaceOnlyAgentId(
     options.agentId ??
-      parseWorkspaceOnlyAgentIdFromSessionKey(options.runtimeSessionKey) ??
-      parseWorkspaceOnlyAgentIdFromSessionKey(params.sandboxSessionKey) ??
-      parseWorkspaceOnlyAgentIdFromSessionKey(params.sessionKey),
+      resolveWorkspaceOnlyAgentIdFromSessionKey(options.runtimeSessionKey) ??
+      resolveWorkspaceOnlyAgentIdFromSessionKey(params.sandboxSessionKey) ??
+      resolveWorkspaceOnlyAgentIdFromSessionKey(params.sessionKey),
   );
   if (agentId) {
     const match = agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
@@ -566,15 +570,15 @@ function resolveWorkspaceOnlyPolicyAgent(
   return agents.find((entry) => entry?.default === true);
 }
 
-function parseWorkspaceOnlyAgentIdFromSessionKey(
+function resolveWorkspaceOnlyAgentIdFromSessionKey(
   sessionKey: string | undefined,
 ): string | undefined {
-  const parts = sessionKey?.trim().split(":") ?? [];
-  return parts.length >= 3 && parts[0] === "agent" ? parts[1] : undefined;
+  const trimmed = sessionKey?.trim();
+  return trimmed ? resolveAgentIdFromSessionKey(trimmed) : undefined;
 }
 
 function normalizeWorkspaceOnlyAgentId(value: unknown): string | undefined {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const normalized = typeof value === "string" ? normalizeAgentId(value) : "";
   return normalized || undefined;
 }
 

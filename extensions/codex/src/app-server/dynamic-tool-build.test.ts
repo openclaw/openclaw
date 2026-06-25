@@ -1330,6 +1330,127 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(true);
   });
 
+  it("disables Codex native tool surfaces for global workspace-only fs policy", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+    } as never;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("uses default agent workspace-only fs policy when no agent id matches", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      agents: {
+        list: [
+          {
+            id: "fallback",
+            default: true,
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        agentId: "missing",
+      }),
+    ).toBe(false);
+  });
+
+  it("resolves workspace-only fs policy from the runtime session key", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      agents: {
+        list: [
+          {
+            id: "runtime",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        runtimeSessionKey: "agent:runtime:session-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("lets explicit agent workspace-only false override global workspace-only true", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "poly",
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        agentId: "poly",
+      }),
+    ).toBe(true);
+  });
+
+  it("handles malformed workspace-only policy config defensively", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: 42,
+            default: "yes",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.config = {
+      agents: {
+        list: "not-an-array",
+      },
+    } as never;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+  });
+
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
