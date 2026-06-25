@@ -1,10 +1,15 @@
-// File-backed session lifecycle operations own entry mutation and transcript artifact transitions.
+// SQLite session lifecycle operations own entry mutation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntry,
+  replaceSessionEntry,
+  resetSessionEntryLifecycle,
+} from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
 describe("session store lifecycle mutations", () => {
@@ -13,34 +18,22 @@ describe("session store lifecycle mutations", () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-lifecycle-mutation-"));
-    storePath = path.join(tempDir, "sessions.json");
+    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("resets an entry while archiving the old transcript and creating the new header", async () => {
-    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
-    const nextTranscriptPath = path.join(tempDir, "next-session.jsonl");
+  it("resets an entry in SQLite while reporting the previous session", async () => {
     const now = Date.now();
-    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
-    await saveSessionStore(
-      storePath,
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:room", storePath },
       {
-        "agent:main:room": {
-          sessionFile: path.join(tempDir, "stale-session.jsonl"),
-          sessionId: "stale-session",
-          updatedAt: now - 1,
-        },
-        "Agent:Main:Room": {
-          sessionFile: oldTranscriptPath,
-          sessionId: "old-session",
-          updatedAt: now,
-        },
+        sessionId: "old-session",
+        updatedAt: now,
       },
-      { skipMaintenance: true },
     );
 
     const result = await resetSessionEntryLifecycle({
@@ -51,7 +44,6 @@ describe("session store lifecycle mutations", () => {
       },
       buildNextEntry: ({ currentEntry }): SessionEntry => ({
         ...currentEntry,
-        sessionFile: nextTranscriptPath,
         sessionId: "next-session",
         updatedAt: now + 1,
         systemSent: false,
@@ -59,35 +51,27 @@ describe("session store lifecycle mutations", () => {
       }),
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:main:room"]?.sessionId).toBe("next-session");
-    expect(store["Agent:Main:Room"]).toBeUndefined();
+    const stored = loadSessionEntry({ sessionKey: "agent:main:room", storePath });
+    expect(stored?.sessionId).toBe("next-session");
     expect(result.previousSessionId).toBe("old-session");
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(result.archivedTranscripts[0]?.archivedPath).toContain(".jsonl.reset.");
-    expect(fs.existsSync(oldTranscriptPath)).toBe(false);
-    expect(fs.readFileSync(nextTranscriptPath, "utf-8")).toContain('"id":"next-session"');
+    expect(result.archivedTranscripts).toEqual([]);
   });
 
-  it("deletes an entry while archiving its transcript in the same lifecycle operation", async () => {
-    const transcriptPath = path.join(tempDir, "delete-session.jsonl");
+  it("deletes an entry from SQLite while preserving unrelated entries", async () => {
     const now = Date.now();
-    fs.writeFileSync(transcriptPath, '{"type":"session","id":"delete-session"}\n', "utf-8");
-    await saveSessionStore(
-      storePath,
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:keep", storePath },
       {
-        "agent:main:keep": {
-          sessionId: "keep-session",
-          sessionFile: path.join(tempDir, "keep-session.jsonl"),
-          updatedAt: now,
-        },
-        "agent:main:delete": {
-          sessionFile: transcriptPath,
-          sessionId: "delete-session",
-          updatedAt: now - 1,
-        },
+        sessionId: "keep-session",
+        updatedAt: now,
       },
-      { skipMaintenance: true },
+    );
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:delete", storePath },
+      {
+        sessionId: "delete-session",
+        updatedAt: now - 1,
+      },
     );
 
     const result = await deleteSessionEntryLifecycle({
@@ -99,13 +83,12 @@ describe("session store lifecycle mutations", () => {
       },
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
     expect(result.deleted).toBe(true);
     expect(result.deletedSessionId).toBe("delete-session");
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(result.archivedTranscripts[0]?.archivedPath).toContain(".jsonl.deleted.");
-    expect(store["agent:main:delete"]).toBeUndefined();
-    expect(store["agent:main:keep"]?.sessionId).toBe("keep-session");
-    expect(fs.existsSync(transcriptPath)).toBe(false);
+    expect(result.archivedTranscripts).toEqual([]);
+    expect(loadSessionEntry({ sessionKey: "agent:main:delete", storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: "agent:main:keep", storePath })?.sessionId).toBe(
+      "keep-session",
+    );
   });
 });
