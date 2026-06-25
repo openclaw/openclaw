@@ -18,6 +18,7 @@ export type MentionSource =
   | "explicit_bot"
   | "subteam"
   | "mention_pattern"
+  | "native"
   | "implicit_thread"
   | "command_bypass"
   | "none";

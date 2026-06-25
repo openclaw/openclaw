@@ -121,6 +121,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    mentionFacts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      hasAnyMention?: boolean;
+      mentionSource?: "mention_pattern" | "native";
+      requireMention?: boolean;
+      effectiveWasMentioned?: boolean;
+      shouldSkip?: boolean;
+    };
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -246,7 +255,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       access: {
         ...(entry.isGroup
           ? {
-              mentions: {
+              mentions: entry.mentionFacts ?? {
                 canDetectMention: true,
                 wasMentioned: entry.wasMentioned === true,
               },
@@ -758,6 +767,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    const mentionSource = nativeMentionFacts.mentionsBot
+      ? "native"
+      : textWasMentioned
+        ? "mention_pattern"
+        : undefined;
+    const mentionFacts = isGroup
+      ? {
+          canDetectMention,
+          wasMentioned,
+          ...(nativeMentionFacts.hasAnyMention !== undefined
+            ? { hasAnyMention: nativeMentionFacts.hasAnyMention }
+            : {}),
+          ...(mentionSource ? { mentionSource } : {}),
+          requireMention,
+          effectiveWasMentioned,
+          shouldSkip: mentionDecision.shouldSkip,
+        }
+      : undefined;
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: logVerbose,
@@ -940,6 +967,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      mentionFacts,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,

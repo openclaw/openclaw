@@ -4,9 +4,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
+type SignalMsgContext = Pick<
+  MsgContext,
+  | "Body"
+  | "CanDetectMention"
+  | "WasMentioned"
+  | "HasAnyMention"
+  | "RequireMention"
+  | "EffectiveWasMentioned"
+  | "MentionShouldSkip"
+  | "MentionSource"
+> & {
   Body?: string;
+  CanDetectMention?: boolean;
   WasMentioned?: boolean;
+  HasAnyMention?: boolean;
+  RequireMention?: boolean;
+  EffectiveWasMentioned?: boolean;
+  MentionShouldSkip?: boolean;
+  MentionSource?: string;
 };
 
 let capturedCtx: SignalMsgContext | undefined;
@@ -297,6 +313,8 @@ describe("signal mention gating", () => {
 
     expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
   });
 
   it("allows native bot UUID mentions without a text mention pattern", async () => {
@@ -315,7 +333,13 @@ describe("signal mention gating", () => {
     );
 
     expect(getCapturedCtx()?.Body ?? "").toContain("@bot-uuid ping");
+    expect(getCapturedCtx().CanDetectMention).toBe(true);
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
+    expect(getCapturedCtx().MentionShouldSkip).toBe(false);
+    expect(getCapturedCtx().MentionSource).toBe("native");
   });
 
   it("allows native bot phone mentions after E.164 normalization", async () => {
@@ -335,6 +359,8 @@ describe("signal mention gating", () => {
 
     expect(getCapturedCtx()?.Body ?? "").toContain("@1 (555) 000-2222");
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("native");
   });
 
   it("keeps native mentions of other participants silent while recording pending context", async () => {
