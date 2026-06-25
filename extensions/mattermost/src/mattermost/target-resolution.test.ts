@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
 const fetchMattermostUser = vi.fn();
+const fetchMattermostChannel = vi.fn();
 const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
 vi.mock("./accounts.js", () => ({
@@ -13,6 +14,7 @@ vi.mock("./accounts.js", () => ({
 vi.mock("./client.js", () => ({
   createMattermostClient,
   fetchMattermostUser,
+  fetchMattermostChannel,
   normalizeMattermostBaseUrl,
 }));
 
@@ -37,6 +39,7 @@ describe("mattermost target resolution", () => {
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
+    fetchMattermostChannel.mockReset();
     normalizeMattermostBaseUrl.mockClear();
   });
 
@@ -88,10 +91,59 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to channel targets on 404 lookups", async () => {
+  it("resolves public channels (type O) as channel on 404 user lookups", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ id: "bcde1234abcd1234abcd1234ab", type: "O" });
     const input = "bcde1234abcd1234abcd1234ab";
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "channel",
+      id: input,
+      to: `channel:${input}`,
+    });
+  });
+
+  it("resolves private channels (type P) as group, keeping a channel:<id> wire target", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ id: "priv1234abcd1234abcd1234ab", type: "P" });
+    const input = "priv1234abcd1234abcd1234ab";
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "group",
+      id: input,
+      to: `channel:${input}`,
+    });
+
+    // Second call is served from cache (no extra channel lookup).
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({ kind: "group", id: input, to: `channel:${input}` });
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to channel when the channel lookup fails", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockRejectedValue(new Error("Mattermost API 500"));
+    const input = "fail1234abcd1234abcd1234ab";
 
     await expect(
       resolveMattermostOpaqueTarget({

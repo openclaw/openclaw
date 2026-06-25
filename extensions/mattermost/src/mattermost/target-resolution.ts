@@ -4,18 +4,22 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
+  fetchMattermostChannel,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
 } from "./client.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 export type MattermostOpaqueTargetResolution = {
-  kind: "user" | "channel";
+  kind: "user" | "channel" | "group";
   id: string;
   to: string;
 };
 
-const mattermostOpaqueTargetCache = new Map<string, boolean>();
+type MattermostOpaqueTargetKind = MattermostOpaqueTargetResolution["kind"];
+
+const mattermostOpaqueTargetCache = new Map<string, MattermostOpaqueTargetKind>();
 
 function cacheKey(baseUrl: string, token: string, id: string): string {
   return `${baseUrl}::${token}::${id}`;
@@ -75,11 +79,11 @@ export async function resolveMattermostOpaqueTarget(params: {
 
   const key = cacheKey(baseUrl, token, input);
   const cached = mattermostOpaqueTargetCache.get(key);
-  if (cached === true) {
+  if (cached === "user") {
     return { kind: "user", id: input, to: `user:${input}` };
   }
-  if (cached === false) {
-    return { kind: "channel", id: input, to: `channel:${input}` };
+  if (cached === "channel" || cached === "group") {
+    return { kind: cached, id: input, to: `channel:${input}` };
   }
 
   const client = createMattermostClient({
@@ -89,13 +93,32 @@ export async function resolveMattermostOpaqueTarget(params: {
   });
   try {
     await fetchMattermostUser(client, input);
-    mattermostOpaqueTargetCache.set(key, true);
+    mattermostOpaqueTargetCache.set(key, "user");
     return { kind: "user", id: input, to: `user:${input}` };
   } catch (err) {
-    if (parseMattermostApiStatus(err) === 404) {
-      mattermostOpaqueTargetCache.set(key, false);
+    if (parseMattermostApiStatus(err) !== 404) {
+      // Unknown lookup error: stay best-effort and do not cache the result.
+      return { kind: "channel", id: input, to: `channel:${input}` };
     }
-    return { kind: "channel", id: input, to: `channel:${input}` };
+    // 404 => not a user, so it is a channel. Resolve its kind so a private channel
+    // or group DM (`P`/`G`) is keyed as `group`, not `channel` (#95646). The wire
+    // target stays `channel:<id>` — Mattermost posts to the channel id either way.
+    const channelKind = await resolveMattermostChannelKind(client, input);
+    mattermostOpaqueTargetCache.set(key, channelKind);
+    return { kind: channelKind, id: input, to: `channel:${input}` };
+  }
+}
+
+async function resolveMattermostChannelKind(
+  client: ReturnType<typeof createMattermostClient>,
+  channelId: string,
+): Promise<"channel" | "group"> {
+  try {
+    const channel = await fetchMattermostChannel(client, channelId);
+    return mapMattermostChannelTypeToChatType(channel.type) === "group" ? "group" : "channel";
+  } catch {
+    // Channel lookup failed; fall back to the non-group default.
+    return "channel";
   }
 }
 
