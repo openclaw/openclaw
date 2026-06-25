@@ -1399,6 +1399,16 @@ export function createExecTool(
       resolution,
     });
   };
+  const shouldDeferResolveExecEnvUntilWorkdirValidated = (params: ExecToolArgs): boolean => {
+    try {
+      return (
+        resolveHostForParams(params) === "sandbox" &&
+        defaults?.sandbox?.workdirValidation === "backend"
+      );
+    } catch {
+      return false;
+    }
+  };
   const prepareParamsWithResolvedExecEnv = async (
     rawArgs: unknown,
     context?: { hookContext?: HookContext },
@@ -1463,6 +1473,9 @@ export function createExecTool(
       const params = await prepareParamsWithResolvedExecWorkdir(args);
       const workdirState = getResolvedExecWorkdirPreparedState(params);
       if (workdirState?.resolution.kind === "unavailable") {
+        return params;
+      }
+      if (shouldDeferResolveExecEnvUntilWorkdirValidated(params)) {
         return params;
       }
       return prepareParamsWithResolvedExecEnv(params, {

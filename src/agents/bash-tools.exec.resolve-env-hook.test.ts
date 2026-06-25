@@ -471,6 +471,51 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.spawnInputs).toHaveLength(0);
   });
 
+  it("defers resolve_exec_env for backend sandboxes until workdir validation succeeds", async () => {
+    const validateWorkdir = vi.fn(async () => null);
+    mocks.hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
+      ),
+      runResolveExecEnv: vi.fn(async () => ({ PLUGIN_SAFE: "yes" })),
+      runBeforeToolCall: vi.fn(async () => undefined),
+    };
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+
+    const result = await definition.execute(
+      "call-backend-invalid-cwd-before-env",
+      {
+        command: "echo ok",
+        workdir: "/remote/workspace/missing",
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
+
+    expect((result.details as { status?: unknown } | undefined)?.status).toBe("failed");
+    expect(mocks.hookRunner.runBeforeToolCall!).toHaveBeenCalledOnce();
+    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/missing");
+    expect(mocks.hookRunner.runResolveExecEnv!).not.toHaveBeenCalled();
+    expect(mocks.gatewayParams).toHaveLength(0);
+    expect(mocks.spawnInputs).toHaveLength(0);
+  });
+
   it("lets lazy before_tool_call see invalid workdirs before failing unchanged params", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
