@@ -72,6 +72,57 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
   });
 
+  it("creates a state-change task for a native Codex subagent thread with a requester origin", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:C123",
+          threadId: "T456",
+        },
+        agentId: "main",
+        now: () => 20_000,
+      },
+      runtime,
+    );
+    mirror.handleNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "child-thread",
+          preview: "write the Madrid wine script",
+          createdAt: 10,
+          source: {
+            subAgent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1,
+                agent_nickname: "Poincare",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId: "codex-thread:child-thread",
+        runId: "codex-thread:child-thread",
+        notifyPolicy: "state_changes",
+        deliveryStatus: "pending",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:C123",
+          threadId: "T456",
+        },
+      }),
+    );
+  });
+
   it("ignores subagent threads spawned by a different parent thread", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(
@@ -289,6 +340,46 @@ describe("CodexNativeSubagentTaskMirror", () => {
       progressSummary: "done",
     });
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("uses state-change delivery for Codex collab spawn items with a requester origin", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:slack:channel:C123",
+        requesterOrigin: {
+          channel: "slack",
+          to: "C123",
+        },
+        now: () => 41_000,
+      },
+      runtime,
+    );
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          senderThreadId: "parent-thread",
+          receiverThreadIds: ["child-thread"],
+          prompt: "write the proof file",
+        },
+      },
+    });
+
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        notifyPolicy: "state_changes",
+        deliveryStatus: "pending",
+        requesterOrigin: {
+          channel: "slack",
+          to: "C123",
+        },
+      }),
+    );
   });
 
   it("uses the notification thread id when collab agent items omit sender thread id", () => {

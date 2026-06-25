@@ -2,7 +2,10 @@
  * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
  * runtime rows so parent sessions can observe child progress.
  */
-import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type {
+  AgentHarnessTaskRuntime,
+  AgentHarnessTaskRuntimeScope,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -27,6 +30,7 @@ export type TaskLifecycleRuntime = Pick<
 export type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
+  requesterOrigin?: AgentHarnessTaskRuntimeScope["requesterOrigin"];
   agentId?: string;
   now?: () => number;
 };
@@ -111,8 +115,7 @@ export class CodexNativeSubagentTaskMirror {
       runId,
       label,
       task,
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
+      ...resolveNativeSubagentTaskDeliveryFields(this.params.requesterOrigin),
       preferMetadata: true,
       startedAt: createdAt,
       lastEventAt: this.now(),
@@ -260,8 +263,7 @@ export class CodexNativeSubagentTaskMirror {
       runId,
       label: "Codex subagent",
       task: prompt ?? "Codex native subagent",
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
+      ...resolveNativeSubagentTaskDeliveryFields(this.params.requesterOrigin),
       preferMetadata: true,
       startedAt: createdAt,
       lastEventAt: createdAt,
@@ -364,6 +366,34 @@ export class CodexNativeSubagentTaskMirror {
 /** Converts a Codex child thread id into the OpenClaw task-runtime run id. */
 export function codexNativeSubagentRunId(threadId: string): string {
   return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
+}
+
+type NativeSubagentTaskDeliveryFields = {
+  notifyPolicy: "silent" | "state_changes";
+  deliveryStatus: "not_applicable" | "pending";
+  requesterOrigin?: AgentHarnessTaskRuntimeScope["requesterOrigin"];
+};
+
+function resolveNativeSubagentTaskDeliveryFields(
+  requesterOrigin: AgentHarnessTaskRuntimeScope["requesterOrigin"],
+): NativeSubagentTaskDeliveryFields {
+  if (!hasRequesterDeliveryOrigin(requesterOrigin)) {
+    return {
+      notifyPolicy: "silent",
+      deliveryStatus: "not_applicable",
+    };
+  }
+  return {
+    requesterOrigin,
+    notifyPolicy: "state_changes",
+    deliveryStatus: "pending",
+  };
+}
+
+function hasRequesterDeliveryOrigin(
+  requesterOrigin: AgentHarnessTaskRuntimeScope["requesterOrigin"],
+): boolean {
+  return Boolean(requesterOrigin?.channel?.trim() && requesterOrigin.to?.trim());
 }
 
 /** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */

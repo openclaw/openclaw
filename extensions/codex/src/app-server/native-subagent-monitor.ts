@@ -241,6 +241,7 @@ export class CodexNativeSubagentMonitor {
       {
         parentThreadId: state.parentThreadId,
         requesterSessionKey: state.requesterSessionKey,
+        requesterOrigin: state.taskRuntimeScope.requesterOrigin,
         agentId: state.agentId,
       },
       state.taskRuntime,

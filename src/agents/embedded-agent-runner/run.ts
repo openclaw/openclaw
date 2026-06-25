@@ -2106,6 +2106,7 @@ async function runEmbeddedAgentInternal(
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
                     requesterSessionKey: params.sessionKey,
+                    ...(params.requesterOrigin ? { requesterOrigin: params.requesterOrigin } : {}),
                   }),
                 }
               : {}),

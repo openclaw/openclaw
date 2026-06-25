@@ -1603,6 +1603,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedSessionAgentId: string | undefined;
       let isNewSession = false;
       let skipAgentInitialSessionTouch = false;
+      let requesterOrigin: DeliveryContext | undefined;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
@@ -1842,6 +1843,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupId: string | undefined;
           groupChannel: string | undefined;
           groupSpace: string | undefined;
+          requesterOrigin: DeliveryContext | undefined;
           freshSessionRotatedSinceLoad: boolean;
           isNewSession: boolean;
           rotatedSessionId: boolean;
@@ -2044,6 +2046,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupId: nextGroup.groupId,
             groupChannel: nextGroup.groupChannel,
             groupSpace: nextGroup.groupSpace,
+            requesterOrigin: effectiveDeliveryFields.deliveryContext,
             freshSessionRotatedSinceLoad,
             isNewSession: freshIsNewSession,
             rotatedSessionId: freshRotatedSessionId,
@@ -2186,6 +2189,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupId = patchBuild.groupId;
         resolvedGroupChannel = patchBuild.groupChannel;
         resolvedGroupSpace = patchBuild.groupSpace;
+        requesterOrigin = patchBuild.requesterOrigin;
         if (
           !suppressVisibleSessionEffects &&
           isNewSession &&
@@ -2674,6 +2678,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               timeout: request.timeout?.toString(),
               bestEffortDeliver,
               messageChannel: originMessageChannel,
+              ...(requesterOrigin ? { requesterOrigin } : {}),
               runId,
               lane: request.lane,
               modelRun: request.modelRun === true,
