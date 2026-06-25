@@ -447,10 +447,14 @@ function parseDelegateDirective(
     // Provider/model override forwarded to the spawned delegate. The model ref
     // is not validated here; unknown models resolve downstream at spawn time,
     // mirroring sessions_spawn. An empty value is malformed and rejects the token.
+    // The "default" sentinel means "inherit the parent model" (no override),
+    // matching the tool form's normalizeToolModelOverride so both surfaces agree.
     if (!assignment.value) {
       return { status: "invalid" };
     }
-    state.model = assignment.value;
+    if (assignment.value.toLowerCase() !== "default") {
+      state.model = assignment.value;
+    }
     return { status: "applied" };
   }
 

@@ -263,6 +263,20 @@ describe("parseContinuationSignal", () => {
     expect(parseContinuationSignal("[[CONTINUE_DELEGATE: bad model | model=]]")).toBeNull();
   });
 
+  it('treats delegate token model="default" as inherit (no override)', () => {
+    const signal = parseContinuationSignal(
+      "[[CONTINUE_DELEGATE: inherit via sentinel | model=default]]",
+    );
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "inherit via sentinel",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+    });
+    expect(signal?.kind === "delegate" ? signal.model : "unset").toBeUndefined();
+  });
+
   it("rejects conflicting delegate target and fanout syntax", () => {
     expect(
       parseContinuationSignal(
