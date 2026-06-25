@@ -139,7 +139,7 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 }
 
 // Fetch latest release version from GitHub
-async function getLatestVersion(repo: string): Promise<string> {
+export async function getLatestVersion(repo: string): Promise<string> {
   const guarded = await fetchWithSsrFGuard({
     url: `https://api.github.com/repos/${repo}/releases/latest`,
     timeoutMs: NETWORK_TIMEOUT_MS,

@@ -1,98 +1,62 @@
-// Real behavior proof: demonstrates readResponseWithLimit bounded read behavior
-// matching the pattern used in getLatestVersion() in tools-manager.ts.
-import { describe, expect, it } from "vitest";
+// Real behavior proof for PR #96347.
+// Tests readResponseWithLimit directly AND exercises the production
+// getLatestVersion() path through a mocked fetchWithSsrFGuard.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readResponseWithLimit } from "../../../packages/media-core/src/read-response-with-limit.js";
 
-const MAX_BYTES = 1 * 1024 * 1024; // 1 MiB, matching GITHUB_API_JSON_RESPONSE_MAX_BYTES
+const MAX_BYTES = 1 * 1024 * 1024;
+const onOverflow = ({ maxBytes }: { maxBytes: number }) =>
+  new Error(`GitHub API release response exceeds ${maxBytes} bytes`);
 
-describe("bounded read proof (same pattern as getLatestVersion)", () => {
+describe("bounded read (helper level)", () => {
   it("accepts a normal-sized JSON response", async () => {
     const body = JSON.stringify({ tag_name: "v1.0.0" });
-    const resp = new Response(body);
-    const bytes = await readResponseWithLimit(resp, MAX_BYTES, {
-      onOverflow: ({ maxBytes }) => new Error(`exceeds ${maxBytes} bytes`),
-    });
+    const bytes = await readResponseWithLimit(new Response(body), MAX_BYTES, { onOverflow });
     const data = JSON.parse(new TextDecoder().decode(bytes)) as { tag_name: string };
     expect(data.tag_name).toBe("v1.0.0");
   });
 
-  it("accepts an empty JSON object", async () => {
-    const resp = new Response(JSON.stringify({}));
-    const bytes = await readResponseWithLimit(resp, MAX_BYTES, {
-      onOverflow: ({ maxBytes }) => new Error(`exceeds ${maxBytes} bytes`),
-    });
-    const data = JSON.parse(new TextDecoder().decode(bytes));
-    expect(Object.keys(data)).toHaveLength(0);
-  });
-
   it("rejects an oversized response exceeding 1 MiB", async () => {
-    const padding = "x".repeat(MAX_BYTES);
-    const body = JSON.stringify({ tag_name: "v1.0.0", _padding: padding });
-    const resp = new Response(body);
+    const body = JSON.stringify({ _padding: "x".repeat(MAX_BYTES) });
     await expect(
-      readResponseWithLimit(resp, MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`GitHub API release response exceeds ${maxBytes} bytes`),
-      }),
+      readResponseWithLimit(new Response(body), MAX_BYTES, { onOverflow }),
     ).rejects.toThrow(/exceeds/);
   });
+});
 
-  it("rejects with the exact error shape from the PR", async () => {
-    const padding = "x".repeat(MAX_BYTES);
-    const resp = new Response(JSON.stringify({ _padding: padding }));
-    try {
-      await readResponseWithLimit(resp, MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`GitHub API release response exceeds ${maxBytes} bytes`),
-      });
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain("1048576");
-    }
+// Production-path tests: mock fetchWithSsrFGuard so getLatestVersion()
+// can be tested without hitting GitHub.  Vitest hoists the mock before
+// any dynamic import of tools-manager.js.
+const mockFetch = vi.hoisted(() => vi.fn());
+vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: mockFetch,
+}));
+
+describe("getLatestVersion (production path)", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
   });
 
-  // Realistic payload sizes — fd and ripgrep latest-release JSON are ~200-400 B
-  it("accepts an fd-size release JSON (~300 B) under the cap", async () => {
-    const body = {
-      tag_name: "v10.2.0",
-      name: "v10.2.0",
-      prerelease: false,
-      assets: [{ name: "fd-v10.2.0-linux.tar.gz", size: 2345678 }],
-    };
-    const resp = new Response(JSON.stringify(body));
-    const bytes = await readResponseWithLimit(resp, MAX_BYTES, {
-      onOverflow: ({ maxBytes }) => new Error(`exceeds ${maxBytes} bytes`),
+  it("accepts a normal GitHub release response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ tag_name: "v10.3.0" })),
+      release: () => Promise.resolve(),
     });
-    const data = JSON.parse(new TextDecoder().decode(bytes)) as { tag_name: string };
-    expect(data.tag_name).toBe("v10.2.0");
-    expect(bytes.length).toBeLessThan(1024); // well under 1 KB
+    const { getLatestVersion } = await import("../../../src/agents/utils/tools-manager.js");
+    await expect(getLatestVersion("test/repo")).resolves.toBe("10.3.0");
   });
 
-  it("accepts a ripgrep-size release JSON (~300 B) under the cap", async () => {
-    const body = {
-      tag_name: "14.1.0",
-      name: "14.1.0",
-      prerelease: false,
-      assets: [{ name: "ripgrep-14.1.0-linux.tar.gz", size: 4567890 }],
-    };
-    const resp = new Response(JSON.stringify(body));
-    const bytes = await readResponseWithLimit(resp, MAX_BYTES, {
-      onOverflow: ({ maxBytes }) => new Error(`exceeds ${maxBytes} bytes`),
+  it("rejects an oversized GitHub release response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          tag_name: "v99.0.0",
+          _padding: "x".repeat(MAX_BYTES),
+        }),
+      ),
+      release: () => Promise.resolve(),
     });
-    const data = JSON.parse(new TextDecoder().decode(bytes)) as { tag_name: string };
-    expect(data.tag_name).toBe("14.1.0");
-    expect(bytes.length).toBeLessThan(1024); // well under 1 KB
-  });
-
-  it("rejects a response at exactly 1 MiB + 1 byte", async () => {
-    const payload = "x".repeat(MAX_BYTES + 1); // 1 MiB + 1 byte
-    const resp = new Response(JSON.stringify({ _padding: payload }));
-    await expect(
-      readResponseWithLimit(resp, MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`GitHub API release response exceeds ${maxBytes} bytes`),
-      }),
-    ).rejects.toThrow(/exceeds/);
+    const { getLatestVersion } = await import("../../../src/agents/utils/tools-manager.js");
+    await expect(getLatestVersion("test/repo")).rejects.toThrow(/exceeds/);
   });
 });
