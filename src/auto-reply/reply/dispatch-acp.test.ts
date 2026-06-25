@@ -1192,6 +1192,30 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
+  it("forwards media-understanding current-turn images into agent runtime turns", async () => {
+    setReadyAcpResolution();
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("rendered-pdf-page").toString("base64"),
+    };
+
+    await runDispatch({
+      bodyForAgent: "describe scanned pdf",
+      ctxOverrides: {
+        CurrentTurnImages: [image],
+      },
+    });
+
+    expect(runTurnCall().text).toBe("describe scanned pdf");
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
+  });
+
   it("preserves chat.send inline image attachments over recent history images", async () => {
     setReadyAcpResolution();
     const image = {

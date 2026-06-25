@@ -37,6 +37,7 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { resolveFirstContextText } from "./context-text.js";
+import { takeCurrentTurnImages } from "./current-turn-images.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -563,22 +564,26 @@ export async function tryDispatchAcpReply(params: {
       cfg: params.cfg,
     });
     const mediaAttachments = resolvedTurnAttachments.attachments;
-    const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
+    const explicitInlineAttachments = resolveInlineAgentImageAttachments(params.images);
+    const transientInlineAttachments = resolveInlineAgentImageAttachments(
+      takeCurrentTurnImages(params.ctx),
+    );
+    const inlineAttachments = [...explicitInlineAttachments, ...transientInlineAttachments];
     const mediaAttachmentsAreOnlyRecentHistory =
       mediaAttachments.length > 0 &&
       mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
-    const attachments =
+    const shouldUseMediaAttachments =
       mediaAttachments.length > 0 &&
-      !(mediaAttachmentsAreOnlyRecentHistory && inlineAttachments.length > 0)
-        ? mediaAttachments
-        : inlineAttachments;
-    const turnPromptText =
-      attachments === mediaAttachments
-        ? appendRecentHistoryImageContext({
-            promptText,
-            images: resolvedTurnAttachments.recentHistoryImages,
-          })
-        : promptText;
+      !(mediaAttachmentsAreOnlyRecentHistory && inlineAttachments.length > 0);
+    const attachments = shouldUseMediaAttachments
+      ? [...mediaAttachments, ...transientInlineAttachments]
+      : inlineAttachments;
+    const turnPromptText = shouldUseMediaAttachments
+      ? appendRecentHistoryImageContext({
+          promptText,
+          images: resolvedTurnAttachments.recentHistoryImages,
+        })
+      : promptText;
     if (!turnPromptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);

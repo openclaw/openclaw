@@ -31,6 +31,7 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const extractDocumentContentMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -39,6 +40,7 @@ const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
+const mockedExtractDocumentContent = extractDocumentContentMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 let suiteTempMediaRootDir = "";
@@ -298,6 +300,9 @@ describe("applyMediaUnderstanding", () => {
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,
     }));
+    vi.doMock("../media/document-extractors.runtime.js", () => ({
+      extractDocumentContent: extractDocumentContentMock,
+    }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
@@ -352,6 +357,8 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
+    mockedExtractDocumentContent.mockReset();
+    mockedExtractDocumentContent.mockResolvedValue(null);
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -1740,6 +1747,38 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("forwards rendered PDF page images as current-turn images", async () => {
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "scan.pdf",
+      content: pseudoPdf,
+    });
+    const renderedPageImage = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("rendered-page").toString("base64"),
+    };
+    mockedExtractDocumentContent.mockResolvedValueOnce({
+      text: "",
+      images: [renderedPageImage],
+    });
+
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["application/pdf"]);
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+      cfg,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="scan.pdf" mime="application/pdf">');
+    expect(ctx.Body).toContain("[PDF content rendered to images]");
+    expect(ctx.Body).not.toContain("images not forwarded");
+    expect(ctx.CurrentTurnImages).toEqual([renderedPageImage]);
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {

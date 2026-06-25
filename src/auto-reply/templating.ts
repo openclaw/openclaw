@@ -1,5 +1,6 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ImageContent } from "../llm/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -200,6 +201,8 @@ export type MsgContext = {
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
   MediaTranscribedIndexes?: number[];
+  /** Extracted current-turn image payloads to forward once without persisting as text context. */
+  CurrentTurnImages?: ImageContent[];
   /**
    * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
    * staging runs synchronously before respond() and surfaces 5xx to the

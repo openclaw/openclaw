@@ -88,6 +88,23 @@ function createUndescribedImageContext(
   };
 }
 
+function isValidCurrentTurnImage(image: ImageContent): boolean {
+  return (
+    image.type === "image" && image.mimeType.startsWith("image/") && image.data.trim().length > 0
+  );
+}
+
+/** Returns transient current-turn image payloads and removes them from the context. */
+export function takeCurrentTurnImages(ctx: MsgContext): ImageContent[] {
+  const images = Array.isArray(ctx.CurrentTurnImages)
+    ? ctx.CurrentTurnImages.filter(isValidCurrentTurnImage)
+    : [];
+  if (Array.isArray(ctx.CurrentTurnImages)) {
+    delete ctx.CurrentTurnImages;
+  }
+  return images;
+}
+
 /** Resolves current-turn image attachments that were not already described by media understanding. */
 export async function resolveCurrentTurnImages(params: {
   ctx: MsgContext;
@@ -98,8 +115,18 @@ export async function resolveCurrentTurnImages(params: {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
 }> {
-  if (Array.isArray(params.images) && params.images.length > 0) {
+  const explicitImages = Array.isArray(params.images) ? params.images : [];
+  const currentTurnImages = takeCurrentTurnImages(params.ctx);
+  if (explicitImages.length > 0 && currentTurnImages.length === 0) {
     return { images: params.images, imageOrder: params.imageOrder };
+  }
+  const combinedImages = [...explicitImages, ...currentTurnImages];
+  if (combinedImages.length > 0) {
+    const explicitImageOrder = params.imageOrder ?? explicitImages.map(() => "inline" as const);
+    return {
+      images: combinedImages,
+      imageOrder: [...explicitImageOrder, ...currentTurnImages.map(() => "inline" as const)],
+    };
   }
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);

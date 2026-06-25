@@ -5,19 +5,20 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import type { ImageContent } from "../llm/types.js";
+import { renderFileContextBlock } from "../media/file-context.js";
+import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -47,6 +48,11 @@ type ApplyMediaUnderstandingResult = {
   appliedAudio: boolean;
   appliedVideo: boolean;
   appliedFile: boolean;
+};
+
+type ExtractedFileBlocks = {
+  blocks: string[];
+  images: ImageContent[];
 };
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
@@ -383,12 +389,13 @@ async function extractFileBlocks(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
-}): Promise<string[]> {
+}): Promise<ExtractedFileBlocks> {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
-    return [];
+    return { blocks: [], images: [] };
   }
   const blocks: string[] = [];
+  const images: ImageContent[] = [];
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
@@ -494,10 +501,13 @@ async function extractFileBlocks(params: {
       continue;
     }
     const text = extracted?.text?.trim() ?? "";
+    if (extracted?.images && extracted.images.length > 0) {
+      images.push(...extracted.images);
+    }
     let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
     if (!blockText) {
       if (extracted?.images && extracted.images.length > 0) {
-        blockText = "[PDF content rendered to images; images not forwarded to model]";
+        blockText = "[PDF content rendered to images]";
       } else {
         blockText = "[No extractable text]";
       }
@@ -511,7 +521,7 @@ async function extractFileBlocks(params: {
       }),
     );
   }
-  return blocks;
+  return { blocks, images };
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -670,13 +680,17 @@ export async function applyMediaUnderstanding(params: {
         )
         .map((output) => output.attachmentIndex),
     );
-    const fileBlocks = await extractFileBlocks({
+    const extractedFiles = await extractFileBlocks({
       attachments,
       cache,
       cfg,
       limits: resolveFileExtractionLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
     });
+    const fileBlocks = extractedFiles.blocks;
+    if (extractedFiles.images.length > 0) {
+      ctx.CurrentTurnImages = [...(ctx.CurrentTurnImages ?? []), ...extractedFiles.images];
+    }
     if (fileBlocks.length > 0) {
       ctx.Body = appendFileBlocks(ctx.Body, fileBlocks);
     }
