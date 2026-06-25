@@ -95,12 +95,36 @@ describe("kimi web search provider", () => {
     );
   });
 
-  it("does not inherit non-native Moonshot baseUrl for web search", () => {
+  it("inherits configured Moonshot baseUrl for web search", () => {
     const proxyConfig = {
       models: { providers: { moonshot: { baseUrl: "https://proxy.example/v1" } } },
     } as unknown as OpenClawConfig;
 
-    expect(testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://api.moonshot.ai/v1");
+    expect(testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://proxy.example/v1");
+  });
+
+  it("throws a provider error when inherited proxy returns 401", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("Unauthorized", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createKimiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        models: { providers: { moonshot: { baseUrl: "https://proxy.example/v1" } } },
+      } as unknown as OpenClawConfig,
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      await expect(tool.execute({ query: "test query" })).rejects.toThrow("Kimi API error");
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("https://proxy.example/v1/chat/completions"),
+        expect.anything(),
+      );
+    });
   });
 
   it("keeps explicit kimi baseUrl over models.providers.moonshot.baseUrl", () => {

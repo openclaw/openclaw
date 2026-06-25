@@ -124,7 +124,7 @@ function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig):
   const moonshotBaseUrl = openClawConfig?.models?.providers?.moonshot?.baseUrl;
   if (typeof moonshotBaseUrl === "string") {
     const normalizedMoonshotBaseUrl = trimTrailingSlashes(moonshotBaseUrl.trim());
-    if (normalizedMoonshotBaseUrl && isNativeMoonshotBaseUrl(normalizedMoonshotBaseUrl)) {
+    if (normalizedMoonshotBaseUrl) {
       return normalizedMoonshotBaseUrl;
     }
   }
