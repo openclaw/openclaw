@@ -82,7 +82,30 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
     return `${line}\n`;
   }
+  // Preserve token usage from the original data when truncating (#96804).
+  // usage is ~96 bytes but is lost when the entire data block is replaced.
+  // Preserve it so downstream accounting can still read per-turn token counts.
+  const originalData = event.data as Record<string, unknown> | undefined;
+  const preservedUsage = originalData?.usage;
+  const stubData: Record<string, unknown> = {
+    truncated: true,
+    originalBytes: bytes,
+    limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    reason: "trajectory-event-size-limit",
+  };
+  if (preservedUsage) {
+    stubData.usage = preservedUsage;
+  }
   const truncated = JSON.stringify({
+    ...event,
+    data: stubData,
+  });
+  if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return `${truncated}\n`;
+  }
+  // Fallback: full truncation without usage preservation if the size
+  // limit is still exceeded (extremely unlikely for a ~96-byte usage blob).
+  const fallback = JSON.stringify({
     ...event,
     data: {
       truncated: true,
@@ -91,8 +114,8 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
       reason: "trajectory-event-size-limit",
     },
   });
-  if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return `${truncated}\n`;
+  if (Buffer.byteLength(fallback, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return `${fallback}\n`;
   }
   return undefined;
 }

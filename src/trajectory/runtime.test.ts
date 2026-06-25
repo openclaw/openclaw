@@ -136,6 +136,47 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("preserves usage when truncating oversized model.completed events (#96804)", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const usage = { input: 5000, output: 200, total: 5200 };
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("model.completed", {
+      finishReason: "stop",
+      usage,
+      // Fill enough fields to force event-level truncation
+      fields: Object.fromEntries(
+        Array.from({ length: 20 }, (_, index) => [`field-${index}`, "y".repeat(20 * 1024)]),
+      ),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(writes[0]);
+    // Event-level truncation should have fired
+    expect(parsed.data.truncated).toBe(true);
+    expect(parsed.data.reason).toBe("trajectory-event-size-limit");
+    // Usage must be preserved
+    expect(parsed.data.usage).toBeDefined();
+    expect(parsed.data.usage.input).toBe(5000);
+    expect(parsed.data.usage.output).toBe(200);
+    expect(parsed.data.usage.total).toBe(5200);
+    // Truncated line must still be within the byte limit
+    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
+  });
+
   it("rotates runtime capture at the file budget and keeps newer events", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

@@ -240,7 +240,10 @@ describe("Codex trajectory recorder", () => {
     });
 
     const trajectoryRecorder = expectTrajectoryRecorder(recorder);
-    trajectoryRecorder.recordEvent("context.compiled", {
+    const usage = { input: 5000, output: 200, total: 5200 };
+    trajectoryRecorder.recordEvent("model.completed", {
+      finishReason: "stop",
+      usage,
       fields: Object.fromEntries(
         Array.from({ length: 100 }, (_, index) => [`field-${index}`, "x".repeat(3_000)]),
       ),
@@ -249,8 +252,13 @@ describe("Codex trajectory recorder", () => {
 
     const parsed = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
-    ) as { data?: { truncated?: boolean; reason?: string } };
+    ) as { data?: { truncated?: boolean; reason?: string; usage?: { input: number; output: number; total: number } } };
     expect(parsed.data?.truncated).toBe(true);
     expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
+    // usage must survive event-level truncation (#96804)
+    expect(parsed.data?.usage).toBeDefined();
+    expect(parsed.data?.usage?.input).toBe(5000);
+    expect(parsed.data?.usage?.output).toBe(200);
+    expect(parsed.data?.usage?.total).toBe(5200);
   });
 });
