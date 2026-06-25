@@ -437,7 +437,10 @@ export function buildSessionContext(
  * Encodes cwd into a safe directory name under ~/.openclaw/agent/sessions/.
  */
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
-  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  const safePath = `--${cwd
+    .replace(/^[/\\]/, "")
+    .replace(/%/g, "%25")
+    .replace(/[/\\:]/g, (c) => (c === "/" ? "%2F" : c === "\\" ? "%5C" : "%3A"))}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
@@ -1194,6 +1197,35 @@ export function findMostRecentSession(sessionDir: string): string | null {
       .map((path) => ({ path, mtime: statSync(path).mtime }))
       .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
+    return files[0]?.path || null;
+  } catch {
+    return null;
+  }
+}
+
+function readSessionCwd(filePath: string): string | undefined {
+  try {
+    const firstLine = readFirstSessionFileLine(filePath);
+    if (!firstLine) {
+      return undefined;
+    }
+    const parsed = JSON.parse(firstLine);
+    return parsed.type === "session" ? parsed.cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findMostRecentSessionByCwd(sessionDir: string, cwd: string): string | null {
+  try {
+    const normalizedCwd = resolve(cwd);
+    const files = readdirSync(sessionDir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => join(sessionDir, f))
+      .filter(isValidSessionFile)
+      .map((path) => ({ path, mtime: statSync(path).mtime, sessionCwd: readSessionCwd(path) }))
+      .filter((f) => f.sessionCwd !== undefined && resolve(f.sessionCwd) === normalizedCwd)
+      .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
     return files[0]?.path || null;
   } catch {
     return null;
@@ -2923,7 +2955,14 @@ export class SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const mostRecent = findMostRecentSession(dir);
     if (mostRecent) {
-      return new SessionManager(cwd, dir, mostRecent, true);
+      const sessionCwd = readSessionCwd(mostRecent);
+      if (sessionCwd !== undefined && resolve(sessionCwd) === resolve(cwd)) {
+        return new SessionManager(cwd, dir, mostRecent, true);
+      }
+      const cwdMatch = findMostRecentSessionByCwd(dir, cwd);
+      if (cwdMatch) {
+        return new SessionManager(cwd, dir, cwdMatch, true);
+      }
     }
     return new SessionManager(cwd, dir, undefined, true);
   }
