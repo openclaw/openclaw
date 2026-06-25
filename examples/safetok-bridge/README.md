@@ -25,16 +25,6 @@ OpenClaw session  →  assistant reply
 safeTok user
 ```
 
-safeTok uses a **custom NIP-44 variant** (documented in `nip44.mjs`):
-
-| Parameter       | Standard NIP-44 v2 | safeTok variant         |
-| --------------- | ------------------ | ----------------------- |
-| ECDH            | SHA256 of raw-x    | SHA256 of compressed pt |
-| Nonce           | 32 bytes           | 12 bytes                |
-| Padding         | Yes                | None                    |
-| Conv key        | HKDF extract-only  | HKDF extract + expand   |
-| Parity fallback | No                 | Yes (both tried)        |
-
 ## Prerequisites
 
 - **safeTok** — download at [safetok.me](https://safetok.me)
