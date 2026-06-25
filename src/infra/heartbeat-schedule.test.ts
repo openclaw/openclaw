@@ -212,6 +212,46 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
   });
 
+  it("finds the next active slot for sub-minute intervals without unbounded iteration", () => {
+    // 30s interval, 09:00–17:00. Start at 17:00 (quiet) → 09:00 next day.
+    const startMs = Date.parse("2026-01-01T17:00:00.000Z");
+    const intervalMs = 30_000;
+    const isActive = (ms: number) => {
+      const hour = new Date(ms).getUTCHours();
+      return hour >= 9 && hour < 17;
+    };
+
+    const t0 = performance.now();
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs,
+      phaseMs: 0,
+      isActive,
+    });
+    const elapsedMs = performance.now() - t0;
+
+    // Finds the first active slot at 09:00 the next day
+    expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
+    // Must be near-instant — not stall on unbounded iteration
+    expect(elapsedMs).toBeLessThan(100);
+  });
+
+  it("stays bounded for 1ms interval with never-active window", () => {
+    const startMs = Date.parse("2026-01-01T12:00:00.000Z");
+    const t0 = performance.now();
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs: 1,
+      phaseMs: 0,
+      isActive: () => false,
+    });
+    const elapsedMs = performance.now() - t0;
+
+    expect(result).toBe(startMs);
+    // With 60s seek floor, max ~10,080 iterations — sub-millisecond
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
   it("falls back to startMs after 7-day horizon for intervals without active slot", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
