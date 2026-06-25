@@ -10,6 +10,7 @@ import {
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -468,6 +469,49 @@ afterEach(async () => {
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
+describe("initSessionState guarded initialization", () => {
+  it("serializes concurrent initializers before reading the guarded snapshot", async () => {
+    const storePath = await createStorePath("openclaw-session-init-race-");
+    const sessionKey = "agent:main:telegram:chat:42";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-session",
+        updatedAt: 100,
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    let releaseWriter = () => {};
+    const writerReleased = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    let markWriterStarted = () => {};
+    const writerStarted = new Promise<void>((resolve) => {
+      markWriterStarted = resolve;
+    });
+    const heldWriter = runExclusiveSessionStoreWrite(storePath, async () => {
+      markWriterStarted();
+      await writerReleased;
+    });
+    await writerStarted;
+
+    const turns = Array.from({ length: 8 }, (_, index) =>
+      initSessionState({
+        ctx: {
+          Body: `turn ${index}`,
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      }),
+    );
+
+    releaseWriter();
+    await heldWriter;
+
+    await expect(Promise.all(turns)).resolves.toHaveLength(8);
+  });
+});
+
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
