@@ -27,6 +27,7 @@ import {
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackSendIdentity } from "./send.js";
+import { assertSlackThreadDeliveryResult } from "./thread-delivery-confirmation.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -65,29 +66,6 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
     return undefined;
   }
   return { username, iconUrl, iconEmoji };
-}
-
-function assertSlackThreadDeliveryResult(params: {
-  result: Awaited<ReturnType<SlackSendFn>>;
-  to: string;
-  threadTs?: string;
-}) {
-  if (!params.threadTs) {
-    return;
-  }
-  const deliveredThreadTs = normalizeOptionalString(params.result?.confirmedThreadTs);
-  if (deliveredThreadTs === params.threadTs) {
-    return;
-  }
-  const deliveredMessageId = normalizeOptionalString(params.result?.messageId);
-  const suffix = deliveredThreadTs
-    ? `; delivered thread ${deliveredThreadTs}`
-    : deliveredMessageId
-      ? `; delivered message ${deliveredMessageId}`
-      : "";
-  throw new Error(
-    `Slack delivery did not confirm thread ${params.threadTs} for ${params.to}${suffix}`,
-  );
 }
 
 async function sendSlackOutboundMessage(params: {

@@ -72,6 +72,7 @@ import {
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
+import { assertSlackThreadDeliveryResult } from "./thread-delivery-confirmation.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
@@ -481,12 +482,14 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
       });
-      return await send(to, text, {
+      const result = await send(to, text, {
         cfg,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
+      assertSlackThreadDeliveryResult({ result, to, threadTs: threadTsValue });
+      return result;
     },
     sendMedia: async ({
       to,
@@ -661,8 +664,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>

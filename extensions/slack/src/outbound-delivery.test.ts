@@ -58,6 +58,12 @@ describe("slack outbound shared hook wiring", () => {
   });
 
   it("fires message_sending once with shared routing fields", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "m1",
+      channelId: "C123",
+      threadTs: "1712000000.000001",
+      confirmedThreadTs: "1712000000.000001",
+    });
     const hookRegistry = createEmptyPluginRegistry();
     const handler = vi.fn().mockResolvedValue(undefined);
     addTestHook({
@@ -99,6 +105,12 @@ describe("slack outbound shared hook wiring", () => {
   });
 
   it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "m1",
+      channelId: "C123",
+      threadTs: "1712000000.000001",
+      confirmedThreadTs: "1712000000.000001",
+    });
     await deliverOutboundPayloads({
       cfg,
       channel: "slack",
