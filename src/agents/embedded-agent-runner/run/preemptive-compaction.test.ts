@@ -75,6 +75,22 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
   } as AgentMessage;
 }
 
+function makeToolSchema(descriptionChars: number) {
+  return {
+    name: `tool_${descriptionChars}`,
+    description: "tool schema pressure ".repeat(4),
+    parameters: {
+      type: "object",
+      properties: {
+        payload: {
+          type: "string",
+          description: "x".repeat(descriptionChars),
+        },
+      },
+    },
+  };
+}
+
 describe("preemptive-compaction", () => {
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
@@ -157,6 +173,7 @@ describe("preemptive-compaction", () => {
     expect(line).toContain("provider=anthropic/claude-opus-4-6");
     expect(line).toContain("route=fits");
     expect(line).toContain(`estimatedPromptTokens=${result.estimatedPromptTokens}`);
+    expect(line).toContain(`toolSchemaTokens=${result.toolSchemaTokens}`);
     expect(line).toContain(`promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve}`);
     expect(line).toContain("overflowTokens=0");
     expect(line).toContain(`toolResultReducibleChars=${result.toolResultReducibleChars}`);
@@ -346,13 +363,15 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
-  it("keeps small-context lightweight cron prompts out of no-op compact-only recovery", () => {
+  it("keeps small-context tool-less lightweight cron prompts out of no-op compact-only recovery", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [],
       systemPrompt: "",
       prompt: "run scheduled task",
+      contextMode: "lightweight",
       contextTokenBudget: 4_096,
       reserveTokens: 20_000,
+      tools: [],
       llmBoundaryTokenPressure: {
         estimatedPromptTokens: 3_544,
         source: "reported_lightweight_cron",
@@ -363,6 +382,46 @@ describe("preemptive-compaction", () => {
     expect(result.effectiveReserveTokens).toBeLessThan(1_000);
     expect(result.shouldCompact).toBe(false);
     expect(result.route).toBe("fits");
+  });
+
+  it("keeps tool-schema pressure inside the lightweight small-context budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      tools: [makeToolSchema(1_200)],
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_544,
+        source: "reported_lightweight_cron",
+      },
+    });
+
+    expect(result.toolSchemaTokens).toBeGreaterThan(40);
+    expect(result.promptBudgetBeforeReserve).toBeLessThan(3_544);
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
+  });
+
+  it("keeps full-context small models on the shared prompt floor", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "full",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_544,
+        source: "reported_lightweight_cron",
+      },
+    });
+
+    expect(result.promptBudgetBeforeReserve).toBe(2_048);
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
   });
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {

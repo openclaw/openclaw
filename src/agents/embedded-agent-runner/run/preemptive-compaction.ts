@@ -30,12 +30,20 @@ const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+const LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO = 0.875;
+
+type ToolSchemaTokenPressureSource = {
+  name?: unknown;
+  description?: unknown;
+  parameters?: unknown;
+};
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
+  toolSchemaTokens: number;
   pressureSource?: string;
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
@@ -148,6 +156,25 @@ function estimateContentTokenPressure(content: unknown): number {
     return estimateJsonPayloadTokenPressure(content);
   }
   return 0;
+}
+
+function estimateToolSchemaTokenPressure(
+  tools: readonly ToolSchemaTokenPressureSource[] | undefined,
+): number {
+  if (!tools?.length) {
+    return 0;
+  }
+  const payload = tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }));
+  return Math.max(
+    0,
+    Math.ceil(
+      estimateJsonPayloadTokenPressure(payload, JSON_PAYLOAD_CHARS_PER_TOKEN) * SAFETY_MARGIN,
+    ),
+  );
 }
 
 function isToolResultMessage(message: AgentMessage): boolean {
@@ -281,8 +308,10 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   unwindowedMessages?: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  contextMode?: "full" | "lightweight";
   contextTokenBudget: number;
   reserveTokens: number;
+  tools?: readonly ToolSchemaTokenPressureSource[];
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
 }): PreemptiveCompactionDecision {
@@ -312,16 +341,36 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
+  const toolSchemaTokens = estimateToolSchemaTokenPressure(params.tools);
+  const sharedMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
+  );
+  const lightweightMinPromptBudget =
+    params.contextMode === "lightweight"
+      ? Math.max(
+          sharedMinPromptBudget,
+          Math.max(
+            1,
+            Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO) - toolSchemaTokens,
+          ),
+        )
+      : sharedMinPromptBudget;
+  const minPromptBudget = Math.min(
+    lightweightMinPromptBudget,
+    Math.max(1, contextTokenBudget - toolSchemaTokens),
   );
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,
-    Math.max(0, contextTokenBudget - minPromptBudget),
+    Math.max(0, contextTokenBudget - toolSchemaTokens - minPromptBudget),
   );
-  const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
+  // Provider requests carry tool schemas next to messages, so prompt budget must leave
+  // room for the exact effective tool surface before accepting a small-window fit.
+  const promptBudgetBeforeReserve = Math.max(
+    1,
+    contextTokenBudget - effectiveReserveTokens - toolSchemaTokens,
+  );
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: messagesForPressure,
@@ -351,6 +400,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
+    toolSchemaTokens,
     pressureSource,
     promptBudgetBeforeReserve,
     overflowTokens,
@@ -379,6 +429,7 @@ export function formatPrePromptPrecheckLog(params: {
     `provider=${params.provider}/${params.modelId} ` +
     `route=${result.route} ` +
     `estimatedPromptTokens=${result.estimatedPromptTokens} ` +
+    `toolSchemaTokens=${result.toolSchemaTokens} ` +
     `pressureSource=${result.pressureSource ?? "unknown"} ` +
     `promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve} ` +
     `overflowTokens=${result.overflowTokens} ` +

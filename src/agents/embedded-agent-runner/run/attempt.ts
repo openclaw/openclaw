@@ -4624,8 +4624,10 @@ export async function runEmbeddedAttempt(
                 : {}),
               systemPrompt: systemPromptForHook,
               prompt: llmBoundaryPromptForPrecheck,
+              contextMode: params.bootstrapContextMode,
               contextTokenBudget,
               reserveTokens,
+              tools: effectiveTools,
               toolResultMaxChars: promptToolResultMaxChars,
               llmBoundaryTokenPressure: {
                 estimatedPromptTokens: llmBoundaryTokenPressure,
