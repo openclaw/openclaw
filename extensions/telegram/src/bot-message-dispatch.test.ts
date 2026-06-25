@@ -2424,7 +2424,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("returns retryable when callback silence suppresses fallback after non-silent delivery failure", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onError?.(new Error("send failed"), { kind: "final" });
+      await dispatcherOptions.onError?.(new Error("send failed"), { kind: "final" });
       return { queuedFinal: false };
     });
 
