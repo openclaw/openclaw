@@ -592,12 +592,17 @@ function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sess
 
 export async function ensureSandboxContainer(params: {
   sessionKey: string;
+  scopeKey?: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
 }) {
-  const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
+  const scopeKey =
+    params.scopeKey ??
+    resolveSandboxScopeKey(params.cfg.scope, params.sessionKey, {
+      workspaceDir: params.agentWorkspaceDir,
+    });
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);

@@ -180,10 +180,12 @@ async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
   sessionKey?: string;
+  scopeKey?: string;
 }): Promise<SpawnCall> {
   const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
   await ensureSandboxContainer({
     sessionKey: params.sessionKey ?? "agent:main:session-1",
+    scopeKey: params.scopeKey,
     workspaceDir,
     agentWorkspaceDir: workspaceDir,
     cfg: params.cfg,
@@ -213,6 +215,30 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     await loadFreshDockerModuleForTest();
+  });
+
+  it("uses the resolved scope key for agent-scoped container names and labels", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    cfg.scope = "agent";
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      sessionKey: "agent:poly:msteams:channel-1",
+      scopeKey: "agent:poly:workspace:tenant123",
+    });
+
+    expect(createCall.args).toContain("--name");
+    expect(createCall.args[createCall.args.indexOf("--name") + 1]).toBe(
+      "oc-test-agent-poly-workspace-tenant123-f73c4135",
+    );
+    expect(createCall.args).toContain("openclaw.sessionKey=agent:poly:workspace:tenant123");
+    const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+    expect(registryUpdate?.containerName).toBe("oc-test-agent-poly-workspace-tenant123-f73c4135");
+    expect(registryUpdate?.sessionKey).toBe("agent:poly:workspace:tenant123");
   });
 
   it("recreates shared container when array-order change alters hash", async () => {

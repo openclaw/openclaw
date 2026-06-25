@@ -37,6 +37,7 @@ export async function createDockerSandboxBackend(
 ): Promise<SandboxBackendHandle> {
   const containerName = await ensureSandboxContainer({
     sessionKey: params.sessionKey,
+    scopeKey: params.scopeKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,

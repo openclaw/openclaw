@@ -29,16 +29,24 @@ export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
 }
 
 /** Resolves the registry scope key for session-, agent-, or shared-scope sandbox lifetimes. */
-export function resolveSandboxScopeKey(scope: "session" | "agent" | "shared", sessionKey: string) {
+export function resolveSandboxScopeKey(
+  scope: "session" | "agent" | "shared",
+  sessionKey: string,
+  options?: { workspaceDir?: string },
+) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") {
     return "shared";
   }
+  const workspaceDir = options?.workspaceDir?.trim();
+  const workspaceScopeSuffix = workspaceDir
+    ? `:workspace:${hashTextSha256(resolveUserPath(workspaceDir)).slice(0, 8)}`
+    : "";
   if (scope === "session") {
-    return trimmed;
+    return `${trimmed}${workspaceScopeSuffix}`;
   }
   const agentId = resolveAgentIdFromSessionKey(trimmed);
-  return `agent:${agentId}`;
+  return `agent:${agentId}${workspaceScopeSuffix}`;
 }
 
 /** Extracts the agent id represented by a sandbox scope key, when one exists. */

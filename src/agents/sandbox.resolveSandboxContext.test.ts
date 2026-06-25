@@ -257,6 +257,72 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it("scopes agent sandboxes by workspace to avoid cross-customer reuse", async () => {
+    const backendCalls: Array<{
+      scopeKey: string;
+      workspaceDir: string;
+      agentWorkspaceDir: string;
+    }> = [];
+    const restore = registerSandboxBackend("test-tenant-backend", async (params) => {
+      backendCalls.push({
+        scopeKey: params.scopeKey,
+        workspaceDir: params.workspaceDir,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+      });
+      return {
+        id: "test-tenant-backend",
+        runtimeId: `runtime-${backendCalls.length}`,
+        runtimeLabel: `Runtime ${backendCalls.length}`,
+        workdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["test-tenant-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      };
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-tenant-backend",
+              scope: "agent",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:poly:msteams:channel-1",
+        workspaceDir: "/tmp/openclaw-customers/atica/openclaw/agents/poly/workspace",
+      });
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:poly:msteams:channel-1",
+        workspaceDir: "/tmp/openclaw-customers/polytopic/openclaw/agents/poly/workspace",
+      });
+
+      expect(backendCalls).toHaveLength(2);
+      expect(backendCalls[0]?.scopeKey).toMatch(/^agent:poly:workspace:/);
+      expect(backendCalls[1]?.scopeKey).toMatch(/^agent:poly:workspace:/);
+      expect(backendCalls[0]?.scopeKey).not.toBe(backendCalls[1]?.scopeKey);
+      expect(backendCalls[0]?.workspaceDir).toBe(backendCalls[0]?.agentWorkspaceDir);
+      expect(backendCalls[1]?.workspaceDir).toBe(backendCalls[1]?.agentWorkspaceDir);
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("passes the resolved browser SSRF policy to sandbox browser setup", async () => {
     ensureSandboxBrowserMock.mockClear();
     const restore = registerSandboxBackend("test-browser-backend", async () => ({
@@ -408,7 +474,7 @@ describe("resolveSandboxContext", () => {
       path.join(".openclaw", "sandbox", "skills-workspaces"),
     );
     expect(syncOptions?.targetWorkspaceDir).toMatch(
-      /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+      /[\\/]agent-main-main-workspace-[a-f0-9]{6}-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
     );
     expect(syncOptions?.targetWorkspaceDir).not.toBe(
       path.join(workspaceDir, ".openclaw", "sandbox-skills"),
@@ -455,7 +521,7 @@ describe("resolveSandboxContext", () => {
 
     expect(result?.workspaceDir).toBe(workspaceDir);
     expect(result?.containerWorkdir).toMatch(
-      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-[a-f0-9]{8}\/workspace$/,
+      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-workspace-[a-f0-9]{6}-[a-f0-9]{8}\/workspace$/,
     );
     expect(result?.containerWorkdir).not.toBe("/workspace");
     expect(result?.skillsWorkspaceDir).toContain(
