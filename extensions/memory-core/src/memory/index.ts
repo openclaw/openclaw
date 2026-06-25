@@ -9,6 +9,7 @@ export {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
+  releaseMemorySearchResourcesForAgent,
   type MemorySearchManagerPurpose,
   type MemorySearchManagerResult,
 } from "./search-manager.js";

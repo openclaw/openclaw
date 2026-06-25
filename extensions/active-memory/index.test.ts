@@ -3374,6 +3374,7 @@ describe("active-memory plugin", () => {
     expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledWith({
       cfg: configFile,
       agentId: "main",
+      scope: "resources",
     });
   });
 

@@ -13,10 +13,12 @@ import {
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const releaseMemorySearchResourcesForAgentMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./src/runtime-provider.js", () => ({
   memoryRuntime: {
     closeAllMemorySearchManagers: vi.fn(async () => {}),
+    releaseMemorySearchResourcesForAgent: releaseMemorySearchResourcesForAgentMock,
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: vi.fn(async () => null),
   },
@@ -111,6 +113,18 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("wires scoped memory search resource release through the lazy runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.releaseMemorySearchResourcesForAgent?.({ cfg, agentId: "main" });
+
+    expect(releaseMemorySearchResourcesForAgentMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
   });
 });
 
