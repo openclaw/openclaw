@@ -34,6 +34,22 @@ export function resolveUserTimezone(configured?: string): string {
   return host?.trim() || "UTC";
 }
 
+/**
+ * Returns the configured timezone only when explicitly set and valid.
+ * Returns undefined for unset or invalid values — no host/UTC fallback.
+ * Use this when a behavior should only activate on explicit user config.
+ */
+export function resolveConfiguredTimezone(configured?: string): string | undefined {
+  const trimmed = configured?.trim();
+  if (!trimmed) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve 12/24-hour display preference, detecting the host for `auto`. */
 export function resolveUserTimeFormat(preference?: TimeFormatPreference): ResolvedTimeFormat {
   if (preference === "12" || preference === "24") {
