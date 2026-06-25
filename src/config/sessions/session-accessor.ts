@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -10,10 +8,8 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type {
-  SessionTranscriptUpdate,
-  SessionTranscriptUpdateTarget,
-} from "../../sessions/transcript-events.js";
+import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
@@ -39,6 +35,7 @@ import {
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
+  loadLatestSqliteAssistantText,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   patchSqliteSessionEntry,
@@ -50,6 +47,7 @@ import {
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
+  withSqliteTranscriptWriteLock,
 } from "./session-accessor.sqlite.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
@@ -78,13 +76,6 @@ import {
   type SessionLifecycleStoreTarget,
 } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
-import {
-  type AppendSessionTranscriptMessageParams,
-  type AppendSessionTranscriptMessageResult,
-  appendSessionTranscriptEvent,
-  appendSessionTranscriptMessage,
-} from "./transcript-append.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import {
@@ -202,18 +193,18 @@ export type ResolvedSessionEntryUpdateResult<T> =
     };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
-  /** Explicit transcript file path; bypasses store lookup when already known. */
+  /** Deprecated transcript locator from older file-backed call sites. */
   sessionFile?: string;
-  /** Runtime session id used to derive a transcript file when no explicit file is provided. */
+  /** Runtime session id used to resolve the transcript identity. */
   sessionId: string;
-  /** Required when resolving through session metadata; optional for explicit transcript artifacts. */
+  /** Required when resolving through session metadata; optional for legacy locators. */
   sessionKey?: string;
   /** Channel thread suffix used when deriving topic transcript paths. */
   threadId?: string | number;
 };
 
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  /** Resolved file-backed artifact for the current runtime target. */
+  /** Deprecated transcript locator from older file-backed call sites. */
   sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
@@ -235,7 +226,7 @@ export type SessionTranscriptReadTarget = Omit<
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
-  /** Optional for appenders that can operate on an existing explicit transcript target. */
+  /** Optional for appenders that resolve it from the session entry. */
   sessionId?: string;
 };
 
@@ -283,6 +274,19 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; sessionFile is resolved here. */
 export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
+
+export type LatestTranscriptAssistantText = {
+  id?: string;
+  text: string;
+  timestamp?: number;
+};
+
+export type SessionTranscriptWriteLockAccessorContext = {
+  appendMessage: <TMessage>(
+    options: TranscriptMessageAppendOptions<TMessage>,
+  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  readEvents: () => Promise<TranscriptEvent[]>;
+};
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
@@ -336,10 +340,6 @@ export type SessionTranscriptTurnPersistResult = {
   sessionEntry: SessionEntry | undefined;
   sessionFile: string;
 };
-
-type SessionTranscriptTurnAppendRunner = <TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage>,
-) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 
 export type SessionTranscriptRuntimeTarget = {
   agentId: string;
@@ -627,10 +627,6 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
-
-type CreatedSessionTranscriptResult =
-  | { ok: true; sessionFile: string }
-  | { ok: false; error: string; phase: "transcript" };
 
 export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
 export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
@@ -1185,44 +1181,6 @@ function resolveInitializedReplySessionEntry(params: {
     ...params.sessionEntry,
     sessionFile,
   };
-}
-
-// File-backed creation resolves the concrete transcript artifact and writes the
-// header before the store mutation is saved; SQLite adapters implement this as
-// the same lifecycle operation without exposing rollback details to callers.
-function ensureCreatedSessionTranscript(params: {
-  agentId?: string;
-  entry: SessionEntry;
-  storePath: string;
-}): CreatedSessionTranscriptResult {
-  try {
-    const sessionFile = resolveSessionFilePath(
-      params.entry.sessionId,
-      params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : undefined,
-      {
-        agentId: params.agentId,
-        sessionsDir: path.dirname(path.resolve(params.storePath)),
-      },
-    );
-    if (!fs.existsSync(sessionFile)) {
-      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-      fs.writeFileSync(
-        sessionFile,
-        `${JSON.stringify(createSessionTranscriptHeader({ sessionId: params.entry.sessionId }))}\n`,
-        {
-          encoding: "utf-8",
-          mode: 0o600,
-        },
-      );
-    }
-    return { ok: true, sessionFile };
-  } catch (err) {
-    return {
-      ok: false,
-      error: formatErrorMessage(err),
-      phase: "transcript",
-    };
-  }
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -1889,17 +1847,11 @@ export async function loadTranscriptEvents(
   return await loadSqliteTranscriptEvents(scope);
 }
 
-function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return;
-  }
-  // Message records require parent-link, idempotency, and redaction handling
-  // from appendTranscriptMessage; raw event writes would bypass those invariants.
-  if ((event as { type?: unknown }).type === "message") {
-    throw new Error(
-      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
-    );
-  }
+/** Reads the latest visible assistant text without materializing the whole transcript. */
+export function readLatestTranscriptAssistantText(
+  scope: SessionTranscriptReadScope,
+): LatestTranscriptAssistantText | undefined {
+  return loadLatestSqliteAssistantText(scope);
 }
 
 /**
@@ -1929,6 +1881,14 @@ export async function publishTranscriptUpdate(
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {
   await publishSqliteTranscriptUpdate(scope, update);
+}
+
+/** Runs transcript read/append work under the backing store writer lock. */
+export async function withTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
+  return await withSqliteTranscriptWriteLock(scope, run);
 }
 
 /**
@@ -2293,9 +2253,9 @@ async function persistExpectedSessionTranscriptTurn(
 }
 
 /**
- * Resolves the current file-backed target for a storage-neutral runtime
- * transcript scope. Callers use the scope as identity; sessionFile is returned
- * only for current file-backed implementation details such as locks/events.
+ * Resolves the current storage-neutral runtime transcript target. Callers use
+ * the scope as identity; sessionFile is only a legacy locator for older
+ * command payloads and must not be treated as a readable JSONL path.
  */
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
@@ -2325,8 +2285,8 @@ export async function resolveSessionTranscriptRuntimeTarget(
 }
 
 /**
- * Resolves the file-backed runtime transcript target for read/delete probes
- * without persisting missing sessionFile metadata into the session store.
+ * Resolves the runtime transcript target for read/delete probes without
+ * persisting missing sessionFile metadata into the session store.
  */
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
@@ -2389,7 +2349,7 @@ function resolveSessionTranscriptRuntimeContext(
 }
 
 /**
- * Resolves the current file-backed target for read-only transcript callers.
+ * Resolves the current storage-neutral target for read-only transcript callers.
  * Unlike writer/runtime resolution, this does not persist missing sessionFile
  * metadata; reader projections must not mutate session metadata.
  */
@@ -2450,15 +2410,6 @@ function resolveConcreteReadStorePath(storePath: string | undefined): string | u
     return undefined;
   }
   return trimmed;
-}
-
-function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
-  const now = Date.now();
-  return {
-    sessionId: patch.sessionId ?? randomUUID(),
-    updatedAt: patch.updatedAt ?? now,
-    ...patch,
-  };
 }
 
 function snapshotTemporarySessionMapping(
@@ -2540,66 +2491,15 @@ async function archivePreviousSessionTranscript(params: {
   });
 }
 
-type ResolvedTranscriptAccess = {
-  sessionFile: string;
-  target?: SessionTranscriptUpdateTarget;
-};
-
-function projectTranscriptUpdateTarget(
-  target: Pick<Partial<SessionTranscriptRuntimeTarget>, "agentId" | "sessionId" | "sessionKey">,
-): SessionTranscriptUpdateTarget | undefined {
-  if (!target.agentId || !target.sessionId || !target.sessionKey) {
-    return undefined;
+function resolveAccessStorePath(scope: SessionAccessScope): string {
+  if (scope.storePath) {
+    return scope.storePath;
   }
-  return {
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  };
-}
-
-async function resolveTranscriptAccess(
-  scope: SessionTranscriptWriteScope,
-): Promise<ResolvedTranscriptAccess> {
-  if (scope.sessionFile?.trim()) {
-    const scopeSessionKey = scope.sessionKey?.trim();
-    const agentId = scopeSessionKey
-      ? (scope.agentId ?? resolveAgentIdFromSessionKey(scopeSessionKey))
-      : undefined;
-    return {
-      sessionFile: scope.sessionFile,
-      ...(agentId && scope.sessionId && scopeSessionKey
-        ? {
-            target: projectTranscriptUpdateTarget({
-              agentId,
-              sessionId: scope.sessionId,
-              sessionKey: scopeSessionKey,
-            }),
-          }
-        : {}),
-    };
-  }
-  if (!scope.sessionId) {
-    throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
-  }
-  // Past this point resolution goes through the session entry, so the owning
-  // key is mandatory; explicit-artifact writes returned above never need it.
-  const scopeSessionKey = scope.sessionKey?.trim();
-  if (!scopeSessionKey) {
-    throw new Error(
-      "Cannot resolve a transcript write scope without a session key or explicit session file",
-    );
-  }
-  const target = await resolveSessionTranscriptRuntimeTarget({
-    ...scope,
-    sessionId: scope.sessionId,
-    sessionKey: scopeSessionKey,
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  return resolveStorePath(getRuntimeConfig().session?.store, {
+    agentId,
+    env: scope.env,
   });
-  const updateTarget = projectTranscriptUpdateTarget(target);
-  return {
-    sessionFile: target.sessionFile,
-    ...(updateTarget ? { target: updateTarget } : {}),
-  };
 }
 
 async function resolveTranscriptTurnTarget(

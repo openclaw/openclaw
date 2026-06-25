@@ -188,6 +188,7 @@ export async function cleanupSessionLifecycleArtifacts(
 }
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use getSessionEntry to read session metadata by agent/session
