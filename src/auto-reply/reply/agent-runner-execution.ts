@@ -2625,7 +2625,12 @@ export async function runAgentTurnWithFallback(params: {
                           }
                         : undefined,
                     onReasoningEnd: params.opts?.onReasoningEnd,
-                    onAgentEvent: async (evt) => {
+                    onAgentEvent: (() => {
+                      // Commentary arrives as snapshots (replace), deltas, or both
+                      // depending on the producer; accumulate per item so the
+                      // preamble progress payload always carries full text.
+                      const commentaryTextByItem = new Map<string, string>();
+                      return async (evt) => {
                       lifecycleBackstop.note(evt);
                       // Signal run start only after the embedded agent emits real activity.
                       const hasLifecyclePhase =
@@ -2697,6 +2702,38 @@ export async function runAgentTurnWithFallback(params: {
                       if (completedMessageToolDelivery) {
                         messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
                         messageToolOnlyDeliveryCompleted = true;
+                      }
+                      // Commentary rides the assistant lane per the I/O contract;
+                      // rebuild the preamble progress payload here so channel
+                      // rendering (draft commentary lines, verbose delivery, and
+                      // the collapse-bar 💬 count) sees it. Without this the
+                      // embedded commentary stream reaches the bus but never the
+                      // window/count — plain-mode 💬 was silently dropped.
+                      if (
+                        evt.stream === "assistant" &&
+                        readStringValue(evt.data.phase) === "commentary" &&
+                        !shouldSuppressProgressAfterMessageToolDelivery()
+                      ) {
+                        const commentaryItemId = readStringValue(evt.data.itemId) ?? "";
+                        const snapshotText = readStringValue(evt.data.text);
+                        const deltaText = readStringValue(evt.data.delta);
+                        const accumulated =
+                          evt.data.replace === true && snapshotText
+                            ? snapshotText
+                            : deltaText
+                              ? `${commentaryTextByItem.get(commentaryItemId) ?? ""}${deltaText}`
+                              : (snapshotText ?? "");
+                        commentaryTextByItem.set(commentaryItemId, accumulated);
+                        const commentaryText = accumulated.replace(/\s+/g, " ").trim();
+                        if (commentaryText) {
+                          await params.opts?.onItemEvent?.({
+                            itemId: commentaryItemId || undefined,
+                            kind: "preamble",
+                            title: "Preamble",
+                            phase: "update",
+                            progressText: commentaryText,
+                          });
+                        }
                       }
                       if (
                         evt.stream === "item" &&
@@ -2860,7 +2897,8 @@ export async function runAgentTurnWithFallback(params: {
                           }
                         }
                       }
-                    },
+                      };
+                    })(),
                     // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
                     // even when regular block streaming is disabled. The handler sends directly
                     // via opts.onBlockReply when the pipeline isn't available.
