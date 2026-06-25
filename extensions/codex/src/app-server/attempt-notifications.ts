@@ -63,6 +63,27 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
+export function updateActiveCompletionBlockerItemIds(
+  notification: CodexServerNotification,
+  activeItemIds: Set<string>,
+): void {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return;
+  }
+  const itemId = readNotificationItemId(notification);
+  if (!itemId) {
+    return;
+  }
+  if (notification.method === "item/completed") {
+    activeItemIds.delete(itemId);
+    return;
+  }
+  const item = readCodexNotificationItem(notification.params);
+  if (item && codexExecutionToolName(item)) {
+    activeItemIds.add(itemId);
+  }
+}
+
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
