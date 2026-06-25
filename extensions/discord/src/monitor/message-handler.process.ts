@@ -597,8 +597,8 @@ async function processDiscordMessageInner(
   // Per-line "> " quoting (not ">>> ") so the blockquote survives message
   // chunking. Blank lines are dropped: Discord renders a quoted empty line as
   // a bare ">" row.
-  const formatDiscordReasoningQuote = (text: string): string | undefined => {
-    const lines = text
+  const formatDiscordReasoningQuote = (quoteText: string): string | undefined => {
+    const lines = quoteText
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
@@ -618,8 +618,8 @@ async function processDiscordMessageInner(
   // for id-less notes count each new text so re-renders do not inflate the tally.
   const seenCommentaryIds = new Set<string>();
   let lastCommentaryNoteText = "";
-  const noteWindowCommentary = (itemId?: string, text?: string) => {
-    const trimmed = text?.trim();
+  const noteWindowCommentary = (itemId?: string, noteText?: string) => {
+    const trimmed = noteText?.trim();
     if (!trimmed) {
       return;
     }
@@ -734,8 +734,8 @@ async function processDiscordMessageInner(
       });
       const replies = (chunks.length ? chunks : [body])
         .map((chunk) => formatDiscordReasoningQuote(chunk))
-        .filter((text): text is string => Boolean(text))
-        .map((text) => ({ ...payload, text, isReasoning: undefined }));
+        .filter((quote): quote is string => Boolean(quote))
+        .map((quote) => Object.assign({}, payload, { text: quote, isReasoning: undefined }));
       if (!replies.length) {
         return { visibleReplySent: false };
       }

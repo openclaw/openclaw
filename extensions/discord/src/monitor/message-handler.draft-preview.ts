@@ -5,6 +5,7 @@ import {
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressThinking,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -91,6 +92,12 @@ export function createDiscordDraftPreviewController(params: {
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
+    // Discord renders the lane markers and owns the (config-gated, default-off)
+    // window-thinking gate; the shared compositor stays neutral so other
+    // channels keep their existing window render until they adopt this feature.
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    reasoningGate: resolveChannelStreamingProgressThinking(params.discordConfig),
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;

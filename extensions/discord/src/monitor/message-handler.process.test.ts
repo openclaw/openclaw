@@ -2132,7 +2132,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
       },
     });
 
@@ -2160,7 +2160,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
       },
     });
 
@@ -3291,6 +3291,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3323,6 +3324,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3353,6 +3355,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3380,6 +3383,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3407,6 +3411,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3436,6 +3441,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3465,6 +3471,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3492,6 +3499,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3520,6 +3528,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3548,6 +3557,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3576,6 +3586,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },
@@ -3606,6 +3617,7 @@ describe("processDiscordMessage draft streaming", () => {
           progress: {
             label: "Clawing...",
             maxLineChars: 36,
+            thinking: true,
           },
         },
       },
@@ -3642,6 +3654,7 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
+            thinking: true,
           },
         },
       },

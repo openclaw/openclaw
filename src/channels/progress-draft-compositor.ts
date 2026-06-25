@@ -14,7 +14,6 @@ import {
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingProgressCommentary,
-  resolveChannelStreamingProgressThinking,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type StreamingCompatEntry,
@@ -46,13 +45,30 @@ export function createChannelProgressDraftCompositor(params: {
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
+  /**
+   * Marker prepended to each window reasoning (🧠) line. The lane marker is a
+   * per-channel presentation choice, so the shared compositor stays neutral
+   * (default ""); Discord opts in with "🧠 ". Keeps other channels' render
+   * untouched until they adopt their own markers.
+   */
+  reasoningLinePrefix?: string;
+  /** Marker prepended to each window commentary (💬) line. Default ""; Discord opts in with "💬 ". */
+  commentaryLinePrefix?: string;
+  /**
+   * Whether the window reasoning (🧠) lane may render. This gate is a new
+   * Discord-scoped feature, so the shared compositor stays neutral (default
+   * true = render, matching pre-feature behavior on every other channel);
+   * Discord passes its config-resolved value (default off) to gate it.
+   */
+  reasoningGate?: boolean;
 }) {
+  const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
+  const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
   const previewToolProgressEnabled =
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
-  const thinkingProgressEnabled =
-    params.active && resolveChannelStreamingProgressThinking(params.entry);
+  const thinkingProgressEnabled = params.active && (params.reasoningGate ?? true);
   const suppressDefaultToolProgressMessages =
     params.active &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
@@ -290,7 +306,7 @@ export function createChannelProgressDraftCompositor(params: {
       if (!compactLine) {
         return false;
       }
-      const displayLine = `🧠 ${compactLine}`;
+      const displayLine = `${reasoningLinePrefix}${compactLine}`;
       // Reasoning streams usually arrive as deltas. Replace the previous
       // reasoning line so the draft stays compact instead of appending noise.
       const priorIndex =
@@ -331,9 +347,9 @@ export function createChannelProgressDraftCompositor(params: {
       }
       const line: ChannelProgressDraftLine = {
         id: lineId,
-        // 💬 marks the narration lane in the window, matching 🧠 (thinking)
-        // and 🛠️ (tools) so all three lanes read consistently.
-        text: `💬 ${normalized}`,
+        // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
+        // presentation choice supplied via commentaryLinePrefix; default none.
+        text: `${commentaryLinePrefix}${normalized}`,
         kind: "item",
         label: "Commentary",
         prefix: false,

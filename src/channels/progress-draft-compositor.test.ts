@@ -26,11 +26,12 @@ describe("createChannelProgressDraftCompositor", () => {
     const hiddenUpdate = vi.fn();
     const hidden = createChannelProgressDraftCompositor({
       entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", thinking: false } },
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningGate: false,
       update: hiddenUpdate,
     });
     await hidden.pushToolProgress("🛠️ Exec", { startImmediately: true });
@@ -41,11 +42,15 @@ describe("createChannelProgressDraftCompositor", () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", toolProgress: false } },
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
       },
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
@@ -100,6 +105,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 
@@ -119,6 +125,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      commentaryLinePrefix: "💬 ",
       update,
     });
 
@@ -131,10 +138,13 @@ describe("createChannelProgressDraftCompositor", () => {
   it("interleaves reasoning bursts with tool calls in arrival order", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } } },
+      entry: {
+        streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
+      },
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 
@@ -160,6 +170,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 
@@ -195,6 +206,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 
@@ -214,6 +226,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 
@@ -235,6 +248,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
+      reasoningLinePrefix: "🧠 ",
       update,
     });
 

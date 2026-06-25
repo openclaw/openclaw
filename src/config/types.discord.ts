@@ -1,6 +1,7 @@
 // Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -22,7 +23,20 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
+/**
+ * Discord progress config. `thinking` (render the 🧠 reasoning lane in the
+ * progress draft) is currently enforced only on Discord, so the key is scoped
+ * here rather than in the shared base — it intentionally does NOT validate for
+ * channels that don't yet enforce it. Widen to the base schema when other
+ * channels adopt reasoning-progress enforcement.
+ */
+export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Include assistant reasoning/thinking text in the progress draft. Default: false. */
+  thinking?: boolean;
+};
+export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: DiscordStreamingProgressConfig;
+};
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;

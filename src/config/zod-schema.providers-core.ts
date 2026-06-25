@@ -103,6 +103,14 @@ const ChannelStreamingProgressSchema = z
     commentary: z.boolean().optional(),
   })
   .strict();
+// `thinking` (render the 🧠 reasoning lane in the progress draft) is currently
+// enforced only on Discord, so it lives on a Discord-scoped schema rather than
+// the shared base — it must not validate for channels that don't yet enforce
+// it (avoids a misleading/unsafe config contract on sibling channels). Widen to
+// the base when other channels adopt reasoning-progress enforcement.
+const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  thinking: z.boolean().optional(),
+}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -125,7 +133,9 @@ const ChannelPreviewStreamingConfigSchema = z
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.optional(),
 }).strict();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  progress: DiscordStreamingProgressSchema.optional(),
+}).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),

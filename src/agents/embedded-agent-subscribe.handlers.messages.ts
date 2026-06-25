@@ -654,7 +654,11 @@ export function handleMessageUpdate(
     // Prefer full partial-message thinking when available; fall back to event payloads.
     const partialThinking = extractAssistantThinking(msg);
     ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
-    if (evtType === "thinking_end") {
+    if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
+      // Mirror the open gate above: when message-tool-only delivery has made the
+      // reasoning lane private, do not force-open it just to close it — that
+      // would fire the lane's end hook (onReasoningEnd) for a lane that never
+      // rendered, leaking the boundary signal.
       if (!ctx.state.reasoningStreamOpen) {
         openReasoningStream(ctx);
       }

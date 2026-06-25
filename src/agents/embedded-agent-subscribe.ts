@@ -1197,7 +1197,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       },
     });
 
-    if (state.streamReasoning && params.onReasoningStream) {
+    // Message-tool-only delivery makes later reasoning private: once the
+    // user-facing reply has gone out via the message tool, the channel shows
+    // only what was explicitly sent, so trailing reasoning must stay out of the
+    // render hook — uniformly, whether the thinking block rode in on a tool call
+    // or arrived on its own. It still reaches the bus/archive above.
+    if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
       void params.onReasoningStream({
         text: trimmed,
       });
