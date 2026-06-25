@@ -109,7 +109,12 @@ const ChannelStreamingProgressSchema = z
 // it (avoids a misleading/unsafe config contract on sibling channels). Widen to
 // the base when other channels adopt reasoning-progress enforcement.
 const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  thinking: z.boolean().optional(),
+  thinking: z
+    .boolean()
+    .optional()
+    .describe(
+      "Render the assistant's reasoning (🧠 thinking) lane in the Discord progress draft, interleaved with tool calls. Default: false (operator opt-in). Discord-only; reasoning is omitted from the progress draft on channels that do not enforce this key.",
+    ),
 }).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
