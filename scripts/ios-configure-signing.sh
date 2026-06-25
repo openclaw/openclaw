@@ -68,6 +68,7 @@ fi
 bundle_base="$(normalize_bundle_id "${bundle_base}")"
 
 share_bundle_id="${OPENCLAW_IOS_SHARE_BUNDLE_ID:-${bundle_base}.share}"
+app_group_id="${OPENCLAW_IOS_APP_GROUP_ID:-group.${bundle_base}.shared}"
 activity_widget_bundle_id="${OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID:-${bundle_base}.activitywidget}"
 watch_app_bundle_id="${OPENCLAW_IOS_WATCH_APP_BUNDLE_ID:-${bundle_base}.watchkitapp}"
 
@@ -86,7 +87,8 @@ cat >"${tmp_file}" <<EOF
 // Override values with env vars if needed:
 // IOS_DEVELOPMENT_TEAM / IOS_PREFERRED_TEAM_ID
 // OPENCLAW_IOS_APP_BUNDLE_ID / OPENCLAW_IOS_BUNDLE_ID_BASE
-// OPENCLAW_IOS_SHARE_BUNDLE_ID / OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID
+// OPENCLAW_IOS_SHARE_BUNDLE_ID / OPENCLAW_IOS_APP_GROUP_ID
+// OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID
 // OPENCLAW_IOS_WATCH_APP_BUNDLE_ID
 // OPENCLAW_IOS_CODE_SIGN_STYLE / OPENCLAW_IOS_CODE_SIGN_IDENTITY
 // OPENCLAW_IOS_APNS_ENTITLEMENT_ENVIRONMENT / OPENCLAW_IOS_APP_PROFILE
@@ -94,11 +96,13 @@ cat >"${tmp_file}" <<EOF
 // OPENCLAW_IOS_WATCH_APP_PROFILE
 OPENCLAW_CODE_SIGN_STYLE = ${code_sign_style}
 OPENCLAW_CODE_SIGN_IDENTITY = ${code_sign_identity}
+OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClaw.entitlements
 OPENCLAW_DEVELOPMENT_TEAM = ${team_id}
 // Keep legacy key for compatibility with older signing config paths.
 OPENCLAW_IOS_SELECTED_TEAM = ${team_id}
 OPENCLAW_APP_BUNDLE_ID = ${bundle_base}
 OPENCLAW_SHARE_BUNDLE_ID = ${share_bundle_id}
+OPENCLAW_APP_GROUP_ID = ${app_group_id}
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ${activity_widget_bundle_id}
 OPENCLAW_WATCH_APP_BUNDLE_ID = ${watch_app_bundle_id}
 OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = ${apns_entitlement_environment}

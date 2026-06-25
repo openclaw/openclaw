@@ -332,7 +332,7 @@ describe("configureGatewayForSetup", () => {
       ...createQuickstartGateway("token"),
       token: {
         source: "exec" as const,
-        provider: "gatewayTokens",
+        provider: "gatewaytokens",
         id: "gateway/auth/token",
       },
     };
@@ -348,7 +348,7 @@ describe("configureGatewayForSetup", () => {
       nextConfig: {
         secrets: {
           providers: {
-            gatewayTokens: {
+            gatewaytokens: {
               source: "exec",
               command: process.execPath,
               allowInsecurePath: true,

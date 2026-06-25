@@ -1146,7 +1146,7 @@ private enum WatchNativeTextInput {
         suggestions: [String],
         onSubmit: @escaping (String) -> Void)
     {
-        WKExtension.shared().visibleInterfaceController?.presentTextInputController(
+        WKApplication.shared().visibleInterfaceController?.presentTextInputController(
             withSuggestions: suggestions,
             allowedInputMode: .allowEmoji)
         { results in

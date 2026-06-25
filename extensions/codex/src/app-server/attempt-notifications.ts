@@ -189,7 +189,23 @@ export function isRawToolOutputCompletionNotification(
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return item ? readString(item, "type") === "custom_tool_call_output" : false;
+  switch (item ? readString(item, "type") : undefined) {
+    case "custom_tool_call_output":
+    case "function_call_output":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isRawFunctionToolOutputCompletionNotification(
+  notification: CodexServerNotification,
+): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "function_call_output" : false;
 }
 
 /** Returns true for progress on Codex-native tool item types. */

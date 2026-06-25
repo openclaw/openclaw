@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify a substantive private final warns without outbound delivery.
     config:
+      requiredProviderMode: mock-openai
       conversationId: qa-stranded-dm
       promptSnippet: qa private final reply warning check
       prompt: "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool."
@@ -37,6 +38,9 @@ flow:
   steps:
     - name: warns for substantive private final text when the model omits the message tool
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
         - call: waitForGatewayHealthy
           args:
             - ref: env

@@ -160,7 +160,7 @@ function getTokenForOperation(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
-  const userToken = normalizeOptionalString(account.config.userToken);
+  const userToken = normalizeOptionalString(account.userToken);
   const botToken = normalizeOptionalString(account.botToken);
   const allowUserWrites = account.config.userTokenReadOnly === false;
   if (operation === "read") {
@@ -414,7 +414,7 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
-    normalizeOptionalString(account.config.userToken) ?? normalizeOptionalString(account.botToken),
+    normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
   resolveNames: async ({ token, entries }) =>
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
@@ -646,7 +646,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (kind === "group") {
           return resolveTargetsWithOptionalToken({
             token:
-              normalizeOptionalString(account.config.userToken) ??
+              normalizeOptionalString(account.userToken) ??
               normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
@@ -661,8 +661,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.config.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>
@@ -713,7 +712,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const lines = [];
         const details: Record<string, unknown> = {};
         const botToken = account.botToken?.trim();
-        const userToken = account.config.userToken?.trim();
+        const userToken = account.userToken?.trim();
         const { fetchSlackScopes } = await loadSlackScopesModule();
         const botScopes: SlackScopesResultShape = botToken
           ? await fetchSlackScopes(botToken, timeoutMs)
@@ -729,16 +728,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const configured =
-          (mode === "http"
+        const credentialConfigured =
+          mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                 "botTokenStatus",
                 "signingSecretStatus",
               ])
-            : resolveConfiguredFromRequiredCredentialStatuses(account, [
-                "botTokenStatus",
-                "appTokenStatus",
-              ])) ?? isSlackPluginAccountConfigured(account);
+            : mode === "socket"
+              ? resolveConfiguredFromRequiredCredentialStatuses(account, [
+                  "botTokenStatus",
+                  "appTokenStatus",
+                ])
+              : undefined;
+        const configured = credentialConfigured ?? isSlackPluginAccountConfigured(account);
         return {
           accountId: account.accountId,
           name: account.name,

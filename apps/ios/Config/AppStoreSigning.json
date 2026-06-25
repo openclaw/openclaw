@@ -3,6 +3,7 @@
   "signingRepo": "git@github.com:openclaw/apps-signing.git",
   "signingBranch": "main",
   "profileType": "appstore",
+  "appGroupId": "group.ai.openclawfoundation.app.shared",
   "targets": [
     {
       "target": "OpenClaw",
@@ -11,7 +12,8 @@
       "platform": "IOS",
       "profileKey": "OPENCLAW_APP_PROFILE",
       "profileName": "OpenClaw App Store ai.openclawfoundation.app",
-      "capabilities": ["PUSH_NOTIFICATIONS"]
+      "capabilities": ["PUSH_NOTIFICATIONS", "APP_GROUPS", "APP_ATTEST"],
+      "appGroups": ["group.ai.openclawfoundation.app.shared"]
     },
     {
       "target": "OpenClawShareExtension",
@@ -20,7 +22,8 @@
       "platform": "IOS",
       "profileKey": "OPENCLAW_SHARE_PROFILE",
       "profileName": "OpenClaw App Store ai.openclawfoundation.app.share",
-      "capabilities": []
+      "capabilities": ["APP_GROUPS"],
+      "appGroups": ["group.ai.openclawfoundation.app.shared"]
     },
     {
       "target": "OpenClawActivityWidget",

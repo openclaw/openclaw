@@ -191,7 +191,6 @@ export async function markRestartAbortedMainSessions(params: {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key: sessionKey,
-          scanLegacyKeys: true,
         });
         storePaths.add(path.resolve(target.storePath));
         for (const storeKey of target.storeKeys) {
@@ -230,7 +229,8 @@ export async function markRestartAbortedMainSessions(params: {
               (entry.status === "running" ||
                 run.observedAt === undefined ||
                 normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-                entry.updatedAt < run.observedAt) &&
+                (entry.updatedAt < run.observedAt &&
+                  run.lifecycleGeneration !== currentLifecycleGeneration)) &&
               params.isActiveRun?.(run) !== false,
           );
           if (
@@ -710,7 +710,6 @@ function isRoutableRecoveryStore(params: {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.sessionKey,
-      scanLegacyKeys: true,
     });
     return path.resolve(target.storePath) === path.resolve(params.storePath);
   } catch (err) {
@@ -805,8 +804,9 @@ async function recoverStore(params: {
       messages = await readSessionMessagesAsync(
         {
           agentId: resolveAgentIdFromSessionKey(sessionKey),
-          sessionFile: entry.sessionFile,
+          sessionEntry: entry,
           sessionId: entry.sessionId,
+          sessionKey,
           storePath: params.storePath,
         },
         {

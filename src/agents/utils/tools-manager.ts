@@ -21,6 +21,10 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../../infra/windows-install-roots.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -97,9 +101,12 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe" });
-    // Check for ENOENT error (command not found)
-    return result.error === undefined || result.error === null;
+    const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: 5_000 });
+    // Require a clean exit, not just a successful spawn. An installed-but-broken
+    // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
+    // spawns fine but exits non-zero; without the status check it would be
+    // misreported as available and block ensureTool's auto-install fallback.
+    return !result.error && result.status === 0;
   } catch {
     return false;
   }
@@ -235,14 +242,7 @@ function extractTarGzArchive(archivePath: string, extractDir: string, assetName:
 }
 
 function getWindowsTarCommand(): string {
-  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (systemRoot) {
-    const systemTar = join(systemRoot, "System32", "tar.exe");
-    if (existsSync(systemTar)) {
-      return systemTar;
-    }
-  }
-  return "tar.exe";
+  return getWindowsSystem32ExePath("tar.exe");
 }
 
 function extractZipArchive(archivePath: string, extractDir: string, assetName: string): void {
@@ -264,7 +264,7 @@ function extractZipArchive(archivePath: string, extractDir: string, assetName: s
 
     const script =
       "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-    const powershellFailure = runExtractionCommand("powershell.exe", [
+    const powershellFailure = runExtractionCommand(getWindowsPowerShellExePath(), [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",

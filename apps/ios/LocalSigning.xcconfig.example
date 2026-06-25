@@ -7,6 +7,7 @@ OPENCLAW_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
 OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
+OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
 

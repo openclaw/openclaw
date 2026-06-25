@@ -75,9 +75,88 @@ export type JidToE164Options = {
   logMissing?: boolean;
 };
 
-type LidLookup = {
+export type LidLookup = {
+  getLIDForPN?: (jid: string) => Promise<string | null>;
   getPNForLID?: (jid: string) => Promise<string | null>;
 };
+
+function addUniqueString(target: string[], value: string | null | undefined): void {
+  const normalized = value?.trim();
+  if (normalized && !target.includes(normalized)) {
+    target.push(normalized);
+  }
+}
+
+async function tryLookupMappedJid(
+  lookup: (() => Promise<string | null> | undefined) | undefined,
+): Promise<string | null> {
+  if (!lookup) {
+    return null;
+  }
+  try {
+    return (await lookup()) ?? null;
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`LID mapping lookup failed: ${String(err)}`);
+    }
+    return null;
+  }
+}
+
+const DIRECT_PN_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/i;
+const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
+
+function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
+  addUniqueString(target, jid);
+  const pnMatch = jid?.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    addUniqueString(target, `${pnMatch[1]}@${pnMatch[2]}`);
+    return;
+  }
+  const lidMatch = jid?.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    addUniqueString(target, `${lidMatch[1]}@${lidMatch[2]}`);
+  }
+}
+
+export async function resolveEquivalentWhatsAppDirectChatJids(
+  jid: string | null | undefined,
+  opts?: JidToE164Options & { lidLookup?: LidLookup },
+): Promise<string[]> {
+  const normalized = jid?.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  addEquivalentDirectChatCandidate(candidates, normalized);
+  const pnMatch = normalized.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedLid);
+
+    const mappedLocalLid = readLidForwardMapping({ phoneDigits: pnMatch[1], opts });
+    const localLidDomain = pnMatch[2].toLowerCase() === "hosted" ? "hosted.lid" : "lid";
+    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
+    return candidates;
+  }
+
+  const lidMatch = normalized.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedPn);
+
+    const e164 = jidToE164(normalized, { ...opts, logMissing: false });
+    const localPnJid =
+      e164 && lidMatch[2].toLowerCase() === "hosted.lid"
+        ? `${e164.replace(/\D/g, "")}@hosted`
+        : e164
+          ? toWhatsappJid(e164)
+          : null;
+    addUniqueString(candidates, localPnJid);
+  }
+  return candidates;
+}
 
 function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   const dirs = new Set<string>();

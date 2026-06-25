@@ -403,6 +403,63 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
   });
 
+  it("keeps a confirmed send successful when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "broken redactor",
+      rawHandler: () => undefined,
+      handler: () => {
+        throw new Error("redaction failed");
+      },
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const sessionManager = SessionManager.inMemory();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "message",
+        toolCallId: "call-message",
+        input: { action: "send", target: "C123" },
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+          toolSend: { to: "channel:C123" },
+        },
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
+    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
+      details: { toolSend: { to: "channel:C123" } },
+    });
+  });
+
   it("marks status-timeout tool results as model-visible failures", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 

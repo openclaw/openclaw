@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -33,8 +34,34 @@ function loadSlackMessagePipeline(): Promise<SlackMessagePipeline> {
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
+  opts: {
+    source: "message" | "app_mention";
+    wasMentioned?: boolean;
+    relayIdentity?: SlackSendIdentity;
+    /** Wait until any inbound debounce flush and dispatch has completed. */
+    awaitDispatch?: boolean;
+  },
 ) => Promise<void>;
+
+type SlackDispatchCompletion = {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
+type QueuedSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
+  dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
+};
+
+function createSlackDispatchCompletion(): SlackDispatchCompletion {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
 
 const APP_MENTION_RETRY_TTL_MS = 60_000;
 
@@ -71,103 +98,123 @@ export function createSlackMessageHandler(params: {
   const { ctx, account, trackEvent } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
-    opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+    opts: QueuedSlackMessageOptions;
   }>({
     cfg: ctx.cfg,
     channel: "slack",
     buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
     shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
-      const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId);
-      const topLevelConversationKey = buildTopLevelSlackConversationKey(
-        last.message,
-        ctx.accountId,
-      );
-      if (flushedKey && topLevelConversationKey) {
-        const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
-        if (pendingKeys) {
-          pendingKeys.delete(flushedKey);
-          if (pendingKeys.size === 0) {
-            pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
-          }
-        }
-      }
-      const combinedText =
-        entries.length === 1
-          ? (last.message.text ?? "")
-          : entries
-              .map((entry) => entry.message.text ?? "")
-              .filter(Boolean)
-              .join("\n");
-      const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
-      const syntheticMessage: SlackMessageEvent = {
-        ...last.message,
-        text: combinedText,
-      };
-      const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
+      const completions = entries
+        .map((entry) => entry.opts.dispatchCompletion)
+        .filter((completion) => completion !== undefined);
       try {
-        const { prepareSlackMessage, dispatchPreparedSlackMessage } =
-          await loadSlackMessagePipeline();
-        const prepared = await prepareSlackMessage({
-          ctx,
-          account,
-          message: syntheticMessage,
-          opts: {
-            ...last.opts,
-            wasMentioned: combinedMentioned || last.opts.wasMentioned,
-          },
-        });
-        if (!prepared) {
-          return;
-        }
-        if (seenMessageKey) {
-          pruneAppMentionRetryKeys(Date.now());
-          if (last.opts.source === "app_mention") {
-            // If app_mention wins the race and dispatches first, drop the later message dispatch.
-            rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
-          } else if (
-            last.opts.source === "message" &&
-            appMentionDispatchedKeys.has(seenMessageKey)
-          ) {
-            appMentionDispatchedKeys.delete(seenMessageKey);
-            appMentionRetryKeys.delete(seenMessageKey);
+        await (async () => {
+          const last = entries.at(-1);
+          if (!last) {
             return;
           }
-          appMentionRetryKeys.delete(seenMessageKey);
-        }
-        if (entries.length > 1) {
-          const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
-          if (ids.length > 0) {
-            prepared.ctxPayload.MessageSids = ids;
-            prepared.ctxPayload.MessageSidFirst = ids[0];
-            prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
+          const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId);
+          const topLevelConversationKey = buildTopLevelSlackConversationKey(
+            last.message,
+            ctx.accountId,
+          );
+          if (flushedKey && topLevelConversationKey) {
+            const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
+            if (pendingKeys) {
+              pendingKeys.delete(flushedKey);
+              if (pendingKeys.size === 0) {
+                pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
+              }
+            }
           }
-        }
-        try {
-          await dispatchPreparedSlackMessage(prepared);
-          await recordSlackInboundMessageDeliveries({
-            accountId: ctx.accountId,
-            messages: entries.map((entry) => entry.message),
-          });
-        } catch (error) {
-          if (!(error instanceof SlackRetryableInboundError)) {
-            await recordSlackInboundMessageDeliveries({
-              accountId: ctx.accountId,
-              messages: entries.map((entry) => entry.message),
+          const combinedText =
+            entries.length === 1
+              ? (last.message.text ?? "")
+              : entries
+                  .map((entry) => entry.message.text ?? "")
+                  .filter(Boolean)
+                  .join("\n");
+          const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
+          const syntheticMessage: SlackMessageEvent = {
+            ...last.message,
+            text: combinedText,
+          };
+          const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
+          try {
+            const { prepareSlackMessage, dispatchPreparedSlackMessage } =
+              await loadSlackMessagePipeline();
+            const {
+              dispatchCompletion: _completion,
+              awaitDispatch: _awaitDispatch,
+              ...lastOpts
+            } = last.opts;
+            const prepared = await prepareSlackMessage({
+              ctx,
+              account,
+              message: syntheticMessage,
+              opts: {
+                ...lastOpts,
+                wasMentioned: combinedMentioned || last.opts.wasMentioned,
+              },
             });
+            if (!prepared) {
+              return;
+            }
+            if (seenMessageKey) {
+              pruneAppMentionRetryKeys(Date.now());
+              if (last.opts.source === "app_mention") {
+                // If app_mention wins the race and dispatches first, drop the later message dispatch.
+                rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
+              } else if (
+                last.opts.source === "message" &&
+                appMentionDispatchedKeys.has(seenMessageKey)
+              ) {
+                appMentionDispatchedKeys.delete(seenMessageKey);
+                appMentionRetryKeys.delete(seenMessageKey);
+                return;
+              }
+              appMentionRetryKeys.delete(seenMessageKey);
+            }
+            if (entries.length > 1) {
+              const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+              if (ids.length > 0) {
+                prepared.ctxPayload.MessageSids = ids;
+                prepared.ctxPayload.MessageSidFirst = ids[0];
+                prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
+              }
+            }
+            try {
+              await dispatchPreparedSlackMessage(prepared);
+              await recordSlackInboundMessageDeliveries({
+                accountId: ctx.accountId,
+                messages: entries.map((entry) => entry.message),
+              });
+            } catch (error) {
+              if (!(error instanceof SlackRetryableInboundError)) {
+                await recordSlackInboundMessageDeliveries({
+                  accountId: ctx.accountId,
+                  messages: entries.map((entry) => entry.message),
+                });
+              }
+              throw error;
+            }
+          } catch (error) {
+            if (error instanceof SlackRetryableInboundError) {
+              if (seenMessageKey) {
+                appMentionDispatchedKeys.delete(seenMessageKey);
+              }
+              ctx.releaseSeenMessage(last.message.channel, last.message.ts);
+            }
+            throw error;
           }
-          throw error;
+        })();
+        for (const completion of completions) {
+          completion.resolve();
         }
       } catch (error) {
-        if (error instanceof SlackRetryableInboundError) {
-          if (seenMessageKey) {
-            appMentionDispatchedKeys.delete(seenMessageKey);
-          }
-          ctx.releaseSeenMessage(last.message.channel, last.message.ts);
+        for (const completion of completions) {
+          completion.reject(error);
         }
         throw error;
       }
@@ -284,6 +331,21 @@ export function createSlackMessageHandler(params: {
       pendingKeys.add(debounceKey);
       pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
     }
-    await debouncer.enqueue({ message: resolvedMessage, opts });
+    const dispatchCompletion = opts.awaitDispatch ? createSlackDispatchCompletion() : undefined;
+    await debouncer.enqueue({
+      message: resolvedMessage,
+      opts: {
+        ...opts,
+        ...(dispatchCompletion
+          ? {
+              dispatchCompletion: {
+                resolve: dispatchCompletion.resolve,
+                reject: dispatchCompletion.reject,
+              },
+            }
+          : {}),
+      },
+    });
+    await dispatchCompletion?.promise;
   };
 }

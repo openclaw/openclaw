@@ -21,6 +21,9 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
   fi
 fi
 
+# shellcheck disable=SC1091
+source "$script_parent_dir/lib/plain-gh.sh"
+
 usage() {
   cat <<USAGE
 Usage:
@@ -48,16 +51,25 @@ USAGE
 require_cmds() {
   local missing=()
   local cmd
-  for cmd in git gh jq rg pnpm node; do
+  for cmd in git jq rg pnpm node; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
   done
+  if ! OPENCLAW_GH_BIN="$(resolve_plain_gh_bin)"; then
+    missing+=("gh")
+  else
+    export OPENCLAW_GH_BIN
+  fi
 
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing required command(s): ${missing[*]}"
     exit 1
   fi
+}
+
+gh() {
+  gh_plain "$@"
 }
 
 # shellcheck disable=SC1091

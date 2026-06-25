@@ -299,25 +299,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;
@@ -798,6 +779,7 @@ async function buildCdpRoleSnapshot(params: {
 
   const counts = new Map<string, number>();
   const refsByKey = new Map<string, string[]>();
+  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -816,7 +798,13 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(ref);
+    } else {
+      refsByKey.set(key, [ref]);
+    }
+    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
@@ -832,7 +820,7 @@ async function buildCdpRoleSnapshot(params: {
     const ref = refList[0];
     if (ref) {
       delete refs[ref]?.nth;
-      const node = tree.find((entry) => entry.ref === ref);
+      const node = nodesByRef.get(ref);
       if (node) {
         delete node.nth;
       }

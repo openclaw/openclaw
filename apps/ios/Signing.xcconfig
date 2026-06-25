@@ -6,10 +6,12 @@
 
 OPENCLAW_CODE_SIGN_STYLE = Manual
 OPENCLAW_CODE_SIGN_IDENTITY = Apple Development
+OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClaw.entitlements
 OPENCLAW_DEVELOPMENT_TEAM = FWJYW4S8P8
 
 OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
+OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = development
