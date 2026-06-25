@@ -1,5 +1,6 @@
 // Session permissions and hooks tests protect gateway access control around
 // patch/delete/compact/restore APIs plus emitted internal hook payloads.
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +16,7 @@ async function _mktemp(prefix: string): Promise<string> {
 
 afterAll(() => {
   for (const dir of _permHookTempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 import {

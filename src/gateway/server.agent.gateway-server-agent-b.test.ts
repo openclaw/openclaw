@@ -183,7 +183,11 @@ async function useTempSessionStorePath() {
 }
 
 afterAll(async () => {
-  await Promise.all(_gwSessionTempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    _gwSessionTempDirs.map((dir) =>
+      fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+    ),
+  );
 });
 
 describe("gateway server agent", () => {
