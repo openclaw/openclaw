@@ -46,7 +46,7 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
  *
  * Cross-owner extension imports are blocked by package contract guardrails.
  */
-export const reservedBundledPluginSdkEntrypoints = [] as const;
+export const reservedBundledPluginSdkEntrypoints = ["codex-mcp-projection"] as const;
 
 /**
  * Supported SDK facades backed by bundled plugins until generic contracts replace them.
