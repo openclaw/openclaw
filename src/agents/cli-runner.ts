@@ -125,7 +125,12 @@ export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
   workspaceDir?: string,
+  options?: { warmStdin?: boolean },
 ): Promise<boolean> {
+  // FIX #96564: Skip the probe entirely for warm-stdin sessions that never write native transcript
+  if (options?.warmStdin) {
+    return true;
+  }
   if (!provider || !isClaudeCliProvider(provider)) {
     return true;
   }
@@ -1044,10 +1049,17 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
         });
+        // FIX #96564: Compute warm-stdin flag BEFORE calling isCliBindingFlushed to skip the probe entirely
+        const backend = context.preparedBackend?.backend;
+        const isWarmStdin =
+          backend?.liveSession === "claude-stdio" &&
+          backend?.output === "jsonl" &&
+          backend?.input === "stdin";
         const bindingFlushOk = await isCliBindingFlushed(
           effectiveCliSessionId,
           params.provider,
           context.cwd ?? context.workspaceDir,
+          { warmStdin: isWarmStdin },
         );
         await runCliAgentEndHook(params, {
           event: {
@@ -1058,11 +1070,6 @@ export async function runPreparedCliAgent(
           ctx: hookContext,
           hookRunner,
         });
-        const backend = context.preparedBackend?.backend;
-        const isWarmStdin =
-          backend?.liveSession === "claude-stdio" &&
-          backend?.output === "jsonl" &&
-          backend?.input === "stdin";
         return buildCliRunResult({
           output,
           effectiveCliSessionId,
