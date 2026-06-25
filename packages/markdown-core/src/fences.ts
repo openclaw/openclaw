@@ -58,9 +58,14 @@ export function scanFenceSpans(
           marker,
           indent,
         };
-      } else if (open.markerChar === markerChar && markerLen >= open.markerLen) {
-        // CommonMark allows a closing fence to be longer than the opener, but
-        // it must use the same marker character to avoid crossing fence kinds.
+      } else if (
+        open.markerChar === markerChar &&
+        markerLen >= open.markerLen &&
+        match[3].trim() === ""
+      ) {
+        // CommonMark: a closing fence uses the same marker character, may be longer than the
+        // opener, and may be followed only by whitespace. A marker line carrying trailing text
+        // (e.g. "``` note") is code content, not a close, so it must not end the block.
         const end = lineEnd;
         spans.push({
           start: open.start,
