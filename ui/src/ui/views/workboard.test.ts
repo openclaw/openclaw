@@ -81,6 +81,66 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
   });
 
+  it("shows a visible Code Farm panel under WorkBoard and loads jobs", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [];
+    state.codefarmRepoInput = "/Users/me/repo";
+    const request = vi.fn(async (method: string, params: unknown) => {
+      expect(method).toBe("workboard.codefarm.list");
+      expect(params).toEqual({ repo: "/Users/me/repo" });
+      return {
+        schemaVersion: 1,
+        jobs: [
+          {
+            id: "cf_20260625_001",
+            runtime: "codex-cli",
+            observedOrManaged: "managed",
+            cwd: "/Users/me/repo",
+            worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+            taskIntent: "Run focused tests",
+            status: "running",
+            branch: "codefarm/cf_20260625_001",
+            nextAction: "observe",
+          },
+        ],
+      };
+    });
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    } satisfies WorkboardRenderProps;
+
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-codefarm-panel")?.textContent).toContain(
+      "Code Farm",
+    );
+    const repoInput = container.querySelector<HTMLInputElement>(".workboard-codefarm-panel__repo");
+    expect(repoInput?.value).toBe("/Users/me/repo");
+
+    container
+      .querySelector<HTMLButtonElement>(".workboard-codefarm-panel__load")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    renderInto(container, props);
+
+    expect(request).toHaveBeenCalledWith("workboard.codefarm.list", { repo: "/Users/me/repo" });
+    expect(container.querySelector(".workboard-codefarm-panel")?.textContent).toContain(
+      "cf_20260625_001",
+    );
+    expect(container.querySelector(".workboard-codefarm-panel")?.textContent).toContain("running");
+  });
+
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
     const host = {};
     const state = getWorkboardState(host);

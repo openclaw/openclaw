@@ -28,7 +28,12 @@ export type CodefarmObserveParams = {
   lines: number;
 };
 
+export type CodefarmListParams = {
+  repo: string;
+};
+
 export type CodefarmObserveRunner = (params: CodefarmObserveParams) => Promise<unknown>;
+export type CodefarmListRunner = (params: CodefarmListParams) => Promise<unknown>;
 
 function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, {
@@ -96,6 +101,34 @@ function readCodefarmObserveParams(params: Record<string, unknown>): CodefarmObs
   };
 }
 
+function readCodefarmListParams(params: Record<string, unknown>): CodefarmListParams {
+  const repo = typeof params.repo === "string" ? params.repo.trim() : "";
+  if (!repo) {
+    throw new Error("repo is required.");
+  }
+  if (repo.includes("\0") || !isAbsoluteRepoPath(repo)) {
+    throw new Error("repo must be an absolute local path.");
+  }
+  return { repo };
+}
+
+function parseCodefarmJsonOutput(stdout: string | Buffer, emptyMessage: string): unknown {
+  const output = typeof stdout === "string" ? stdout.trim() : Buffer.from(stdout).toString().trim();
+  if (!output) {
+    throw new Error(emptyMessage);
+  }
+  return JSON.parse(output);
+}
+
+export async function listCodefarmJobsWithCli(params: CodefarmListParams): Promise<unknown> {
+  const bin = process.env.OPENCLAW_CODEFARM_BIN?.trim() || "codefarm";
+  const { stdout } = await execFileAsync(bin, ["list", "--repo", params.repo, "--json"], {
+    timeout: CODEFARM_OBSERVE_TIMEOUT_MS,
+    maxBuffer: CODEFARM_OBSERVE_MAX_BUFFER,
+  });
+  return parseCodefarmJsonOutput(stdout, "codefarm list returned no JSON output.");
+}
+
 export async function observeCodefarmJobWithCli(params: CodefarmObserveParams): Promise<unknown> {
   const bin = process.env.OPENCLAW_CODEFARM_BIN?.trim() || "codefarm";
   const args = [
@@ -111,11 +144,7 @@ export async function observeCodefarmJobWithCli(params: CodefarmObserveParams): 
     timeout: CODEFARM_OBSERVE_TIMEOUT_MS,
     maxBuffer: CODEFARM_OBSERVE_MAX_BUFFER,
   });
-  const output = typeof stdout === "string" ? stdout.trim() : Buffer.from(stdout).toString().trim();
-  if (!output) {
-    throw new Error("codefarm observe returned no JSON output.");
-  }
-  return JSON.parse(output);
+  return parseCodefarmJsonOutput(stdout, "codefarm observe returned no JSON output.");
 }
 
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
@@ -145,10 +174,12 @@ function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagno
 export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
+  listCodefarm?: CodefarmListRunner;
   observeCodefarm?: CodefarmObserveRunner;
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const listCodefarm = params.listCodefarm ?? listCodefarmJobsWithCli;
   const observeCodefarm = params.observeCodefarm ?? observeCodefarmJobWithCli;
 
   api.registerGatewayMethod(
@@ -769,6 +800,18 @@ export function registerWorkboardGatewayMethods(params: {
       try {
         const exported = await store.exportCards();
         respond(true, { ...exported, cards: exported.cards.map(redactClaimToken) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.codefarm.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await listCodefarm(readCodefarmListParams(requestParams)));
       } catch (error) {
         respondError(respond, error);
       }

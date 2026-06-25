@@ -367,11 +367,36 @@ export type WorkboardCodefarmObservation = {
   };
 };
 
+export type WorkboardCodefarmJobSummary = {
+  id: string;
+  status: string;
+  runtime?: string;
+  observedOrManaged?: string;
+  cwd?: string;
+  worktree?: string;
+  taskIntent?: string;
+  branch?: string;
+  nextAction?: string;
+};
+
 export type WorkboardCodefarmViewerState = {
   ref: WorkboardCodefarmRef | null;
   observation: WorkboardCodefarmObservation | null;
   loading: boolean;
   error: string | null;
+  updatedAt?: number;
+};
+
+export type WorkboardCodefarmPanelState = {
+  loading: boolean;
+  loadAttempted: boolean;
+  error: string | null;
+  repo: string;
+  jobs: WorkboardCodefarmJobSummary[];
+  selectedJobId: string | null;
+  observation: WorkboardCodefarmObservation | null;
+  observing: boolean;
+  observeError: string | null;
   updatedAt?: number;
 };
 
@@ -406,6 +431,8 @@ export type WorkboardUiState = {
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
   codefarmByCardId: Map<string, WorkboardCodefarmViewerState>;
+  codefarmRepoInput: string;
+  codefarmPanel: WorkboardCodefarmPanelState;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   query: string;
   priorityFilter: "all" | WorkboardPriority;
@@ -447,6 +474,20 @@ const CODEFARM_JOB_ID_RE = /\bcf_\d{8}_\d{3,}\b/;
 const CODEFARM_OBSERVE_DEFAULT_LINES = 200;
 const CODEFARM_OBSERVE_MAX_LINES = 1000;
 
+function createDefaultCodefarmPanelState(): WorkboardCodefarmPanelState {
+  return {
+    loading: false,
+    loadAttempted: false,
+    error: null,
+    repo: "",
+    jobs: [],
+    selectedJobId: null,
+    observation: null,
+    observing: false,
+    observeError: null,
+  };
+}
+
 function createDefaultState(): WorkboardUiState {
   return {
     loading: false,
@@ -457,6 +498,8 @@ function createDefaultState(): WorkboardUiState {
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
     codefarmByCardId: new Map(),
+    codefarmRepoInput: "",
+    codefarmPanel: createDefaultCodefarmPanelState(),
     lastDispatchSummary: null,
     query: "",
     priorityFilter: "all",
@@ -744,6 +787,17 @@ export function findWorkboardCodefarmRef(card: WorkboardCard): WorkboardCodefarm
     }
   }
   return null;
+}
+
+export function findWorkboardCodefarmRepos(cards: readonly WorkboardCard[]): string[] {
+  const repos: string[] = [];
+  for (const card of cards) {
+    const ref = findWorkboardCodefarmRef(card);
+    if (ref && !repos.includes(ref.repo)) {
+      repos.push(ref.repo);
+    }
+  }
+  return repos;
 }
 
 function normalizeWorkerProtocolState(
@@ -1346,6 +1400,135 @@ function normalizeCodefarmObservation(
   };
 }
 
+function normalizeCodefarmJobSummary(value: unknown): WorkboardCodefarmJobSummary | null {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id.trim()) {
+    return null;
+  }
+  return {
+    id: value.id.trim(),
+    status:
+      typeof value.status === "string" && value.status.trim() ? value.status.trim() : "unknown",
+    ...(typeof value.runtime === "string" ? { runtime: value.runtime } : {}),
+    ...(typeof value.observedOrManaged === "string"
+      ? { observedOrManaged: value.observedOrManaged }
+      : {}),
+    ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
+    ...(typeof value.worktree === "string" ? { worktree: value.worktree } : {}),
+    ...(typeof value.taskIntent === "string" ? { taskIntent: value.taskIntent } : {}),
+    ...(typeof value.branch === "string" ? { branch: value.branch } : {}),
+    ...(typeof value.nextAction === "string" ? { nextAction: value.nextAction } : {}),
+  };
+}
+
+function normalizeCodefarmJobsPayload(payload: unknown): WorkboardCodefarmJobSummary[] {
+  if (!isRecord(payload) || !Array.isArray(payload.jobs)) {
+    return [];
+  }
+  return payload.jobs
+    .map(normalizeCodefarmJobSummary)
+    .filter((job): job is WorkboardCodefarmJobSummary => job !== null);
+}
+
+export async function loadWorkboardCodefarmJobs(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  repo?: string;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const repo = (params.repo ?? state.codefarmRepoInput).trim();
+  state.codefarmRepoInput = repo;
+  state.codefarmPanel = {
+    ...state.codefarmPanel,
+    repo,
+    loading: true,
+    loadAttempted: true,
+    error: null,
+    updatedAt: Date.now(),
+  };
+  params.requestUpdate?.();
+  try {
+    if (!repo) {
+      throw new Error("Repo path is required.");
+    }
+    if (!params.client) {
+      throw new Error("Gateway client is not connected.");
+    }
+    const payload = await params.client.request("workboard.codefarm.list", { repo });
+    const jobs = normalizeCodefarmJobsPayload(payload);
+    const selectedJobId =
+      state.codefarmPanel.selectedJobId &&
+      jobs.some((job) => job.id === state.codefarmPanel.selectedJobId)
+        ? state.codefarmPanel.selectedJobId
+        : (jobs[0]?.id ?? null);
+    state.codefarmPanel = {
+      ...state.codefarmPanel,
+      repo,
+      jobs,
+      selectedJobId,
+      loading: false,
+      error: null,
+      updatedAt: Date.now(),
+    };
+  } catch (error) {
+    state.codefarmPanel = {
+      ...state.codefarmPanel,
+      loading: false,
+      error: formatError(error),
+      updatedAt: Date.now(),
+    };
+  } finally {
+    params.requestUpdate?.();
+  }
+}
+
+export async function observeWorkboardCodefarmRef(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  ref: WorkboardCodefarmRef;
+  lines?: number;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  state.codefarmRepoInput = params.ref.repo;
+  state.codefarmPanel = {
+    ...state.codefarmPanel,
+    repo: params.ref.repo,
+    selectedJobId: params.ref.jobId,
+    observing: true,
+    observeError: null,
+    updatedAt: Date.now(),
+  };
+  params.requestUpdate?.();
+  try {
+    if (!params.client) {
+      throw new Error("Gateway client is not connected.");
+    }
+    const lines = normalizeCodefarmLineCount(params.lines);
+    const payload = await params.client.request("workboard.codefarm.observe", {
+      repo: params.ref.repo,
+      jobId: params.ref.jobId,
+      lines,
+    });
+    state.codefarmPanel = {
+      ...state.codefarmPanel,
+      observation: normalizeCodefarmObservation(payload, params.ref),
+      observing: false,
+      observeError: null,
+      updatedAt: Date.now(),
+    };
+  } catch (error) {
+    state.codefarmPanel = {
+      ...state.codefarmPanel,
+      observing: false,
+      observeError: formatError(error),
+      updatedAt: Date.now(),
+    };
+  } finally {
+    params.requestUpdate?.();
+  }
+}
+
 export async function observeWorkboardCodefarmJob(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
@@ -1525,6 +1708,9 @@ export async function loadWorkboard(params: {
       state.tasksByCardId = new Map();
       if (state.cards.length > 0) {
         applyTaskSummariesToState(state, await listWorkboardTasks(client));
+      }
+      if (!state.codefarmRepoInput.trim()) {
+        state.codefarmRepoInput = findWorkboardCodefarmRepos(state.cards)[0] ?? "";
       }
       state.loaded = true;
     } catch (error) {

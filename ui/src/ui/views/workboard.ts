@@ -12,8 +12,10 @@ import {
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
+  loadWorkboardCodefarmJobs,
   loadWorkboard,
   moveWorkboardCard,
+  observeWorkboardCodefarmRef,
   observeWorkboardCodefarmJob,
   saveWorkboardCardDraft,
   startWorkboardCard,
@@ -1390,6 +1392,122 @@ ${terminalText}</pre
   `;
 }
 
+function renderCodefarmPanel(props: WorkboardProps) {
+  const state = getWorkboardState(props.host);
+  const panel = state.codefarmPanel;
+  const repo = state.codefarmRepoInput.trim();
+  const selectedJob = panel.jobs.find((job) => job.id === panel.selectedJobId);
+  const observation = panel.observation;
+  const terminalText = observation?.terminal.lines.length
+    ? observation.terminal.lines.join("\n")
+    : t("workboard.codefarmEmpty");
+  return html`
+    <section class="workboard-codefarm-panel" aria-label=${t("workboard.codefarmPanelTitle")}>
+      <div class="workboard-codefarm-panel__header">
+        <div>
+          <h2>${t("workboard.codefarmPanelTitle")}</h2>
+          <p>${t("workboard.codefarmPanelStatus", { count: String(panel.jobs.length) })}</p>
+        </div>
+        <div class="workboard-codefarm-panel__controls">
+          <input
+            class="input workboard-codefarm-panel__repo"
+            type="text"
+            title=${t("workboard.codefarmRepoInput")}
+            placeholder=${t("workboard.codefarmRepoPlaceholder")}
+            .value=${state.codefarmRepoInput}
+            @input=${(event: InputEvent) => {
+              state.codefarmRepoInput = (event.currentTarget as HTMLInputElement).value;
+              props.onRequestUpdate?.();
+            }}
+          />
+          <button
+            class="btn workboard-codefarm-panel__load"
+            type="button"
+            ?disabled=${panel.loading || !props.connected || !props.client || !repo}
+            @click=${() =>
+              loadWorkboardCodefarmJobs({
+                host: props.host,
+                client: props.client,
+                requestUpdate: props.onRequestUpdate,
+              })}
+          >
+            ${panel.loading ? t("workboard.codefarmLoading") : t("workboard.codefarmLoadJobs")}
+          </button>
+        </div>
+      </div>
+      ${panel.error ? html`<div class="callout danger">${panel.error}</div>` : nothing}
+      ${panel.jobs.length
+        ? html`
+            <ol class="workboard-codefarm-panel__jobs">
+              ${panel.jobs.map(
+                (job) => html`
+                  <li class=${job.id === panel.selectedJobId ? "is-selected" : ""}>
+                    <div>
+                      <strong>${job.id}</strong>
+                      <span
+                        >${[job.status, job.runtime, job.branch].filter(Boolean).join(" - ")}</span
+                      >
+                      ${job.taskIntent ? html`<small>${job.taskIntent}</small>` : nothing}
+                    </div>
+                    <button
+                      class="btn"
+                      type="button"
+                      ?disabled=${panel.observing || !props.connected || !props.client}
+                      @click=${() =>
+                        observeWorkboardCodefarmRef({
+                          host: props.host,
+                          client: props.client,
+                          ref: { repo: panel.repo || repo, jobId: job.id },
+                          requestUpdate: props.onRequestUpdate,
+                        })}
+                    >
+                      ${icons.terminal}
+                      ${panel.observing && job.id === panel.selectedJobId
+                        ? t("workboard.codefarmLoading")
+                        : t("workboard.codefarmObserve")}
+                    </button>
+                  </li>
+                `,
+              )}
+            </ol>
+          `
+        : html`<p class="workboard-codefarm-panel__empty">${t("workboard.codefarmNoJobs")}</p>`}
+      ${panel.observeError
+        ? html`<div class="callout danger">${panel.observeError}</div>`
+        : nothing}
+      ${observation
+        ? html`
+            <div class="workboard-codefarm-panel__snapshot">
+              <div class="workboard-codefarm__meta">
+                <span>${t("workboard.codefarmJob", { job: observation.jobId })}</span>
+                <span title=${observation.repo}
+                  >${t("workboard.codefarmRepo", { repo: observation.repo })}</span
+                >
+                <span
+                  >${t("workboard.codefarmSource", { source: observation.terminal.source })}</span
+                >
+                ${selectedJob?.worktree
+                  ? html`<span title=${selectedJob.worktree}>${selectedJob.worktree}</span>`
+                  : nothing}
+              </div>
+              ${observation.tmux?.attachCommand
+                ? html`
+                    <div class="workboard-codefarm__attach">
+                      ${t("workboard.codefarmAttach", { command: observation.tmux.attachCommand })}
+                    </div>
+                  `
+                : nothing}
+              ${observation.tmux?.note
+                ? html`<p class="workboard-codefarm__note">${observation.tmux.note}</p>`
+                : nothing}
+              <pre class="workboard-codefarm__terminal">${terminalText}</pre>
+            </div>
+          `
+        : nothing}
+    </section>
+  `;
+}
+
 function renderCardDetailsPanel(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const card = getVisibleDetailCard(state);
@@ -2109,6 +2227,7 @@ export function renderWorkboard(props: WorkboardProps) {
               : nothing}
           </div>
         </div>
+        ${renderCodefarmPanel(props)}
         ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
         ${renderDispatchSummary(state)}
         <div class="workboard-board workboard-board--${state.layout}">

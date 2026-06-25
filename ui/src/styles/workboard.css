@@ -986,6 +986,100 @@
   font-size: 0.76rem;
 }
 
+.workboard-codefarm-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
+}
+
+.workboard-codefarm-panel__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.workboard-codefarm-panel__header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.96rem;
+  line-height: 1.2;
+}
+
+.workboard-codefarm-panel__header p,
+.workboard-codefarm-panel__empty {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.workboard-codefarm-panel__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workboard-codefarm-panel__repo {
+  width: min(360px, 42vw);
+}
+
+.workboard-codefarm-panel__jobs {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workboard-codefarm-panel__jobs li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+
+.workboard-codefarm-panel__jobs li.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
+}
+
+.workboard-codefarm-panel__jobs strong,
+.workboard-codefarm-panel__jobs span,
+.workboard-codefarm-panel__jobs small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-codefarm-panel__jobs strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.workboard-codefarm-panel__jobs span,
+.workboard-codefarm-panel__jobs small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.workboard-codefarm-panel__snapshot {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .workboard-codefarm {
   min-width: 0;
 }
@@ -1094,6 +1188,20 @@
 
   .workboard-board {
     grid-auto-columns: minmax(282px, 84vw);
+  }
+
+  .workboard-codefarm-panel__header,
+  .workboard-codefarm-panel__jobs li {
+    grid-template-columns: 1fr;
+  }
+
+  .workboard-codefarm-panel__controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .workboard-codefarm-panel__repo {
+    width: 100%;
   }
 
   .workboard-detail-drawer {

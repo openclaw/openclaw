@@ -12,7 +12,9 @@ import {
   getWorkboardDependencyState,
   getWorkboardState,
   loadWorkboard,
+  loadWorkboardCodefarmJobs,
   moveWorkboardCard,
+  observeWorkboardCodefarmRef,
   observeWorkboardCodefarmJob,
   saveWorkboardCardDraft,
   startWorkboardCard,
@@ -362,6 +364,98 @@ describe("workboard controller", () => {
         jobId: "cf_20260625_001",
         terminal: { source: "tmux", truncated: false, lines: ["boot", "npm test"] },
         tmux: { attachCommand: "tmux attach -t codefarm_repo-12345678" },
+      },
+    });
+  });
+
+  it("loads Code Farm jobs into the visible WorkBoard panel", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.codefarmRepoInput = "/Users/me/repo";
+    const client = createClient((method, params) => {
+      expect(method).toBe("workboard.codefarm.list");
+      expect(params).toEqual({ repo: "/Users/me/repo" });
+      return {
+        schemaVersion: 1,
+        jobs: [
+          {
+            id: "cf_20260625_001",
+            runtime: "codex-cli",
+            observedOrManaged: "managed",
+            cwd: "/Users/me/repo",
+            worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+            taskIntent: "Run focused tests",
+            status: "running",
+            branch: "codefarm/cf_20260625_001",
+            nextAction: "observe",
+          },
+        ],
+      };
+    });
+
+    await loadWorkboardCodefarmJobs({ host, client: client as never });
+
+    expect(state.codefarmPanel).toMatchObject({
+      loading: false,
+      error: null,
+      repo: "/Users/me/repo",
+      jobs: [
+        {
+          id: "cf_20260625_001",
+          status: "running",
+          runtime: "codex-cli",
+          worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+        },
+      ],
+    });
+  });
+
+  it("observes a Code Farm job from the visible panel", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.codefarmPanel = {
+      loading: false,
+      loadAttempted: false,
+      error: null,
+      repo: "/Users/me/repo",
+      jobs: [],
+      selectedJobId: null,
+      observation: null,
+      observing: false,
+      observeError: null,
+    };
+    const client = createClient((method, params) => {
+      expect(method).toBe("workboard.codefarm.observe");
+      expect(params).toEqual({
+        repo: "/Users/me/repo",
+        jobId: "cf_20260625_001",
+        lines: 200,
+      });
+      return {
+        schemaVersion: 1,
+        jobId: "cf_20260625_001",
+        repo: "/Users/me/repo",
+        terminal: {
+          source: "tmux",
+          truncated: false,
+          lines: ["worker booted"],
+        },
+      };
+    });
+
+    await observeWorkboardCodefarmRef({
+      host,
+      client: client as never,
+      ref: { repo: "/Users/me/repo", jobId: "cf_20260625_001" },
+    });
+
+    expect(state.codefarmPanel).toMatchObject({
+      selectedJobId: "cf_20260625_001",
+      observing: false,
+      observeError: null,
+      observation: {
+        jobId: "cf_20260625_001",
+        terminal: { source: "tmux", lines: ["worker booted"] },
       },
     });
   });
