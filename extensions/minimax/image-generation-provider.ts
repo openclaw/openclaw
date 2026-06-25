@@ -1,6 +1,9 @@
 // Minimax provider module implements model/runtime integration.
-import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import {
+  resolveInlineImageJsonResponseMaxBytes,
+  type ImageGenerationProvider,
+} from "openclaw/plugin-sdk/image-generation";
+import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -14,6 +17,8 @@ const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
+const MINIMAX_MAX_IMAGE_RESULTS = 9;
+const MB = 1024 * 1024;
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -73,6 +78,16 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
+function resolveGeneratedImageMaxBytes(req: {
+  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
+}): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * MB);
+  }
+  return MAX_IMAGE_BYTES;
+}
+
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
   return {
     id: providerId,
@@ -86,14 +101,14 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }),
     capabilities: {
       generate: {
-        maxCount: 9,
+        maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
         enabled: true,
-        maxCount: 9,
+        maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         maxInputImages: 1,
         supportsSize: false,
         supportsAspectRatio: true,
@@ -167,6 +182,12 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         const data = await readProviderJsonResponse<MinimaxImageApiResponse>(
           response,
           "minimax.image-generation",
+          {
+            maxBytes: resolveInlineImageJsonResponseMaxBytes(
+              MINIMAX_MAX_IMAGE_RESULTS,
+              resolveGeneratedImageMaxBytes(req),
+            ),
+          },
         );
 
         const baseResp = data.base_resp;
