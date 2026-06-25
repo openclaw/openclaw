@@ -150,7 +150,10 @@ function classifyHarnessResult(params: {
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
   provider: string,
-): Extract<FailoverReason, "auth" | "auth_permanent" | "billing" | "rate_limit"> | null {
+): Extract<
+  FailoverReason,
+  "auth" | "auth_permanent" | "billing" | "rate_limit" | "timeout" | "overloaded" | "server_error"
+> | null {
   if (!errorText.trim()) {
     return null;
   }
@@ -160,6 +163,9 @@ function classifyBusinessDenialErrorPayloadReason(
     case "auth_permanent":
     case "billing":
     case "rate_limit":
+    case "timeout":
+    case "overloaded":
+    case "server_error":
       return failoverReason;
     default:
       return null;

@@ -282,7 +282,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("retries transport error payloads as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -299,7 +299,12 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: "HTTP 500: internal server error",
+    });
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {
