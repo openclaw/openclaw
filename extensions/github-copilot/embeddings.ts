@@ -32,6 +32,7 @@ const COPILOT_HEADERS_STATIC: Record<string, string> = {
   ...buildCopilotIdeHeaders(),
 };
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
@@ -245,7 +246,9 @@ async function createGitHubCopilotEmbeddingProvider(
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
 
-        const payload = await readProviderJsonResponse(response, "github-copilot.embeddings");
+        const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
+          maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
+        });
         return parseGitHubCopilotEmbeddingPayload(payload, input.length);
       },
     });
