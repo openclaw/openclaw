@@ -3194,7 +3194,7 @@ export class AgentSession {
     );
     const dir = dirname(filePath);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      mkdirSync(dir, { recursive: true });
     }
 
     const header: SessionHeader = {

@@ -214,13 +214,20 @@ export class FileSettingsStorage implements SettingsStorage {
       if (next !== undefined) {
         // Only create directory when we actually need to write
         if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true, mode: 0o700 });
+          if (scope === "global") {
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+          } else {
+            mkdirSync(dir, { recursive: true });
+          }
         }
-        // Repair permissions on existing managed settings dirs
-        try {
-          chmodSync(dir, 0o700);
-        } catch {
-          /* best effort */
+        // Repair permissions on existing managed settings dirs (global only;
+        // project settings live under the caller-owned workspace directory).
+        if (scope === "global") {
+          try {
+            chmodSync(dir, 0o700);
+          } catch {
+            /* best effort */
+          }
         }
         if (!release) {
           release = this.acquireLockSyncWithRetry(path);

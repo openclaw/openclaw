@@ -722,12 +722,7 @@ async function archiveLifecycleSessionTranscripts(params: {
 
 function ensureLifecycleTranscriptHeader(params: { sessionFile: string; sessionId: string }): void {
   const sessionParentDir = path.dirname(params.sessionFile);
-  fs.mkdirSync(sessionParentDir, { recursive: true, mode: 0o700 });
-  try {
-    fs.chmodSync(sessionParentDir, 0o700);
-  } catch {
-    /* best effort */
-  }
+  fs.mkdirSync(sessionParentDir, { recursive: true });
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
@@ -864,7 +859,8 @@ async function saveSessionStoreUnlocked(
     return;
   }
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const storeParentDir = path.dirname(storePath);
+  await fs.promises.mkdir(storeParentDir, { recursive: true });
   if (
     opts?.singleEntryPersistence &&
     !maintenanceChangedStore &&
