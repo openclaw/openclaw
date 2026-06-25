@@ -71,6 +71,7 @@ import {
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
+import { deliverySerializer } from "./delivery-serializer.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
@@ -1327,24 +1328,30 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
 
+  // Serialize deliveries to the same channel+account+recipient so concurrent
+  // sessions (e.g. main + sub-agent) don't interleave messages.
+  const serializerKey = `${params.channel}:${params.accountId ?? "default"}:${params.to}`;
+
   try {
     let platformSendStarted = false;
-    const results = await deliverOutboundPayloadsCore({
-      ...wrappedParams,
-      ...(queueId
-        ? {
-            onPlatformSendStart: async () => {
-              if (platformSendStarted) {
-                return;
-              }
-              platformSendStarted = await markQueuedPlatformSendAttemptStarted({
-                queueId,
-                queuePolicy,
-              });
-            },
-          }
-        : {}),
-    });
+    const results = await deliverySerializer.serialize(serializerKey, () =>
+      deliverOutboundPayloadsCore({
+        ...wrappedParams,
+        ...(queueId
+          ? {
+              onPlatformSendStart: async () => {
+                if (platformSendStarted) {
+                  return;
+                }
+                platformSendStarted = await markQueuedPlatformSendAttemptStarted({
+                  queueId,
+                  queuePolicy,
+                });
+              },
+            }
+          : {}),
+      }),
+    );
     platformResultsReturned = true;
     if (!queueId) {
       if (!params.deferCommitHooks) {
