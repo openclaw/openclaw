@@ -98,6 +98,24 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 
+  it("suppresses system-marked payloads before Telegram delivery", () => {
+    const payload = { text: "⚙️ available commands updated" };
+
+    expect(telegramOutbound.normalizePayload?.({ payload })).toBeNull();
+  });
+
+  it("suppresses compaction notices before Telegram delivery", () => {
+    const payload = { text: "Auto-compaction complete", isCompactionNotice: true };
+
+    expect(telegramOutbound.normalizePayload?.({ payload })).toBeNull();
+  });
+
+  it("keeps regular payloads deliverable", () => {
+    const payload = { text: "visible reply" };
+
+    expect(telegramOutbound.normalizePayload?.({ payload })).toBe(payload);
+  });
+
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
 

@@ -25,6 +25,7 @@ import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound
 import { pinMessageTelegram } from "./send.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
+const TELEGRAM_SYSTEM_MESSAGE_PREFIX = "⚙️";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
@@ -123,6 +124,16 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   extractMarkdownImages: true,
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+  normalizePayload: ({ payload }) => {
+    if (payload.isCompactionNotice === true) {
+      return null;
+    }
+    const text = payload.text?.trimStart();
+    if (text?.startsWith(TELEGRAM_SYSTEM_MESSAGE_PREFIX)) {
+      return null;
+    }
+    return payload;
+  },
   sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
   presentationCapabilities: {
