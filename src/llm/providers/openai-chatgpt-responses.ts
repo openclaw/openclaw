@@ -25,6 +25,7 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
@@ -66,6 +67,7 @@ const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
+const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
@@ -722,12 +724,23 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   }
 
   const reader = response.body.getReader();
+  // Cap the streaming 200 success-body read at 16 MiB, mirroring the
+  // non-streaming `readProviderJsonResponse` cap so a hostile or
+  // malfunctioning ChatGPT Responses endpoint cannot exhaust memory by
+  // streaming an unbounded SSE body.
+  const guard = createSseByteGuard(reader, {
+    maxBytes: OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `OpenAI ChatGPT Responses success body exceeded ${maxBytes} bytes (received ${size})`,
+      ),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await guard.read();
       if (done) {
         break;
       }
@@ -760,13 +773,17 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
     }
   } finally {
     try {
-      await reader.cancel();
+      await guard.cancel();
     } catch {}
     try {
       reader.releaseLock();
     } catch {}
   }
 }
+
+// Test-only re-export of the bounded SSE parser. Mirrors
+// `parseAnthropicSseBodyForTest` / `iterateSseMessagesForTest` patterns.
+export const parseSSEForTest = parseSSE;
 
 // ============================================================================
 // WebSocket Parsing

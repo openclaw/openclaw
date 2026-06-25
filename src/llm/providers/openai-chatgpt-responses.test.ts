@@ -5,6 +5,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-b
 import type { Context, Model } from "../types.js";
 import {
   extractOpenAICodexAccountId,
+  parseSSEForTest,
   resetOpenAICodexWebSocketDebugStats,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
@@ -559,5 +560,47 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+});
+
+describe("parseSSEForTest", () => {
+  it("bounds streamed OpenAI ChatGPT Responses success bodies without content-length", async () => {
+    // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before
+    // draining the full 32 MiB advertised body.
+    const CHUNK = 1024 * 1024;
+    const TOTAL = 32;
+    let pullCount = 0;
+    let cancelReason: unknown;
+    const overflowing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount > TOTAL) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    let caught: Error | null = null;
+    try {
+      // parseSSE expects a Response-like; pass the streaming body directly
+      // through a minimal Response shim that only exposes .body.
+      const response = { body: overflowing } as unknown as Response;
+      for await (const event of parseSSEForTest(response)) {
+        expect(event).toBeDefined();
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toMatch(
+      /OpenAI ChatGPT Responses success body exceeded 16777216 bytes/,
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    // 16 MiB + a couple of overshoot pulls, well under 32.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
   });
 });
