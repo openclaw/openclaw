@@ -244,6 +244,24 @@ function hasDeprecatedTag(symbol) {
 
 const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
 
+function isGeneratedPluginSdkDeclaration(declaration) {
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  return (
+    relativePath.startsWith("dist/plugin-sdk/") ||
+    relativePath.startsWith("packages/plugin-sdk/dist/")
+  );
+}
+
+function hasSourceBackedDeclaration(checker, symbol) {
+  const target = unwrapAlias(checker, symbol);
+  const declarations = [...(symbol.declarations ?? []), ...(target.declarations ?? [])];
+  if (declarations.length === 0) {
+    return true;
+  }
+  return declarations.some((declaration) => !isGeneratedPluginSdkDeclaration(declaration));
+}
+
 function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
   if (!generatedLlmCoreValidatorExports.has(exportName)) {
     return false;
@@ -319,6 +337,9 @@ function collectExportStats(entrypoints) {
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
     for (const symbol of symbols) {
+      if (!hasSourceBackedDeclaration(checker, symbol)) {
+        continue;
+      }
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
