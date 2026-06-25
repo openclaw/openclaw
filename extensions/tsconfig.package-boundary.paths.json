@@ -14,11 +14,11 @@
       "openclaw/plugin-sdk/reply-payload-testing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/reply-payload-testing.d.ts"
       ],
+      "openclaw/plugin-sdk/sqlite-runtime-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-runtime-testing.d.ts"
+      ],
       "openclaw/plugin-sdk/ssrf-runtime-internal": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/ssrf-runtime-internal.d.ts"
-      ],
-      "openclaw/plugin-sdk/codex-mcp-projection": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
       "openclaw/plugin-sdk/codex-native-task-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-native-task-runtime.d.ts"
@@ -64,9 +64,6 @@
       ],
       "openclaw/plugin-sdk/channel-contract-testing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts"
-      ],
-      "openclaw/plugin-sdk/sqlite-runtime-testing": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-runtime-testing.d.ts"
       ],
       "openclaw/plugin-sdk/account-id": [
         "../dist/plugin-sdk/account-id.d.ts"
