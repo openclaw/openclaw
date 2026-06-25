@@ -21,31 +21,21 @@ describe("enforceChatHistoryFinalBudget", () => {
     ];
     const result = enforceChatHistoryFinalBudget({ messages, maxBytes: 1_000_000 });
     expect(result.messages).toEqual(messages);
-    expect(result.omittedCount).toBe(0);
   });
 
   it("returns the empty array unchanged for empty input", () => {
     const result = enforceChatHistoryFinalBudget({ messages: [], maxBytes: 10 });
     expect(result.messages).toEqual([]);
-    expect(result.omittedCount).toBe(0);
   });
 
-  it("reports the dropped count when keeping only the last message", () => {
+  it("keeps just the last message when the full set is over budget but the last fits", () => {
     const big = { role: "user", content: [{ type: "text", text: "x".repeat(4000) }] };
     const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
     const result = enforceChatHistoryFinalBudget({ messages: [big, last], maxBytes: 2_000 });
+    // The same last-message reference survives so callers can detect which
+    // originals were omitted by identity.
     expect(result.messages).toEqual([last]);
-    // The earlier oversized message was dropped, so truncation must stay visible.
-    expect(result.omittedCount).toBe(1);
-  });
-
-  it("counts every dropped message when only the last survives", () => {
-    const big = { role: "user", content: [{ type: "text", text: "x".repeat(4000) }] };
-    const mid = { role: "assistant", content: [{ type: "text", text: "x".repeat(4000) }] };
-    const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
-    const result = enforceChatHistoryFinalBudget({ messages: [big, mid, last], maxBytes: 2_000 });
-    expect(result.messages).toEqual([last]);
-    expect(result.omittedCount).toBe(2);
+    expect(result.messages[0]).toBe(last);
   });
 
   it("falls back to a small placeholder when even the last message is too large", () => {
@@ -58,22 +48,8 @@ describe("enforceChatHistoryFinalBudget", () => {
     const result = enforceChatHistoryFinalBudget({ messages: [last], maxBytes: 2_000 });
     expect(result.messages).toHaveLength(1);
     expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
-    expect(result.omittedCount).toBe(1);
-  });
-
-  it("counts the whole list as omitted when the last message is replaced by a placeholder", () => {
-    const earlier = { role: "user", content: [{ type: "text", text: "hi" }] };
-    const last = {
-      role: "assistant",
-      timestamp: 1,
-      content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7 },
-    };
-    const result = enforceChatHistoryFinalBudget({ messages: [earlier, last], maxBytes: 2_000 });
-    expect(result.messages).toHaveLength(1);
-    expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
-    // No input message survives verbatim, so both are counted as omitted.
-    expect(result.omittedCount).toBe(2);
+    // The placeholder is a new object, not the oversized original.
+    expect(result.messages[0]).not.toBe(last);
   });
 
   it("returns a metadata-free sentinel (never an empty transcript) when even the placeholder is over budget", () => {
@@ -93,6 +69,5 @@ describe("enforceChatHistoryFinalBudget", () => {
     expect(firstText(result.messages)).toContain("chat.history unavailable");
     // The sentinel does not carry the oversized source metadata.
     expect((result.messages[0] as Record<string, unknown>)["__openclaw"]).toBeUndefined();
-    expect(result.omittedCount).toBe(1);
   });
 });

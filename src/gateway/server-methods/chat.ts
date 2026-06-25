@@ -1672,38 +1672,73 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+// Enforces the final byte budget for chat.history. Returns only the surviving
+// messages; how many original messages were omitted is measured end-to-end by
+// reportOmittedChatHistory, which alone sees the full replace/cap/final pipeline
+// and so can count unique omitted originals without double-counting.
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
-  // Number of input messages that lost their verbatim representation to fit the
-  // byte budget (dropped outright or swapped for a placeholder). The caller logs
-  // truncation only when this is positive, so every omitting branch must report
-  // it — a zero here while history is silently discarded hides truncation from
-  // operators.
-  omittedCount: number;
 } {
   const { messages, maxBytes } = params;
   if (messages.length === 0) {
-    return { messages, omittedCount: 0 };
+    return { messages };
   }
   if (jsonUtf8Bytes(messages) <= maxBytes) {
-    return { messages, omittedCount: 0 };
+    return { messages };
   }
   const last = messages.at(-1);
   if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    // Keep only the final message; every earlier message is dropped.
-    return { messages: [last], omittedCount: messages.length - 1 };
+    return { messages: [last] };
   }
   const placeholder = buildOversizedHistoryPlaceholder(last);
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
-    // Even the final message is over budget, so it too is replaced — no input
-    // message survives verbatim.
-    return { messages: [placeholder], omittedCount: messages.length };
+    return { messages: [placeholder] };
   }
   // The oversized placeholder still does not fit (e.g. the source message
   // carried very large metadata). Never return an empty history — that renders
   // as a blank transcript and reads as data loss even though the on-disk
   // transcript is intact. Fall back to a small metadata-free sentinel.
-  return { messages: [buildChatHistoryUnavailableSentinel()], omittedCount: messages.length };
+  return { messages: [buildChatHistoryUnavailableSentinel()] };
+}
+
+// Counts how many of the original chat.history messages lost their verbatim
+// representation by the time the budget pipeline finished — whether they were
+// replaced with a placeholder, dropped by the front byte cap, or collapsed by
+// the final budget. Identity membership counts each omitted original exactly
+// once (a message that is first replaced and then trimmed is not counted twice),
+// and emits the truncation diagnostic so operators see when history is omitted.
+// Returns the omitted count (0 when nothing was omitted, so no diagnostic fires).
+export function reportOmittedChatHistory(params: {
+  originalMessages: unknown[];
+  finalMessages: unknown[];
+  normalizedBytes: number;
+  maxHistoryBytes: number;
+  logDebug: (message: string) => void;
+}): number {
+  const { originalMessages, finalMessages, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const survivors = new Set(finalMessages);
+  let omittedCount = 0;
+  for (const message of originalMessages) {
+    if (!survivors.has(message)) {
+      omittedCount += 1;
+    }
+  }
+  if (omittedCount === 0) {
+    return 0;
+  }
+  chatHistoryOmittedEmitCount += omittedCount;
+  logLargePayload({
+    surface: "gateway.chat.history",
+    action: "truncated",
+    bytes: normalizedBytes,
+    limitBytes: maxHistoryBytes,
+    count: omittedCount,
+    reason: "chat_history_budget",
+  });
+  logDebug(
+    `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
+  );
+  return omittedCount;
 }
 
 function resolveTranscriptPath(params: {
@@ -2767,25 +2802,14 @@ async function handleChatHistoryRequest({
     context,
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  // Front byte cap drops the oldest messages without reporting a count, so derive
-  // it from the length delta to keep that omission visible in truncation logs.
-  const frontCapDropped = replaced.messages.length - capped.length;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-  const omittedCount = replaced.replacedCount + frontCapDropped + bounded.omittedCount;
-  if (omittedCount > 0) {
-    chatHistoryOmittedEmitCount += omittedCount;
-    logLargePayload({
-      surface: "gateway.chat.history",
-      action: "truncated",
-      bytes: jsonUtf8Bytes(normalized),
-      limitBytes: maxHistoryBytes,
-      count: omittedCount,
-      reason: "chat_history_budget",
-    });
-    context.logGateway.debug(
-      `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
-    );
-  }
+  reportOmittedChatHistory({
+    originalMessages: normalized,
+    finalMessages: bounded.messages,
+    normalizedBytes: jsonUtf8Bytes(normalized),
+    maxHistoryBytes,
+    logDebug: (message) => context.logGateway.debug(message),
+  });
   const modelCatalog = await modelCatalogPromise;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const startupMetadata = includeMetadata
