@@ -117,7 +117,7 @@
           "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.6",
           "defaultChoice": "npm",
           "expectedIntegrity": "sha512-qw9k3PLTiMWGNjjsknHgcTManH1w4j+Ji1ArWIaYLKCq3aFRsVwcqnPi127bvOoVMJGW4dbyJ8NECEMgoO+iRw==",
-          "minHostVersion": ">=2026.3.22"
+          "minHostVersion": ">=2026.5.12"
         }
       }
     },
