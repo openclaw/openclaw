@@ -2497,6 +2497,46 @@ describe("legacy model compat migrate", () => {
     ).toBe(true);
   });
 
+  it("merges when the canonical key follows the retired key", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": { alias: "legacy-four" },
+            "openai/gpt-5.5": { streaming: false },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": {
+        alias: "legacy-four",
+        streaming: false,
+      },
+    });
+  });
+
+  it("keeps canonical values when canonical and retired keys collide", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": { alias: "legacy-four", streaming: true },
+            "openai/gpt-5.5": { alias: "current-five" },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": {
+        alias: "current-five",
+        streaming: true,
+      },
+    });
+  });
+
   it("does not pollute prototypes when merging colliding model ref map keys", () => {
     const polluted = JSON.parse(
       '{"agents":{"defaults":{"models":{"openai/gpt-4o":{"streaming":false},"openai/gpt-4":{"__proto__":{"polluted":true},"alias":"legacy-four"}}}}}',

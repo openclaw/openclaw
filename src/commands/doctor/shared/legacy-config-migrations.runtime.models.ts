@@ -880,6 +880,15 @@ function mergeModelRefMapEntries(
   return { value: merged, conflicts };
 }
 
+function setModelRefMapEntry(record: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
 function rewriteModelRefMapKeys(
   record: Record<string, unknown>,
   path: string,
@@ -887,18 +896,24 @@ function rewriteModelRefMapKeys(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = {};
+  const canonicalKeys = new Set<string>();
   for (const [key, child] of Object.entries(record)) {
     const upgradedKey = upgradeRetiredModelRef(key);
     const nextKey = upgradedKey ?? key;
+    const isCanonicalEntry = !upgradedKey;
     if (upgradedKey) {
       changes.push(
         `Upgraded ${path} key from ${JSON.stringify(key)} to ${JSON.stringify(upgradedKey)}.`,
       );
       changed = true;
     }
-    if (nextKey in next && upgradedKey) {
-      const { value, conflicts } = mergeModelRefMapEntries(next[nextKey], child);
-      next[nextKey] = value;
+    if (Object.hasOwn(next, nextKey)) {
+      const existing = next[nextKey];
+      const { value, conflicts } =
+        isCanonicalEntry && !canonicalKeys.has(nextKey)
+          ? mergeModelRefMapEntries(child, existing)
+          : mergeModelRefMapEntries(existing, child);
+      setModelRefMapEntry(next, nextKey, value);
       if (conflicts.length > 0) {
         changes.push(
           `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`,
@@ -906,9 +921,15 @@ function rewriteModelRefMapKeys(
       } else {
         changes.push(`Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`);
       }
+      if (isCanonicalEntry) {
+        canonicalKeys.add(nextKey);
+      }
       continue;
     }
-    next[nextKey] = child;
+    setModelRefMapEntry(next, nextKey, child);
+    if (isCanonicalEntry) {
+      canonicalKeys.add(nextKey);
+    }
   }
   return { value: changed ? next : record, changed };
 }
