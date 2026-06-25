@@ -29,6 +29,7 @@ type CodexTrajectoryInit = {
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
+  trajectorySessionFile?: string;
   tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
 };
@@ -142,11 +143,24 @@ function resolveTrajectoryPointerFilePath(sessionFile: string): string {
     : `${sessionFile}.trajectory-path.json`;
 }
 
+function parseSqliteSessionFileMarker(
+  sessionFile: string,
+): { sessionId: string; storePath: string } | undefined {
+  const match = /^sqlite:[^:]+:([^:]+):(.*)$/u.exec(sessionFile.trim());
+  if (!match?.[1] || !match[2]) {
+    return undefined;
+  }
+  return { sessionId: match[1], storePath: match[2] };
+}
+
 function writeTrajectoryPointerBestEffort(params: {
   filePath: string;
   sessionFile: string;
   sessionId: string;
 }): void {
+  if (parseSqliteSessionFileMarker(params.sessionFile)) {
+    return;
+  }
   const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
   try {
     const pointerDir = path.resolve(path.dirname(pointerPath));
@@ -199,7 +213,7 @@ export function createCodexTrajectoryRecorder(
 
   const filePath = resolveTrajectoryFilePath({
     env,
-    sessionFile: params.attempt.sessionFile,
+    sessionFile: params.trajectorySessionFile ?? params.attempt.sessionFile,
     sessionId: params.attempt.sessionId,
   });
   const ready = fs
@@ -207,7 +221,7 @@ export function createCodexTrajectoryRecorder(
     .catch(() => undefined);
   writeTrajectoryPointerBestEffort({
     filePath,
-    sessionFile: params.attempt.sessionFile,
+    sessionFile: params.trajectorySessionFile ?? params.attempt.sessionFile,
     sessionId: params.attempt.sessionId,
   });
   let queue = Promise.resolve();
@@ -315,6 +329,14 @@ function resolveTrajectoryFilePath(params: {
     return resolveContainedPath(
       resolveUserPath(dirOverride),
       `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`,
+    );
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (sqliteMarker) {
+    return path.join(
+      path.dirname(path.resolve(sqliteMarker.storePath)),
+      "trajectory",
+      `${safeTrajectorySessionFileName(sqliteMarker.sessionId)}.jsonl`,
     );
   }
   return params.sessionFile.endsWith(".jsonl")

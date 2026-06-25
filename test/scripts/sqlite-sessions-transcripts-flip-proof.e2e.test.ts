@@ -15,6 +15,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-doctor-validate",
       "gateway-started",
       "after-gateway-restart",
+      "after-chat-send",
       "after-sessions-reset",
       "after-transcript-append",
       "after-sessions-delete",
@@ -26,6 +27,15 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       report.checkpoints
         .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
         .every((checkpoint) => checkpoint.activeJsonl.length === 0),
+    ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-chat-send" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) => entry.sessionKey === report.resetSessionKey && entry.transcriptEvents >= 3,
+          ),
+      ),
     ).toBe(true);
     expect(
       report.checkpoints.some(
