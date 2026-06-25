@@ -205,6 +205,21 @@ function applySchemaArrayCoercion(value: unknown[], schema: JsonSchemaObject): v
 }
 
 function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unknown {
+  // First pass: prefer exact type match over coercion.  This prevents nullable
+  // unions like anyOf [{type: "string"}, {type: "null"}] from coercing null to
+  // empty string via the string branch before trying the null branch.
+  for (const schema of schemas) {
+    const types = getSchemaTypes(schema);
+    if (types.length === 1) {
+      const type = types[0];
+      if (type !== "object" && type !== "array" && matchesJsonType(value, type)) {
+        const validator = getSubSchemaValidator(schema);
+        if (!validator || validator.Check(value)) {
+          return value;
+        }
+      }
+    }
+  }
   for (const schema of schemas) {
     const candidate = structuredClone(value);
     const coerced = coerceWithJsonSchema(candidate, schema);

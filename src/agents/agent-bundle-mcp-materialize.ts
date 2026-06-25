@@ -383,6 +383,76 @@ export function buildBundleMcpToolsFromCatalog(params: {
   return tools;
 }
 
+/**
+ * Checks whether a field declared in a JSON Schema object explicitly allows null.
+ * Handles type: "null", type: ["string", "null"], anyOf/oneOf with {type: "null"}.
+ */
+function isFieldNullableInSchema(schema: unknown, key: string): boolean {
+  if (!schema || typeof schema !== "object") {
+    return false;
+  }
+  const root = schema as Record<string, unknown>;
+  const properties = root.properties as Record<string, unknown> | undefined;
+  if (!properties) {
+    return false;
+  }
+
+  const propertySchema = properties[key];
+  if (!propertySchema || typeof propertySchema !== "object") {
+    return false;
+  }
+
+  const ps = propertySchema as Record<string, unknown>;
+
+  // Direct type: null or ["...", "null"]
+  if (ps.type === "null") {
+    return true;
+  }
+  if (Array.isArray(ps.type) && ps.type.includes("null")) {
+    return true;
+  }
+
+  // anyOf/oneOf with a null variant
+  for (const unionKey of ["anyOf", "oneOf"] as const) {
+    const union = ps[unionKey];
+    if (!Array.isArray(union)) {
+      continue;
+    }
+    if (
+      union.some((v: unknown) => {
+        if (!v || typeof v !== "object") {
+          return false;
+        }
+        const entry = v as Record<string, unknown>;
+        if (entry.type === "null") {
+          return true;
+        }
+        return Array.isArray(entry.type) && entry.type.includes("null");
+      })
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Strips null-valued keys from an object input, preserving nulls for fields
+ * that the JSON Schema declares as nullable (type: "null" or anyOf/oneOf with
+ * a null variant). Keeps non-object/non-record inputs unchanged.
+ */
+function stripNullOptionalArgs(input: unknown, schema?: unknown): unknown {
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    return Object.fromEntries(
+      Object.entries(input as Record<string, unknown>).filter(
+        ([k, v]) => v !== null || isFieldNullableInSchema(schema, k),
+      ),
+    );
+  }
+  return input;
+}
+
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
@@ -403,7 +473,13 @@ export async function materializeBundleMcpToolsForRun(params: {
     reservedToolNames: params.reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
-      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      // Strip null-valued optional arguments: some MCP servers treat JSON null differently
+      // from an absent key (e.g., coercing null to ""), while the LLM often sends null for
+      // unset optional params. Only strip nulls for fields NOT declared as nullable in the
+      // tool's input schema, preserving schema-meaningful nulls for required nullable fields.
+      const schema = tool.inputSchema as Record<string, unknown> | undefined;
+      const cleaned = stripNullOptionalArgs(input, schema);
+      const result = await params.runtime.callTool(tool.serverName, tool.toolName, cleaned);
       return toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,

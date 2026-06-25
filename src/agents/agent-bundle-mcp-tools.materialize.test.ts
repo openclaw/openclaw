@@ -108,6 +108,94 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("strips null-valued optional arguments from MCP tool calls (issue #96716)", async () => {
+    const callToolArgs: unknown[] = [];
+    const base = makeToolRuntime();
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...base,
+        callTool: async (_serverName: string, _toolName: string, args: unknown) => {
+          callToolArgs.push(args);
+          return { content: [{ type: "text", text: "ok" }], isError: false };
+        },
+      },
+    });
+
+    const tool = runtime.tools[0];
+
+    // Test 1: null values are stripped before callTool receives them
+    await tool.execute("call-1", { insight_id: null, cluster_name: "test" }, undefined, undefined);
+    expect(callToolArgs[0]).toEqual({ cluster_name: "test" });
+
+    // Test 2: non-null values pass through unchanged
+    await tool.execute("call-2", { cluster_name: "test" }, undefined, undefined);
+    expect(callToolArgs[1]).toEqual({ cluster_name: "test" });
+
+    // Test 3: mixed null and non-null values
+    await tool.execute("call-3", { a: null, b: "val", c: null, d: 42 }, undefined, undefined);
+    expect(callToolArgs[2]).toEqual({ b: "val", d: 42 });
+
+    // Test 4: all-null object becomes empty object, not undefined/non-object
+    await tool.execute("call-4", { a: null, b: null }, undefined, undefined);
+    expect(callToolArgs[3]).toEqual({});
+  });
+
+  it("preserves nulls for MCP fields declared as nullable in schema (issue #96716)", async () => {
+    const callToolArgs: unknown[] = [];
+    const base = makeToolRuntime({
+      tools: [
+        {
+          serverName: "eks",
+          safeServerName: "eks",
+          toolName: "describe_cluster",
+          description: "Describe an EKS cluster",
+          inputSchema: {
+            type: "object",
+            properties: {
+              insight_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+              cluster_name: { type: "string" },
+            },
+            required: ["cluster_name"],
+          },
+          fallbackDescription: "Describe an EKS cluster",
+        },
+      ],
+    });
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...base,
+        callTool: async (_serverName: string, _toolName: string, args: unknown) => {
+          callToolArgs.push(args);
+          return { content: [{ type: "text", text: "ok" }], isError: false };
+        },
+      },
+    });
+
+    const tool = runtime.tools[0];
+
+    // Test 1: nullable field with null is PRESERVED at the boundary
+    await tool.execute("call-1", { insight_id: null, cluster_name: "test" }, undefined, undefined);
+    expect(callToolArgs[0]).toEqual({ insight_id: null, cluster_name: "test" });
+
+    // Test 2: nullable field with value is still preserved
+    await tool.execute(
+      "call-2",
+      { insight_id: "eks-123", cluster_name: "test" },
+      undefined,
+      undefined,
+    );
+    expect(callToolArgs[1]).toEqual({ insight_id: "eks-123", cluster_name: "test" });
+
+    // Test 3: non-nullable field still has null stripped
+    await tool.execute(
+      "call-3",
+      { insight_id: "eks-123", cluster_name: "test", extra: null },
+      undefined,
+      undefined,
+    );
+    expect(callToolArgs[2]).toEqual({ insight_id: "eks-123", cluster_name: "test" });
+  });
+
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({
