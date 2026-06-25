@@ -19,42 +19,23 @@ Use this page to answer one question: which OpenClaw surfaces are credible choic
 ## At a glance
 
 <div className="maturity-summary-grid">
-  <div className="maturity-summary-item maturity-score-experimental">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">4%</span>
-      <span>Coverage</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "4" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-experimental">Experimental</span>
-      <span>QA profile evidence</span>
-    </div>
-  </div>
   <div className="maturity-summary-item maturity-score-alpha">
     <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">63%</span>
-      <span>Quality</span>
+      <span className="maturity-summary-value">67%</span>
+      <span>Maturity score</span>
     </div>
-    <div className="maturity-summary-bar" style={{ "--score": "63" }}><span /></div>
+    <div className="maturity-summary-bar" style={{ "--score": "67" }}><span /></div>
     <div className="maturity-summary-meta">
       <span className="maturity-level-pill maturity-level-alpha">Alpha</span>
-      <span>Reliability and operator confidence</span>
-    </div>
-  </div>
-  <div className="maturity-summary-item maturity-score-beta">
-    <div className="maturity-summary-heading">
-      <span className="maturity-summary-value">70%</span>
-      <span>Completeness</span>
-    </div>
-    <div className="maturity-summary-bar" style={{ "--score": "70" }}><span /></div>
-    <div className="maturity-summary-meta">
-      <span className="maturity-level-pill maturity-level-beta">Beta</span>
-      <span>Expected workflow coverage</span>
+      <span>Quality + completeness</span>
+      <span>Coverage Experimental - 4%</span>
+      <span>Quality Alpha - 63%</span>
+      <span>Completeness Beta - 70%</span>
     </div>
   </div>
 </div>
 
-Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.
+Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.
 
 ## Score bands
 
