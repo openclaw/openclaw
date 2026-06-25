@@ -12,6 +12,7 @@ export {
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
+  sessionPathForSessionIdentity,
   type BuildSessionEntryOptions,
   type ResolvedMemorySessionSyncTarget,
   type ResolvedSessionTranscriptIdentity,

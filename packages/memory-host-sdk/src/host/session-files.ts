@@ -16,7 +16,9 @@ import {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  loadTranscriptEventsSync,
   parseUsageCountedSessionIdFromFileName,
+  parseSqliteSessionFileMarker,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
@@ -67,6 +69,10 @@ export type BuildSessionEntryOptions = {
   generatedByDreamingNarrative?: boolean;
   /** Optional preclassification from a caller-managed cron transcript lookup. */
   generatedByCronRun?: boolean;
+  /** Session key for identity-backed transcript readers. */
+  sessionKey?: string;
+  /** Activity timestamp for transcript sources that do not have filesystem stats. */
+  updatedAtMs?: number;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
   parseYieldEveryLines?: number;
 };
@@ -399,6 +405,11 @@ export function sessionPathForFile(absPath: string): string {
     .replace(/\\/g, "/");
 }
 
+/** Returns the logical memory path for a live SQLite-backed session transcript. */
+export function sessionPathForSessionIdentity(agentId: string, sessionId: string): string {
+  return path.join("sessions", normalizeAgentId(agentId), sessionId).replace(/\\/g, "/");
+}
+
 /**
  * Parses a deprecated path-shaped memory sync hint only when it points at an
  * OpenClaw-owned usage-counted transcript in the canonical agent sessions dir.
@@ -726,6 +737,38 @@ function parseSessionTimestampMs(
   return 0;
 }
 
+function parseRecordTimestampMs(record: unknown): number {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return 0;
+  }
+  const candidate = record as { message?: unknown; timestamp?: unknown };
+  const message =
+    candidate.message && typeof candidate.message === "object" && !Array.isArray(candidate.message)
+      ? (candidate.message as { timestamp?: unknown })
+      : {};
+  return parseSessionTimestampMs(candidate, message);
+}
+
+function serializeTranscriptEvent(record: unknown): string | null {
+  const serialized = JSON.stringify(record);
+  return typeof serialized === "string" ? serialized : null;
+}
+
+function serializeTranscriptEvents(records: readonly unknown[]): string {
+  return records
+    .map(serializeTranscriptEvent)
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+function resolveMaxRecordTimestampMs(records: readonly unknown[]): number {
+  let max = 0;
+  for (const record of records) {
+    max = Math.max(max, parseRecordTimestampMs(record));
+  }
+  return max;
+}
+
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -750,29 +793,61 @@ export async function buildSessionEntry(
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
   try {
-    const regularFile = await statRegularFile(absPath);
-    if (regularFile.missing) {
-      return null;
+    const sqliteMarker = parseSqliteSessionFileMarker(absPath);
+    const rawSource = sqliteMarker
+      ? (() => {
+          const records = loadTranscriptEventsSync({
+            agentId: sqliteMarker.agentId,
+            sessionId: sqliteMarker.sessionId,
+            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+            storePath: sqliteMarker.storePath,
+          });
+          const raw = serializeTranscriptEvents(records);
+          return {
+            mtimeMs: opts.updatedAtMs ?? resolveMaxRecordTimestampMs(records),
+            path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+            raw,
+            size: Buffer.byteLength(raw, "utf-8"),
+          };
+        })()
+      : null;
+    let raw: string;
+    let mtimeMs: number;
+    let size: number;
+    let memoryPath: string;
+    if (rawSource) {
+      raw = rawSource.raw;
+      mtimeMs = rawSource.mtimeMs;
+      size = rawSource.size;
+      memoryPath = rawSource.path;
+    } else {
+      const regularFile = await statRegularFile(absPath);
+      if (regularFile.missing) {
+        return null;
+      }
+      const stat = regularFile.stat;
+      if (shouldSkipTranscriptFileForDreaming(absPath)) {
+        return {
+          path: sessionPathForFile(absPath),
+          absPath,
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          hash: hashText("\n\n"),
+          content: "",
+          lineMap: [],
+          messageTimestampsMs: [],
+        };
+      }
+      raw = (
+        await retryTransientMemoryRead(
+          () => readRegularFile({ filePath: absPath }),
+          `read session transcript ${absPath}`,
+        )
+      ).buffer.toString("utf-8");
+      mtimeMs = stat.mtimeMs;
+      size = stat.size;
+      memoryPath = sessionPathForFile(absPath);
     }
-    const stat = regularFile.stat;
-    if (shouldSkipTranscriptFileForDreaming(absPath)) {
-      return {
-        path: sessionPathForFile(absPath),
-        absPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        hash: hashText("\n\n"),
-        content: "",
-        lineMap: [],
-        messageTimestampsMs: [],
-      };
-    }
-    const raw = (
-      await retryTransientMemoryRead(
-        () => readRegularFile({ filePath: absPath }),
-        `read session transcript ${absPath}`,
-      )
-    ).buffer.toString("utf-8");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
@@ -877,10 +952,10 @@ export async function buildSessionEntry(
     }
     const content = collected.join("\n");
     return {
-      path: sessionPathForFile(absPath),
+      path: memoryPath,
       absPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
+      mtimeMs,
+      size,
       hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
       content,
       lineMap,
