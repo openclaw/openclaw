@@ -21,7 +21,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
+import { streamAnthropic, streamSimpleAnthropic, iterateSseMessagesForTest } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
   const body = events
@@ -1305,5 +1305,42 @@ describe("Anthropic provider", () => {
         text: "Stable prefix\nDynamic suffix",
       },
     ]);
+  });
+
+  it("bounds streamed Anthropic provider success bodies without content-length", async () => {
+    // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before
+    // draining the full 32 MiB advertised body.
+    const CHUNK = 1024 * 1024;
+    const TOTAL = 32;
+    let pullCount = 0;
+    let cancelReason: unknown;
+    const overflowing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount > TOTAL) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    let caught: Error | null = null;
+    try {
+      for await (const event of iterateSseMessagesForTest(overflowing)) {
+        expect(event).toBeDefined();
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toMatch(
+      /Anthropic Messages success body exceeded 16777216 bytes/,
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    // 16 MiB + a couple of overshoot pulls, well under 32.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
   });
 });

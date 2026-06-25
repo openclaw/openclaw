@@ -32,6 +32,7 @@ import {
   usesClaudeFable5MessagesContract,
 } from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
 import { notifyLlmRequestActivity } from "../../shared/llm-request-activity.js";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -72,6 +73,7 @@ import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.j
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+const ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -347,6 +349,17 @@ async function* iterateSseMessages(
   signal?: AbortSignal,
 ): AsyncGenerator<ServerSentEvent> {
   const reader = body.getReader();
+  // Cap the streaming 200 success-body read at 16 MiB, mirroring the
+  // non-streaming `readProviderJsonResponse` cap so a hostile or
+  // malfunctioning Anthropic-compatible endpoint cannot exhaust memory by
+  // streaming an unbounded SSE body.
+  const guard = createSseByteGuard(reader, {
+    maxBytes: ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `Anthropic Messages success body exceeded ${maxBytes} bytes (received ${size})`,
+      ),
+  });
   const decoder = new TextDecoder();
   const state: SseDecoderState = { event: null, data: [], raw: [] };
   let buffer = "";
@@ -357,7 +370,7 @@ async function* iterateSseMessages(
         throw new Error("Request was aborted");
       }
 
-      const { value, done } = await reader.read();
+      const { value, done } = await guard.read();
       if (done) {
         break;
       }
@@ -1495,3 +1508,10 @@ function mapStopReason(reason: string): StopReason {
       throw new Error(`Unhandled stop reason: ${reason}`);
   }
 }
+
+/**
+ * Internal — exported under a separate name so production callers go through
+ * `streamAnthropic`. Tests can drive it directly to exercise the bounded-reader
+ * behaviour without the surrounding SDK client wrapper.
+ */
+export const iterateSseMessagesForTest = iterateSseMessages;
