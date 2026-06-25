@@ -179,6 +179,15 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       };
     }
     if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+      // Timeouts from harness-owned transports (Ollama, etc.) should still
+      // attempt the configured fallback chain before surfacing the error,
+      // consistent with the behavior for auth and billing failures.
+      if (params.fallbackConfigured) {
+        return {
+          action: "fallback_model",
+          reason: "timeout",
+        };
+      }
       return {
         action: "surface_error",
         reason: params.failoverReason,

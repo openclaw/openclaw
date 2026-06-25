@@ -68,6 +68,44 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back on harness transport timeout when a fallback model chain is configured", () => {
+    // Positive: harnessOwnsTransport + timeout + fallbackConfigured → fallback_model
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        harnessOwnsTransport: true,
+        fallbackConfigured: true,
+        failoverReason: "timeout",
+        aborted: false,
+        externalAbort: false,
+        failoverFailure: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces harness transport timeout when no fallback model is configured", () => {
+    // Negative: harnessOwnsTransport + timeout + fallbackConfigured=false → surface_error
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        harnessOwnsTransport: true,
+        fallbackConfigured: false,
+        failoverReason: "timeout",
+        aborted: false,
+        externalAbort: false,
+        failoverFailure: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
   it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
     expect(
       resolveRunFailoverDecision({
@@ -563,7 +601,10 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+  it("falls back on harness-owned prompt timeouts when a fallback chain is configured", () => {
+    // With fallbackConfigured=true and a harness-owned transport timeout,
+    // the decision should route to the fallback model chain instead of
+    // surfacing the error directly — consistent with auth/billing failures.
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -576,7 +617,7 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: true,
       }),
     ).toEqual({
-      action: "surface_error",
+      action: "fallback_model",
       reason: "timeout",
     });
   });
