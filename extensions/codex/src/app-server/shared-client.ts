@@ -44,6 +44,23 @@ type KeyedSharedCodexAppServerClientState = {
 };
 
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const scopedAuthProfileStoreCacheKeys = new WeakMap<AuthProfileStore, string>();
+let nextScopedAuthProfileStoreCacheKey = 0;
+
+function resolveScopedAuthProfileStoreCacheKey(
+  authProfileStore: AuthProfileStore | undefined,
+): string | undefined {
+  if (!authProfileStore) {
+    return undefined;
+  }
+  const cached = scopedAuthProfileStoreCacheKeys.get(authProfileStore);
+  if (cached) {
+    return cached;
+  }
+  const key = `scoped-auth-store:${++nextScopedAuthProfileStoreCacheKey}`;
+  scopedAuthProfileStoreCacheKeys.set(authProfileStore, key);
+  return key;
+}
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
@@ -109,15 +126,14 @@ type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string | null;
+  authProfileStore?: AuthProfileStore;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
   abandonSignal?: AbortSignal;
 };
 
-type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
-  authProfileStore?: AuthProfileStore;
-};
+type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions;
 
 type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
@@ -128,7 +144,7 @@ type ResolvedCodexAppServerClientStartContext = {
 };
 
 async function resolveCodexAppServerClientStartContext(
-  options?: IsolatedCodexAppServerClientOptions,
+  options?: CodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
@@ -212,15 +228,19 @@ async function acquireSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
   leaseOptions?: { leased: true },
 ): Promise<{ client: CodexAppServerClient; release?: () => void }> {
-  const { agentDir, usesNativeAuth, authProfileId, startOptions } =
+  const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const fallbackApiKeyCacheKey = authProfileId
     ? undefined
     : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions });
+  const authProfileStoreCacheKey = usesNativeAuth
+    ? undefined
+    : resolveScopedAuthProfileStoreCacheKey(authProfileStore);
   const key = codexAppServerStartOptionsKey(startOptions, {
     authProfileId,
     agentDir: usesNativeAuth ? undefined : agentDir,
     fallbackApiKeyCacheKey,
+    authProfileStoreCacheKey,
   });
   const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
@@ -247,6 +267,21 @@ async function acquireSharedCodexAppServerClient(
       options?.onStartedClient?.(client);
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
+      if (authProfileId) {
+        // Shared clients must expose the same host-driven OAuth refresh path as
+        // isolated clients because turn-bound Telegram sessions reuse them.
+        client.addRequestHandler(async (request) => {
+          if (request.method !== "account/chatgptAuthTokens/refresh") {
+            return undefined;
+          }
+          return await refreshCodexAppServerAuthTokens({
+            agentDir,
+            authProfileId,
+            ...(authProfileStore ? { authProfileStore } : {}),
+            config: options?.config,
+          });
+        });
+      }
       try {
         await client.initialize();
         await applyCodexAppServerAuthProfile({
@@ -255,6 +290,7 @@ async function acquireSharedCodexAppServerClient(
           authProfileId: usesNativeAuth ? null : authProfileId,
           startOptions,
           config: options?.config,
+          ...(authProfileStore ? { authProfileStore } : {}),
         });
         return client;
       } catch (error) {

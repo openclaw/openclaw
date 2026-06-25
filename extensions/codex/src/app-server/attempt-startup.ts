@@ -92,6 +92,7 @@ export async function startCodexAttemptThread(params: {
   startupAuthProfileId: string | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
+  authProfileStore: EmbeddedRunAttemptParams["authProfileStore"];
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
@@ -191,6 +192,7 @@ export async function startCodexAttemptThread(params: {
                   }
                 },
                 abandonSignal: startupAbandonController.signal,
+                authProfileStore: params.authProfileStore,
               },
             );
             const activeStartupClient = startupClient;

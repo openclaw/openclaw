@@ -1,6 +1,7 @@
 /**
  * Lazy factories for shared and leased Codex app-server clients.
  */
+import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -19,6 +20,7 @@ export type CodexAppServerClientFactory = (
     onStartedClient?: (client: CodexAppServerClient) => void;
     abandonSignal?: AbortSignal;
     timeoutMs?: number;
+    authProfileStore?: AuthProfileStore;
   },
 ) => Promise<CodexAppServerClient>;
 
@@ -46,5 +48,6 @@ export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFacto
       onStartedClient: options?.onStartedClient,
       abandonSignal: options?.abandonSignal,
       timeoutMs: options?.timeoutMs,
+      authProfileStore: options?.authProfileStore,
     }),
   );
