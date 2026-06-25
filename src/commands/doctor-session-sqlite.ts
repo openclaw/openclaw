@@ -12,6 +12,7 @@ import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -577,19 +578,11 @@ function readSqliteEntryCount(target: SessionStoreTarget): number {
 }
 
 function resolveTargetSqlitePath(target: SessionStoreTarget): string {
-  const sessionsDir = path.dirname(path.resolve(target.storePath));
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (
-    path.basename(target.storePath) === "sessions.json" &&
-    path.basename(agentsDir) === "agents"
-  ) {
-    return resolveOpenClawAgentSqlitePath({
-      agentId: target.agentId,
-      path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
-    });
-  }
-  return resolveOpenClawAgentSqlitePath({ agentId: target.agentId });
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath);
+  return resolveOpenClawAgentSqlitePath({
+    agentId: sqliteTarget.agentId ?? target.agentId,
+    ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),
+  });
 }
 
 function isSessionEntry(value: unknown): value is SessionEntry {
