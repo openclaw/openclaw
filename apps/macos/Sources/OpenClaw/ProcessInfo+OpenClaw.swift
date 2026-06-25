@@ -24,9 +24,14 @@ extension ProcessInfo {
         return false
     }
 
+    static func stableNixDefaults(bundleIdentifier: String?, suiteName: String = launchdLabel) -> UserDefaults? {
+        guard bundleIdentifier != suiteName else { return nil }
+        return UserDefaults(suiteName: suiteName)
+    }
+
     var isNixMode: Bool {
         let isAppBundle = Bundle.main.bundleURL.pathExtension == "app"
-        let stableSuite = UserDefaults(suiteName: launchdLabel)
+        let stableSuite = Self.stableNixDefaults(bundleIdentifier: Bundle.main.bundleIdentifier)
         return Self.resolveNixMode(
             environment: self.environment,
             standard: .standard,
