@@ -89,6 +89,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.protocolViolation",
       "workboard.cards.archive",
       "workboard.cards.export",
+      "workboard.codefarm.observe",
     ]);
     expect(methods.get("workboard.cards.list")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.diagnostics")?.opts).toEqual({ scope: "operator.read" });
@@ -96,6 +97,7 @@ describe("workboard gateway methods", () => {
       scope: "operator.write",
     });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.codefarm.observe")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.cards.runs")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.attachments.get")?.opts).toEqual({
@@ -351,5 +353,112 @@ describe("workboard gateway methods", () => {
     expect(blockRespond.mock.calls[0]?.[1]).toMatchObject({
       card: { status: "blocked" },
     });
+  });
+
+  it("observes Code Farm jobs through a read-only gateway method", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const observeCodefarm = vi.fn(async () => ({
+      schemaVersion: 1,
+      jobId: "cf_20260625_001",
+      repo: "/Users/me/repo",
+      worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+      status: "running",
+      runtime: "codex",
+      branch: "codefarm/cf_20260625_001",
+      updatedAt: "2026-06-25T12:00:00Z",
+      tmux: {
+        available: true,
+        enabled: true,
+        session: "codefarm_repo-12345678",
+        window: "cf_20260625_001",
+        pane: "%42",
+        attachCommand: "tmux attach -t codefarm_repo-12345678",
+        note: null,
+      },
+      terminal: {
+        source: "tmux",
+        truncated: false,
+        lines: ["worker booted", "running tests"],
+      },
+      handoff: { taskFile: ".codefarm/jobs/cf_20260625_001/TASK.md", summary: "Run tests" },
+      changes: { touchedFiles: ["app/tests/canvas.test.ts"], hasUncommittedChanges: true },
+      proof: { proofFile: ".codefarm/jobs/cf_20260625_001/PROOF.json", verdict: null },
+    }));
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({
+      api,
+      store: new WorkboardStore(createMemoryStore()),
+      observeCodefarm,
+    });
+
+    const respond = vi.fn();
+    await methods.get("workboard.codefarm.observe")?.handler({
+      params: { repo: "/Users/me/repo", jobId: "cf_20260625_001", lines: 42 },
+      respond,
+    } as never);
+
+    expect(observeCodefarm).toHaveBeenCalledWith({
+      repo: "/Users/me/repo",
+      jobId: "cf_20260625_001",
+      lines: 42,
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      jobId: "cf_20260625_001",
+      terminal: { source: "tmux", lines: ["worker booted", "running tests"] },
+    });
+  });
+
+  it("rejects unsafe Code Farm observe parameters before invoking the CLI", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const observeCodefarm = vi.fn();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({
+      api,
+      store: new WorkboardStore(createMemoryStore()),
+      observeCodefarm,
+    });
+
+    const respond = vi.fn();
+    await methods.get("workboard.codefarm.observe")?.handler({
+      params: { repo: "/Users/me/repo", jobId: "cf_20260625_001;rm -rf /", lines: 5000 },
+      respond,
+    } as never);
+
+    expect(observeCodefarm).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[2]?.message).toContain("jobId");
   });
 });

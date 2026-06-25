@@ -1,4 +1,7 @@
 // Workboard plugin module implements gateway behavior.
+import { execFile } from "node:child_process";
+import * as path from "node:path";
+import { promisify } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
@@ -7,11 +10,25 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const CODEFARM_JOB_ID_PATTERN = /^cf_\d{8}_\d{3,}$/;
+const CODEFARM_OBSERVE_DEFAULT_LINES = 200;
+const CODEFARM_OBSERVE_MAX_LINES = 1000;
+const CODEFARM_OBSERVE_TIMEOUT_MS = 10_000;
+const CODEFARM_OBSERVE_MAX_BUFFER = 1_500_000;
+const execFileAsync = promisify(execFile);
 
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
+
+export type CodefarmObserveParams = {
+  repo: string;
+  jobId: string;
+  lines: number;
+};
+
+export type CodefarmObserveRunner = (params: CodefarmObserveParams) => Promise<unknown>;
 
 function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, {
@@ -42,6 +59,65 @@ function assertNoCursorAdvance(params: Record<string, unknown>) {
   }
 }
 
+function isAbsoluteRepoPath(value: string): boolean {
+  return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function readCodefarmObserveLines(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return CODEFARM_OBSERVE_DEFAULT_LINES;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("lines must be a finite number.");
+  }
+  const lines = Math.trunc(value);
+  if (lines < 0 || lines > CODEFARM_OBSERVE_MAX_LINES) {
+    throw new Error(`lines must be between 0 and ${CODEFARM_OBSERVE_MAX_LINES}.`);
+  }
+  return lines;
+}
+
+function readCodefarmObserveParams(params: Record<string, unknown>): CodefarmObserveParams {
+  const repo = typeof params.repo === "string" ? params.repo.trim() : "";
+  if (!repo) {
+    throw new Error("repo is required.");
+  }
+  if (repo.includes("\0") || !isAbsoluteRepoPath(repo)) {
+    throw new Error("repo must be an absolute local path.");
+  }
+  const jobId = typeof params.jobId === "string" ? params.jobId.trim() : "";
+  if (!CODEFARM_JOB_ID_PATTERN.test(jobId)) {
+    throw new Error("jobId must look like cf_YYYYMMDD_001.");
+  }
+  return {
+    repo,
+    jobId,
+    lines: readCodefarmObserveLines(params.lines),
+  };
+}
+
+export async function observeCodefarmJobWithCli(params: CodefarmObserveParams): Promise<unknown> {
+  const bin = process.env.OPENCLAW_CODEFARM_BIN?.trim() || "codefarm";
+  const args = [
+    "observe",
+    params.jobId,
+    "--repo",
+    params.repo,
+    "--json",
+    "--lines",
+    String(params.lines),
+  ];
+  const { stdout } = await execFileAsync(bin, args, {
+    timeout: CODEFARM_OBSERVE_TIMEOUT_MS,
+    maxBuffer: CODEFARM_OBSERVE_MAX_BUFFER,
+  });
+  const output = typeof stdout === "string" ? stdout.trim() : Buffer.from(stdout).toString().trim();
+  if (!output) {
+    throw new Error("codefarm observe returned no JSON output.");
+  }
+  return JSON.parse(output);
+}
+
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
   const claim = card.metadata?.claim;
   if (!claim) {
@@ -69,9 +145,11 @@ function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagno
 export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
+  observeCodefarm?: CodefarmObserveRunner;
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const observeCodefarm = params.observeCodefarm ?? observeCodefarmJobWithCli;
 
   api.registerGatewayMethod(
     "workboard.cards.list",
@@ -691,6 +769,18 @@ export function registerWorkboardGatewayMethods(params: {
       try {
         const exported = await store.exportCards();
         respond(true, { ...exported, cards: exported.cards.map(redactClaimToken) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.codefarm.observe",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await observeCodefarm(readCodefarmObserveParams(requestParams)));
       } catch (error) {
         respondError(respond, error);
       }

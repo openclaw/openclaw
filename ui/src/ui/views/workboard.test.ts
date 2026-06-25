@@ -194,6 +194,94 @@ describe("renderWorkboard", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 
+  it("renders a read-only Code Farm terminal viewer in card details", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Observe Code Farm worker",
+        notes: "Track cf_20260625_001 while it runs.",
+        status: "running",
+        priority: "normal",
+        labels: ["codefarm"],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          automation: {
+            workspace: {
+              kind: "worktree",
+              path: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+            },
+          },
+        },
+      },
+    ];
+    const request = vi.fn(async () => ({
+      schemaVersion: 1,
+      jobId: "cf_20260625_001",
+      repo: "/Users/me/repo",
+      worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+      status: "running",
+      runtime: "codex",
+      branch: "codefarm/cf_20260625_001",
+      updatedAt: "2026-06-25T12:00:00Z",
+      tmux: {
+        available: true,
+        enabled: true,
+        attachCommand: "tmux attach -t codefarm_repo-12345678",
+      },
+      terminal: {
+        source: "tmux",
+        truncated: false,
+        lines: ["worker booted", "npm test -- --run app/tests/canvas.test.ts"],
+      },
+      changes: { touchedFiles: ["app/tests/canvas.test.ts"], hasUncommittedChanges: true },
+      proof: { proofFile: ".codefarm/jobs/cf_20260625_001/PROOF.json", commands: [] },
+    }));
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    } satisfies WorkboardRenderProps;
+
+    renderInto(container, props);
+    container
+      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderInto(container, props);
+
+    const detail = container.querySelector(".workboard-detail");
+    expect(detail?.textContent).toContain("Code Farm terminal");
+    expect(detail?.textContent).toContain("cf_20260625_001");
+    expect(detail?.textContent).toContain("/Users/me/repo");
+
+    container
+      .querySelector<HTMLButtonElement>(".workboard-codefarm__observe")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    renderInto(container, props);
+
+    expect(request).toHaveBeenCalledWith("workboard.codefarm.observe", {
+      repo: "/Users/me/repo",
+      jobId: "cf_20260625_001",
+      lines: 200,
+    });
+    const terminal = container.querySelector(".workboard-codefarm__terminal");
+    expect(terminal?.textContent).toContain("worker booted");
+    expect(terminal?.textContent).toContain("npm test -- --run app/tests/canvas.test.ts");
+    expect(detail?.textContent).toContain("tmux attach -t codefarm_repo-12345678");
+  });
+
   it("keeps focus inside the card modal and restores focus on Escape", async () => {
     const host = {};
     const state = getWorkboardState(host);

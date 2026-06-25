@@ -986,6 +986,68 @@
   font-size: 0.76rem;
 }
 
+.workboard-codefarm {
+  min-width: 0;
+}
+
+.workboard-codefarm__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workboard-codefarm__header .btn {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 0.78rem;
+}
+
+.workboard-codefarm__meta {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.workboard-codefarm__meta span,
+.workboard-codefarm__attach {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-codefarm__error {
+  color: var(--danger);
+}
+
+.workboard-codefarm__note {
+  color: var(--muted);
+}
+
+.workboard-codefarm__terminal {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 168px;
+  max-height: 280px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 92%, black 8%);
+  color: var(--text);
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .workboard textarea.input.workboard-detail__note {
   width: 100%;
   min-height: 84px;

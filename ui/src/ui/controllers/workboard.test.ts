@@ -7,11 +7,13 @@ import {
   captureSessionToWorkboard,
   createWorkboardCard,
   deleteWorkboardCard,
+  findWorkboardCodefarmRef,
   getWorkboardLifecycle,
   getWorkboardDependencyState,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
+  observeWorkboardCodefarmJob,
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
@@ -268,6 +270,99 @@ describe("workboard controller", () => {
       workspace: { kind: "scratch" },
       dispatchCount: 2,
       lastDispatchAt: 20,
+    });
+  });
+
+  it("derives Code Farm observe refs from card text and worktree metadata", () => {
+    const card = {
+      ...sampleCard,
+      notes: "Worker job cf_20260624_002 is running.",
+      metadata: {
+        automation: {
+          workspace: {
+            kind: "worktree",
+            path: "/Users/me/repo/.worktrees/codefarm/cf_20260624_002",
+          },
+        },
+        artifacts: [
+          {
+            id: "artifact-1",
+            createdAt: 1,
+            label: "worker log",
+            path: "/Users/me/repo/.codefarm/jobs/cf_20260624_002/logs/worker.log",
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+
+    expect(findWorkboardCodefarmRef(card)).toEqual({
+      jobId: "cf_20260624_002",
+      repo: "/Users/me/repo",
+    });
+  });
+
+  it("observes a Code Farm job and stores normalized terminal output by card", async () => {
+    const host = {};
+    const card = {
+      ...sampleCard,
+      notes: "Inspect cf_20260625_001.",
+      metadata: {
+        automation: {
+          workspace: {
+            kind: "dir",
+            path: "/Users/me/repo",
+          },
+        },
+      },
+    } satisfies WorkboardCard;
+    const client = createClient((method, params) => {
+      expect(method).toBe("workboard.codefarm.observe");
+      expect(params).toEqual({
+        repo: "/Users/me/repo",
+        jobId: "cf_20260625_001",
+        lines: 50,
+      });
+      return {
+        schemaVersion: 1,
+        jobId: "cf_20260625_001",
+        repo: "/Users/me/repo",
+        worktree: "/Users/me/repo/.worktrees/codefarm/cf_20260625_001",
+        status: "running",
+        runtime: "codex",
+        branch: "codefarm/cf_20260625_001",
+        updatedAt: "2026-06-25T12:00:00Z",
+        tmux: {
+          available: true,
+          enabled: true,
+          attachCommand: "tmux attach -t codefarm_repo-12345678",
+        },
+        terminal: {
+          source: "tmux",
+          truncated: false,
+          lines: ["boot", "npm test"],
+        },
+        changes: { touchedFiles: ["app/tests/canvas.test.ts"], hasUncommittedChanges: true },
+        proof: { proofFile: ".codefarm/jobs/cf_20260625_001/PROOF.json", commands: [] },
+      };
+    });
+
+    await observeWorkboardCodefarmJob({
+      host,
+      client: client as never,
+      card,
+      lines: 50,
+    });
+
+    const viewer = getWorkboardState(host).codefarmByCardId.get(card.id);
+    expect(viewer).toMatchObject({
+      loading: false,
+      error: null,
+      ref: { repo: "/Users/me/repo", jobId: "cf_20260625_001" },
+      observation: {
+        jobId: "cf_20260625_001",
+        terminal: { source: "tmux", truncated: false, lines: ["boot", "npm test"] },
+        tmux: { attachCommand: "tmux attach -t codefarm_repo-12345678" },
+      },
     });
   });
 

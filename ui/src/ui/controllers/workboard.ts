@@ -319,6 +319,62 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
+export type WorkboardCodefarmRef = {
+  repo: string;
+  jobId: string;
+};
+
+export type WorkboardCodefarmTerminal = {
+  source: string;
+  truncated: boolean;
+  lines: string[];
+};
+
+export type WorkboardCodefarmTmux = {
+  available?: boolean;
+  enabled?: boolean;
+  session?: string;
+  window?: string;
+  pane?: string;
+  attachCommand?: string;
+  note?: string;
+};
+
+export type WorkboardCodefarmObservation = {
+  schemaVersion: number;
+  jobId: string;
+  repo: string;
+  worktree?: string;
+  status?: string;
+  runtime?: string;
+  branch?: string;
+  updatedAt?: string | number;
+  tmux?: WorkboardCodefarmTmux;
+  terminal: WorkboardCodefarmTerminal;
+  handoff?: {
+    taskFile?: string;
+    summary?: string;
+  };
+  changes?: {
+    touchedFiles: string[];
+    hasUncommittedChanges: boolean;
+    diffHash?: string;
+  };
+  proof?: {
+    proofFile?: string;
+    verdict?: string;
+    commands: string[];
+  };
+};
+
+export type WorkboardCodefarmViewerState = {
+  ref: WorkboardCodefarmRef | null;
+  observation: WorkboardCodefarmObservation | null;
+  loading: boolean;
+  error: string | null;
+  updatedAt?: number;
+};
+
 export type WorkboardDependencyParent = {
   id: string;
   title: string;
@@ -349,6 +405,7 @@ export type WorkboardUiState = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
+  codefarmByCardId: Map<string, WorkboardCodefarmViewerState>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   query: string;
   priorityFilter: "all" | WorkboardPriority;
@@ -386,6 +443,9 @@ const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
+const CODEFARM_JOB_ID_RE = /\bcf_\d{8}_\d{3,}\b/;
+const CODEFARM_OBSERVE_DEFAULT_LINES = 200;
+const CODEFARM_OBSERVE_MAX_LINES = 1000;
 
 function createDefaultState(): WorkboardUiState {
   return {
@@ -396,6 +456,7 @@ function createDefaultState(): WorkboardUiState {
     cards: [],
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
+    codefarmByCardId: new Map(),
     lastDispatchSummary: null,
     query: "",
     priorityFilter: "all",
@@ -521,6 +582,168 @@ function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     : [];
+}
+
+function addString(values: string[], value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    values.push(value.trim());
+  }
+}
+
+function addStrings(values: string[], entries: readonly unknown[] | undefined) {
+  for (const entry of entries ?? []) {
+    addString(values, entry);
+  }
+}
+
+function collectWorkboardCardText(card: WorkboardCard): string[] {
+  const values: string[] = [];
+  addString(values, card.id);
+  addString(values, card.title);
+  addString(values, card.notes);
+  addString(values, card.agentId);
+  addString(values, card.sessionKey);
+  addString(values, card.runId);
+  addString(values, card.taskId);
+  addString(values, card.sourceUrl);
+  addStrings(values, card.labels);
+  for (const attempt of card.metadata?.attempts ?? []) {
+    addString(values, attempt.id);
+    addString(values, attempt.model);
+    addString(values, attempt.sessionKey);
+    addString(values, attempt.runId);
+    addString(values, attempt.error);
+  }
+  for (const comment of card.metadata?.comments ?? []) {
+    addString(values, comment.body);
+  }
+  for (const link of card.metadata?.links ?? []) {
+    addString(values, link.id);
+    addString(values, link.targetCardId);
+    addString(values, link.title);
+    addString(values, link.url);
+  }
+  for (const proof of card.metadata?.proof ?? []) {
+    addString(values, proof.id);
+    addString(values, proof.label);
+    addString(values, proof.command);
+    addString(values, proof.url);
+    addString(values, proof.note);
+  }
+  for (const artifact of card.metadata?.artifacts ?? []) {
+    addString(values, artifact.id);
+    addString(values, artifact.label);
+    addString(values, artifact.url);
+    addString(values, artifact.path);
+    addString(values, artifact.mimeType);
+  }
+  for (const log of card.metadata?.workerLogs ?? []) {
+    addString(values, log.message);
+    addString(values, log.sessionKey);
+    addString(values, log.runId);
+  }
+  const automation = card.metadata?.automation;
+  if (automation) {
+    addString(values, automation.tenant);
+    addString(values, automation.boardId);
+    addString(values, automation.createdByCardId);
+    addString(values, automation.idempotencyKey);
+    addStrings(values, automation.skills);
+    addString(values, automation.workspace?.path);
+    addString(values, automation.workspace?.branch);
+    addString(values, automation.summary);
+    addStrings(values, automation.createdCardIds);
+  }
+  for (const diagnostic of card.metadata?.diagnostics ?? []) {
+    addString(values, diagnostic.kind);
+    addString(values, diagnostic.title);
+    addString(values, diagnostic.detail);
+  }
+  for (const notification of card.metadata?.notifications ?? []) {
+    addString(values, notification.kind);
+    addString(values, notification.message);
+    addString(values, notification.sessionKey);
+    addString(values, notification.runId);
+  }
+  return values;
+}
+
+function collectWorkboardCodefarmPathCandidates(card: WorkboardCard): string[] {
+  const values: string[] = [];
+  addString(values, card.sourceUrl);
+  addString(values, card.metadata?.automation?.workspace?.path);
+  for (const link of card.metadata?.links ?? []) {
+    addString(values, link.url);
+  }
+  for (const proof of card.metadata?.proof ?? []) {
+    addString(values, proof.url);
+    addString(values, proof.command);
+  }
+  for (const artifact of card.metadata?.artifacts ?? []) {
+    addString(values, artifact.path);
+    addString(values, artifact.url);
+  }
+  return values;
+}
+
+function decodeFilePathCandidate(value: string): string {
+  if (!value.startsWith("file://")) {
+    return value.trim();
+  }
+  try {
+    return decodeURIComponent(new URL(value).pathname);
+  } catch {
+    return value.trim();
+  }
+}
+
+function trimRepoPath(value: string): string {
+  if (value === "/") {
+    return value;
+  }
+  return value.replace(/[\\/]+$/, "");
+}
+
+function repoFromCodefarmPathCandidate(value: string, jobId: string): string | null {
+  const candidate = decodeFilePathCandidate(value).trim();
+  if (!candidate) {
+    return null;
+  }
+  const normalized = candidate.replace(/\\/g, "/");
+  const codefarmJobsIndex = normalized.indexOf("/.codefarm/jobs/");
+  if (codefarmJobsIndex >= 0) {
+    return trimRepoPath(candidate.slice(0, codefarmJobsIndex));
+  }
+  const codefarmWorktreeIndex = normalized.indexOf("/.worktrees/codefarm/");
+  if (codefarmWorktreeIndex >= 0) {
+    return trimRepoPath(candidate.slice(0, codefarmWorktreeIndex));
+  }
+  const workspace = candidate.replace(
+    new RegExp(`${jobId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
+    "",
+  );
+  if (workspace !== candidate && workspace.includes(".worktrees")) {
+    const worktreesIndex = workspace.replace(/\\/g, "/").indexOf("/.worktrees/");
+    if (worktreesIndex >= 0) {
+      return trimRepoPath(workspace.slice(0, worktreesIndex));
+    }
+  }
+  return /^\/|^[A-Za-z]:[\\/]/.test(candidate) ? trimRepoPath(candidate) : null;
+}
+
+export function findWorkboardCodefarmRef(card: WorkboardCard): WorkboardCodefarmRef | null {
+  const text = collectWorkboardCardText(card).join("\n");
+  const jobId = text.match(CODEFARM_JOB_ID_RE)?.[0];
+  if (!jobId) {
+    return null;
+  }
+  for (const candidate of collectWorkboardCodefarmPathCandidates(card)) {
+    const repo = repoFromCodefarmPathCandidate(candidate, jobId);
+    if (repo) {
+      return { repo, jobId };
+    }
+  }
+  return null;
 }
 
 function normalizeWorkerProtocolState(
@@ -1016,6 +1239,161 @@ async function listWorkboardTasks(client: GatewayBrowserClient): Promise<Workboa
     }
     seenCursors.add(page.nextCursor);
     cursor = page.nextCursor;
+  }
+}
+
+function normalizeCodefarmLineCount(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return CODEFARM_OBSERVE_DEFAULT_LINES;
+  }
+  return Math.max(0, Math.min(CODEFARM_OBSERVE_MAX_LINES, Math.trunc(value)));
+}
+
+function normalizeCodefarmTerminal(value: unknown): WorkboardCodefarmTerminal {
+  const record = isRecord(value) ? value : {};
+  const lines = Array.isArray(record.lines)
+    ? record.lines
+        .filter((line): line is string => typeof line === "string")
+        .slice(-CODEFARM_OBSERVE_MAX_LINES)
+    : [];
+  return {
+    source:
+      typeof record.source === "string" && record.source.trim() ? record.source.trim() : "log",
+    truncated: Boolean(record.truncated),
+    lines,
+  };
+}
+
+function normalizeCodefarmTmux(value: unknown): WorkboardCodefarmTmux | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const tmux: WorkboardCodefarmTmux = {
+    ...(typeof value.available === "boolean" ? { available: value.available } : {}),
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(typeof value.session === "string" ? { session: value.session } : {}),
+    ...(typeof value.window === "string" ? { window: value.window } : {}),
+    ...(typeof value.pane === "string" ? { pane: value.pane } : {}),
+    ...(typeof value.attachCommand === "string" ? { attachCommand: value.attachCommand } : {}),
+    ...(typeof value.note === "string" ? { note: value.note } : {}),
+  };
+  return Object.keys(tmux).length ? tmux : undefined;
+}
+
+function normalizeCodefarmObservation(
+  payload: unknown,
+  ref: WorkboardCodefarmRef,
+): WorkboardCodefarmObservation {
+  if (!isRecord(payload)) {
+    throw new Error("Code Farm observe response was not an object.");
+  }
+  const jobId =
+    typeof payload.jobId === "string" && payload.jobId.trim() ? payload.jobId : ref.jobId;
+  const repo = typeof payload.repo === "string" && payload.repo.trim() ? payload.repo : ref.repo;
+  const handoffRecord = isRecord(payload.handoff) ? payload.handoff : undefined;
+  const changesRecord = isRecord(payload.changes) ? payload.changes : undefined;
+  const proofRecord = isRecord(payload.proof) ? payload.proof : undefined;
+  return {
+    schemaVersion:
+      typeof payload.schemaVersion === "number" && Number.isFinite(payload.schemaVersion)
+        ? payload.schemaVersion
+        : 1,
+    jobId,
+    repo,
+    ...(typeof payload.worktree === "string" ? { worktree: payload.worktree } : {}),
+    ...(typeof payload.status === "string" ? { status: payload.status } : {}),
+    ...(typeof payload.runtime === "string" ? { runtime: payload.runtime } : {}),
+    ...(typeof payload.branch === "string" ? { branch: payload.branch } : {}),
+    ...(typeof payload.updatedAt === "string" || typeof payload.updatedAt === "number"
+      ? { updatedAt: payload.updatedAt }
+      : {}),
+    ...(normalizeCodefarmTmux(payload.tmux) ? { tmux: normalizeCodefarmTmux(payload.tmux) } : {}),
+    terminal: normalizeCodefarmTerminal(payload.terminal),
+    ...(handoffRecord
+      ? {
+          handoff: {
+            ...(typeof handoffRecord.taskFile === "string"
+              ? { taskFile: handoffRecord.taskFile }
+              : {}),
+            ...(typeof handoffRecord.summary === "string"
+              ? { summary: handoffRecord.summary }
+              : {}),
+          },
+        }
+      : {}),
+    ...(changesRecord
+      ? {
+          changes: {
+            touchedFiles: normalizeStringArray(changesRecord.touchedFiles),
+            hasUncommittedChanges: Boolean(changesRecord.hasUncommittedChanges),
+            ...(typeof changesRecord.diffHash === "string"
+              ? { diffHash: changesRecord.diffHash }
+              : {}),
+          },
+        }
+      : {}),
+    ...(proofRecord
+      ? {
+          proof: {
+            ...(typeof proofRecord.proofFile === "string"
+              ? { proofFile: proofRecord.proofFile }
+              : {}),
+            ...(typeof proofRecord.verdict === "string" ? { verdict: proofRecord.verdict } : {}),
+            commands: normalizeStringArray(proofRecord.commands),
+          },
+        }
+      : {}),
+  };
+}
+
+export async function observeWorkboardCodefarmJob(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  card: WorkboardCard;
+  lines?: number;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const ref = findWorkboardCodefarmRef(params.card);
+  const previous = state.codefarmByCardId.get(params.card.id);
+  state.codefarmByCardId.set(params.card.id, {
+    ref,
+    observation: previous?.observation ?? null,
+    loading: true,
+    error: null,
+    updatedAt: Date.now(),
+  });
+  params.requestUpdate?.();
+  try {
+    if (!ref) {
+      throw new Error("No Code Farm job metadata found on this card.");
+    }
+    if (!params.client) {
+      throw new Error("Gateway client is not connected.");
+    }
+    const lines = normalizeCodefarmLineCount(params.lines);
+    const payload = await params.client.request("workboard.codefarm.observe", {
+      repo: ref.repo,
+      jobId: ref.jobId,
+      lines,
+    });
+    state.codefarmByCardId.set(params.card.id, {
+      ref,
+      observation: normalizeCodefarmObservation(payload, ref),
+      loading: false,
+      error: null,
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    state.codefarmByCardId.set(params.card.id, {
+      ref,
+      observation: previous?.observation ?? null,
+      loading: false,
+      error: formatError(error),
+      updatedAt: Date.now(),
+    });
+  } finally {
+    params.requestUpdate?.();
   }
 }
 

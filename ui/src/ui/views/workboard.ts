@@ -7,12 +7,14 @@ import {
   archiveWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
+  findWorkboardCodefarmRef,
   findWorkboardSession,
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
+  observeWorkboardCodefarmJob,
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
@@ -1313,6 +1315,81 @@ function renderDetailList(
   `;
 }
 
+function renderCodefarmViewer(props: WorkboardProps, card: WorkboardCard) {
+  const state = getWorkboardState(props.host);
+  const ref = findWorkboardCodefarmRef(card);
+  const viewer = state.codefarmByCardId.get(card.id);
+  const effectiveRef = viewer?.ref ?? ref;
+  const observation = viewer?.observation;
+  if (!effectiveRef && !observation && !viewer?.error) {
+    return nothing;
+  }
+  const source = observation?.terminal.source;
+  const terminalText = observation?.terminal.lines.length
+    ? observation.terminal.lines.join("\n")
+    : t("workboard.codefarmEmpty");
+  const disabled = viewer?.loading || !props.connected || !props.client || !effectiveRef;
+  return html`
+    <section class="workboard-detail__section workboard-codefarm">
+      <div class="workboard-codefarm__header">
+        <h3>${t("workboard.detailCodefarm")}</h3>
+        <button
+          class="btn workboard-codefarm__observe"
+          type="button"
+          ?disabled=${disabled}
+          @click=${() =>
+            observeWorkboardCodefarmJob({
+              host: props.host,
+              client: props.client,
+              card,
+              requestUpdate: props.onRequestUpdate,
+            })}
+        >
+          ${icons.terminal}
+          ${viewer?.loading
+            ? t("workboard.codefarmLoading")
+            : observation
+              ? t("workboard.codefarmRefresh")
+              : t("workboard.codefarmObserve")}
+        </button>
+      </div>
+      ${effectiveRef
+        ? html`
+            <div class="workboard-codefarm__meta">
+              <span>${t("workboard.codefarmJob", { job: effectiveRef.jobId })}</span>
+              <span title=${effectiveRef.repo}
+                >${t("workboard.codefarmRepo", { repo: effectiveRef.repo })}</span
+              >
+              ${source ? html`<span>${t("workboard.codefarmSource", { source })}</span>` : nothing}
+            </div>
+          `
+        : html`<p>${t("workboard.codefarmNoRef")}</p>`}
+      ${viewer?.error ? html`<p class="workboard-codefarm__error">${viewer.error}</p>` : nothing}
+      ${observation?.tmux?.attachCommand
+        ? html`
+            <div class="workboard-codefarm__attach">
+              ${t("workboard.codefarmAttach", { command: observation.tmux.attachCommand })}
+            </div>
+          `
+        : nothing}
+      ${observation?.tmux?.note
+        ? html`<p class="workboard-codefarm__note">${observation.tmux.note}</p>`
+        : nothing}
+      ${observation?.terminal.truncated
+        ? html`<p class="workboard-codefarm__note">${t("workboard.codefarmTruncated")}</p>`
+        : nothing}
+      ${observation
+        ? html`<pre
+            class="workboard-codefarm__terminal"
+            aria-label=${t("workboard.detailCodefarm")}
+          >
+${terminalText}</pre
+          >`
+        : nothing}
+    </section>
+  `;
+}
+
 function renderCardDetailsPanel(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const card = getVisibleDetailCard(state);
@@ -1490,6 +1567,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
                 : "",
             ])
           : nothing}
+        ${renderCodefarmViewer(props, card)}
         ${renderDetailList(
           t("workboard.eventsLabel"),
           events.map((event) => `${formatEventLabel(event)} ${formatTime(event.at)}`),
