@@ -894,7 +894,11 @@ describe("config help copy quality", () => {
     const pluginHookTimeouts = FIELD_HELP["plugins.entries.*.hooks.timeouts"];
     expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
     expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
-    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
+    // agent_end is now documented under allowStateAccess, not allowConversationAccess
+    const pluginStatePolicy = FIELD_HELP["plugins.entries.*.hooks.allowStateAccess"];
+    expect(pluginStatePolicy).toBeTruthy();
+    expect(pluginStatePolicy.includes("agent_end")).toBe(true);
+    expect(pluginConversationPolicy.includes("agent_end")).toBe(false);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
