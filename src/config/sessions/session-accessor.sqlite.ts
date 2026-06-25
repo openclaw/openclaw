@@ -587,6 +587,18 @@ function loadSqliteTranscriptEventsFromDatabase(
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
+function readTranscriptEventJsonSetInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): Set<string> {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("transcript_events").select("event_json").where("session_id", "=", sessionId),
+  ).rows;
+  return new Set(rows.map((row) => row.event_json));
+}
+
 /** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
 export function loadLatestSqliteAssistantText(
   scope: SessionTranscriptReadScope,
@@ -810,15 +822,24 @@ export async function importSqliteSessionRows(
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
       writeSessionEntry(database, resolved.sessionKey, params.entry);
-      deleteSqliteTranscriptEventsInTransaction(database, params.entry.sessionId);
       if (params.readTranscriptEvents) {
         const transcriptScope = {
           ...resolved,
           sessionId: params.entry.sessionId,
         };
+        const existingEventJson = readTranscriptEventJsonSetInTransaction(
+          database,
+          params.entry.sessionId,
+        );
         params.readTranscriptEvents((event) => {
-          appendTranscriptEventInTransaction(database, transcriptScope, event);
-          transcriptEvents += 1;
+          const eventJson = JSON.stringify(event);
+          if (existingEventJson.has(eventJson)) {
+            return;
+          }
+          if (appendTranscriptEventInTransaction(database, transcriptScope, event)) {
+            existingEventJson.add(eventJson);
+            transcriptEvents += 1;
+          }
         });
       }
     }, toDatabaseOptions(resolved));

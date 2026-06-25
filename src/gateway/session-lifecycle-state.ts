@@ -4,7 +4,8 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
@@ -276,7 +277,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ? params.event.sessionId
       : undefined;
 
-  await updateSessionStoreEntry({
+  await updateSessionEntry({
     storePath: sessionEntry.storePath,
     sessionKey: sessionEntry.canonicalKey,
     skipMaintenance: true,

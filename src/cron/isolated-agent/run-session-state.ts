@@ -19,10 +19,11 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 /** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
 
-type UpdateSessionStore = (
-  storePath: string,
-  update: (store: MutableSessionStore) => void,
-) => Promise<void>;
+type PersistSessionEntry = (params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}) => Promise<void>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = () => Promise<void>;
@@ -59,7 +60,7 @@ export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
-  updateSessionStore: UpdateSessionStore;
+  persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
     if (params.isFastTestEnv) {
@@ -71,11 +72,13 @@ export function createPersistCronSessionEntry(params: {
       !cronTranscriptExists(params.cronSession.sessionEntry)
         ? toNonResumableCronSessionEntry(params.cronSession.sessionEntry)
         : params.cronSession.sessionEntry;
-    // Update both the in-memory store and persisted JSON so later operations in
-    // this process observe the same session entry that hit disk.
+    // Keep the active process mirror aligned with the accessor-backed row so
+    // later cron steps see the same session entry that was persisted.
     params.cronSession.store[params.agentSessionKey] = persistedEntry;
-    await params.updateSessionStore(params.cronSession.storePath, (store) => {
-      store[params.agentSessionKey] = persistedEntry;
+    await params.persistSessionEntry({
+      storePath: params.cronSession.storePath,
+      sessionKey: params.agentSessionKey,
+      entry: persistedEntry,
     });
   };
 }

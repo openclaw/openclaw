@@ -53,7 +53,10 @@ import {
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
 } from "./session-accessor.sqlite.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
   ResolvedSessionMaintenanceConfig,
@@ -1169,21 +1172,10 @@ function resolveInitializedReplySessionEntry(params: {
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
-  const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const currentSessionFile = params.currentEntry?.sessionFile;
-  const inheritedPreviousSessionFile =
-    Boolean(currentSessionFile) &&
-    params.currentEntry?.sessionId !== params.sessionEntry.sessionId &&
-    currentSessionFile === params.sessionEntry.sessionFile;
-  const entryForResolve =
-    fallbackSessionFile && (inheritedPreviousSessionFile || !params.sessionEntry.sessionFile)
-      ? { ...params.sessionEntry, sessionFile: fallbackSessionFile }
-      : inheritedPreviousSessionFile
-        ? { ...params.sessionEntry, sessionFile: undefined }
-        : params.sessionEntry;
-  const sessionFile = resolveSessionFilePath(params.sessionEntry.sessionId, entryForResolve, {
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
-    sessionsDir: path.dirname(path.resolve(params.storePath)),
+    sessionId: params.sessionEntry.sessionId,
+    storePath: params.storePath,
   });
   return {
     ...params.sessionEntry,
@@ -2272,10 +2264,9 @@ async function persistExpectedSessionTranscriptTurn(
 }
 
 /**
- * Resolves the current storage-neutral runtime transcript target. Runtime
- * callers still pass sessionFile into file-backed session managers, so the
- * returned locator remains a filesystem path while SQLite identity comes from
- * sessionId/sessionKey/storePath.
+ * Resolves the current storage-neutral runtime transcript target. SQLite-backed
+ * rows return their marker so transcript readers/writers stay on the accessor
+ * path instead of reopening legacy JSONL artifacts.
  */
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
@@ -2332,6 +2323,19 @@ function resolveRuntimeSessionFile(
     sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
       ? sessionEntry
       : undefined;
+  if (
+    sqliteSessionFileMarkerMatchesSession(matchingSessionEntry?.sessionFile, scope.sessionId) &&
+    matchingSessionEntry?.sessionFile
+  ) {
+    return matchingSessionEntry.sessionFile;
+  }
+  if (scope.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+    });
+  }
   return resolveSessionFilePath(
     scope.sessionId,
     matchingSessionEntry,

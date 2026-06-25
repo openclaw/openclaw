@@ -18,6 +18,7 @@ type TestStore = {
   stateDir: string;
   storePath: string;
   tempDir: string;
+  trajectoryPath: string;
   transcriptPath: string;
 };
 
@@ -55,7 +56,7 @@ describe("runDoctorSessionSqlite", () => {
       legacyEntries: 1,
       sqliteEntries: 0,
       targets: 1,
-      unreferencedJsonlFiles: 1,
+      unreferencedJsonlFiles: 2,
       validatedEntries: 1,
       validatedTranscriptEvents: 2,
     });
@@ -86,7 +87,7 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(firstImport.totals).toMatchObject({
-      archivedTranscriptFiles: 1,
+      archivedTranscriptFiles: 2,
       importedEntries: 1,
       importedTranscriptEvents: 2,
       issues: 0,
@@ -107,11 +108,13 @@ describe("runDoctorSessionSqlite", () => {
       validatedTranscriptEvents: 2,
     });
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
-    expect(firstImport.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
-    const archivedTranscriptPath = firstImport.targets[0]?.archivedTranscriptFiles[0];
-    expect(archivedTranscriptPath).toBeTruthy();
-    expect(archivedTranscriptPath).not.toContain(`${path.sep}sessions${path.sep}`);
-    expect(fs.existsSync(archivedTranscriptPath!)).toBe(true);
+    expect(fs.existsSync(store.trajectoryPath)).toBe(false);
+    expect(firstImport.targets[0]?.archivedTranscriptFiles).toHaveLength(2);
+    for (const archivedTranscriptPath of firstImport.targets[0]?.archivedTranscriptFiles ?? []) {
+      expect(archivedTranscriptPath).toBeTruthy();
+      expect(archivedTranscriptPath).not.toContain(`${path.sep}sessions${path.sep}`);
+      expect(fs.existsSync(archivedTranscriptPath)).toBe(true);
+    }
     expect(inspect.totals.sqliteEntries).toBe(1);
     expect(
       loadExactSqliteSessionEntry({
@@ -154,6 +157,51 @@ describe("runDoctorSessionSqlite", () => {
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
+    const store = createLegacyStore({
+      transcriptLines: [
+        '{"type":"session","sessionId":"session-1"}',
+        '{"type":"message","id":"msg-1","message":{"role":"user","content":"first"}}',
+        '{"type":"message","id":"msg-2","message":{"role":"assistant","content":"second"}}',
+      ],
+    });
+
+    await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    fs.writeFileSync(
+      store.transcriptPath,
+      '{"type":"message","id":"msg-2","message":{"role":"assistant","content":"second"}}\n',
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(store.trajectoryPath, `${JSON.stringify({ type: "trajectory" })}\n`, {
+      mode: 0o600,
+    });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedTranscriptFiles: 2,
+      importedEntries: 1,
+      importedTranscriptEvents: 0,
+      issues: 0,
+    });
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toHaveLength(3);
   });
 
   it("reports custom explicit store sqlite paths beside the store", async () => {
@@ -210,6 +258,7 @@ function createLegacyStore(
     : path.join(stateDir, "agents", params.agentDirName ?? "main", "sessions");
   const storePath = path.join(sessionDir, "sessions.json");
   const transcriptPath = path.join(sessionDir, "session-1.jsonl");
+  const trajectoryPath = path.join(sessionDir, "session-1.trajectory.jsonl");
   fs.mkdirSync(sessionDir, { recursive: true });
   fs.writeFileSync(configPath, "{}\n", { mode: 0o600 });
   fs.writeFileSync(
@@ -235,6 +284,9 @@ function createLegacyStore(
     `${(params.transcriptLines ?? ['{"type":"session","sessionId":"session-1"}', '{"type":"event","id":"evt-1"}']).join("\n")}\n`,
     { mode: 0o600 },
   );
+  fs.writeFileSync(trajectoryPath, `${JSON.stringify({ type: "trajectory" })}\n`, {
+    mode: 0o600,
+  });
   fs.writeFileSync(path.join(sessionDir, "orphan.jsonl"), '{"type":"event"}\n', {
     mode: 0o600,
   });
@@ -245,7 +297,16 @@ function createLegacyStore(
   };
   process.env.OPENCLAW_CONFIG_PATH = configPath;
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  return { configPath, env, sessionDir, stateDir, storePath, tempDir, transcriptPath };
+  return {
+    configPath,
+    env,
+    sessionDir,
+    stateDir,
+    storePath,
+    tempDir,
+    trajectoryPath,
+    transcriptPath,
+  };
 }
 
 function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined): void {

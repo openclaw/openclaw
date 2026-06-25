@@ -111,8 +111,8 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
+const sessionAccessorRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
 );
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 const cronExternalContentRuntimeLoader = createLazyImportLoader(
@@ -133,8 +133,8 @@ const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
 
-async function loadSessionStoreRuntime() {
-  return await sessionStoreRuntimeLoader.load();
+async function loadSessionAccessorRuntime() {
+  return await sessionAccessorRuntimeLoader.load();
 }
 
 async function loadCronExecutorRuntime() {
@@ -598,9 +598,9 @@ async function prepareCronRunContext(params: {
     isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
-    updateSessionStore: async (storePath, update) => {
-      const { updateSessionStore } = await loadSessionStoreRuntime();
-      await updateSessionStore(storePath, update);
+    persistSessionEntry: async ({ storePath, sessionKey, entry }) => {
+      const { replaceSessionEntry } = await loadSessionAccessorRuntime();
+      await replaceSessionEntry({ storePath, sessionKey, agentId }, entry);
     },
   });
   const withRunSession: WithRunSession = (result) => ({
