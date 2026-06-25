@@ -158,6 +158,38 @@ describe("resolveSessionStoreTargets", () => {
     ]);
   });
 
+  it("uses the path-owned agent id for explicit agent store paths", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const storePaths = await createAgentSessionStores(stateDir, ["codex-proof"]);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      expect(resolveSessionStoreTargets({}, { store: storePaths["codex-proof"] }, { env })).toEqual(
+        [
+          {
+            agentId: "codex-proof",
+            storePath: storePaths["codex-proof"],
+          },
+        ],
+      );
+    });
+  });
+
+  it("keeps arbitrary explicit store paths on the default agent", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "backups", "sessions", "sessions.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, "{}", "utf8");
+
+      expect(resolveSessionStoreTargets({}, { store: storePath })).toEqual([
+        {
+          agentId: "main",
+          storePath,
+        },
+      ]);
+    });
+  });
+
   it("rejects unknown agent ids", () => {
     const cfg: OpenClawConfig = {
       agents: {
