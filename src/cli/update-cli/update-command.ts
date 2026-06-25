@@ -3498,6 +3498,11 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     if (explicitTag && !canResolveRegistryVersionForPackageTarget(tag)) {
       notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
     }
+    if (explicitTag && canResolveRegistryVersionForPackageTarget(tag) && targetVersion == null) {
+      notes.push(
+        `Package target ${tag} is not published on npm yet; apply will fail until the registry propagates it.`,
+      );
+    }
 
     printDryRunPreview(
       {
