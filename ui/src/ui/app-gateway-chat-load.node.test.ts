@@ -18,7 +18,6 @@ const loadDevicesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadHealthStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadModelAuthStatusStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadNodesMock = vi.hoisted(() => vi.fn(async () => undefined));
-const subscribeSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const syncUrlWithSessionKeyMock = vi.hoisted(() => vi.fn());
 const verifyPushMock = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -202,15 +201,6 @@ vi.mock("../pages/nodes/data.ts", () => ({
   loadNodes: loadNodesMock,
 }));
 
-vi.mock("../pages/sessions/data.ts", () => ({
-  applySessionsChangedEvent: vi.fn(() => ({ applied: false })),
-  loadSessions: vi.fn(async () => undefined),
-  subscribeSessions: subscribeSessionsMock,
-}));
-vi.mock("../pages/chat/session-switch.ts", () => ({
-  syncSelectedSessionMessageSubscription: vi.fn(),
-}));
-
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./gateway.ts");
@@ -225,8 +215,6 @@ afterAll(() => {
   vi.doUnmock("./controllers/health.ts");
   vi.doUnmock("./controllers/model-auth-status.ts");
   vi.doUnmock("../pages/nodes/data.ts");
-  vi.doUnmock("../pages/sessions/data.ts");
-  vi.doUnmock("../pages/chat/session-switch.ts");
   vi.resetModules();
 });
 
@@ -316,7 +304,6 @@ beforeEach(() => {
   loadHealthStateMock.mockClear();
   loadModelAuthStatusStateMock.mockClear();
   loadNodesMock.mockClear();
-  subscribeSessionsMock.mockClear();
   syncUrlWithSessionKeyMock.mockClear();
   verifyPushMock.mockClear();
 });

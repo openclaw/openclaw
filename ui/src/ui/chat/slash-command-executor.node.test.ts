@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -14,16 +14,26 @@ import { executeSlashCommand as executeSlashCommandImpl } from "./slash-command-
 function createSessionCapability(client: GatewayBrowserClient): SessionCapability {
   const request = client.request.bind(client);
   return {
-    snapshot: {
+    state: {
       result: null,
+      agentId: null,
       loading: false,
       error: null,
     },
     list: (options = {}) => request("sessions.list", options),
     refresh: async () => undefined,
     create: async () => null,
-    patch: (key, patch, options = {}) => request("sessions.patch", { key, ...options, ...patch }),
+    patch: (key: string, patch: SessionPatch, options: { agentId?: string | null } = {}) =>
+      request("sessions.patch", { key, ...options, ...patch }),
     delete: async () => false,
+    deleteMany: async () => ({ deleted: [], errors: [] }),
+    reset: async () => undefined,
+    compact: (key: string, options: { agentId?: string | null } = {}) =>
+      request("sessions.compact", { key, ...options }),
+    steer: (key: string, message: string, options: { agentId?: string | null } = {}) =>
+      request("sessions.steer", { key, ...options, message }),
+    listFiles: async () => null,
+    getFile: async () => null,
     subscribe: () => () => undefined,
     dispose: () => undefined,
   } as unknown as SessionCapability;
