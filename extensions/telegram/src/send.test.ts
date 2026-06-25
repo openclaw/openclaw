@@ -258,6 +258,14 @@ function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[]
   return mockCall(mock, 0, label);
 }
 
+function firstMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex: number) {
+  const call = mock.mock.calls[0];
+  if (call === undefined) {
+    throw new Error("expected mock call");
+  }
+  return call[argIndex];
+}
+
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`expected ${label} to be a string`);
@@ -1609,6 +1617,36 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
       message_thread_id: 99,
     });
+  });
+
+  it("strips internal media-store cache suffix from outbound filenames", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 59,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "cached photo", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "/media/store/photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg",
+    });
+
+    const media = firstMockCallArg(sendPhoto, 1);
+    if (media === undefined) {
+      throw new Error("Expected Telegram photo media");
+    }
+    expect((media as { fileName?: string }).fileName).toBe("photo.jpg");
   });
 
   it("splits long captions into media + text messages when text exceeds 1024 chars", async () => {

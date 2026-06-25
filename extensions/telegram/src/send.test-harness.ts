@@ -2,6 +2,7 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
+  extractOriginalFilename,
   isGifMedia,
   kindFromMime,
   normalizePollInput,
@@ -145,7 +146,9 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: function InputFile() {},
+  InputFile: function InputFile(this: { fileName?: string }, _buffer: unknown, fileName?: string) {
+    this.fileName = fileName;
+  },
 }));
 
 vi.mock("undici", async () => {
@@ -172,6 +175,7 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
 
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
+  extractOriginalFilename,
   getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
   isGifMedia,
   kindFromMime,

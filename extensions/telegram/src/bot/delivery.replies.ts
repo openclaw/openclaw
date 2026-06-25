@@ -18,6 +18,7 @@ import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runti
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   buildOutboundMediaLoadOptions,
+  extractOriginalFilename,
   isGifMedia,
   kindFromMime,
   probeVideoDimensions,
@@ -402,7 +403,11 @@ async function deliverMediaReply(params: {
       contentType: media.contentType,
       fileName: media.fileName,
     });
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
+    const fileName = media.fileName
+      ? extractOriginalFilename(media.fileName)
+      : isGif
+        ? "animation.gif"
+        : "file";
     const file = new InputFile(media.buffer, fileName);
     const { caption, followUpText } = splitTelegramCaption(
       isFirstMedia ? (params.reply.text ?? undefined) : undefined,

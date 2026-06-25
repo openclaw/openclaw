@@ -804,6 +804,29 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("strips internal media-store cache suffix from outbound filenames", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 2,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "/media/store/photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg" }],
+      runtime,
+      bot,
+    });
+
+    const media = firstMockCallArg(sendPhoto, 1);
+    if (media === undefined) {
+      throw new Error("Expected Telegram photo media");
+    }
+    expect((media as { fileName?: string }).fileName).toBe("photo.jpg");
+  });
+
   it("passes probed dimensions to video reply sends", async () => {
     const runtime = createRuntime();
     const sendVideo = vi.fn().mockResolvedValue({

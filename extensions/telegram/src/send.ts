@@ -52,6 +52,7 @@ import {
 } from "./rich-message.js";
 import {
   buildOutboundMediaLoadOptions,
+  extractOriginalFilename,
   getImageMetadata,
   isGifMedia,
   kindFromMime,
@@ -981,8 +982,9 @@ export async function sendMessageTelegram(
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
-    const fileName =
-      media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
+    const fileName = media.fileName
+      ? extractOriginalFilename(media.fileName)
+      : ((isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file");
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
