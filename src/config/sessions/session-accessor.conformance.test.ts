@@ -482,6 +482,27 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
             scopedTranscript("agent:main:lifecycle-cleanup-removed", "removed-lifecycle"),
           ),
         ).resolves.toEqual([]);
+        const files = fs.readdirSync(path.dirname(cleanupStorePath));
+        const removedArchive = files.find((file) =>
+          file.startsWith("removed-lifecycle.jsonl.deleted."),
+        );
+        const orphanArchive = files.find((file) =>
+          file.startsWith("orphan-lifecycle.jsonl.deleted."),
+        );
+        expect(removedArchive).toBeDefined();
+        expect(orphanArchive).toBeDefined();
+        expect(
+          fs
+            .readFileSync(path.join(path.dirname(cleanupStorePath), removedArchive ?? ""), "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toEqual([
+          expect.objectContaining({
+            id: "removed-lifecycle-event",
+            marker: "lifecycle-marker-run",
+          }),
+        ]);
       } else {
         const files = fs.readdirSync(path.dirname(cleanupStorePath));
         expect(
@@ -1061,6 +1082,17 @@ describe("sqlite session normalization", () => {
         storePath: paths.sqlitePath,
       }),
     ).resolves.toEqual([]);
+    const archivedStale = fs
+      .readdirSync(paths.tempDir)
+      .filter((file) => file.startsWith("stale-session.jsonl.deleted."));
+    expect(archivedStale).toHaveLength(1);
+    expect(
+      fs
+        .readFileSync(path.join(paths.tempDir, archivedStale[0] ?? ""), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([staleTranscriptEvent]);
 
     await patchSqliteSessionEntry(
       scopeFor("agent:main:newer"),

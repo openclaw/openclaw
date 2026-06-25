@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -22,6 +23,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type {
   ExactSessionEntry,
   DeleteSessionEntryLifecycleParams,
@@ -57,6 +59,7 @@ import {
 } from "./store-maintenance.js";
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { serializeJsonlLines } from "./transcript-jsonl.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -278,6 +281,7 @@ export async function patchSqliteSessionEntry(
       deleteLegacySessionEntryRows(writeDatabase, fresh?.legacyKeys ?? [], resolved.sessionKey);
       applySqliteSessionEntryMaintenance(writeDatabase, {
         activeSessionKey: resolved.sessionKey,
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         skipMaintenance: options.skipMaintenance,
       });
       result = cloneSessionEntry(next);
@@ -318,6 +322,7 @@ export async function updateSqliteSessionEntry(
       deleteLegacySessionEntryRows(writeDatabase, fresh.legacyKeys, resolved.sessionKey);
       applySqliteSessionEntryMaintenance(writeDatabase, {
         activeSessionKey: resolved.sessionKey,
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         skipMaintenance: options.skipMaintenance,
       });
       result = cloneSessionEntry(next);
@@ -344,6 +349,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     };
     runOpenClawAgentWriteTransaction((database) => {
       result = cleanupSqliteSessionLifecycleArtifactsInTransaction(database, {
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         sessionKeySegmentPrefix,
         transcriptContentMarker,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
@@ -468,6 +474,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       }
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: params.activeSessionKey ?? "",
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         skipMaintenance: params.skipMaintenance,
       });
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
@@ -508,6 +515,7 @@ export async function purgeSqliteDeletedAgentSessionEntries(
       }
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: "",
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       });
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
     }, toDatabaseOptions(resolved));
@@ -929,6 +937,17 @@ function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | un
   return normalizeAgentId(path.basename(agentDir));
 }
 
+function resolveSqliteTranscriptArchiveDirectory(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+): string {
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
+  const databaseDir = path.dirname(databasePath);
+  if (path.basename(databaseDir) !== "agent") {
+    return databaseDir;
+  }
+  return path.join(path.dirname(databaseDir), "sessions");
+}
+
 function resolveSqliteTranscriptScope(
   scope: Pick<
     SessionTranscriptWriteScope,
@@ -1180,7 +1199,7 @@ function deleteLegacySessionEntryRows(
 
 function applySqliteSessionEntryMaintenance(
   database: OpenClawAgentDatabase,
-  params: { activeSessionKey: string; skipMaintenance?: boolean },
+  params: { activeSessionKey: string; archiveDirectory: string; skipMaintenance?: boolean },
 ): void {
   if (params.skipMaintenance) {
     return;
@@ -1241,6 +1260,7 @@ function applySqliteSessionEntryMaintenance(
   const referencedSessionIds = readReferencedSqliteSessionIds(database);
   for (const sessionId of removedSessionIds) {
     deleteSqliteSessionStateIfUnreferenced({
+      archiveDirectory: params.archiveDirectory,
       database,
       referencedSessionIds,
       sessionId,
@@ -1312,7 +1332,127 @@ function readReferencedSqliteSessionIds(database: OpenClawAgentDatabase): Set<st
   return new Set(rows.map((row) => row.session_id));
 }
 
+function readSqliteTranscriptArchiveLines(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string[] {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows.map((row) => row.event_json);
+}
+
+function resolveSqliteTranscriptArchivePath(params: {
+  archiveDirectory: string;
+  sessionId: string;
+  nowMs?: number;
+}): string {
+  const archiveDirectory = path.resolve(params.archiveDirectory);
+  const archivePath = path.resolve(
+    archiveDirectory,
+    `${params.sessionId}.jsonl.deleted.${formatSessionArchiveTimestamp(params.nowMs)}`,
+  );
+  if (path.dirname(archivePath) !== archiveDirectory) {
+    throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
+  }
+  return archivePath;
+}
+
+function findMatchingSqliteTranscriptArchive(params: {
+  archiveDirectory: string;
+  content: string;
+  sessionId: string;
+}): string | null {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(params.archiveDirectory);
+  } catch {
+    return null;
+  }
+  const prefix = `${params.sessionId}.jsonl.deleted.`;
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const archivePath = path.join(params.archiveDirectory, entry);
+    try {
+      const stat = fs.statSync(archivePath);
+      if (!stat.isFile() || stat.size !== Buffer.byteLength(params.content, "utf8")) {
+        continue;
+      }
+      if (fs.readFileSync(archivePath, "utf8") === params.content) {
+        return archivePath;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function writeSqliteTranscriptArchive(params: {
+  archiveDirectory: string;
+  content: string;
+  sessionId: string;
+}): string {
+  fs.mkdirSync(params.archiveDirectory, { recursive: true });
+  const existing = findMatchingSqliteTranscriptArchive(params);
+  if (existing) {
+    return existing;
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const archivePath = resolveSqliteTranscriptArchivePath({
+      archiveDirectory: params.archiveDirectory,
+      sessionId: params.sessionId,
+      nowMs: Date.now() + attempt,
+    });
+    if (fs.existsSync(archivePath)) {
+      continue;
+    }
+    const tempPath = `${archivePath}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, params.content, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      fs.renameSync(tempPath, archivePath);
+      return archivePath;
+    } catch (err) {
+      fs.rmSync(tempPath, { force: true });
+      if ((err as { code?: unknown })?.code === "EEXIST") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
+}
+
+function archiveSqliteTranscriptRows(params: {
+  archiveDirectory: string;
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+}): boolean {
+  const lines = readSqliteTranscriptArchiveLines(params.database, params.sessionId);
+  if (lines.length === 0) {
+    return false;
+  }
+  writeSqliteTranscriptArchive({
+    archiveDirectory: params.archiveDirectory,
+    content: serializeJsonlLines(lines),
+    sessionId: params.sessionId,
+  });
+  return true;
+}
+
 function deleteSqliteSessionStateIfUnreferenced(params: {
+  archiveDirectory: string;
   database: OpenClawAgentDatabase;
   referencedSessionIds: ReadonlySet<string>;
   sessionId: string;
@@ -1322,15 +1462,21 @@ function deleteSqliteSessionStateIfUnreferenced(params: {
   }
   const hadTranscriptState =
     readSessionTranscriptUpdatedAt(params.database, params.sessionId) !== undefined;
+  const archivedTranscriptState = archiveSqliteTranscriptRows({
+    archiveDirectory: params.archiveDirectory,
+    database: params.database,
+    sessionId: params.sessionId,
+  });
   const db = getSessionKysely(params.database.db);
   executeSqliteQuerySync(
     params.database.db,
     db.deleteFrom("sessions").where("session_id", "=", params.sessionId),
   );
-  return hadTranscriptState ? 1 : 0;
+  return hadTranscriptState && archivedTranscriptState ? 1 : 0;
 }
 
 function cleanupSqliteOrphanLifecycleTranscriptState(params: {
+  archiveDirectory: string;
   database: OpenClawAgentDatabase;
   referencedSessionIds: ReadonlySet<string>;
   transcriptContentMarker: string;
@@ -1365,11 +1511,18 @@ function cleanupSqliteOrphanLifecycleTranscriptState(params: {
     ) {
       continue;
     }
+    const archived = archiveSqliteTranscriptRows({
+      archiveDirectory: params.archiveDirectory,
+      database: params.database,
+      sessionId: row.session_id,
+    });
     executeSqliteQuerySync(
       params.database.db,
       db.deleteFrom("sessions").where("session_id", "=", row.session_id),
     );
-    removed += 1;
+    if (archived) {
+      removed += 1;
+    }
   }
   return removed;
 }
@@ -1377,6 +1530,7 @@ function cleanupSqliteOrphanLifecycleTranscriptState(params: {
 function cleanupSqliteSessionLifecycleArtifactsInTransaction(
   database: OpenClawAgentDatabase,
   params: {
+    archiveDirectory: string;
     sessionKeySegmentPrefix: string;
     transcriptContentMarker: string;
     orphanTranscriptMinAgeMs: number;
@@ -1426,12 +1580,14 @@ function cleanupSqliteSessionLifecycleArtifactsInTransaction(
   let archivedTranscriptArtifacts = 0;
   for (const sessionId of removedSessionIds) {
     archivedTranscriptArtifacts += deleteSqliteSessionStateIfUnreferenced({
+      archiveDirectory: params.archiveDirectory,
       database,
       referencedSessionIds,
       sessionId,
     });
   }
   archivedTranscriptArtifacts += cleanupSqliteOrphanLifecycleTranscriptState({
+    archiveDirectory: params.archiveDirectory,
     database,
     referencedSessionIds,
     transcriptContentMarker: params.transcriptContentMarker,
