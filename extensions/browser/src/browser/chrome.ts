@@ -73,6 +73,11 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import {
+  restoreManagedChromeCookies,
+  saveManagedChromeCookies,
+  startManagedChromeCookieFlush,
+} from "./cookie-persistence.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -697,6 +702,10 @@ export type RunningChrome = {
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
+  /** Browser-level CDP WebSocket URL resolved once at launch; reused for cookie persistence (#96704). */
+  browserWsUrl?: string;
+  /** Interval flushing cookies to disk so they survive ungraceful kills (#96704). */
+  cookieFlushTimer?: NodeJS.Timeout;
   /**
    * @deprecated CDP managed-proxy bypasses are scoped at exact request URLs.
    * Kept so older in-memory callers can pass stale RunningChrome objects
@@ -1103,6 +1112,19 @@ export async function launchOpenClawChrome(
         }
       }
 
+      // Chrome over CDP may not persist cookies to its SQLite store, so restore
+      // the saved jar once CDP is ready, then keep flushing it while the browser
+      // runs. The browser-level ws GUID is stable for the process lifetime.
+      const browserWsUrl =
+        (await getChromeWebSocketUrl(cdpUrlForPort(profile.cdpPort)).catch(() => null)) ??
+        undefined;
+      if (browserWsUrl) {
+        await restoreManagedChromeCookies(browserWsUrl, userDataDir);
+      }
+      const cookieFlushTimer = browserWsUrl
+        ? startManagedChromeCookieFlush(browserWsUrl, userDataDir)
+        : undefined;
+
       const pid = proc.pid ?? -1;
       log.info(
         `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
@@ -1117,6 +1139,8 @@ export async function launchOpenClawChrome(
         proc,
         headless: headlessMode.headless,
         headlessSource: headlessMode.source,
+        browserWsUrl,
+        cookieFlushTimer,
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
@@ -1138,6 +1162,14 @@ export async function stopOpenClawChrome(
   try {
     if (proc.killed) {
       return;
+    }
+    // Stop the periodic flush and take a final cookie snapshot while CDP is
+    // still reachable, before we kill Chrome.
+    if (running.cookieFlushTimer) {
+      clearInterval(running.cookieFlushTimer);
+    }
+    if (running.browserWsUrl) {
+      await saveManagedChromeCookies(running.browserWsUrl, running.userDataDir);
     }
     try {
       proc.kill("SIGTERM");

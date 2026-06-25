@@ -71,6 +71,10 @@ Notes:
   OpenClaw did not launch the browser process itself.
 - For local managed profiles, `openclaw browser stop` stops the spawned browser
   process.
+- Local managed profiles persist browser cookies in
+  `~/.openclaw/browser/<profile>/cookies.json` so logins survive browser and
+  gateway restarts. Treat that sidecar like the browser profile itself: it
+  contains live login cookies and is written with restrictive file permissions.
 - `openclaw browser start --headless` applies only to that start request and
   only when OpenClaw launches a local managed browser. It does not rewrite
   `browser.headless` or profile config, and it is a no-op for an already-running
