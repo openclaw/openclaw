@@ -73,6 +73,17 @@ const ALLOWLIST = [
       "Lost on process restart; the TaskFlow queue remains and the next continuation scheduling pass can arm a fresh work timer.",
   },
   {
+    file: "src/auto-reply/continuation/work-dispatch.ts",
+    symbol: "idleRetryControllers",
+    owner: "continuation work dispatcher",
+    purpose:
+      "Dedupes the live AbortController waiting for a reply-run end or command-lane idle event before retrying a busy continue_work row.",
+    safeVolatileClassification:
+      "The map stores AbortControllers and in-process waiter closures; the durable retry intent and slow hedge dueAt are persisted in TaskFlow.",
+    restartContract:
+      "Lost on process restart; pending continuation work remains in TaskFlow and recovery re-arms the hedge timer so the row is not stranded.",
+  },
+  {
     file: "src/auto-reply/reply/reply-run-registry.ts",
     symbol: "activeRunsByKey",
     owner: "reply run registry singleton",
