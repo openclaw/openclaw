@@ -24,6 +24,7 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "accountId",
   "directPolicy",
   "includeReasoning",
+  "transcriptMode",
 ] as const;
 
 describe("heartbeat config-honor inventory", () => {

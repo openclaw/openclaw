@@ -1069,19 +1069,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "Sync completed. No errors found.",
-              },
+              arguments: { notify: false, summary: "Sync completed. No errors found." },
             },
           ],
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_heartbeat",
-          content: "Success",
-        },
+        { role: "toolResult", toolCallId: "call_heartbeat", content: "Success" },
       ];
       expect(
         filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
@@ -1089,10 +1081,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "[Heartbeat summary: Sync completed. No errors found.]",
-            },
+            { type: "text", text: "[Heartbeat summary: Sync completed. No errors found.]" },
           ],
         },
       ]);
@@ -1108,11 +1097,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "Clean summary.",
-              },
+              arguments: { notify: false, summary: "Clean summary." },
             },
           ],
           tool_calls: [
@@ -1120,11 +1105,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               id: "call_heartbeat",
               type: "toolCall",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "Clean summary.",
-              },
+              arguments: { notify: false, summary: "Clean summary." },
             },
           ],
           reasoning_content: "internal thinking...",
@@ -1135,23 +1116,14 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
           api: "openai-responses",
           stopReason: "toolUse",
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_heartbeat",
-          content: "Success",
-        },
+        { role: "toolResult", toolCallId: "call_heartbeat", content: "Success" },
       ];
       expect(
         filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
       ).toEqual([
         {
           role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "[Heartbeat summary: Clean summary.]",
-            },
-          ],
+          content: [{ type: "text", text: "[Heartbeat summary: Clean summary.]" }],
           timestamp: 123456789,
           model: "gpt-4o",
           provider: "openai",
@@ -1172,19 +1144,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "",
-              },
+              arguments: { notify: false, summary: "" },
             },
           ],
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_heartbeat",
-          content: "Success",
-        },
+        { role: "toolResult", toolCallId: "call_heartbeat", content: "Success" },
         { role: "user", content: "Hi" },
       ];
       expect(
@@ -1206,11 +1170,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: true,
-                summary: "Should not be summarized",
-              },
+              arguments: { notify: true, summary: "Should not be summarized" },
             },
           ],
         },
@@ -1234,11 +1194,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: true,
-                summary: "Should not be summarized",
-              },
+              arguments: { notify: true, summary: "Should not be summarized" },
             },
           ],
         },
@@ -1269,19 +1225,11 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: true,
-                summary: "Visible summary",
-              },
+              arguments: { notify: true, summary: "Visible summary" },
             },
           ],
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_heartbeat",
-          content: "Success",
-        },
+        { role: "toolResult", toolCallId: "call_heartbeat", content: "Success" },
       ];
       expect(
         filterHeartbeatTranscriptArtifacts(
@@ -1304,11 +1252,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "Pending silent summary",
-              },
+              arguments: { notify: false, summary: "Pending silent summary" },
             },
           ],
         },
@@ -1332,11 +1276,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
               type: "toolCall",
               id: "call_heartbeat",
               name: "heartbeat_respond",
-              arguments: {
-                outcome: "no_change",
-                notify: false,
-                summary: "Failed silent summary",
-              },
+              arguments: { notify: false, summary: "Failed silent summary" },
             },
           ],
         },

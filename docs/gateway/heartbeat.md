@@ -274,12 +274,12 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 </ParamField>
 <ParamField path="transcriptMode" type='"strip-all" | "keep-result" | "keep-all"' default="strip-all">
-  Controls how acknowledged heartbeat turns (where the reply contains `HEARTBEAT_OK` and any additional text is `<= ackMaxChars`) are filtered in the conversation history:
+  Controls how acknowledged heartbeat turns are filtered in the conversation history:
   - `strip-all` (default): removes the heartbeat prompt, intermediate tool runs/results, and the terminal acknowledgement response entirely.
   - `keep-result`: removes the heartbeat prompt and intermediate tool run noise, but retains a single compact assistant turn summarizing any non-empty report/text returned alongside the acknowledgement.
   - `keep-all`: disables filtering, keeping the full prompt, tool run history, and acknowledgement.
 
-Note: Heartbeat turns that fail to acknowledge or return text longer than `ackMaxChars` are always retained in full.
+This only affects acknowledged heartbeat turns.
 
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">

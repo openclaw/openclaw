@@ -118,8 +118,7 @@ export function resolveHeartbeatSummaryForAgent(
       overrides?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
-  const transcriptMode =
-    merged?.transcriptMode ?? defaults?.transcriptMode ?? overrides?.transcriptMode ?? "strip-all";
+  const transcriptMode = merged?.transcriptMode ?? "strip-all";
 
   return {
     enabled: true,
