@@ -1067,9 +1067,22 @@ function collectToolTelemetry(params: {
       }
     }
   }
+  if (!isMessagingTool(params.toolName)) {
+    return;
+  }
+  const isMessagingSendAction = isMessagingToolSendAction(params.toolName, params.args);
+  if (!isMessagingSendAction && !params.messagingTarget) {
+    return;
+  }
   if (
-    !isMessagingTool(params.toolName) ||
-    (!isMessagingToolSendAction(params.toolName, params.args) && !params.messagingTarget)
+    !isMessagingSendAction &&
+    !isDeliveredMessagingToolResult({
+      toolName: params.toolName,
+      args: params.args,
+      result: params.result,
+      hookResult: params.mediaTrustResult,
+      isError: params.isError,
+    })
   ) {
     return;
   }

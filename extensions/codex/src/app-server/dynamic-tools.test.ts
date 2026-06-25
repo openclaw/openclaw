@@ -1303,6 +1303,37 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
 
+  it("does not record dry-run reply actions as committed sends", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Dry run.", {
+        deliveryStatus: "dry_run",
+        dryRun: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:+12069106512",
+        currentMessagingTarget: "+12069106512",
+        currentMessageId: "provider-guid-862",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "862",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Dry run."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
   it("keeps message-tool-only source replies terminal for explicit native target segments", async () => {
     const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
       sourceReplyDeliveryMode: "message_tool_only",
