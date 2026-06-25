@@ -50,6 +50,7 @@ import {
 } from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { createSseByteGuard } from "./streaming-byte-guard.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
@@ -69,6 +70,7 @@ const CLAUDE_CODE_VERSION = "2.1.75";
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+const ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -613,7 +615,7 @@ function createAbortError(signal: AbortSignal): Error {
 }
 
 function readAnthropicSseChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: { read: () => Promise<ReadableStreamReadResult<Uint8Array>>; cancel: (reason?: unknown) => Promise<void> },
   signal?: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (!signal) {
@@ -675,12 +677,23 @@ async function* parseAnthropicSseBody(
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
+  // Cap the streaming 200 success-body read at 16 MiB, mirroring the
+  // non-streaming `readProviderJsonResponse` cap so a hostile or
+  // malfunctioning Anthropic-compatible endpoint cannot exhaust memory by
+  // streaming an unbounded SSE body.
+  const guard = createSseByteGuard(reader, {
+    maxBytes: ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `Anthropic Messages success body exceeded ${maxBytes} bytes (received ${size})`,
+      ),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
   try {
     while (true) {
-      const { done, value } = await readAnthropicSseChunk(reader, signal);
+      const { done, value } = await readAnthropicSseChunk(guard, signal);
       if (done) {
         completed = true;
         break;

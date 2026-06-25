@@ -2903,4 +2903,47 @@ describe("anthropic transport stream", () => {
     // stream (a timing artefact of synchronous mock SSE delivery).
     expect(eventTypes).not.toContain("start");
   });
+
+  it("bounds streamed Anthropic success bodies without content-length", async () => {
+    // 1 MiB chunks; cap is 16 MiB so the bounded reader should cancel well
+    // before draining the full 32 MiB advertised body.
+    const CHUNK = 1024 * 1024;
+    const TOTAL = 32;
+    let pullCount = 0;
+    let cancelReason: unknown;
+    const overflowing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount > TOTAL) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(overflowing, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(
+      /Anthropic Messages success body exceeded 16777216 bytes/,
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    // 16 MiB + a couple of overshoot pulls, well under 32.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(20);
+  });
 });
