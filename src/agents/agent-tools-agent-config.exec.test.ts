@@ -3,11 +3,11 @@
  * Verifies per-agent exec host policy affects lazy exec/process behavior.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
@@ -49,8 +49,10 @@ function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return execTool;
 }
 
+const tempDirs = createTempDirTracker();
+
 function createTempAgentDirs(prefix: string) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  const root = tempDirs.make(`${prefix}-`);
   const workspaceDir = path.join(root, "workspace");
   const agentDir = path.join(root, "agent");
   fs.mkdirSync(workspaceDir, { recursive: true });
@@ -61,6 +63,10 @@ function createTempAgentDirs(prefix: string) {
 describe("Agent-specific exec tool defaults", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
+  afterEach(() => {
+    tempDirs.cleanup();
   });
 
   it("should run exec synchronously when process is denied", async () => {
