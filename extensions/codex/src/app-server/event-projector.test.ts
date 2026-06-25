@@ -1447,6 +1447,75 @@ describe("CodexAppServerEventProjector", () => {
     expect(preambles.every((event) => event.data.itemId === "msg-commentary")).toBe(true);
   });
 
+  it("suppresses a raw commentary echo whose phase field is missing from the envelope", async () => {
+    // FIX #89668: The Codex app-server may ship a raw response echo for a
+    // commentary item without including the `phase` field. The typed completion
+    // was already echoed, so the raw envelope must be suppressed even when
+    // `readString(item, "phase")` returns undefined.
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    // Typed commentary completion increments pendingRawCommentaryEchoes.
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-commentary", phase: "commentary", text: "" },
+      }),
+    );
+    await projector.handleNotification(
+      agentMessageDelta("Checking the workspace", "msg-commentary"),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "Checking the workspace",
+        },
+      }),
+    );
+    // Raw response echo — same text, but the envelope OMITS the `phase` field.
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Checking the workspace" }],
+        },
+      }),
+    );
+    // A later raw-only note (also without phase) — should be delivered
+    // as final assistant output, not consumed by the echo counter.
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Still working" }],
+        },
+      }),
+    );
+
+    const preambles = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+
+    // Only the typed-echo preamble should appear.  The raw echo without a phase
+    // was consumed by the echo counter and is NOT a preamble.
+    expect(preambles.map((event) => event.data.progressText)).toEqual([
+      "Checking the workspace",
+    ]);
+
+    // The later no-phase raw-only note is stored in assistantTextByItem
+    // and should appear in the final assistant output.
+    await projector.handleNotification(turnCompleted());
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toContain("Still working");
+  });
+
   it("clears a pending commentary echo when the raw envelope has no text", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({
