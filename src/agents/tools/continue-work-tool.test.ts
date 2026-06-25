@@ -118,6 +118,14 @@ describe("continue_work tool", () => {
     });
   });
 
+  it("tells models not to use continue_work for wait or park loops", () => {
+    const tool = makeTool();
+
+    expect(tool.description).toContain("concrete follow-up work");
+    expect(tool.description).toContain("Do not use continue_work to wait, yield, stand by, park");
+    expect(tool.description).toContain("use sessions_yield");
+  });
+
   it("keeps traceparent absent when the optional carrier is omitted", async () => {
     const requestContinuation = vi.fn();
     const tool = makeTool({ requestContinuation });

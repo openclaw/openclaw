@@ -52,11 +52,10 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
     label: "Continuation",
     name: "continue_work",
     description: [
-      "Schedule next turn, in this session, to occur immediately after this turn completes or on a time delay.",
-      "Use for long-running result pending, watch-loop pacing, self-scheduled check, or simply to schedule your next turn without being event-prompted — at any point in this turn when you would like another.",
-      "Lighter than holding the channel with exec sleeps; lighter than spawning a session.",
-      "Without this or continue_delegate, the session goes dark until next heartbeat or external wake — yielded turns don't auto-resume.",
-      "Use delaySeconds to schedule the wake; reason captures why for diagnostics.",
+      "Schedule another turn in this same session for concrete follow-up work that cannot finish in the current turn.",
+      "Do not use continue_work to wait, yield, stand by, park, or keep the session alive after all tasks are complete.",
+      "For waiting or parking, use sessions_yield when a deliberate yield is needed, or schedule no continuation.",
+      "Use delaySeconds only when real follow-up work should run later; reason captures the specific remaining work for diagnostics.",
     ].join(" "),
     parameters: ContinueWorkToolSchema,
     execute: async (_toolCallId, args) => {

@@ -41,10 +41,20 @@ const PendingWorkStateSchema = z.object({
   releasedAt: z.number().int().nonnegative().optional(),
   turnGrantedAt: z.number().int().nonnegative().optional(),
   retryCount: z.number().int().nonnegative().optional(),
-  // #990 Pillar-0: consecutive PRE-drive busy-skip (requests-in-flight/draining)
-  // count for exp-backoff on the re-arm. DISTINCT from retryCount — a busy-skip is
-  // a legit defer, never a failed attempt, so it must not feed the fail-bound.
+  // Consecutive PRE-drive busy-skip (requests-in-flight/draining/queue-busy)
+  // count for diagnostics and rate state. DISTINCT from retryCount — a busy-skip
+  // is a legit defer, never a failed attempt, so it must not feed the fail-bound.
   busySkipCount: z.number().int().nonnegative().optional(),
+  // Event-driven busy retry: when a wake is blocked by an active turn or the
+  // main lane, the row parks behind the matching idle event and keeps a slow
+  // hedge timer only as loss recovery.
+  idleRetry: z
+    .object({
+      trigger: z.enum(["reply-run-ended", "command-lane-idle"]),
+      reasonCategory: z.enum(["follow-up-work", "wait-shaped", "unknown"]),
+      armedAt: z.number().int().nonnegative(),
+    })
+    .optional(),
   // #990 locus-3: durable delivered-mark written AFTER a wake is confirmed
   // delivered but BEFORE the persist-gap that precedes finishFlow. The
   // consume read-guard skips any flow carrying it so a crash in that window
@@ -53,6 +63,14 @@ const PendingWorkStateSchema = z.object({
 });
 
 type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
+
+export type ContinuationWorkReasonCategory = "follow-up-work" | "wait-shaped" | "unknown";
+
+export type PendingContinuationIdleRetry = {
+  trigger: "reply-run-ended" | "command-lane-idle";
+  reasonCategory: ContinuationWorkReasonCategory;
+  armedAt: number;
+};
 
 export type PendingContinuationWork = {
   sessionKey: string;
@@ -68,9 +86,10 @@ export type PendingContinuationWork = {
   chainId?: string;
   traceparent?: string;
   retryCount?: number;
-  // #990 Pillar-0: consecutive busy-skip count for exp-backoff on the busy re-arm.
-  // Distinct from retryCount (the transient-error fail-bound). Never penalizes.
+  // Consecutive busy-skip count for diagnostics/rate state. Distinct from
+  // retryCount (the transient-error fail-bound). Never penalizes.
   busySkipCount?: number;
+  idleRetry?: PendingContinuationIdleRetry;
   // #990 locus-3: durable delivered-mark (see schema). PRESENT once a wake was
   // confirmed delivered; the consume read-guard refuses to re-drive it.
   succeeded?: { point: "optimal"; durability: "durable" };
@@ -125,6 +144,7 @@ function workToRuntime(
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
     ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
+    ...(state.idleRetry ? { idleRetry: state.idleRetry } : {}),
     ...(state.succeeded ? { succeeded: state.succeeded } : {}),
     status,
     flowId: flow.flowId,
@@ -171,7 +191,11 @@ export function listPendingWorkSessionKeysForRecovery(): string[] {
 
 export function consumePendingWork(
   sessionKey: string,
-  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+  options: {
+    includeRunning?: boolean;
+    includeRunningUpdatedAtOrBefore?: number;
+    includeIdleRetry?: boolean;
+  } = {},
 ): PendingContinuationWork[] {
   const now = Date.now();
   const work: PendingContinuationWork[] = [];
@@ -221,7 +245,8 @@ export function consumePendingWork(
     if (state.succeeded) {
       continue;
     }
-    if (now < state.dueAt) {
+    const idleRetryReady = options.includeIdleRetry === true && state.idleRetry !== undefined;
+    if (now < state.dueAt && !idleRetryReady) {
       continue;
     }
     const releasedAt = Date.now();
@@ -286,12 +311,14 @@ function finishContinuationWorkFlow(
   const current = getTaskFlowById(work.flowId);
   const state = current ? decodeWorkState(current) : undefined;
   const now = Date.now();
+  const baseState: PendingWorkState = state ?? buildFallbackWorkState(work);
+  const { idleRetry: _idleRetry, ...terminalState } = baseState;
   const finished = finishFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
     currentStep: params.currentStep,
     stateJson: {
-      ...(state ?? buildFallbackWorkState(work)),
+      ...terminalState,
       turnGrantedAt: now,
       ...params.stateExtra,
     },
@@ -309,8 +336,8 @@ function finishContinuationWorkFlow(
 export function markPendingWorkTurnGranted(work: PendingContinuationWork): boolean {
   return finishContinuationWorkFlow(work, {
     currentStep: "Same-session continuation turn granted",
-    // #990 Pillar-0: a flow that drove is no longer busy-deferred — clear the
-    // exp-backoff counter so the granted record never carries a stale rate-cap.
+    // A flow that drove is no longer busy-deferred — clear the busy counter so
+    // the granted record never carries stale retry state.
     stateExtra: { busySkipCount: 0 },
     notCommittedTag: "work-finish-not-committed",
   });
@@ -359,26 +386,35 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
 
 export function requeuePendingWork(
   work: PendingContinuationWork,
-  params: { dueAt: number; summary: string; retryCount?: number; busySkipCount?: number },
+  params: {
+    dueAt: number;
+    summary: string;
+    retryCount?: number;
+    busySkipCount?: number;
+    idleRetry?: PendingContinuationIdleRetry;
+  },
 ): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
   }
   const current = getTaskFlowById(work.flowId);
   const state = current ? decodeWorkState(current) : undefined;
+  const baseState: PendingWorkState = state ?? {
+    kind: "continuation_work",
+    sessionKey: work.sessionKey,
+    hop: work.hop,
+    delayMs: work.delayMs,
+    electedAt: work.electedAt,
+    dueAt: work.dueAt,
+    maxChainLength: work.maxChainLength,
+  };
+  const { idleRetry: _idleRetry, ...stateWithoutIdleRetry } = baseState;
   const nextState: PendingWorkState = {
-    ...(state ?? {
-      kind: "continuation_work",
-      sessionKey: work.sessionKey,
-      hop: work.hop,
-      delayMs: work.delayMs,
-      electedAt: work.electedAt,
-      dueAt: work.dueAt,
-      maxChainLength: work.maxChainLength,
-    }),
+    ...stateWithoutIdleRetry,
     dueAt: params.dueAt,
     ...(params.retryCount !== undefined ? { retryCount: params.retryCount } : {}),
     ...(params.busySkipCount !== undefined ? { busySkipCount: params.busySkipCount } : {}),
+    ...(params.idleRetry ? { idleRetry: params.idleRetry } : {}),
   };
   const updated = updateFlowRecordByIdExpectedRevision({
     flowId: work.flowId,

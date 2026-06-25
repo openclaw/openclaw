@@ -2,12 +2,114 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
 const activeSessions = new Set<string>();
+const replyIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
+const laneIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
 let mainQueueSize = 0;
 let gatewayDraining = false;
 let replyError: Error | undefined;
 let drainAfterReply = false;
 let replyPayloadOverride: unknown;
 const mockSessionStore: Record<string, unknown> = {};
+
+function removeWaiter(
+  waiters: Map<string, Array<(idle: boolean) => void>>,
+  key: string,
+  waiter: (idle: boolean) => void,
+): void {
+  const current = waiters.get(key);
+  if (!current) {
+    return;
+  }
+  const index = current.indexOf(waiter);
+  if (index >= 0) {
+    current.splice(index, 1);
+  }
+  if (current.length === 0) {
+    waiters.delete(key);
+  }
+}
+
+function waitForMockIdle(
+  waiters: Map<string, Array<(idle: boolean) => void>>,
+  key: string,
+  isIdle: () => boolean,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (isIdle()) {
+    return Promise.resolve(true);
+  }
+  if (signal?.aborted) {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let abortHandler: (() => void) | undefined;
+    const finish = (idle: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      removeWaiter(waiters, key, finish);
+      if (abortHandler) {
+        signal?.removeEventListener("abort", abortHandler);
+      }
+      resolve(idle);
+    };
+    const current = waiters.get(key) ?? [];
+    current.push(finish);
+    waiters.set(key, current);
+    if (signal) {
+      abortHandler = () => finish(false);
+      signal.addEventListener("abort", abortHandler, { once: true });
+    }
+  });
+}
+
+function resolveReplyRunIdle(sessionKey: string): void {
+  activeSessions.delete(sessionKey);
+  const waiters = replyIdleWaiters.get(sessionKey) ?? [];
+  for (const finish of Array.from(waiters)) {
+    finish(true);
+  }
+}
+
+function resolveCommandLaneIdle(lane = "main"): void {
+  mainQueueSize = 0;
+  const waiters = laneIdleWaiters.get(lane) ?? [];
+  for (const finish of Array.from(waiters)) {
+    finish(true);
+  }
+}
+
+async function flushAsyncWork(iterations = 8): Promise<void> {
+  for (let i = 0; i < iterations; i++) {
+    await Promise.resolve();
+  }
+}
+
+async function waitForMockWaiter(
+  waiters: Map<string, Array<(idle: boolean) => void>>,
+  key: string,
+): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    if ((waiters.get(key)?.length ?? 0) > 0) {
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await flushAsyncWork();
+  }
+  throw new Error(`expected idle waiter for ${key}`);
+}
+
+async function waitForTurnGrantCount(count: number): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (turnGrants.length >= count) {
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await flushAsyncWork();
+  }
+}
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({ session: { store: "test-store" } }),
@@ -58,12 +160,26 @@ vi.mock("../../sessions/session-key-utils.js", () => ({
 vi.mock("../reply/reply-run-registry.js", () => ({
   replyRunRegistry: {
     isActive: (sessionKey: string) => activeSessions.has(sessionKey),
+    waitForIdle: (sessionKey: string, _timeoutMs?: number, opts?: { signal?: AbortSignal }) =>
+      waitForMockIdle(
+        replyIdleWaiters,
+        sessionKey,
+        () => !activeSessions.has(sessionKey),
+        opts?.signal,
+      ),
   },
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: () => mainQueueSize,
   isGatewayDraining: () => gatewayDraining,
+  waitForCommandLaneIdle: async (
+    lane = "main",
+    _timeoutMs?: number,
+    opts?: { signal?: AbortSignal },
+  ) => ({
+    idle: await waitForMockIdle(laneIdleWaiters, lane, () => mainQueueSize <= 0, opts?.signal),
+  }),
 }));
 
 vi.mock("../reply/get-reply.js", () => ({
@@ -241,10 +357,12 @@ import {
   deleteSubagentSessionForCleanup,
   resetSubagentSessionCleanupForTests,
 } from "../../agents/subagent-session-cleanup.js";
+import { getReplyFromConfig } from "../reply/get-reply.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
   bucket1ReapVerdict,
+  classifyContinuationWorkReason,
   computeBusySkipBackoffMs,
   partitionSupersededWork,
   recoverPendingContinuationWork,
@@ -257,6 +375,8 @@ import {
   enqueuePendingWork,
   hasLiveOrRecentlyDispatchedContinuationWork,
 } from "./work-store.js";
+
+const getReplyFromConfigMock = vi.mocked(getReplyFromConfig);
 
 function addSubagentRun(childSessionKey: string, overrides: Partial<SubagentRunRecord> = {}): void {
   const runId = overrides.runId ?? `run-${childSessionKey}-${subagentRuns.size + 1}`;
@@ -296,6 +416,8 @@ describe("durable continuation_work dispatch", () => {
     turnGrants.length = 0;
     systemEvents.length = 0;
     activeSessions.clear();
+    replyIdleWaiters.clear();
+    laneIdleWaiters.clear();
     mainQueueSize = 0;
     gatewayDraining = false;
     replyError = undefined;
@@ -307,12 +429,15 @@ describe("durable continuation_work dispatch", () => {
     mockFlows.clear();
     flowCounter = 0;
     subagentRuns.clear();
+    getReplyFromConfigMock.mockClear();
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
   });
 
   afterEach(() => {
     subagentRuns.clear();
+    replyIdleWaiters.clear();
+    laneIdleWaiters.clear();
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
     vi.useRealTimers();
@@ -438,7 +563,7 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("requeues instead of losing a claimed continuation when the session is busy", async () => {
+  it("retries busy same-session work from the reply-run end event instead of near-1Hz polling", async () => {
     const sessionKey = "agent:main:busy";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);
@@ -458,16 +583,25 @@ describe("durable continuation_work dispatch", () => {
     const flow = [...mockFlows.values()][0];
     expect(flow).toMatchObject({ status: "queued" });
     expect(flow?.currentStep).toBe("Requeued same-session continuation wake");
+    expect(flow?.stateJson).toMatchObject({
+      busySkipCount: 1,
+      dueAt: Date.now() + 60_000,
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    });
     expect(systemEvents).toEqual([]);
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
 
-    activeSessions.clear();
-    mainQueueSize = 0;
-    gatewayDraining = false;
-    replyError = undefined;
-    drainAfterReply = false;
-    replyPayloadOverride = undefined;
+    await waitForMockWaiter(replyIdleWaiters, sessionKey);
     await vi.advanceTimersByTimeAsync(1_000);
-    await flushTimers();
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(0);
+
+    resolveReplyRunIdle(sessionKey);
+    await waitForTurnGrantCount(1);
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
@@ -515,7 +649,7 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("requeues instead of bypassing already queued main-lane work", async () => {
+  it("retries main-session work from the command-lane idle event instead of polling queue busy", async () => {
     const sessionKey = "agent:main:queued-user-turn";
     mockSessionStore[sessionKey] = { sessionKey };
     mainQueueSize = 1;
@@ -536,15 +670,23 @@ describe("durable continuation_work dispatch", () => {
     expect([...mockFlows.values()][0]).toMatchObject({
       status: "queued",
       currentStep: "Requeued same-session continuation wake",
+      stateJson: expect.objectContaining({
+        dueAt: Date.now() + 60_000,
+        idleRetry: expect.objectContaining({
+          trigger: "command-lane-idle",
+          reasonCategory: "follow-up-work",
+        }),
+      }),
     });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
 
-    mainQueueSize = 0;
-    gatewayDraining = false;
-    replyError = undefined;
-    drainAfterReply = false;
-    replyPayloadOverride = undefined;
+    await waitForMockWaiter(laneIdleWaiters, "main");
     await vi.advanceTimersByTimeAsync(1_000);
-    await flushTimers();
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(0);
+
+    resolveCommandLaneIdle();
+    await waitForTurnGrantCount(1);
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
@@ -574,6 +716,79 @@ describe("durable continuation_work dispatch", () => {
 
     expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
     expect(turnGrants).toHaveLength(0);
+  });
+
+  it("keeps a slow hedge as the safety net when an idle event is lost", async () => {
+    const sessionKey = "agent:main:lost-idle-event";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "follow up after busy turn",
+    });
+
+    await dispatchPendingContinuationWork({ sessionKey });
+    await waitForMockWaiter(replyIdleWaiters, sessionKey);
+    activeSessions.delete(sessionKey);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("follow up after busy turn"),
+        }),
+      }),
+    ]);
+  });
+
+  it("parks wait-shaped continuation rows behind idle events without a high-frequency wake loop", async () => {
+    const sessionKey = "agent:main:wait-shaped";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    enqueuePendingWork({
+      sessionKey,
+      hop: 41,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 200,
+      reason: "Clearing wake cascade. Yielding and standing by.",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    const flow = [...mockFlows.values()][0];
+    expect(flow).toMatchObject({
+      status: "queued",
+      stateJson: expect.objectContaining({
+        dueAt: Date.now() + 60_000,
+        idleRetry: {
+          trigger: "reply-run-ended",
+          reasonCategory: "wait-shaped",
+          armedAt: Date.now(),
+        },
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushAsyncWork();
+
+    expect(turnGrants).toHaveLength(0);
+    expect([...mockFlows.values()][0]?.status).toBe("queued");
   });
 
   it("drives a subagent continuation to completion on its own session lane when main is busy (#1057)", async () => {
@@ -701,7 +916,7 @@ describe("durable continuation_work dispatch", () => {
     });
 
     gatewayDraining = false;
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     await flushTimers();
 
     expect(turnGrants).toEqual([
@@ -977,13 +1192,10 @@ describe("durable continuation_work dispatch", () => {
     );
   });
 
-  it("backs off exponentially on consecutive busy-skip re-arms instead of a flat 1s (#990 Pillar-0)", async () => {
-    // RED against the old flat BUSY_RETRY_MS: step 1 would re-arm at 1s again (and
-    // carry no busySkipCount) instead of doubling. The storm was exactly this flat
-    // ~1Hz re-arm on a chronically-busy seat.
-    const sessionKey = "agent:main:busy-backoff";
+  it("uses the busy-skip ceiling as a slow hedge while idle events own normal retry", async () => {
+    const sessionKey = "agent:main:busy-slow-hedge";
     mockSessionStore[sessionKey] = { sessionKey };
-    activeSessions.add(sessionKey); // chronically busy: every drive busy-skips
+    activeSessions.add(sessionKey);
     enqueuePendingWork({
       sessionKey,
       hop: 2,
@@ -994,11 +1206,9 @@ describe("durable continuation_work dispatch", () => {
       reason: "storm",
     });
 
-    // 2^0..2^6 * 1s, capped at maxDelayMs (60s in test config), then flat at cap.
-    const expectedDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000];
-    for (let i = 0; i < expectedDelays.length; i++) {
+    for (let i = 0; i < 4; i++) {
       await dispatchPendingContinuationWork({ sessionKey });
-      // Drop the just-armed hedge so we drive each re-consume deterministically.
+      // Drop the just-armed idle listener/timer so each re-consume is deterministic.
       resetContinuationWorkDispatchForTests();
       const flow = [...mockFlows.values()][0];
       expect(flow?.status).toBe("queued");
@@ -1007,11 +1217,10 @@ describe("durable continuation_work dispatch", () => {
         busySkipCount?: number;
         retryCount?: number;
       };
-      expect(state.dueAt - Date.now()).toBe(expectedDelays[i]);
+      expect(state.dueAt - Date.now()).toBe(60_000);
       expect(state.busySkipCount).toBe(i + 1);
       expect(state.retryCount).toBeUndefined(); // busy-skip never penalizes
-      // Mature the flow for the next consume (no hedge armed; clock-only advance).
-      await vi.advanceTimersByTimeAsync(expectedDelays[i]);
+      await vi.advanceTimersByTimeAsync(60_000);
     }
 
     expect(turnGrants).toHaveLength(0); // never driven while busy, never dropped
@@ -1567,6 +1776,18 @@ describe("#990 Pillar-0 computeBusySkipBackoffMs (exp-backoff)", () => {
     expect(computeBusySkipBackoffMs(0, { baseMs: 500, ceilingMs: 60_000, factor: 3 })).toBe(500);
     expect(computeBusySkipBackoffMs(1, { baseMs: 500, ceilingMs: 60_000, factor: 3 })).toBe(1_500);
     expect(computeBusySkipBackoffMs(2, { baseMs: 500, ceilingMs: 60_000, factor: 3 })).toBe(4_500);
+  });
+});
+
+describe("classifyContinuationWorkReason", () => {
+  it("keeps wait-shaped continuation reasons observable without text-driving dispatch", () => {
+    expect(classifyContinuationWorkReason("Clearing wake cascade. Yielding and standing by.")).toBe(
+      "wait-shaped",
+    );
+    expect(classifyContinuationWorkReason("Follow up with the package summary.")).toBe(
+      "follow-up-work",
+    );
+    expect(classifyContinuationWorkReason(undefined)).toBe("unknown");
   });
 });
 

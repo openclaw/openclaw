@@ -100,6 +100,14 @@ type ActiveTaskWaiter = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
+type CommandLaneIdleWaiter = {
+  lane: string;
+  resolve: (value: { idle: boolean }) => void;
+  timeout?: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  abortHandler?: () => void;
+};
+
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
@@ -115,6 +123,7 @@ function getQueueState() {
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
+    laneIdleWaiters: new Map<string, Set<CommandLaneIdleWaiter>>(),
     nextTaskId: 1,
     nextQueueSequence: 1,
   }));
@@ -126,6 +135,9 @@ function getQueueState() {
   // valid Set instead of `undefined`.
   if (!state.activeTaskWaiters) {
     state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  if (!state.laneIdleWaiters) {
+    state.laneIdleWaiters = new Map<string, Set<CommandLaneIdleWaiter>>();
   }
   if (!state.nextQueueSequence) {
     state.nextQueueSequence = 1;
@@ -238,6 +250,48 @@ function notifyActiveTaskWaiters(): void {
     if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
       resolveActiveTaskWaiter(waiter, { drained: true });
     }
+  }
+}
+
+function resolveCommandLaneIdleWaiter(
+  waiter: CommandLaneIdleWaiter,
+  result: { idle: boolean },
+): void {
+  const queueState = getQueueState();
+  const laneWaiters = queueState.laneIdleWaiters.get(waiter.lane);
+  if (!laneWaiters?.delete(waiter)) {
+    return;
+  }
+  if (laneWaiters.size === 0) {
+    queueState.laneIdleWaiters.delete(waiter.lane);
+  }
+  if (waiter.timeout) {
+    clearTimeout(waiter.timeout);
+  }
+  if (waiter.signal && waiter.abortHandler) {
+    waiter.signal.removeEventListener("abort", waiter.abortHandler);
+  }
+  waiter.resolve(result);
+}
+
+function notifyCommandLaneIdleWaiters(lane: string): void {
+  const queueState = getQueueState();
+  const laneWaiters = queueState.laneIdleWaiters.get(lane);
+  if (!laneWaiters || laneWaiters.size === 0) {
+    return;
+  }
+  const state = queueState.lanes.get(lane);
+  if (state && getLaneDepth(state) > 0) {
+    return;
+  }
+  for (const waiter of Array.from(laneWaiters)) {
+    resolveCommandLaneIdleWaiter(waiter, { idle: true });
+  }
+}
+
+function notifyAllCommandLaneIdleWaiters(): void {
+  for (const lane of Array.from(getQueueState().laneIdleWaiters.keys())) {
+    notifyCommandLaneIdleWaiters(lane);
   }
 }
 
@@ -419,6 +473,7 @@ function drainLane(lane: string) {
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
               pump();
+              notifyCommandLaneIdleWaiters(lane);
             }
             entry.resolve(result);
           } catch (err) {
@@ -436,6 +491,7 @@ function drainLane(lane: string) {
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
               pump();
+              notifyCommandLaneIdleWaiters(lane);
             }
             entry.reject(err);
           }
@@ -470,6 +526,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   if (state.maxConcurrent > 0) {
     drainLane(cleaned);
   }
+  notifyCommandLaneIdleWaiters(cleaned);
 }
 
 export function enqueueCommandInLane<T>(
@@ -566,6 +623,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   for (const entry of pending) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
+  notifyCommandLaneIdleWaiters(cleaned);
   return removed;
 }
 
@@ -588,6 +646,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
     drainLane(cleaned);
   }
   notifyActiveTaskWaiters();
+  notifyCommandLaneIdleWaiters(cleaned);
   return released;
 }
 
@@ -602,6 +661,11 @@ export function resetCommandQueueStateForTest(): void {
   queueState.lanes.clear();
   for (const waiter of Array.from(queueState.activeTaskWaiters)) {
     resolveActiveTaskWaiter(waiter, { drained: true });
+  }
+  for (const laneWaiters of Array.from(queueState.laneIdleWaiters.values())) {
+    for (const waiter of Array.from(laneWaiters)) {
+      resolveCommandLaneIdleWaiter(waiter, { idle: true });
+    }
   }
   queueState.nextTaskId = 1;
   queueState.nextQueueSequence = 1;
@@ -638,6 +702,7 @@ export function resetAllLanes(): void {
     drainLane(lane);
   }
   notifyActiveTaskWaiters();
+  notifyAllCommandLaneIdleWaiters();
 }
 
 /**
@@ -690,5 +755,52 @@ export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boole
     }
     queueState.activeTaskWaiters.add(waiter);
     notifyActiveTaskWaiters();
+  });
+}
+
+/**
+ * Wait for one command lane to become completely idle: no active task and no
+ * queued task. Unlike waitForActiveTasks, this tracks queued work too, which is
+ * the gate same-session continuation wakes must respect before cutting in.
+ */
+export function waitForCommandLaneIdle(
+  lane: string = CommandLane.Main,
+  timeoutMs?: number,
+  opts?: { signal?: AbortSignal },
+): Promise<{ idle: boolean }> {
+  const queueState = getQueueState();
+  const cleaned = normalizeLane(lane);
+  const state = queueState.lanes.get(cleaned);
+  if (!state || getLaneDepth(state) === 0) {
+    return Promise.resolve({ idle: true });
+  }
+  if (opts?.signal?.aborted) {
+    return Promise.resolve({ idle: false });
+  }
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
+    return Promise.resolve({ idle: false });
+  }
+
+  return new Promise((resolve) => {
+    const waiter: CommandLaneIdleWaiter = {
+      lane: cleaned,
+      resolve,
+      signal: opts?.signal,
+    };
+    if (timeoutMs !== undefined) {
+      waiter.timeout = setTimeout(
+        () => resolveCommandLaneIdleWaiter(waiter, { idle: false }),
+        clampPositiveTimerTimeoutMs(timeoutMs),
+      );
+      waiter.timeout.unref?.();
+    }
+    if (opts?.signal) {
+      waiter.abortHandler = () => resolveCommandLaneIdleWaiter(waiter, { idle: false });
+      opts.signal.addEventListener("abort", waiter.abortHandler, { once: true });
+    }
+    const laneWaiters = queueState.laneIdleWaiters.get(cleaned) ?? new Set();
+    laneWaiters.add(waiter);
+    queueState.laneIdleWaiters.set(cleaned, laneWaiters);
+    notifyCommandLaneIdleWaiters(cleaned);
   });
 }

@@ -24,6 +24,7 @@ import {
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
+  type ContinuationWorkReasonCategory,
   type PendingContinuationWork,
 } from "./work-store.js";
 
@@ -32,6 +33,7 @@ const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
 const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
+const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
 const CONTINUATION_TURN_DRAINING_REASON = "draining";
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
@@ -41,6 +43,7 @@ const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 const SUPERSEDED_GRACE_MULTIPLIER = 2;
 
 const workTimers = new Map<string, NodeJS.Timeout>();
+const idleRetryControllers = new Map<string, AbortController>();
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -53,6 +56,13 @@ function clearWorkTimer(sessionKey: string): void {
   }
   clearTimeout(existing);
   workTimers.delete(sessionKey);
+}
+
+function clearIdleRetryControllersForTests(): void {
+  for (const controller of idleRetryControllers.values()) {
+    controller.abort();
+  }
+  idleRetryControllers.clear();
 }
 
 function armWorkTimer(sessionKey: string, fireAt: number): void {
@@ -85,27 +95,29 @@ export function resetContinuationWorkDispatchForTests(): void {
     clearTimeout(handle);
   }
   workTimers.clear();
+  clearIdleRetryControllersForTests();
 }
 
 function isRetryableContinuationSkipReason(reason: string): boolean {
-  return isRetryableHeartbeatBusySkipReason(reason) || reason === CONTINUATION_TURN_DRAINING_REASON;
+  return (
+    isRetryableHeartbeatBusySkipReason(reason) ||
+    reason === CONTINUATION_TURN_DRAINING_REASON ||
+    reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON
+  );
 }
 
 /**
- * #990 Pillar-0 — exp-backoff delay for a PRE-drive busy-skip re-arm.
+ * #990 rate curve retained for diagnostics/config compatibility.
  *
  * A busy-skip (`requests-in-flight`/`draining`) means the turn never started — a
- * legit defer, never a failed attempt. Re-arming at a flat `baseMs` spins a
- * chronically-busy seat at ~1Hz forever (the storm). Backing off exponentially on
- * the CONSECUTIVE busy-skip count decays the poll rate while the seat stays busy.
+ * legit defer, never a failed attempt. Older runtime re-armed via this exp-backoff
+ * curve; #1088 changed the primary retry to idle events and uses the ceiling as
+ * the slow hedge. Keep the pure curve for existing config semantics and tests.
  *
- * RATE-cap, NEVER TOTAL: the result is bounded by `ceilingMs` but the flow is never
- * dropped — it keeps deferring at the ceiling rate and delivers the instant the seat
- * quiets (give-up = rate-cap-forever). `busySkipCount` is the PRE-increment prior-skip
- * count so the first skip yields `baseMs` (factor^0): base, base·f, base·f², … capped
- * at `ceilingMs`. `factor ** n` overflowing to Infinity is harmless — `Math.min`
- * clamps it to the ceiling. Bounds are operator-tunable (§6); the cap is a RATE knob,
- * not a safety invariant.
+ * `busySkipCount` is the PRE-increment prior-skip count so the first computed
+ * step yields `baseMs` (factor^0): base, base·f, base·f², … capped at
+ * `ceilingMs`. `factor ** n` overflowing to Infinity is harmless — `Math.min`
+ * clamps it to the ceiling.
  */
 export type BusySkipBackoffParams = { baseMs: number; ceilingMs: number; factor: number };
 
@@ -165,7 +177,7 @@ async function readChildSessionRunLiveness(
 
 function requeueWorkForRetry(
   work: PendingContinuationWork,
-  params: { dueAt: number; summary: string; retryCount?: number; busySkipCount?: number },
+  params: Parameters<typeof requeuePendingWork>[1],
 ): boolean {
   const requeued = requeuePendingWork(work, params);
   if (requeued) {
@@ -178,6 +190,92 @@ const GATEWAY_RESTARTING_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
 type ReplyPayloadLike = { text?: unknown };
+
+type ContinuationIdleRetryTrigger =
+  | { kind: "reply-run-ended" }
+  | { kind: "command-lane-idle"; lane: string };
+
+function idleRetryTriggerKey(sessionKey: string, trigger: ContinuationIdleRetryTrigger): string {
+  return trigger.kind === "reply-run-ended"
+    ? `reply:${sessionKey}`
+    : `lane:${trigger.lane}:${sessionKey}`;
+}
+
+function idleRetryTriggerLabel(
+  trigger: ContinuationIdleRetryTrigger,
+): "reply-run-ended" | "command-lane-idle" {
+  return trigger.kind;
+}
+
+export function classifyContinuationWorkReason(
+  reason: string | undefined,
+): ContinuationWorkReasonCategory {
+  const normalized = reason?.trim().toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+  const waitMarkers = [
+    "yield",
+    "stand by",
+    "standing by",
+    "all tasks complete",
+    "tasks complete",
+    "external wake",
+    "holding position",
+    "heartbeat",
+    "waiting for",
+    "wait for",
+  ];
+  return waitMarkers.some((marker) => normalized.includes(marker))
+    ? "wait-shaped"
+    : "follow-up-work";
+}
+
+function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTrigger): void {
+  const key = idleRetryTriggerKey(sessionKey, trigger);
+  if (idleRetryControllers.has(key)) {
+    return;
+  }
+  const controller = new AbortController();
+  idleRetryControllers.set(key, controller);
+  const armedAt = Date.now();
+  log.info(
+    `[continuation:work-idle-retry-armed] trigger=${idleRetryTriggerLabel(trigger)} session=${sessionKey}`,
+  );
+  void (async () => {
+    const idle =
+      trigger.kind === "reply-run-ended"
+        ? await (async () => {
+            const { replyRunRegistry } = await import("../reply/reply-run-registry.js");
+            return await replyRunRegistry.waitForIdle(sessionKey, undefined, {
+              signal: controller.signal,
+            });
+          })()
+        : await (async () => {
+            const { waitForCommandLaneIdle } = await import("../../process/command-queue.js");
+            return (
+              await waitForCommandLaneIdle(trigger.lane, undefined, {
+                signal: controller.signal,
+              })
+            ).idle;
+          })();
+    idleRetryControllers.delete(key);
+    if (!idle || controller.signal.aborted) {
+      return;
+    }
+    log.info(
+      `[continuation:work-idle-retry-fired] trigger=${idleRetryTriggerLabel(trigger)} waitMs=${Date.now() - armedAt} session=${sessionKey}`,
+    );
+    await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+  })().catch((err: unknown) => {
+    idleRetryControllers.delete(key);
+    const message = formatErrorMessage(err);
+    log.error(
+      `[continuation:work-idle-retry-error] trigger=${idleRetryTriggerLabel(trigger)} error=${message} session=${sessionKey}`,
+    );
+    armWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
+  });
+}
 
 function isReplyPayloadLike(value: unknown): value is ReplyPayloadLike {
   return Boolean(value && typeof value === "object");
@@ -209,7 +307,9 @@ function formatContinuationWakeText(work: PendingContinuationWork): string {
   );
 }
 
-type ContinuationTurnGrantResult = { status: "ran" } | { status: "skipped"; reason: string };
+type ContinuationTurnGrantResult =
+  | { status: "ran" }
+  | { status: "skipped"; reason: string; retryTrigger?: ContinuationIdleRetryTrigger };
 
 async function driveContinuationTurn(
   work: PendingContinuationWork,
@@ -244,7 +344,11 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
   }
   if (replyRunRegistry.isActive(work.sessionKey)) {
-    return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
+    return {
+      status: "skipped",
+      reason: CONTINUATION_TURN_BUSY_REASON,
+      retryTrigger: { kind: "reply-run-ended" },
+    };
   }
   // Direct grants bypass heartbeat policy, but a main-session continuation must
   // not jump ahead of already queued user/main-lane work. A subagent continues
@@ -254,7 +358,11 @@ async function driveContinuationTurn(
     ? resolveSessionLane(work.sessionKey)
     : undefined;
   if (continuationLane === undefined && getQueueSize(MAIN_COMMAND_LANE) > 0) {
-    return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
+    return {
+      status: "skipped",
+      reason: CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON,
+      retryTrigger: { kind: "command-lane-idle", lane: MAIN_COMMAND_LANE },
+    };
   }
 
   const cfg = getRuntimeConfig();
@@ -377,10 +485,12 @@ export async function dispatchPendingContinuationWork(params: {
   sessionKey: string;
   recoverRunning?: boolean;
   includeRunningUpdatedAtOrBefore?: number;
+  includeIdleRetry?: boolean;
 }): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const works = consumePendingWork(params.sessionKey, {
     includeRunning: params.recoverRunning === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
+    includeIdleRetry: params.includeIdleRetry === true,
   });
   // #986 Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);
@@ -436,7 +546,7 @@ export async function dispatchPendingContinuationWork(params: {
         log: (message) => log.info(message),
       });
       log.info(
-        `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey}`,
+        `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey} reasonCategory=${classifyContinuationWorkReason(work.reason)}`,
       );
       const wakeText = formatContinuationWakeText(work);
       const result = await driveContinuationTurn(work, wakeText);
@@ -446,12 +556,13 @@ export async function dispatchPendingContinuationWork(params: {
         continue;
       }
       const skippedReason = result.reason;
+      const reasonCategory = classifyContinuationWorkReason(work.reason);
       log.warn(
-        `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
+        `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason} reasonCategory=${reasonCategory}`,
       );
       if (isRetryableContinuationSkipReason(skippedReason)) {
-        // #990 bucket-1: a busy-defer is the storm symptom. Before re-arming
-        // (Pillar-0 exp-backoff = give-up-as-rate-cap-forever), check whether
+        // #990 bucket-1: a busy-defer is the storm symptom. Before parking for
+        // idle-event retry with a slow hedge, check whether
         // this is an ORPHAN whose parent run is confident-terminal and can never
         // rehydrate it. Read-time liveness join (never persisted — liveness
         // mutates after classify). Delegate-flow-gate FIRST: a flow with no
@@ -480,28 +591,35 @@ export async function dispatchPendingContinuationWork(params: {
           reaped++;
           continue;
         }
-        // rate-cap-forever: re-arm with exp-backoff on the consecutive
-        // busy-skip count, bounded by the configured ceiling so a chronically
-        // busy seat decays toward a slow poll instead of spinning at ~1Hz.
-        // busySkipCount is DISTINCT from retryCount — a busy-defer never touches
-        // the transient-error fail-bound (#952 never-penalize) and the flow is
-        // never dropped; it delivers the instant the seat quiets.
+        // Event-driven primary path: park behind the matching idle event and
+        // keep only a slow hedge timer for lost events. busySkipCount remains
+        // diagnostic/rate-cap state and never feeds the transient-error fail-bound.
         const priorBusySkips = work.busySkipCount ?? 0;
         // busySkipBackoff is always set by resolveContinuationRuntimeConfig; the
-        // fallback only covers hand-built fixtures (mirrors the resolver default:
-        // 1s base ×2, capped at the scheduling ceiling).
+        // fallback only covers hand-built fixtures.
         const backoff = runtimeConfig.busySkipBackoff ?? {
           baseMs: 1_000,
           ceilingMs: runtimeConfig.maxDelayMs,
           factor: 2,
         };
-        const backoffMs = computeBusySkipBackoffMs(priorBusySkips, backoff);
-        const retryDueAt = now + backoffMs;
-        requeueWorkForRetry(work, {
+        const retryDueAt = now + backoff.ceilingMs;
+        const requeued = requeueWorkForRetry(work, {
           dueAt: retryDueAt,
           summary: `Retryable continuation skip: ${skippedReason}`,
           busySkipCount: priorBusySkips + 1,
+          ...(result.retryTrigger
+            ? {
+                idleRetry: {
+                  trigger: idleRetryTriggerLabel(result.retryTrigger),
+                  reasonCategory,
+                  armedAt: now,
+                },
+              }
+            : {}),
         });
+        if (requeued && result.retryTrigger) {
+          registerIdleRetry(work.sessionKey, result.retryTrigger);
+        }
       } else {
         enqueueSystemEvent(
           `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
