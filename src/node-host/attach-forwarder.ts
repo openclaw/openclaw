@@ -26,11 +26,15 @@ export function startNodeAttachForwarder(params: {
 }): Promise<NodeAttachForwarder> {
   const { client } = params;
   const server = http.createServer((req, res) => {
+    // A harness that aborts mid-request/response must NOT crash the node host: an unhandled stream
+    // 'error' (e.g. client closed before the body finished) is fatal in Node, so swallow both here.
+    req.on("error", () => {});
+    res.on("error", () => {});
     // Streamable-HTTP MCP: requests are POSTed. The optional GET notification stream carries no
     // server-initiated events here; 405 is the spec-compliant "no server stream", and the harness
     // falls back to plain request/response.
     if (req.method !== "POST") {
-      res.writeHead(405).end();
+      endSafely(res, 405);
       return;
     }
     const grantToken = readBearer(req.headers.authorization);
@@ -57,30 +61,30 @@ export function startNodeAttachForwarder(params: {
         writeJson(res, 400, rpcError(null, -32700, "Parse error"));
         return;
       }
-      void (async () => {
-        try {
-          const { mcpResponse } = await client.request<{ mcpResponse: unknown }>(
-            "node.attachRelay",
-            {
-              grantToken,
-              mcpMessage,
-            },
-          );
-          // A notification (no response) relays back as null — emit 202 with no body, like the loopback.
+      // .then/.catch (not an async IIFE) keeps the rejection handled — no floating promise.
+      void client
+        .request<{ mcpResponse: unknown }>("node.attachRelay", { grantToken, mcpMessage })
+        .then(({ mcpResponse }) => {
+          // A notification (no response) relays back as null — emit 202 with no body, like loopback.
           if (mcpResponse === null || mcpResponse === undefined) {
-            res.writeHead(202).end();
+            endSafely(res, 202);
             return;
           }
           writeJson(res, 200, mcpResponse);
-        } catch {
+        })
+        .catch(() => {
           writeJson(res, 502, rpcError(idOf(mcpMessage), -32001, "attach relay failed"));
-        }
-      })();
+        });
     });
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // A listen failure rejects start(); once listening, later server errors must not crash the host.
+    const onListenError = (err: Error) => reject(err);
+    server.once("error", onListenError);
     server.listen(0, "127.0.0.1", () => {
+      server.off("error", onListenError);
+      server.on("error", () => {});
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       resolve({
@@ -95,12 +99,31 @@ export function startNodeAttachForwarder(params: {
   });
 }
 
+/** Write a status with no body only if the client is still connected (never throws on a dead socket). */
+function endSafely(res: http.ServerResponse, status: number): void {
+  if (res.writableEnded || res.destroyed) {
+    return;
+  }
+  try {
+    res.writeHead(status).end();
+  } catch {
+    // client went away between the check and the write — nothing to do.
+  }
+}
+
 function readBearer(header: string | undefined): string {
   return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
 }
 
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, JSON_HEADERS).end(JSON.stringify(body));
+  if (res.writableEnded || res.destroyed) {
+    return;
+  }
+  try {
+    res.writeHead(status, JSON_HEADERS).end(JSON.stringify(body));
+  } catch {
+    // client went away between the check and the write — nothing to do.
+  }
 }
 
 function rpcError(id: unknown, code: number, message: string) {

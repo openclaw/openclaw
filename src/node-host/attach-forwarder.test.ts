@@ -1,3 +1,4 @@
+import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type NodeAttachForwarder, startNodeAttachForwarder } from "./attach-forwarder.js";
 
@@ -73,5 +74,22 @@ describe("node attach forwarder (PR5 conduit)", () => {
     fwd = await startNodeAttachForwarder({ client: { request: vi.fn() } });
     const res = await fetch(fwd.url, { method: "GET" });
     expect(res.status).toBe(405);
+  });
+
+  it("survives a client that aborts mid-request and keeps serving (no host crash)", async () => {
+    fwd = await startNodeAttachForwarder({
+      client: { request: vi.fn(async () => ({ mcpResponse: { ok: 1 } })) },
+    });
+    // announce a 1000-byte body, send a fragment, then yank the socket → server req 'error'
+    await new Promise<void>((resolve) => {
+      const sock = net.connect(fwd!.port, "127.0.0.1", () => {
+        sock.write("POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npartial");
+        sock.destroy();
+        resolve();
+      });
+    });
+    // the forwarder did not crash the host — a normal request still succeeds
+    const { status } = await postMcp(fwd.url, { jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(status).toBe(200);
   });
 });
