@@ -729,13 +729,26 @@ extension SettingsProTab {
     }
 
     var approvalsDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled {
-            return self.showPreviewApprovalExample ? "Example request showing" : "Example available"
+        Self.approvalsDetail(
+            isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
+            showPreviewApprovalExample: self.showPreviewApprovalExample,
+            notificationsNeedAttention: self.notificationsNeedAttention,
+            hasPendingApproval: self.pendingApproval != nil)
+    }
+
+    static func approvalsDetail(
+        isDemoMode: Bool,
+        showPreviewApprovalExample: Bool,
+        notificationsNeedAttention: Bool,
+        hasPendingApproval: Bool) -> String
+    {
+        if isDemoMode {
+            return showPreviewApprovalExample ? "Example request showing" : "Example available"
         }
-        if self.notificationsNeedAttention {
-            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
+        if notificationsNeedAttention {
+            return hasPendingApproval ? "1 waiting, notifications off" : "Notifications off"
         }
-        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+        return hasPendingApproval ? "1 request waiting" : "No approvals waiting"
     }
 
     var notificationsNeedAttention: Bool {

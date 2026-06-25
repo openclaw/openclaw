@@ -260,13 +260,16 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
-        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+        if hasExistingGatewayConfig {
+            return .none
+        }
+        if shouldPresentOnLaunch {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
-            return .settings
+        if !hasConnectedOnce || !onboardingComplete {
+            return .onboarding
         }
-        return .none
+        return .settings
     }
 
     static func shouldPresentQuickSetup(

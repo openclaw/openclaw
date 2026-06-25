@@ -453,17 +453,31 @@ extension SettingsProTab {
     }
 
     var shouldShowApprovalRows: Bool {
-        self.pendingApproval != nil ||
-            (self.appModel.isAppleReviewDemoModeEnabled && self.showPreviewApprovalExample)
+        Self.shouldShowApprovalRows(
+            hasPendingApproval: self.pendingApproval != nil,
+            isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
+            showPreviewApprovalExample: self.showPreviewApprovalExample)
+    }
+
+    static func shouldShowApprovalRows(
+        hasPendingApproval: Bool,
+        isDemoMode: Bool,
+        showPreviewApprovalExample: Bool) -> Bool
+    {
+        hasPendingApproval || (isDemoMode && showPreviewApprovalExample)
     }
 
     func handleApprovalPreviewOrResolve(decision: String) {
-        if self.appModel.isAppleReviewDemoModeEnabled {
+        if !Self.shouldResolveApprovalThroughGateway(isDemoMode: self.appModel.isAppleReviewDemoModeEnabled) {
             self.showPreviewApprovalExample = false
             return
         }
 
         Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: decision) }
+    }
+
+    static func shouldResolveApprovalThroughGateway(isDemoMode: Bool) -> Bool {
+        !isDemoMode
     }
 
     var permissionsDestination: some View {

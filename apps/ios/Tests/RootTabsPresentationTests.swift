@@ -82,6 +82,101 @@ import UIKit
                 isPreviewMode: true) == .onboarding)
     }
 
+    @Test func startupKeepsSavedGatewayUsersOutOfFirstRunOnboarding() {
+        let savedConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: false)
+        let manualConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: true)
+        let completedWithConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: true,
+            onboardingComplete: true,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: false)
+
+        #expect(savedConfigRoute == .none)
+        #expect(manualConfigRoute == .none)
+        #expect(completedWithConfigRoute == .none)
+    }
+
+    @Test func startupStillGuidesFreshAndBrokenGatewayStates() {
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: true,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: true) == .none)
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: true) == .onboarding)
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: false) == .settings)
+    }
+
+    @Test func previewApprovalPresentationStaysSampleOnly() {
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: true,
+                showPreviewApprovalExample: false,
+                notificationsNeedAttention: true,
+                hasPendingApproval: true) == "Example available")
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: true,
+                showPreviewApprovalExample: true,
+                notificationsNeedAttention: false,
+                hasPendingApproval: false) == "Example request showing")
+        #expect(
+            SettingsProTab.shouldShowApprovalRows(
+                hasPendingApproval: false,
+                isDemoMode: true,
+                showPreviewApprovalExample: true))
+        #expect(!SettingsProTab.shouldResolveApprovalThroughGateway(isDemoMode: true))
+    }
+
+    @Test func realApprovalPresentationKeepsGatewayResolvePath() {
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: false,
+                showPreviewApprovalExample: true,
+                notificationsNeedAttention: true,
+                hasPendingApproval: true) == "1 waiting, notifications off")
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: false,
+                showPreviewApprovalExample: false,
+                notificationsNeedAttention: false,
+                hasPendingApproval: true) == "1 request waiting")
+        #expect(
+            SettingsProTab.shouldShowApprovalRows(
+                hasPendingApproval: true,
+                isDemoMode: false,
+                showPreviewApprovalExample: false))
+        #expect(!SettingsProTab.shouldShowApprovalRows(
+            hasPendingApproval: false,
+            isDemoMode: false,
+            showPreviewApprovalExample: true))
+        #expect(SettingsProTab.shouldResolveApprovalThroughGateway(isDemoMode: false))
+    }
+
     @Test func sidebarTabsEnabledForIPadRegularWidth() {
         #expect(
             RootTabs.shouldUseSidebarTabs(

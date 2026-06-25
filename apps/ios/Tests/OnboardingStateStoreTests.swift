@@ -64,9 +64,15 @@ import Testing
             isLocalGatewayFixtureEnabled: true) == false)
         #expect(OnboardingStateStore.shouldMarkCompleted(
             gatewayServerName: "gateway.local",
+            isLocalGatewayFixtureEnabled: true) == false)
+        #expect(OnboardingStateStore.shouldMarkCompleted(
+            gatewayServerName: "gateway.local",
             isLocalGatewayFixtureEnabled: false))
         #expect(OnboardingStateStore.shouldMarkCompleted(
             gatewayServerName: nil,
+            isLocalGatewayFixtureEnabled: false) == false)
+        #expect(OnboardingStateStore.shouldMarkCompleted(
+            gatewayServerName: "   ",
             isLocalGatewayFixtureEnabled: false) == false)
     }
 
