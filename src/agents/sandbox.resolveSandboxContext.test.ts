@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+import { resolveSandboxScopeKey } from "./sandbox/shared.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -62,6 +63,29 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fs.rm(sandboxFixtureRoot, { recursive: true, force: true });
+});
+
+describe("resolveSandboxScopeKey", () => {
+  it("scopes session sandboxes by workspace", () => {
+    const first = resolveSandboxScopeKey("session", "agent:poly:msteams:channel-1", {
+      workspaceDir: "/tmp/openclaw-customers/atica/openclaw/agents/poly/workspace",
+    });
+    const second = resolveSandboxScopeKey("session", "agent:poly:msteams:channel-1", {
+      workspaceDir: "/tmp/openclaw-customers/polytopic/openclaw/agents/poly/workspace",
+    });
+
+    expect(first).toMatch(/^agent:poly:msteams:channel-1:workspace:[a-f0-9]{8}$/);
+    expect(second).toMatch(/^agent:poly:msteams:channel-1:workspace:[a-f0-9]{8}$/);
+    expect(first).not.toBe(second);
+  });
+
+  it("keeps shared sandbox scope independent of workspace", () => {
+    expect(
+      resolveSandboxScopeKey("shared", "agent:poly:msteams:channel-1", {
+        workspaceDir: "/tmp/openclaw-customers/atica/openclaw/agents/poly/workspace",
+      }),
+    ).toBe("shared");
+  });
 });
 
 describe("resolveSandboxContext", () => {

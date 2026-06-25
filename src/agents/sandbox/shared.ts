@@ -17,6 +17,8 @@ export function slugifySessionKey(value: string) {
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  // Keep the readable prefix bounded; uniqueness comes from the trailing hash of
+  // the full untruncated key, including any workspace scope suffix.
   const base = safe.slice(0, 32) || "session";
   return `${base}-${hash}`;
 }
