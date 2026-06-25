@@ -3901,6 +3901,7 @@ export function renderApp(state: AppViewState) {
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
+                  onAssistantAttachmentLoaded: () => state.scheduleChatScroll(),
                   // Sidebar props for tool output viewing
                   sidebarOpen: state.sidebarOpen,
                   sidebarContent: state.sidebarContent,
