@@ -21,6 +21,13 @@ const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 // Cron has its own outer watchdog; stream stalls must fail early enough for
 // the existing model fallback chain to try the next configured candidate.
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
+const LOCAL_PROVIDER_AUTH_MARKERS = new Set(["custom-local", "ollama-local"]);
+const SELF_HOSTED_PROVIDER_ID_PREFIXES = ["ollama", "lmstudio", "vllm", "sglang", "llama-cpp"];
+
+type IdleTimeoutProviderConfig = {
+  apiKey?: unknown;
+  localService?: unknown;
+};
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers
@@ -96,7 +103,7 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
-function isSelfHostedProviderHostnameBaseUrl(baseUrl: string): boolean {
+function isExplicitLocalHostnameBaseUrl(baseUrl: string): boolean {
   let host: string;
   try {
     host = new URL(baseUrl).hostname.toLowerCase();
@@ -111,10 +118,65 @@ function isSelfHostedProviderHostnameBaseUrl(baseUrl: string): boolean {
   ) {
     return true;
   }
+  return false;
+}
+
+function isBareProviderHostnameBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
   if (host.includes(".") || host.includes(":")) {
     return false;
   }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(host);
+}
+
+function isSelfHostedProviderId(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  if (!normalized || normalized === "ollama-cloud") {
+    return false;
+  }
+  return SELF_HOSTED_PROVIDER_ID_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
+  );
+}
+
+function findConfiguredProviderConfig(
+  cfg: OpenClawConfig | undefined,
+  provider: string | undefined,
+): IdleTimeoutProviderConfig | undefined {
+  const normalizedProvider = provider?.trim().toLowerCase();
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  const providers = cfg?.models?.providers as
+    | Record<string, IdleTimeoutProviderConfig | undefined>
+    | undefined;
+  const exact = providers?.[normalizedProvider];
+  if (exact) {
+    return exact;
+  }
+  return Object.entries(providers ?? {}).find(
+    ([key]) => key.trim().toLowerCase() === normalizedProvider,
+  )?.[1];
+}
+
+function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && LOCAL_PROVIDER_AUTH_MARKERS.has(apiKey.trim().toLowerCase());
+}
+
+function hasConfiguredLocalProviderSignal(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string | undefined;
+}): boolean {
+  const providerConfig = findConfiguredProviderConfig(params.cfg, params.provider);
+  return Boolean(
+    providerConfig?.localService || hasLocalProviderAuthMarker(providerConfig?.apiKey),
+  );
 }
 
 function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
@@ -160,10 +222,17 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const isLocalProvider =
     typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
   const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
+  const isExplicitLocalHostnameRuntimeModel =
+    typeof baseUrl === "string" &&
+    baseUrl.length > 0 &&
+    isExplicitLocalHostnameBaseUrl(baseUrl) &&
+    !isOllamaCloudModel(params?.model);
   const isSelfHostedHostnameRuntimeModel =
     typeof baseUrl === "string" &&
     baseUrl.length > 0 &&
-    isSelfHostedProviderHostnameBaseUrl(baseUrl) &&
+    isBareProviderHostnameBaseUrl(baseUrl) &&
+    (isSelfHostedProviderId(params?.model?.provider) ||
+      hasConfiguredLocalProviderSignal({ cfg: params?.cfg, provider: params?.model?.provider })) &&
     !isOllamaCloudModel(params?.model);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
@@ -205,7 +274,11 @@ export function resolveLlmIdleTimeoutMs(params?: {
       return 0;
     }
     if (params?.trigger === "cron") {
-      if (isLocalRuntimeModel || isSelfHostedHostnameRuntimeModel) {
+      if (
+        isLocalRuntimeModel ||
+        isExplicitLocalHostnameRuntimeModel ||
+        isSelfHostedHostnameRuntimeModel
+      ) {
         return clampTimeoutMs(runTimeoutMs);
       }
       return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));

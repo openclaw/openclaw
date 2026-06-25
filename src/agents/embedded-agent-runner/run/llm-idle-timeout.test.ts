@@ -63,20 +63,116 @@ describe("resolveLlmIdleTimeoutMs", () => {
   });
 
   it.each([
-    "http://ollama-host:11434",
-    "http://lmstudio-box:1234/v1",
-    "http://vllm-rig:8000/v1",
-    "http://sglang-rig:30000/v1",
-    "http://host.docker.internal:11434",
-  ])("honors explicit cron run timeouts for self-hosted provider hostname %s", (baseUrl) => {
+    ["ollama", "http://ollama-host:11434"],
+    ["ollama-beelink", "http://ollama-host:11434"],
+    ["lmstudio", "http://lmstudio-box:1234/v1"],
+    ["lmstudio-mac", "http://lmstudio-box:1234/v1"],
+    ["vllm", "http://vllm-rig:8000/v1"],
+    ["sglang", "http://sglang-rig:30000/v1"],
+  ])(
+    "honors explicit cron run timeouts for self-hosted provider %s hostname %s",
+    (provider, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, baseUrl },
+        }),
+      ).toBe(600_000);
+    },
+  );
+
+  it("honors explicit cron run timeouts for explicit local host aliases", () => {
     expect(
       resolveLlmIdleTimeoutMs({
         trigger: "cron",
         runTimeoutMs: 600_000,
-        model: { baseUrl },
+        model: { baseUrl: "http://host.docker.internal:11434" },
       }),
     ).toBe(600_000);
   });
+
+  it("honors explicit cron run timeouts for custom local provider markers on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          gpu: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: "custom-local",
+            models: [],
+          },
+          "local-ollama": {
+            baseUrl: "http://ollama-box:11434",
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "gpu", baseUrl: "http://gpu-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "local-ollama", baseUrl: "http://ollama-box:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors explicit cron run timeouts for provider-owned local services on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://ds4-box:8000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/opt/ds4/ds4-server",
+              healthUrl: "http://ds4-box:8000/v1/models",
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ds4", baseUrl: "http://ds4-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it.each([
+    ["openai", "openai/gpt-5.5", "http://api:8080/v1"],
+    ["custom-proxy", "custom-proxy/gpt-5.5", "http://gateway:4000/v1"],
+    ["ollama-cloud", "ollama-cloud/kimi-k2.6", "http://ollama-host:11434"],
+  ])(
+    "keeps the cron stall cap for cloud provider %s routed through single-label host %s",
+    (provider, id, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, id, baseUrl },
+        }),
+      ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
 
   it("keeps the cron stall cap for remote or cloud hostnames", () => {
     expect(
