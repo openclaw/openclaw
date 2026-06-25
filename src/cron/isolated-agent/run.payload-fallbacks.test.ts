@@ -1,4 +1,5 @@
 // Payload fallback tests cover fallback prompt payloads for isolated cron runs.
+import { createContractRunResult } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -186,5 +187,58 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
     });
+  });
+
+  it("classifies returned result-level failures so the configured fallback chain still engages (#96525)", async () => {
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          payload: { kind: "agentTurn", message: "test", fallbacks: ["openai/gpt-5.5"] },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+
+    // Cron must classify returned result-level failures; without the classifier
+    // runWithModelFallback accepts the failed primary and never advances to the
+    // configured fallback model (#96525), the same contract the interactive and
+    // auto-reply paths already pass.
+    const request = runWithModelFallbackMock.mock.calls[0]?.[0] as {
+      classifyResult?: (params: {
+        provider: string;
+        model: string;
+        result: ReturnType<typeof createContractRunResult>;
+      }) => unknown;
+      mergeExhaustedResult?: unknown;
+    };
+    expect(typeof request.classifyResult).toBe("function");
+    expect(typeof request.mergeExhaustedResult).toBe("function");
+
+    // The wired classifier flags the reported fallback-safe reasoning-only /
+    // incomplete_turn result class, so the chain advances instead of accepting
+    // the failed primary.
+    const reasoningOnlyPrimary = createContractRunResult({
+      payloads: [{ text: "Agent couldn't generate a response.", isError: true }],
+      meta: {
+        durationMs: 1,
+        agentHarnessResultClassification: "reasoning-only",
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+          terminalPresentation: false,
+        },
+      },
+    });
+    const classified = request.classifyResult?.({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      result: reasoningOnlyPrimary,
+    });
+    expect(classified).not.toBeNull();
   });
 });

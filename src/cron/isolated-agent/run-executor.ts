@@ -2,6 +2,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
@@ -284,6 +288,18 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      // Classify returned result-level failures (reasoning-only / empty /
+      // fallback-safe incomplete_turn) so a configured fallback chain still
+      // engages, matching the interactive and auto-reply paths. The classifier
+      // only fires on embedded-runner result shapes and returns null for CLI
+      // provider results, so runCliAgent terminal handling is unchanged (#96525).
+      classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: providerLocal,
+          model: modelLocal,
+          result: resultLocal,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
