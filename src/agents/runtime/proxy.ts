@@ -15,6 +15,13 @@ import type {
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../../llm/utils/json-parse.js";
+import { createSseByteGuard } from "../streaming-byte-guard.js";
+
+// Cap on the streaming 200 success-body SSE read for the proxy stream.
+// Mirrors the 16 MiB provider-JSON cap from `readProviderJsonResponse` so a
+// hostile or malfunctioning upstream proxy cannot exhaust process memory by
+// streaming an unbounded SSE body on every proxy-streamed model call.
+const PROXY_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 type StreamingToolCall = ToolCall & { partialJson?: string };
 
@@ -152,9 +159,12 @@ export function streamProxy(
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let guard: ReturnType<typeof createSseByteGuard> | undefined;
 
     const abortHandler = () => {
-      if (reader) {
+      if (guard) {
+        guard.cancel("Request aborted by user").catch(() => {});
+      } else if (reader) {
         reader.cancel("Request aborted by user").catch(() => {});
       }
     };
@@ -192,6 +202,11 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
+      guard = createSseByteGuard(reader, {
+        maxBytes: PROXY_SUCCESS_BODY_MAX_BYTES,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Proxy success body exceeded ${maxBytes} bytes (received ${size})`),
+      });
       const decoder = new TextDecoder();
       let buffer = "";
       let terminalEventSeen = false;
@@ -214,7 +229,7 @@ export function streamProxy(
       };
 
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await guard.read();
         if (done) {
           break;
         }

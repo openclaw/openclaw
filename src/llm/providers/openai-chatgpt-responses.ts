@@ -26,6 +26,7 @@ import {
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -62,6 +63,11 @@ import { buildBaseOptions } from "./simple-options.js";
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
+// Cap on the streaming 200 success-body SSE read for OpenAI Codex Responses.
+// Mirrors the 16 MiB provider-JSON cap from `readProviderJsonResponse` so a
+// hostile or malfunctioning ChatGPT Responses endpoint (or a proxy that does
+// not bound its stream) cannot exhaust process memory by streaming forever.
+const OPENAI_CODEX_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -722,12 +728,19 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   }
 
   const reader = response.body.getReader();
+  const guard = createSseByteGuard(reader, {
+    maxBytes: OPENAI_CODEX_RESPONSES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `OpenAI Codex Responses success body exceeded ${maxBytes} bytes (received ${size})`,
+      ),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await guard.read();
       if (done) {
         break;
       }
@@ -760,13 +773,20 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
     }
   } finally {
     try {
-      await reader.cancel();
+      await guard.cancel();
     } catch {}
     try {
       reader.releaseLock();
     } catch {}
   }
 }
+
+/**
+ * Internal-export wrapper around {@link parseSSE} so the bounded-read behavior
+ * can be driven directly from tests. Production code must continue to call
+ * `parseSSE` (the same function body).
+ */
+export const parseSSEForTest = parseSSE;
 
 // ============================================================================
 // WebSocket Parsing
