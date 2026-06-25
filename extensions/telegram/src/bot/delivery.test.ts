@@ -883,6 +883,26 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("strips internal cache uuid suffix from outbound filenames", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 14,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "/tmp/workspace-work/photo.jpg" }],
+      runtime,
+      bot,
+    });
+
+    const sentFile = sendPhoto.mock.calls[0]?.[1] as { fileName?: string };
+    expect(sentFile.fileName).toBe("photo.jpg");
+  });
+
   it("passes the configured media byte cap to media loading", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({
