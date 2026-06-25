@@ -40,6 +40,7 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
+  resolveProviderOperationRemainingTimeoutMs,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -123,6 +124,25 @@ describe("provider operation deadlines", () => {
     vi.setSystemTime(4_250);
 
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+  });
+
+  it("honors the remaining explicit operation budget when a request may exceed defaults", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "image generation",
+      timeoutMs: 300_000,
+    });
+
+    vi.setSystemTime(11_000);
+
+    expect(
+      resolveProviderOperationRemainingTimeoutMs({
+        deadline,
+        defaultTimeoutMs: 60_000,
+      }),
+    ).toBe(290_000);
   });
 
   it("throws once the operation deadline has expired", () => {

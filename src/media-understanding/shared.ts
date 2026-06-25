@@ -145,6 +145,22 @@ export function resolveProviderOperationTimeoutMs(params: {
   return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
 }
 
+export function resolveProviderOperationRemainingTimeoutMs(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}): number {
+  const defaultTimeoutMs = resolveTimerTimeoutMs(params.defaultTimeoutMs, 1);
+  const deadlineAtMs = params.deadline.deadlineAtMs;
+  if (typeof deadlineAtMs !== "number") {
+    return defaultTimeoutMs;
+  }
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+  }
+  return Math.max(1, remainingMs);
+}
+
 /** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
 export function createProviderOperationTimeoutResolver(params: {
   deadline: ProviderOperationDeadline;

@@ -2028,6 +2028,7 @@
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
+    "node-llama-cpp": "^3.18.1",
     "oxfmt": "0.52.0",
     "oxlint": "1.67.0",
     "oxlint-tsgolint": "0.23.0",

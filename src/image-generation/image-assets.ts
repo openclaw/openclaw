@@ -1,4 +1,3 @@
-/** Converts image provider base64/data-url payloads into generated or source image assets. */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -10,9 +9,6 @@ import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
 
-// Image asset helpers for provider responses and source uploads. They normalize
-// base64/data-url inputs into in-memory assets with predictable filenames.
-/** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
   extension: string;
@@ -20,6 +16,7 @@ export type ImageMimeTypeDetection = {
 
 export type OpenAiCompatibleImageResponseEntry = {
   b64_json?: unknown;
+  url?: unknown;
   mime_type?: unknown;
   revised_prompt?: unknown;
 };
@@ -28,6 +25,17 @@ export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
 
+export type OpenAiCompatibleImageUrlDownload = {
+  buffer: Buffer;
+  mimeType?: string;
+};
+
+export type OpenAiCompatibleImageUrlDownloader = (params: {
+  url: string;
+  entry: OpenAiCompatibleImageResponseEntry;
+  index: number;
+}) => Promise<OpenAiCompatibleImageUrlDownload>;
+
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {
     throw new Error(message);
@@ -35,7 +43,6 @@ function throwMalformedImageResponse(message: string | undefined): never | undef
   return undefined;
 }
 
-/** Maps an image MIME type to a stable filename extension. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",
@@ -54,12 +61,7 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
-// Lightweight magic-byte sniffing for providers that omit mime_type. Keep this
-// conservative so unknown formats still use the configured default mime type.
-export function sniffImageMimeType(
-  buffer: Buffer,
-  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
-): ImageMimeTypeDetection {
+function sniffKnownImageMimeType(buffer: Buffer): ImageMimeTypeDetection | undefined {
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
     return { mimeType: "image/jpeg", extension: "jpg" };
   }
@@ -79,10 +81,27 @@ export function sniffImageMimeType(
   ) {
     return { mimeType: "image/webp", extension: "webp" };
   }
+  return undefined;
+}
+
+export function sniffImageMimeType(
+  buffer: Buffer,
+  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
+): ImageMimeTypeDetection {
+  const detected = sniffKnownImageMimeType(buffer);
+  if (detected) {
+    return detected;
+  }
   return {
     mimeType: fallbackMimeType,
     extension: imageFileExtensionForMimeType(fallbackMimeType),
   };
+}
+
+function normalizeImageHeaderMimeType(value: string | undefined): string | undefined {
+  const mimeType = normalizeOptionalString(value);
+  const normalized = normalizeOptionalLowercaseString(mimeType)?.split(";")[0]?.trim();
+  return normalized?.startsWith("image/") ? mimeType : undefined;
 }
 
 export function toImageDataUrl(params: {
@@ -116,8 +135,6 @@ export function parseImageDataUrl(
   return { mimeType, base64: canonicalBase64 };
 }
 
-// Public conversion path for OpenAI-compatible base64 payloads. Invalid or
-// empty base64 returns undefined so callers can choose strict/lenient handling.
 export function generatedImageAssetFromBase64(params: {
   base64: string | undefined;
   index: number;
@@ -191,6 +208,60 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   });
 }
 
+async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  const url = normalizeOptionalString(entry.url);
+  if (!url || !options.downloadUrl) {
+    return undefined;
+  }
+  const download = await options.downloadUrl({ url, entry, index });
+  const defaultMimeType =
+    normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
+  if (download.buffer.length === 0) {
+    throw new Error("OpenAI-compatible image URL download returned an empty image");
+  }
+  const explicitMimeType = normalizeImageHeaderMimeType(download.mimeType);
+  const detected = sniffKnownImageMimeType(download.buffer);
+  if (!detected && !explicitMimeType) {
+    throw new Error("OpenAI-compatible image URL download did not return an image");
+  }
+  const mimeType = detected?.mimeType ?? explicitMimeType ?? defaultMimeType;
+  const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
+  const image: GeneratedImageAsset = {
+    buffer: download.buffer,
+    mimeType,
+    fileName: `${prefix}-${index + 1}.${detected?.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+  };
+  const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
+  if (revisedPrompt) {
+    image.revisedPrompt = revisedPrompt;
+  }
+  return image;
+}
+
+async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    sniffMimeType?: boolean;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  return (
+    generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options) ??
+    (await generatedImageAssetFromOpenAiCompatibleUrlEntry(entry, index, options))
+  );
+}
+
 export function parseOpenAiCompatibleImageResponse(
   payload: unknown,
   options: {
@@ -229,8 +300,45 @@ export function parseOpenAiCompatibleImageResponse(
   return images;
 }
 
-// Upload filename contract for edit/reference images. User-provided filenames
-// win; generated names follow the same prefix/index/mime logic as outputs.
+export async function parseOpenAiCompatibleImageResponseAsync(
+  payload: unknown,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    malformedResponseError?: string;
+    sniffMimeType?: boolean;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset[]> {
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = await generatedImageAssetFromOpenAiCompatibleEntryAsync(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
+}
+
 export function imageSourceUploadFileName(params: {
   image: ImageGenerationSourceImage;
   index: number;

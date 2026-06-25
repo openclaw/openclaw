@@ -2436,20 +2436,20 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("resolves bare qmd command to a Windows-compatible spawn invocation", async () => {
+  it("resolves bare qmd command through the scoped QMD package fallback on Windows", async () => {
     await withMockedWindowsPlatform(async () => {
       const previousPath = process.env.PATH;
       try {
         const nodeModulesDir = path.join(tmpRoot, "node_modules");
         const shimDir = path.join(nodeModulesDir, ".bin");
-        const packageDir = path.join(nodeModulesDir, "qmd");
+        const packageDir = path.join(nodeModulesDir, "@tobilu", "qmd");
         const scriptPath = path.join(packageDir, "dist", "cli.js");
         await fs.mkdir(path.dirname(scriptPath), { recursive: true });
         await fs.mkdir(shimDir, { recursive: true });
         await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
         await fs.writeFile(
           path.join(packageDir, "package.json"),
-          JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+          JSON.stringify({ name: "@tobilu/qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
           "utf8",
         );
         await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");

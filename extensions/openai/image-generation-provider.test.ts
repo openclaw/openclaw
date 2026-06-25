@@ -7,10 +7,14 @@ const {
   isProviderApiKeyConfiguredMock,
   listProfilesForProviderMock,
   resolveApiKeyForProviderMock,
+  fetchWithTimeoutGuardedMock,
+  createProviderOperationDeadlineMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMsMock,
+  resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
   logInfoMock,
 } = vi.hoisted(() => ({
@@ -31,6 +35,11 @@ const {
       apiKey: "openai-key",
     }),
   ),
+  fetchWithTimeoutGuardedMock: vi.fn(),
+  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => ({
+    timeoutMs: params.timeoutMs,
+    label: params.label,
+  })),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -46,6 +55,14 @@ const {
       dispatcherPolicy: undefined,
     };
   }),
+  resolveProviderOperationTimeoutMsMock: vi.fn(
+    (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
+      params.deadline.timeoutMs ?? params.defaultTimeoutMs,
+  ),
+  resolveProviderOperationRemainingTimeoutMsMock: vi.fn(
+    (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
+      params.deadline.timeoutMs ?? params.defaultTimeoutMs,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
   logInfoMock: vi.fn(),
 }));
@@ -62,9 +79,13 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMs: resolveProviderOperationRemainingTimeoutMsMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 
@@ -328,10 +349,13 @@ describe("openai image generation provider", () => {
     listProfilesForProviderMock.mockClear();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openai-key" });
+    fetchWithTimeoutGuardedMock.mockReset();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
+    resolveProviderOperationRemainingTimeoutMsMock.mockClear();
+    resolveProviderOperationTimeoutMsMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
     logInfoMock.mockClear();
     vi.unstubAllEnvs();
@@ -575,6 +599,176 @@ describe("openai image generation provider", () => {
     });
 
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+  });
+
+  it("lets explicit OpenAI image timeouts exceed the provider default", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "slow image",
+      cfg: {},
+      timeoutMs: 300_000,
+    });
+
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledWith({
+      deadline: { timeoutMs: 300_000, label: "OpenAI image generation" },
+      defaultTimeoutMs: 180_000,
+    });
+    expect(jsonRequestCall().timeoutMs).toBe(300_000);
+  });
+
+  it("downloads OpenAI URL image responses through guarded provider HTTP", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ url: "https://cdn.openai.test/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
+      response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
+      release: downloadRelease,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "test",
+      cfg: {
+        browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://192.168.1.15:8082/v1",
+              apiKey: "local-noauth",
+              models: [],
+            },
+          },
+        },
+      },
+      timeoutMs: 123,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
+    const [url, init, timeoutMs, fetchFn, guardedOptions] = fetchWithTimeoutGuardedMock.mock
+      .calls[0] as [string, RequestInit, number | undefined, typeof fetch, Record<string, unknown>];
+    expect(url).toBe("https://cdn.openai.test/generated.png");
+    expect(init).toEqual({ method: "GET" });
+    expect(timeoutMs).toBe(123);
+    expect(fetchFn).toBe(fetch);
+    expect(guardedOptions).toEqual({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      auditContext: "openai-image-download",
+    });
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+    expect(result.images).toEqual([
+      {
+        buffer: pngBytes,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+      },
+    ]);
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
+  it("keeps provider transport policy for same-origin OpenAI URL image responses", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ url: "http://192.168.1.15:8082/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
+      response: new Response(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), {
+        headers: { "content-type": "image/png" },
+      }),
+      release: downloadRelease,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "test",
+      cfg: {
+        browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://192.168.1.15:8082/v1",
+              apiKey: "local-noauth",
+              models: [],
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const downloadCall = fetchWithTimeoutGuardedMock.mock.calls[0] as [
+      string,
+      RequestInit,
+      number | undefined,
+      typeof fetch,
+      Record<string, unknown>,
+    ];
+    expect(downloadCall[1].method).toBe("GET");
+    expect(downloadCall[1].headers).toBeInstanceOf(Headers);
+    expect(new Headers(downloadCall[1].headers).get("Authorization")).toBe("Bearer openai-key");
+    expect(new Headers(downloadCall[1].headers).has("Content-Type")).toBe(false);
+    const guardedOptions = downloadCall[4];
+    expect(guardedOptions).toEqual({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true, allowPrivateNetwork: true },
+      auditContext: "openai-image-download",
+    });
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
+  it("applies configured media limits to OpenAI URL image downloads", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ url: "https://cdn.openai.test/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
+      response: new Response(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), {
+        headers: { "content-type": "image/png" },
+      }),
+      release: downloadRelease,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "test",
+        cfg: { agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } },
+      }),
+    ).rejects.toThrow("OpenAI image URL download exceeded 1 bytes");
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
   it("wraps malformed successful OpenAI image responses", async () => {

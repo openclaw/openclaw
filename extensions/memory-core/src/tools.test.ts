@@ -189,6 +189,48 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("uses the configured QMD search timeout for the tool deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: {
+              limits: {
+                timeoutMs: 120_000,
+              },
+            },
+          },
+        }),
+      });
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-configured-timeout", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(105_000);
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 120s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns unavailable metadata when memory search does not settle", async () => {
     vi.useFakeTimers();
     try {
