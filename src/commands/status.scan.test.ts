@@ -121,13 +121,19 @@ describe("scanStatus", () => {
     ]);
   });
 
-  it("keeps default text status off live channel status and channel setup fallback for fast path", async () => {
+  it("uses live channel status but keeps setup fallback off for default text status", async () => {
     const cfg = createStatusScanConfig();
+    const liveChannelStatus = {
+      ok: true,
+      accounts: [],
+      checkedAt: "2026-05-09T07:30:00.000Z",
+    };
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: cfg,
       resolvedConfig: cfg,
     });
+    mocks.callGateway.mockResolvedValue(liveChannelStatus);
     mocks.probeGateway.mockResolvedValue({
       ok: true,
       url: "ws://127.0.0.1:18789",
@@ -142,11 +148,16 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: false }, {} as never);
 
-    expect(
-      mocks.callGateway.mock.calls.some(([call]) => {
-        return (call as { method?: unknown } | undefined)?.method === "channels.status";
-      }),
-    ).toBe(false);
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(firstCallArg(mocks.callGateway, "callGateway args")).toStrictEqual({
+      config: cfg,
+      method: "channels.status",
+      params: {
+        probe: false,
+        timeoutMs: 8000,
+      },
+      timeoutMs: 2500,
+    });
     expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
       timeoutMs: 2500,
       fetchGit: false,
@@ -163,7 +174,7 @@ describe("scanStatus", () => {
         showSecrets: true,
         includeSetupFallbackPlugins: false,
         sourceConfig: cfg,
-        liveChannelStatus: null,
+        liveChannelStatus,
         credentialResolutionSkipped: true,
       },
     ]);
