@@ -69,6 +69,7 @@ const state = vi.hoisted(() => ({
   sessionStoreMock: undefined as unknown,
   storePathMock: undefined as string | undefined,
   resolvedSessionKeyMock: undefined as string | undefined,
+  trajectoryRecorderParamsMock: vi.fn(),
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -357,12 +358,15 @@ vi.mock("../terminal/ansi.js", () => ({
 }));
 
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: () => ({
-    enabled: true,
-    filePath: "/tmp/session.trajectory.jsonl",
-    recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
-    flush: () => state.trajectoryFlushMock(),
-  }),
+  createTrajectoryRuntimeRecorder: (params: unknown) => {
+    state.trajectoryRecorderParamsMock(params);
+    return {
+      enabled: true,
+      filePath: "/tmp/session.trajectory.jsonl",
+      recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
+      flush: () => state.trajectoryFlushMock(),
+    };
+  },
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -2562,12 +2566,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.prepareInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: "sqlite:default:session-1:/tmp/openclaw-session-store.json",
       runId: expect.any(String),
     });
     expect(attemptCalls).toHaveLength(1);
     expect(attemptCalls[0]?.sessionFile).toBe("/tmp/openclaw-internal-run.jsonl");
     expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
+    expect(state.trajectoryRecorderParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+      }),
+    );
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
