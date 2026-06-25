@@ -1,5 +1,5 @@
 // Builds grouped Vitest duration reports or compares two grouped reports.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
   applyParallelVitestCachePaths,
@@ -27,6 +28,7 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
 const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
 const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
 
 function usage() {
   return [
@@ -62,7 +64,7 @@ function usage() {
 
 function readRequiredValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -93,6 +95,14 @@ export function parseTestGroupReportArgs(argv) {
     topFiles: 25,
     vitestArgs: [],
   };
+  const seenSingleValueFlags = new Set();
+  const setSingleValueFlag = (flag, apply) => {
+    if (seenSingleValueFlags.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seenSingleValueFlags.add(flag);
+    apply();
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -122,10 +132,11 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--compare") {
-      args.compare = {
-        before: readRequiredValue(argv, index, "--compare"),
-        after: readRequiredValue(argv, index + 1, "--compare"),
-      };
+      const before = readRequiredValue(argv, index, "--compare");
+      const after = readRequiredValue(argv, index + 1, "--compare");
+      setSingleValueFlag(arg, () => {
+        args.compare = { before, after };
+      });
       index += 2;
       continue;
     }
@@ -135,42 +146,66 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--group-by") {
-      args.groupBy = readRequiredValue(argv, index, "--group-by");
+      const value = readRequiredValue(argv, index, "--group-by");
+      setSingleValueFlag(arg, () => {
+        args.groupBy = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--output") {
-      args.output = readRequiredValue(argv, index, "--output");
+      const value = readRequiredValue(argv, index, "--output");
+      setSingleValueFlag(arg, () => {
+        args.output = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--limit") {
-      args.limit = readPositiveIntValue(argv, index, "--limit");
+      const value = readPositiveIntValue(argv, index, "--limit");
+      setSingleValueFlag(arg, () => {
+        args.limit = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = readPositiveIntValue(argv, index, "--max-test-ms");
+      const value = readPositiveIntValue(argv, index, "--max-test-ms");
+      setSingleValueFlag(arg, () => {
+        args.maxTestMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = readPositiveIntValue(argv, index, "--timeout-ms");
+      const value = readPositiveIntValue(argv, index, "--timeout-ms");
+      setSingleValueFlag(arg, () => {
+        args.timeoutMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      const value = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      setSingleValueFlag(arg, () => {
+        args.killGraceMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = readPositiveIntValue(argv, index, "--concurrency");
+      const value = readPositiveIntValue(argv, index, "--concurrency");
+      setSingleValueFlag(arg, () => {
+        args.concurrency = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = readPositiveIntValue(argv, index, "--top-files");
+      const value = readPositiveIntValue(argv, index, "--top-files");
+      setSingleValueFlag(arg, () => {
+        args.topFiles = value;
+      });
       index += 1;
       continue;
     }
@@ -231,6 +266,48 @@ function formatSpawnError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function signalTestGroupReportChild(
+  child,
+  signal,
+  {
+    appendDiagnostic = () => {},
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error && error.code !== "ESRCH") {
+        appendDiagnostic(
+          `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
+        );
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
 /**
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
@@ -262,23 +339,12 @@ export function spawnText(command, args, options) {
     let timedOut = false;
     let settled = false;
     let killTimer = null;
+    let killGraceDeadline = null;
+    let killGraceMessage = null;
     let childClosedResult = null;
     let waitingForKillGrace = false;
-    const signalChild = (signal) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if (error && error.code !== "ESRCH") {
-            appendDiagnostic(
-              `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
-            );
-          }
-        }
-      }
-      child.kill(signal);
-    };
+    const signalChild = (signal) =>
+      signalTestGroupReportChild(child, signal, { appendDiagnostic, useProcessGroup });
     const parentSignalHandlers = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -289,6 +355,7 @@ export function spawnText(command, args, options) {
     const relayParentSignal = (signal) => {
       const handler = () => {
         signalChild(signal);
+        signalChild("SIGKILL");
         cleanupParentSignalHandlers();
         process.kill(process.pid, signal);
       };
@@ -299,6 +366,9 @@ export function spawnText(command, args, options) {
       relayParentSignal("SIGINT");
       relayParentSignal("SIGTERM");
       relayParentSignal("SIGHUP");
+    } else if (process.platform === "win32") {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
     }
     const processGroupIsAlive = () => {
       if (!useProcessGroup || typeof child.pid !== "number") {
@@ -311,15 +381,54 @@ export function spawnText(command, args, options) {
         return Boolean(error && error.code === "EPERM");
       }
     };
+    const waitForProcessGroupExit = async (timeoutMsToWait) => {
+      const deadlineAt = Date.now() + timeoutMsToWait;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupIsAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupIsAlive();
+    };
+    const finishAfterProcessGroupCleanup = async (result) => {
+      const graceRemainingMs =
+        killGraceDeadline === null ? killGraceMs : Math.max(0, killGraceDeadline - Date.now());
+      if (graceRemainingMs > 0) {
+        await waitForProcessGroupExit(graceRemainingMs);
+      }
+      if (settled) {
+        return;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      waitingForKillGrace = false;
+      killGraceDeadline = null;
+      if (processGroupIsAlive()) {
+        appendDiagnostic(killGraceMessage ?? "");
+        signalChild("SIGKILL");
+      }
+      killGraceMessage = null;
+      childClosedResult = null;
+      finish(result);
+    };
     const scheduleKill = (message) => {
       if (waitingForKillGrace) {
         return;
       }
       waitingForKillGrace = true;
+      killGraceDeadline = Date.now() + killGraceMs;
+      killGraceMessage = message;
       killTimer = setTimeout(() => {
         waitingForKillGrace = false;
         killTimer = null;
-        appendDiagnostic(message);
+        killGraceDeadline = null;
+        appendDiagnostic(killGraceMessage ?? message);
+        killGraceMessage = null;
         signalChild("SIGKILL");
         if (childClosedResult) {
           finish(childClosedResult);
@@ -453,7 +562,9 @@ export function spawnText(command, args, options) {
         timedOut,
       };
       if (waitingForKillGrace && processGroupIsAlive()) {
+        killTimer?.ref?.();
         childClosedResult = result;
+        void finishAfterProcessGroupCleanup(result);
         return;
       }
       finish(result);

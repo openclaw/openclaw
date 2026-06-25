@@ -1424,7 +1424,7 @@ async function deliverOutboundPayloadsCore(
           agentId: params.session?.agentId ?? params.mirror?.agentId,
           mediaSources,
           mediaAccess: params.mediaAccess,
-          sessionKey: params.session?.key,
+          sessionKey: params.session?.policyKey ?? params.session?.key,
           messageProvider: params.session?.key ? undefined : channel,
           accountId: params.session?.requesterAccountId ?? accountId,
           requesterSenderId: params.session?.requesterSenderId,

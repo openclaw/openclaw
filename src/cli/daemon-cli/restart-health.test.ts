@@ -224,14 +224,14 @@ describe("inspectGatewayRestart", () => {
 
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("ssh");
+    classifyPortListener.mockReturnValue("non_gateway");
 
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "stopped" },
       portUsage: {
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 22001, command: "nginx.exe" }],
+        listeners: [{ pid: 22001, command: "sshd.exe" }],
         hints: [],
       },
       includeUnknownListenersAsStale: true,

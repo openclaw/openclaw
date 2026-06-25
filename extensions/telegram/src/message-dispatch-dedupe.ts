@@ -11,12 +11,39 @@ export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-messag
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
-export type TelegramMessageDispatchReplayGuard = ClaimableDedupe;
+export type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
+  Required<Pick<ClaimableDedupe, "forget">>;
 
 export type TelegramMessageDispatchClaim =
   | { kind: "claimed"; key: string }
   | { kind: "duplicate" }
   | { kind: "invalid" };
+
+export type TelegramMessageDispatchReplayForgetFailure = {
+  key: string;
+  error?: unknown;
+};
+
+export class TelegramMessageDispatchReplayForgetError extends Error {
+  readonly failures: TelegramMessageDispatchReplayForgetFailure[];
+  override readonly cause: unknown;
+
+  constructor(failures: readonly TelegramMessageDispatchReplayForgetFailure[]) {
+    const count = failures.length;
+    super(`telegram message dispatch dedupe rollback failed for ${count} key(s)`, {
+      cause: failures.find((failure) => failure.error !== undefined)?.error,
+    });
+    this.name = "TelegramMessageDispatchReplayForgetError";
+    this.failures = [...failures];
+    this.cause = failures.find((failure) => failure.error !== undefined)?.error;
+  }
+}
+
+export function isTelegramMessageDispatchReplayForgetError(
+  error: unknown,
+): error is TelegramMessageDispatchReplayForgetError {
+  return error instanceof TelegramMessageDispatchReplayForgetError;
+}
 
 function sanitizeFileSegment(value: string): string {
   const trimmed = value.trim();
@@ -129,6 +156,30 @@ export async function commitTelegramMessageDispatchReplay(params: {
       params.guard.commit(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
     ),
   );
+}
+
+export async function forgetTelegramMessageDispatchReplay(params: {
+  guard: TelegramMessageDispatchReplayGuard;
+  keys?: readonly string[];
+}): Promise<void> {
+  const keys = normalizeReplayKeys(params.keys);
+  const failures = (
+    await Promise.all(
+      keys.map(async (key): Promise<TelegramMessageDispatchReplayForgetFailure | null> => {
+        try {
+          const forgotten = await params.guard.forget(key, {
+            namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          });
+          return forgotten ? null : { key };
+        } catch (error) {
+          return { key, error };
+        }
+      }),
+    )
+  ).filter((failure): failure is TelegramMessageDispatchReplayForgetFailure => Boolean(failure));
+  if (failures.length > 0) {
+    throw new TelegramMessageDispatchReplayForgetError(failures);
+  }
 }
 
 export function releaseTelegramMessageDispatchReplay(params: {

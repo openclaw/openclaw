@@ -54,7 +54,8 @@ doctor can report the missing artifact.
 Policy is authored, not generated from the user's current settings. A minimal
 policy for channels, MCP servers, model providers, network posture, ingress/channel access, Gateway
 exposure, agent workspace posture, configured sandbox runtime posture, OpenClaw
-data-handling posture, config secret provider/auth profile posture, and tool metadata looks like this:
+data-handling posture, config secret provider/auth profile posture, exec approval
+file posture, and tool metadata looks like this:
 
 ```jsonc
 {
@@ -145,6 +146,15 @@ data-handling posture, config secret provider/auth profile posture, and tool met
       "allowModes": ["api_key", "token"],
     },
   },
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": { "allowSecurity": ["deny"] },
+    "agents": {
+      "allowSecurity": ["deny", "allowlist"],
+      "allowAutoAllowSkills": false,
+      "allowlist": { "expected": ["deploy", "status"] },
+    },
+  },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
     "profiles": {
@@ -187,9 +197,11 @@ and `group:runtime` covers shell/process tools. Tool posture policy observes
 `tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
 `tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
 `tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
-`agents.list[].tools.*` overrides. It does not read runtime/operator approval
-state such as exec-approvals.json, and it does not enforce tool calls at
-runtime. Secret evidence records
+`agents.list[].tools.*` overrides. Exec approval policy reads the named
+`exec-approvals.json` product artifact only when an `execApprovals` rule is
+present; evidence records defaults, per-agent posture, and allowlist patterns
+without socket tokens or last-used command text. Policy does not enforce tool
+calls at runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
@@ -218,8 +230,8 @@ its own finding against the same observed config.
 
 Use `scopes.<scopeName>` when one set of agents or channels needs stricter
 policy than the top-level baseline. Agent-scoped sections use `agentIds`, which
-supports `tools.*`, `agents.workspace.*`, `sandbox.*`, and
-`dataHandling.memory.*`. Channel-scoped
+supports `tools.*`, `agents.workspace.*`, `sandbox.*`, `dataHandling.memory.*`,
+and `execApprovals.*`. Channel-scoped
 ingress uses `channelIds`, which supports `ingress.channels.*`. Unsupported
 sections are rejected instead of being ignored. If an `agentIds` entry is not
 present in `agents.list[]`, OpenClaw evaluates the scoped rule against inherited
@@ -304,10 +316,10 @@ groups where those fields cannot be observed.
 Top-level `ingress.session.requireDmScope` remains global because
 `session.dmScope` is not channel-attributable evidence.
 
-| Selector     | Supported sections                                                | Use when                                          |
-| ------------ | ----------------------------------------------------------------- | ------------------------------------------------- |
-| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, and `dataHandling.memory` | One or more runtime agents need stricter rules.   |
-| `channelIds` | `ingress.channels`                                                | One or more channels need stricter ingress rules. |
+| Selector     | Supported sections                                                                 | Use when                                          |
+| ------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, `dataHandling.memory`, and `execApprovals` | One or more runtime agents need stricter rules.   |
+| `channelIds` | `ingress.channels`                                                                 | One or more channels need stricter ingress rules. |
 
 Every scope present in `policy.jsonc` must be valid and enforceable.
 
@@ -400,6 +412,69 @@ allowlist such as `["all"]`.
 | `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
 | `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
 | `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+#### Exec approvals
+
+Exec approvals policy observes the active runtime `exec-approvals.json`
+artifact. By default this is `~/.openclaw/exec-approvals.json`; when
+`OPENCLAW_STATE_DIR` is set, Policy reads
+`$OPENCLAW_STATE_DIR/exec-approvals.json`. Actual posture rules such as
+`execApprovals.defaults.*` or `execApprovals.agents.*` require readable artifact
+evidence; a missing or invalid artifact is reported as unobservable evidence
+instead of becoming a best-effort pass against synthetic runtime defaults. Once
+the artifact is readable, omitted approval fields inherit runtime defaults: missing
+`defaults.security` is `full`, and missing agent security inherits that
+default. Evidence includes `defaults`, `agents.*`, and
+`agents.*.allowlist[].pattern` plus optional `argPattern`, effective
+`autoAllowSkills` posture, and entry source. It does not include socket
+path/token, `commandText`, `lastUsedCommand`, resolved paths, or timestamps.
+
+| Policy field                                | Observed state                                                                         | Use when                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
+| `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
+| `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
+| `execApprovals.agents.allowlist.expected`   | Aggregate `agents.*.allowlist[]` pattern and optional argPattern entries               | Require the approvals allowlist to match the reviewed pattern set.                      |
+
+For example, require the approvals artifact, deny permissive defaults, and
+allow only reviewed exec approval posture for selected agents:
+
+```jsonc
+{
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": {
+      // Security modes: "deny", "allowlist", or "full".
+      // This default permits only the locked-down deny posture.
+      "allowSecurity": ["deny"],
+    },
+  },
+  "scopes": {
+    "restricted-shell": {
+      "agentIds": ["family-agent", "groups-agent"],
+      "execApprovals": {
+        "agents": {
+          // Selected agents may use reviewed allowlist posture, but not "full".
+          "allowSecurity": ["allowlist"],
+          // false means skill CLIs must appear in the reviewed allowlist instead of
+          // being implicitly approved by autoAllowSkills.
+          "allowAutoAllowSkills": false,
+          "allowlist": {
+            "expected": [
+              // Simple entry: exact reviewed executable pattern with no argPattern.
+              "travel-hub",
+              // Constrained entry: pattern plus reviewed argument regex.
+              { "pattern": "calendar-cli", "argPattern": "^sync\\b" },
+              "/bin/date",
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 #### Auth profiles
 
@@ -769,6 +844,13 @@ Policy currently verifies:
 | `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
 | `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
 | `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
+| `policy/exec-approvals-missing`                          | Policy requires `exec-approvals.json`, but the artifact is missing.               |
+| `policy/exec-approvals-invalid`                          | The configured exec approvals artifact cannot be parsed.                          |
+| `policy/exec-approvals-default-security-unapproved`      | Exec approval defaults use a security mode outside the policy allowlist.          |
+| `policy/exec-approvals-agent-security-unapproved`        | A per-agent effective exec approval security mode is outside the allowlist.       |
+| `policy/exec-approvals-auto-allow-skills-enabled`        | An exec approval agent implicitly auto-allows skill CLIs when policy denies it.   |
+| `policy/exec-approvals-allowlist-missing`                | The approvals allowlist is missing a pattern required by policy.                  |
+| `policy/exec-approvals-allowlist-unexpected`             | The approvals allowlist includes a pattern not expected by policy.                |
 | `policy/tools-missing-risk-level`                        | A governed tool declaration is missing risk metadata.                             |
 | `policy/tools-unknown-risk-level`                        | A governed tool declaration uses an unknown risk value.                           |
 | `policy/tools-missing-sensitivity-token`                 | A governed tool declaration is missing sensitivity metadata.                      |

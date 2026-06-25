@@ -125,6 +125,7 @@ function resolveBuiltInModelSuppression(params: {
 export function shouldSuppressBuiltInModelFromManifest(params: {
   provider?: string | null;
   id?: string | null;
+  baseUrl?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
 }) {

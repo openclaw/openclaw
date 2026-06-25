@@ -8,6 +8,7 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -15,6 +16,7 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -25,8 +27,8 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
-  stripMalformedXmlArgValueSuffix,
-  stripMalformedXmlArgValueSuffixFromKeys,
+  normalizeFileToolPathParam,
+  normalizeFileToolPathParamsFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -651,7 +653,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
-        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
@@ -736,7 +738,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
       firstRootEscapeError ??= error;
     }
   }
-  throw toLintErrorObject(
+  throw toErrorObject(
     firstRootEscapeError ?? new Error("Path guard has no configured roots."),
     "Non-Error thrown",
   );
@@ -769,7 +771,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = stripMalformedXmlArgValueSuffix(rawFilePath);
+        const filePath = normalizeFileToolPathParam(rawFilePath);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -885,7 +887,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
-        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
@@ -917,6 +919,10 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       }
       return resolveContainerPathCandidate(filePath) ?? filePath;
     },
+    decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
+      params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
+        ? decodeWindowsTextFileBuffer({ buffer })
+        : buffer.toString("utf8"),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
@@ -1120,19 +1126,5 @@ async function toCanonicalRelativeWorkspacePath(
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
-  return error;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
   return error;
 }

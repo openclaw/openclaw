@@ -6,7 +6,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTempDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
+  CONFIG_DIR,
   ensureDir,
+  pinConfigDir,
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
@@ -80,6 +82,25 @@ describe("resolveConfigDir", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
+  });
+
+  it("re-pins the exported configuration root after startup environment selection", () => {
+    const originalConfigDir = CONFIG_DIR;
+    const selectedConfigDir = path.resolve("/tmp/openclaw-selected-config-root");
+    try {
+      expect(
+        pinConfigDir({
+          OPENCLAW_STATE_DIR: selectedConfigDir,
+          OPENCLAW_TEST_FAST: "1",
+        }),
+      ).toBe(selectedConfigDir);
+      expect(CONFIG_DIR).toBe(selectedConfigDir);
+    } finally {
+      pinConfigDir({
+        OPENCLAW_STATE_DIR: originalConfigDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
   });
 });
 

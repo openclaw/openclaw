@@ -7,8 +7,6 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
-  buildBootstrapTruncationSignature,
-  formatBootstrapTruncationWarningLines,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -121,9 +119,10 @@ describe("bootstrap prompt warnings", () => {
     });
     (analysis.truncatedFiles[0] as { name?: string }).name = undefined;
 
-    const lines = formatBootstrapTruncationWarningLines({
+    const lines = buildBootstrapPromptWarning({
       analysis,
-    });
+      mode: "always",
+    }).lines;
     expect(lines.join("\n")).toContain("10 raw -> 1 injected");
   });
 
@@ -345,10 +344,11 @@ describe("bootstrap prompt warnings", () => {
       bootstrapMaxChars: 20,
       bootstrapTotalMaxChars: 10,
     });
-    const lines = formatBootstrapTruncationWarningLines({
+    const lines = buildBootstrapPromptWarning({
       analysis,
+      mode: "always",
       maxFiles: 2,
-    });
+    }).lines;
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
@@ -367,7 +367,10 @@ describe("bootstrap prompt warnings", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    const lines = formatBootstrapTruncationWarningLines({ analysis });
+    const lines = buildBootstrapPromptWarning({
+      analysis,
+      mode: "always",
+    }).lines;
 
     expect(lines).toContain(
       "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
@@ -397,9 +400,10 @@ describe("bootstrap prompt warnings", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 300,
     });
-    const lines = formatBootstrapTruncationWarningLines({
+    const lines = buildBootstrapPromptWarning({
       analysis,
-    });
+      mode: "always",
+    }).lines;
     expect(lines.join("\n")).toContain("AGENTS.md (/tmp/a/AGENTS.md)");
     expect(lines.join("\n")).toContain("AGENTS.md (/tmp/b/AGENTS.md)");
   });
@@ -419,12 +423,15 @@ describe("bootstrap prompt warnings", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    const signature = buildBootstrapTruncationSignature(analysis);
+    const seen = buildBootstrapPromptWarning({
+      analysis,
+      mode: "once",
+    });
     const off = buildBootstrapPromptWarning({
       analysis,
       mode: "off",
-      seenSignatures: [signature ?? ""],
-      previousSignature: signature,
+      seenSignatures: seen.warningSignaturesSeen,
+      previousSignature: seen.signature,
     });
     expect(off.warningShown).toBe(false);
     expect(off.lines).toStrictEqual([]);
@@ -432,8 +439,8 @@ describe("bootstrap prompt warnings", () => {
     const always = buildBootstrapPromptWarning({
       analysis,
       mode: "always",
-      seenSignatures: [signature ?? ""],
-      previousSignature: signature,
+      seenSignatures: seen.warningSignaturesSeen,
+      previousSignature: seen.signature,
     });
     expect(always.warningShown).toBe(true);
     expect(always.lines).toStrictEqual([
@@ -472,9 +479,9 @@ describe("bootstrap prompt warnings", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    expect(buildBootstrapTruncationSignature(left)).not.toBe(
-      buildBootstrapTruncationSignature(right),
-    );
+    const leftWarning = buildBootstrapPromptWarning({ analysis: left, mode: "once" });
+    const rightWarning = buildBootstrapPromptWarning({ analysis: right, mode: "once" });
+    expect(leftWarning.signature).not.toBe(rightWarning.signature);
   });
 
   it("builds truncation report metadata from analysis + warning decision", () => {

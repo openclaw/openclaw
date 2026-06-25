@@ -14,7 +14,6 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { hasRuntimeAvailableProviderAuth } from "../../agents/model-auth.js";
 import {
   loadModelCatalogForBrowse,
@@ -55,18 +54,6 @@ function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
     params?: Record<string, unknown>;
   };
   return rest;
-}
-
-function modelCatalogEntryHasUnknownSecretRefAvailability(
-  cfg: OpenClawConfig,
-  entry: ModelCatalogEntry,
-): boolean {
-  const providerId = normalizeProviderId(entry.provider);
-  const provider = Object.entries(cfg.models?.providers ?? {}).find(
-    ([id]) => normalizeProviderId(id) === providerId,
-  )?.[1];
-  const apiKey = provider?.apiKey;
-  return apiKey === NON_ENV_SECRETREF_MARKER || (isSecretRef(apiKey) && apiKey.source !== "env");
 }
 
 function createInFlightProviderAuthChecker(
@@ -219,16 +206,9 @@ async function resolveModelsListEntryAvailability(
 
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
-  cfg: OpenClawConfig;
   providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
-  if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
-    return {
-      ...publicEntry,
-      available: false,
-    };
-  }
   if (!params.providerAuthChecker) {
     return publicEntry;
   }
@@ -253,7 +233,6 @@ async function buildPublicModelsListEntries(params: {
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
-        cfg: params.cfg,
         providerAuthChecker,
       }),
     ),

@@ -14,39 +14,3 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         var startedAt: Date
     }
 }
-
-#if DEBUG
-extension OpenClawActivityAttributes {
-    static let preview = OpenClawActivityAttributes(agentName: "main", sessionKey: "main")
-}
-
-extension OpenClawActivityAttributes.ContentState {
-    static let connecting = OpenClawActivityAttributes.ContentState(
-        statusText: "Connecting...",
-        isIdle: false,
-        isDisconnected: false,
-        isConnecting: true,
-        startedAt: .now)
-
-    static let idle = OpenClawActivityAttributes.ContentState(
-        statusText: "Idle",
-        isIdle: true,
-        isDisconnected: false,
-        isConnecting: false,
-        startedAt: .now)
-
-    static let disconnected = OpenClawActivityAttributes.ContentState(
-        statusText: "Disconnected",
-        isIdle: false,
-        isDisconnected: true,
-        isConnecting: false,
-        startedAt: .now)
-
-    static let attention = OpenClawActivityAttributes.ContentState(
-        statusText: "Approval needed",
-        isIdle: false,
-        isDisconnected: false,
-        isConnecting: false,
-        startedAt: .now)
-}
-#endif

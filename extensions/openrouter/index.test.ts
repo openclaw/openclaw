@@ -11,6 +11,24 @@ import {
   expectUnifiedModelCatalogProviderRegistration,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
+
+const { getOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } = vi.hoisted(
+  () => ({
+    getOpenRouterModelCapabilitiesMock: vi.fn(),
+    loadOpenRouterModelCapabilitiesMock: vi.fn(async () => {}),
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
+  return {
+    ...actual,
+    getOpenRouterModelCapabilities: getOpenRouterModelCapabilitiesMock,
+    loadOpenRouterModelCapabilities: loadOpenRouterModelCapabilitiesMock,
+  };
+});
+
 import openrouterPlugin from "./index.js";
 import {
   buildOpenrouterProvider,
@@ -204,6 +222,232 @@ describe("openrouter provider hooks", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
   });
 
+  it("normalizes OpenRouter API ids before capability loading and lookup", async () => {
+    getOpenRouterModelCapabilitiesMock.mockReset();
+    loadOpenRouterModelCapabilitiesMock.mockClear();
+    getOpenRouterModelCapabilitiesMock.mockReturnValue({
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      supportsTools: true,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    const context = {
+      provider: "openrouter",
+      modelId,
+      modelRegistry: { find: vi.fn(() => null) },
+    } as never;
+
+    await provider.prepareDynamicModel?.(context);
+    const model = provider.resolveDynamicModel?.(context);
+
+    expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(model).toMatchObject({
+      id: modelId,
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      compat: { supportsTools: true },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("keeps native OpenRouter namespace ids for capability lookup", async () => {
+    getOpenRouterModelCapabilitiesMock.mockReset();
+    loadOpenRouterModelCapabilitiesMock.mockClear();
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const context = {
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRegistry: { find: vi.fn(() => null) },
+    } as never;
+
+    await provider.prepareDynamicModel?.(context);
+    provider.resolveDynamicModel?.(context);
+
+    expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
+    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
+  });
+
+  it("describes configured Fusion analysis models in the system prompt", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [
+                          "google/gemini-3.5-flash",
+                          "moonshotai/kimi-k2.6",
+                          "deepseek/deepseek-v4-pro",
+                        ],
+                        model: "google/gemini-3.5-flash",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain("OpenRouter Fusion Configuration");
+    expect(contribution?.dynamicSuffix).toContain(
+      "Analysis models: google/gemini-3.5-flash, moonshotai/kimi-k2.6, deepseek/deepseek-v4-pro.",
+    );
+    expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
+  });
+
+  it("describes Fusion config from the canonical OpenRouter model key", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: ["deepseek/deepseek-v4-pro"],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
+  });
+
+  it("matches transport alias precedence for Fusion extra body", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            params: {
+              extra_body: {
+                plugins: [
+                  {
+                    id: "fusion",
+                    analysis_models: ["google/gemini-3.5-flash"],
+                  },
+                ],
+              },
+            },
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: ["deepseek/deepseek-v4-pro"],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain("Analysis models: google/gemini-3.5-flash.");
+    expect(contribution?.dynamicSuffix).not.toContain("deepseek/deepseek-v4-pro");
+  });
+
+  it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    metadata: { private: "do-not-render" },
+                    plugins: [{ id: "not-fusion", model: "private-model" }],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution).toBeUndefined();
+  });
+
+  it("does not describe disabled Fusion plugin config in the system prompt", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        enabled: false,
+                        analysis_models: ["deepseek/deepseek-v4-pro"],
+                        model: "google/gemini-3.5-flash",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution).toBeUndefined();
+  });
+
   it("does not include retired stealth models in the bundled catalog", () => {
     const modelIds = buildOpenrouterProvider().models?.map((model) => model.id) ?? [];
     expect(modelIds).not.toContain("openrouter/hunter-alpha");
@@ -389,6 +633,61 @@ describe("openrouter provider hooks", () => {
       },
     } as never);
     expect(normalizedHunterModel?.reasoning).toBe(false);
+    expect(normalizedHunterModel?.id).toBe("openrouter/hunter-alpha");
+
+    const normalizedAnthropicModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/anthropic/claude-sonnet-4.6",
+        name: "anthropic/claude-sonnet-4.6",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedAnthropicModel?.id).toBe("anthropic/claude-sonnet-4.6");
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        model: {
+          provider: "openrouter",
+          id: "openrouter/auto",
+          name: "OpenRouter Auto",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+          reasoning: false,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      } as never),
+    ).toBeUndefined();
+
+    const normalizedDuplicatedAutoModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      modelId: "openrouter/openrouter/auto",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/openrouter/auto",
+        name: "OpenRouter Auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedDuplicatedAutoModel?.id).toBe("openrouter/auto");
 
     expect(
       provider.normalizeTransport?.({

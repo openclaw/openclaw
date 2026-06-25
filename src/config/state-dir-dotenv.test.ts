@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readStateDirDotEnvVarsFromStateDir } from "./state-dir-dotenv.js";
+import { readStateDirDotEnvFromStateDir } from "./state-dir-dotenv.js";
 
-describe("readStateDirDotEnvVarsFromStateDir", () => {
+describe("readStateDirDotEnvFromStateDir", () => {
   async function withDotEnv<T>(content: string, run: (dir: string) => T | Promise<T>): Promise<T> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
     await fs.writeFile(path.join(dir, ".env"), content, "utf8");
@@ -18,7 +18,7 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
 
   it("returns real credential values from the state-dir dotenv", async () => {
     await withDotEnv("SUPERMEMORY_API_KEY=sm_real_credential_value\n", async (dir) => {
-      const result = readStateDirDotEnvVarsFromStateDir(dir);
+      const result = readStateDirDotEnvFromStateDir(dir).entries;
       expect(result["SUPERMEMORY_API_KEY"]).toBe("sm_real_credential_value");
     });
   });
@@ -40,7 +40,7 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
     ].join("\n");
 
     await withDotEnv(content, async (dir) => {
-      const result = readStateDirDotEnvVarsFromStateDir(dir);
+      const result = readStateDirDotEnvFromStateDir(dir).entries;
       expect(Object.keys(result)).not.toContain("SUPERMEMORY_OPENCLAW_API_KEY");
       expect(Object.keys(result)).not.toContain("QUOTED_SUPERMEMORY_OPENCLAW_API_KEY");
       expect(Object.keys(result)).not.toContain("QUOTED_CURLY_KEY");
@@ -70,7 +70,7 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
     ].join("\n");
 
     await withDotEnv(content, async (dir) => {
-      const result = readStateDirDotEnvVarsFromStateDir(dir);
+      const result = readStateDirDotEnvFromStateDir(dir).entries;
       expect(result["PASSWORD"]).toBe("abc$2!xyz");
       expect(result["TOKEN"]).toBe("tok_$prod_v2");
       expect(result["PRICE"]).toBe("\\$100");
@@ -86,7 +86,7 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
   it("returns empty object when .env is missing", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-missing-"));
     try {
-      expect(readStateDirDotEnvVarsFromStateDir(dir)).toEqual({});
+      expect(readStateDirDotEnvFromStateDir(dir).entries).toEqual({});
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

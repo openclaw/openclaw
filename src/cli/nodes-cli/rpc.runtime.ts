@@ -20,7 +20,13 @@ export async function callGatewayCliRuntime(
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    transportTimeoutMs?: number;
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
+  },
 ) {
   // Progress is suppressed for JSON callers so stdout remains structured.
   return await withProgress(
@@ -35,9 +41,17 @@ export async function callGatewayCliRuntime(
         token: opts.token,
         method,
         params,
+        scopes: callOpts?.scopes,
+        useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
+        requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+        requireLocalBackendSharedAuth: callOpts?.useLocalBackendSharedAuth,
         timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+          : GATEWAY_CLIENT_NAMES.CLI,
+        mode: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_MODES.BACKEND
+          : GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }

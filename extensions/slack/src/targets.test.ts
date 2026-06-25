@@ -4,6 +4,8 @@ import {
   normalizeSlackMessagingTarget,
   parseSlackTarget,
   resolveSlackChannelId,
+  slackContextTargetsMatch,
+  slackTargetsMatch,
 } from "./targets.js";
 
 describe("parseSlackTarget", () => {
@@ -65,5 +67,35 @@ describe("resolveSlackChannelId", () => {
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
     expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+  });
+});
+
+describe("slackTargetsMatch", () => {
+  it("matches equivalent channel and user targets", () => {
+    expect(slackTargetsMatch("channel:C123", "C123")).toBe(true);
+    expect(slackTargetsMatch("user:U123", "slack:U123")).toBe(true);
+  });
+
+  it("does not match different target kinds", () => {
+    expect(slackTargetsMatch("user:U123", "channel:U123")).toBe(false);
+  });
+});
+
+describe("slackContextTargetsMatch", () => {
+  it("matches resolved bare user ids against the routable DM target", () => {
+    const context = {
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+    };
+
+    expect(slackContextTargetsMatch("U123", context)).toBe(true);
+    expect(
+      slackContextTargetsMatch("W123", {
+        ...context,
+        currentMessagingTarget: "user:W123",
+      }),
+    ).toBe(true);
+    expect(slackContextTargetsMatch("U999", context)).toBe(false);
+    expect(slackContextTargetsMatch("C123", context)).toBe(false);
   });
 });

@@ -187,4 +187,82 @@ describe("renderUsage", () => {
     expect(container.textContent).toContain("agent:research:main");
     expect(container.textContent).not.toContain("agent:main:main");
   });
+
+  it("keeps session-derived insights scoped to the visible page when the page limit is hit", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            sessionsLimitReached: true,
+            totals: {
+              input: 1_000,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 1_000,
+              totalCost: 10,
+              inputCost: 10,
+              outputCost: 0,
+              cacheReadCost: 0,
+              cacheWriteCost: 0,
+              missingCostEntries: 0,
+            },
+            aggregates: {
+              messages: {
+                total: 100,
+                user: 50,
+                assistant: 50,
+                toolCalls: 0,
+                toolResults: 0,
+                errors: 0,
+              },
+              tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+              byModel: [],
+              byProvider: [],
+              byAgent: [],
+              byChannel: [],
+              daily: [],
+            },
+            sessions: [
+              {
+                key: "agent:main:visible",
+                agentId: "main",
+                lastUpdated: Date.now(),
+                usage: {
+                  input: 10,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 10,
+                  totalCost: 0.1,
+                  inputCost: 0.1,
+                  outputCost: 0,
+                  cacheReadCost: 0,
+                  cacheWriteCost: 0,
+                  missingCostEntries: 0,
+                  messageCounts: {
+                    total: 2,
+                    user: 1,
+                    assistant: 1,
+                    toolCalls: 0,
+                    toolResults: 0,
+                    errors: 0,
+                  },
+                },
+              } as UsageProps["data"]["sessions"][number],
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const messagesValue = container.querySelector(
+      ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
+    );
+    expect(messagesValue?.textContent?.trim()).toBe("2");
+  });
 });

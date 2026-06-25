@@ -12,11 +12,12 @@ const mocks = vi.hoisted(() => ({
   resolveConversationLabelMock: vi.fn(),
   recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
+  deliverSlackSlashRepliesMock: vi.fn<(params: unknown) => Promise<unknown>>(async () => {}),
 }));
 
 vi.mock("./slash-dispatch.runtime.js", () => {
   return {
-    deliverSlackSlashReplies: vi.fn(async () => {}),
+    deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
     finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
@@ -37,6 +38,7 @@ type SlashHarnessMocks = {
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
   recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
+  deliverSlackSlashRepliesMock: AsyncMock;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -56,4 +58,5 @@ export function resetSlackSlashMocks() {
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
   mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
   mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
+  mocks.deliverSlackSlashRepliesMock.mockReset().mockResolvedValue(undefined);
 }

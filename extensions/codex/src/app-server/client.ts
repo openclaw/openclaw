@@ -103,6 +103,15 @@ export type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
+/** Runtime identity returned by the Codex app-server initialize handshake. */
+export type CodexAppServerRuntimeIdentity = {
+  serverVersion: string;
+  userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
+};
+
 /** Stateful app-server JSON-RPC client over stdio or websocket transport. */
 export class CodexAppServerClient {
   private readonly child: CodexAppServerTransport;
@@ -117,6 +126,7 @@ export class CodexAppServerClient {
   private closed = false;
   private closeError: Error | undefined;
   private serverVersion: string | undefined;
+  private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   private stderrTail = "";
   private pendingParse:
     | {
@@ -193,6 +203,7 @@ export class CodexAppServerClient {
       },
     } satisfies CodexInitializeParams);
     this.serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
     this.notify("initialized");
     this.initialized = true;
   }
@@ -200,6 +211,11 @@ export class CodexAppServerClient {
   /** Returns the version detected during initialize. */
   getServerVersion(): string | undefined {
     return this.serverVersion;
+  }
+
+  /** Returns runtime metadata detected during initialize. */
+  getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
+    return this.runtimeIdentity ? { ...this.runtimeIdentity } : undefined;
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -621,6 +637,28 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
     );
   }
   return detectedVersion;
+}
+
+function buildCodexAppServerRuntimeIdentity(
+  response: CodexInitializeResponse,
+  serverVersion: string,
+): CodexAppServerRuntimeIdentity {
+  const userAgent = readNonEmptyInitializeString(response.userAgent);
+  const codexHome = readNonEmptyInitializeString(response.codexHome);
+  const platformFamily = readNonEmptyInitializeString(response.platformFamily);
+  const platformOs = readNonEmptyInitializeString(response.platformOs);
+  return {
+    serverVersion,
+    ...(userAgent ? { userAgent } : {}),
+    ...(codexHome ? { codexHome } : {}),
+    ...(platformFamily ? { platformFamily } : {}),
+    ...(platformOs ? { platformOs } : {}),
+  };
+}
+
+function readNonEmptyInitializeString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 /** Extracts the Codex version from the app-server initialize user-agent field. */

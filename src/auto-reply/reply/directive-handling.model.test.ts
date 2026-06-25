@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 
 vi.hoisted(() => {
   vi.resetModules();
@@ -307,10 +308,6 @@ beforeAll(async () => {
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
   ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
 });
-
-const liveModelSwitchMocks = vi.hoisted(() => ({
-  requestLiveSessionModelSwitch: vi.fn(),
-}));
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
 }));
@@ -344,11 +341,6 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
-}));
-
-vi.mock("../../agents/live-model-switch.js", () => ({
-  requestLiveSessionModelSwitch: (...args: unknown[]) =>
-    liveModelSwitchMocks.requestLiveSessionModelSwitch(...args),
 }));
 
 vi.mock("./queue.js", () => ({
@@ -438,7 +430,6 @@ beforeEach(() => {
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
-  liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
   clearInternalHooks();
 });
@@ -515,6 +506,7 @@ async function persistModelDirectiveForTest(params: {
   cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
   allowedModelKeys: string[];
+  allowedModelCatalog?: ModelCatalogEntry[];
   sessionEntry?: SessionEntry;
   provider?: string;
   model?: string;
@@ -541,6 +533,7 @@ async function persistModelDirectiveForTest(params: {
     defaultModel: "claude-opus-4-6",
     aliasIndex: params.aliasIndex ?? baseAliasIndex(),
     allowedModelKeys: new Set(params.allowedModelKeys),
+    modelCatalog: params.allowedModelCatalog,
     provider: params.provider ?? "anthropic",
     model: params.model ?? "claude-opus-4-6",
     initialModelLabel:
@@ -1304,6 +1297,32 @@ describe("/model chat UX", () => {
     expect(persisted.contextTokens).toBe(1_000_000);
   });
 
+  it("caps a cold model switch with the selected catalog row", async () => {
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-5.5 hello",
+      allowedModelKeys: ["openai/gpt-5.5"],
+      allowedModelCatalog: [
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          contextWindow: 1_000_000,
+          contextTokens: 272_000,
+        },
+      ],
+      cfg: {
+        ...baseConfig(),
+        agents: {
+          defaults: {
+            contextTokens: 1_000_000,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(persisted.contextTokens).toBe(272_000);
+  });
+
   it("clears runtime overrides when the model directive asks for default runtime", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime default hello",
@@ -1571,21 +1590,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("xhigh not supported");
     expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
-
-  it("does not request a live restart when /model mutates an active session", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
-    const sessionEntry = createSessionEntry();
-
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-      }),
-    );
-
-    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).not.toHaveBeenCalled();
-  });
-
   it("retargets queued followups when /model mutates session state", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();

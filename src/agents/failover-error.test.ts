@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   isNonProviderRuntimeCoordinationError,
+  isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -649,6 +650,40 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("uses structured OpenAI-compatible param detail for model-not-found 400s", () => {
+    const err = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      code: "400",
+      param: "Not supported model some-model-id",
+      error: {
+        code: "400",
+        message: "Param Incorrect",
+        param: "Not supported model some-model-id",
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("model_not_found");
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "400 Param Incorrect",
+      reason: "model_not_found",
+      status: 400,
+      code: "400",
+    });
+  });
+
+  it("keeps unsupported capability details classified as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 Param Incorrect",
+        error: {
+          message: "Param Incorrect",
+          param: "This model is not supported for tool calling.",
+        },
+      }),
+    ).toBe("format");
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -923,12 +958,36 @@ describe("failover-error", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
       model: "claude-opus-4-6",
+      authMode: "oauth",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-6");
+    expect(err?.authMode).toBe("oauth");
+  });
+
+  it("enriches an existing FailoverError with the active auth mode", () => {
+    const original = new FailoverError("credit balance too low", {
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      status: 402,
+    });
+
+    const err = coerceToFailoverError(original, { authMode: "token" });
+
+    expect(err).not.toBe(original);
+    expect(err).toMatchObject({
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      authMode: "token",
+      status: 402,
+    });
   });
 
   it("preserves raw provider error text for diagnostic logs", () => {
@@ -1167,6 +1226,7 @@ describe("failover-error", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       profileId: "profile-2",
+      authMode: "oauth",
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
@@ -1177,6 +1237,7 @@ describe("failover-error", () => {
     expect(description.provider).toBe("anthropic");
     expect(description.model).toBe("claude-opus-4-6");
     expect(description.profileId).toBe("profile-2");
+    expect(description.authMode).toBe("oauth");
     expect(description.sessionId).toBe("session:browser-abcd");
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
@@ -1313,5 +1374,36 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
     expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
     expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
+  });
+});
+
+describe("isSignalTimeoutReason", () => {
+  it("returns false for plain AbortController.abort() DOMException (client disconnect)", () => {
+    // watchClientDisconnect calls abort() with no args, producing AbortError.
+    // This must not be classified as a run timeout (#90764).
+    const err = new DOMException("This operation was aborted", "AbortError");
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns false for AbortError whose message matches ABORT_TIMEOUT_RE", () => {
+    // Old isTimeoutError returned true here via ABORT_TIMEOUT_RE (/request.*aborted/i).
+    const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns true for AbortSignal.timeout() DOMException", () => {
+    const err = new DOMException("signal timed out", "TimeoutError");
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns true for makeTimeoutAbortReason()-style Error", () => {
+    // makeTimeoutAbortReason() in attempt.ts: Error("request timed out", name="TimeoutError")
+    const err = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns false for null and undefined", () => {
+    expect(isSignalTimeoutReason(null)).toBe(false);
+    expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });

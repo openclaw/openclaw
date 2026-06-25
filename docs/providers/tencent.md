@@ -6,12 +6,12 @@ read_when:
   - You need the TokenHub API key setup
 ---
 
-Tencent Cloud ships as a bundled provider plugin in OpenClaw. It gives access to Tencent Hy3 preview through the TokenHub endpoint (`tencent-tokenhub`) using an OpenAI-compatible API.
+Install the official Tencent Cloud provider plugin to access Tencent Hy3 preview through the TokenHub endpoint (`tencent-tokenhub`) using an OpenAI-compatible API.
 
 | Property         | Value                                                 |
 | ---------------- | ----------------------------------------------------- |
 | Provider id      | `tencent-tokenhub`                                    |
-| Plugin           | bundled, `enabledByDefault: true`                     |
+| Package          | `@openclaw/tencent-provider`                          |
 | Auth env var     | `TOKENHUB_API_KEY`                                    |
 | Onboarding flag  | `--auth-choice tokenhub-api-key`                      |
 | Direct CLI flag  | `--tokenhub-api-key <key>`                            |
@@ -23,6 +23,11 @@ Tencent Cloud ships as a bundled provider plugin in OpenClaw. It gives access to
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/tencent-provider
+    ```
+  </Step>
   <Step title="Create a TokenHub API key">
     Create an API key in Tencent Cloud TokenHub. If you choose a limited access scope for the key, include **Hy3 preview** in the allowed models.
   </Step>
@@ -78,7 +83,7 @@ Hy3 preview is Tencent Hunyuan's large MoE language model for reasoning, long-co
 
 ## Tiered pricing
 
-The bundled catalog ships tiered cost metadata that scales with input window length, so cost estimates are populated without manual overrides.
+The provider catalog ships tiered cost metadata that scales with input window length, so cost estimates are populated without manual overrides.
 
 | Input tokens range | Input rate | Output rate | Cache read |
 | ------------------ | ---------- | ----------- | ---------- |

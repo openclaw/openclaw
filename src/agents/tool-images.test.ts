@@ -7,7 +7,11 @@ import {
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { getImageMetadata } from "../media/image-ops.js";
-import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
+import {
+  sanitizeContentBlocksImages,
+  sanitizeImageBlocks,
+  sanitizeToolResultImages,
+} from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
   const getImageBlock = (
@@ -115,6 +119,83 @@ describe("tool image sanitizing", () => {
     const image = getImageBlock(out);
     expect(image.mimeType).toBe("image/jpeg");
     expect(image.data).toBe(jpeg.toString("base64"));
+  });
+
+  it("preserves data and mimeType on no-resize path", async () => {
+    const png = createSolidPngBuffer(10, 10, { r: 0, g: 0, b: 255 });
+    const base64 = png.toString("base64");
+
+    const blocks = [{ type: "image" as const, data: base64, mimeType: "image/png" }];
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    expect(out).toHaveLength(1);
+    const image = getImageBlock(out);
+    expect(typeof image.data).toBe("string");
+    expect(image.data.length).toBeGreaterThan(0);
+    expect(typeof image.mimeType).toBe("string");
+    expect(image.mimeType).toBe("image/png");
+  });
+
+  it("preserves data and mimeType on resize path", async () => {
+    const png = createSolidPngBuffer(2600, 400, { r: 255, g: 0, b: 0 });
+    const base64 = png.toString("base64");
+
+    const blocks = [{ type: "image" as const, data: base64, mimeType: "image/png" }];
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    expect(out).toHaveLength(1);
+    const image = getImageBlock(out);
+    expect(typeof image.data).toBe("string");
+    expect(image.data.length).toBeGreaterThan(0);
+    expect(typeof image.mimeType).toBe("string");
+  }, 20_000);
+
+  it("converts image blocks with missing data/mimeType to text", async () => {
+    const blocks = [
+      {
+        type: "image" as const,
+        data: undefined as unknown as string,
+        mimeType: undefined as unknown as string,
+      },
+    ];
+    const out = await sanitizeContentBlocksImages(blocks, "browser:screenshot");
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe("text");
+    expect((out[0] as { type: "text"; text: string }).text).toContain("missing data or mimeType");
+  });
+
+  it("screenshot-shaped tool result round-trips with valid image block", async () => {
+    const png = createSolidPngBuffer(100, 100, { r: 0, g: 128, b: 0 });
+    const base64 = png.toString("base64");
+
+    const result = {
+      content: [{ type: "image" as const, data: base64, mimeType: "image/png" }],
+      details: { path: "/tmp/screenshot.png" },
+    };
+    const sanitized = await sanitizeToolResultImages(result, "browser:screenshot");
+    const imageBlock = sanitized.content.find((b) => b.type === "image");
+    expect(imageBlock).toBeDefined();
+    expect(typeof (imageBlock as { data: string }).data).toBe("string");
+    expect((imageBlock as { data: string }).data.length).toBeGreaterThan(0);
+    expect(typeof (imageBlock as { mimeType: string }).mimeType).toBe("string");
+  });
+
+  it("screenshot-shaped tool result with malformed image produces text fallback", async () => {
+    const result = {
+      content: [
+        {
+          type: "image" as const,
+          data: undefined as unknown as string,
+          mimeType: undefined as unknown as string,
+        },
+      ],
+      details: {},
+    };
+    const sanitized = await sanitizeToolResultImages(result, "browser:screenshot");
+    const imageBlocks = sanitized.content.filter((b) => b.type === "image");
+    expect(imageBlocks).toHaveLength(0);
+    const textFallback = sanitized.content.find(
+      (b) => b.type === "text" && (b as { text: string }).text.includes("missing data or mimeType"),
+    );
+    expect(textFallback).toBeDefined();
   });
 
   it("drops malformed image base64 payloads", async () => {

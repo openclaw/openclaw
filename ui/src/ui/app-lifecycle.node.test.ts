@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { handleDisconnected, handleUpdated } from "./app-lifecycle.ts";
 import { loadChatComposerSnapshot } from "./chat/composer-persistence.ts";
+import { configureWorkboardPolling, getWorkboardState } from "./controllers/workboard.ts";
 import { CONTROL_UI_DOCUMENT_TITLE } from "./document-title.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
@@ -115,6 +116,53 @@ describe("handleDisconnected", () => {
     expect(host.sessionsChangedReloadTimer).toBeNull();
     vi.advanceTimersByTime(1_000);
     expect(pendingReload).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("stops Workboard polling timers on teardown", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {
+      removeEventListener: vi.fn(),
+    });
+    const host = createHost();
+    const client = {
+      request: vi.fn(async () => ({ cards: [], statuses: ["todo"] })),
+    };
+    getWorkboardState(host).autoRefreshIntervalMs = 5000;
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: true,
+    });
+
+    handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(client.request).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("stops Workboard lifecycle refresh state on teardown", () => {
+    vi.stubGlobal("window", {
+      removeEventListener: vi.fn(),
+    });
+    const host = createHost();
+    const state = getWorkboardState(host);
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
+    state.lifecycleTaskRefreshError = "task refresh unavailable";
+    state.lifecycleConfirmedTaskIds.add("task-1");
+    state.lifecycleTaskConfirmationStartedAt = Date.now();
+
+    handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
+
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lifecycleConfirmedTaskIds.size).toBe(0);
+    expect(state.lifecycleTaskConfirmationStartedAt).toBeNull();
     vi.unstubAllGlobals();
   });
 });

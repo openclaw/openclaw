@@ -32,7 +32,7 @@ export function truncateLine(value: string, maxLength: number) {
   return `${value.slice(0, maxLength).trimEnd()}...`;
 }
 
-export type TokenUsageLike = {
+type TokenUsageLike = {
   totalTokens?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;

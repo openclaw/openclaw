@@ -53,8 +53,9 @@ struct SettingsProTab: View {
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @State var notificationStatusText = "Checking"
-    @State var notificationActionText = "Request Access"
+    @State var notificationStatus: SettingsNotificationStatus = .checking
+    @State var isRequestingNotificationAuthorization = false
+    @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
@@ -62,15 +63,18 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil)
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
+        self.onRouteChange = onRouteChange
     }
 
     var body: some View {
@@ -118,6 +122,7 @@ struct SettingsProTab: View {
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
                 self.applyInitialRouteIfNeeded()
+                self.notifyRouteChange()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -153,6 +158,9 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
+            }
+            .onChange(of: self.navigationPath) { _, _ in
+                self.notifyRouteChange()
             }
     }
 
@@ -218,6 +226,19 @@ struct SettingsProTab: View {
             } message: {
                 Text(self.scannerError ?? "")
             }
+            .alert("Enable OpenClaw Hosted Push Relay?", isPresented: self.$showNotificationRelayDisclosure) {
+                    Button("Continue") {
+                        self.requestNotificationAuthorizationFromSettings()
+                    }
+                    Button("Not Now", role: .cancel) {}
+                } message: {
+                    Text(self.notificationRelayDisclosureMessage)
+                }
+    }
+
+    func openNotificationsRouteFromApprovals() {
+        guard self.directRoute == nil else { return }
+        self.navigationPath = [.notifications]
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -225,5 +246,13 @@ struct SettingsProTab: View {
         guard let initialRoute else { return }
         guard self.navigationPath != [initialRoute] else { return }
         self.navigationPath = [initialRoute]
+    }
+
+    private func notifyRouteChange() {
+        if let directRoute {
+            self.onRouteChange?(directRoute)
+            return
+        }
+        self.onRouteChange?(self.navigationPath.last)
     }
 }

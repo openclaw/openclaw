@@ -91,7 +91,7 @@
   color: var(--muted);
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .sw-lifecycle-tab.is-active .sw-lifecycle-tab__count {
@@ -181,7 +181,7 @@
 
 .sw-queue__group {
   padding: 10px 14px 4px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -196,7 +196,7 @@
   color: var(--muted);
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
 }
 
 .sw-row {
@@ -264,7 +264,7 @@
 
 .sw-row__meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   white-space: nowrap;
   align-self: start;
   margin-top: 1px;
@@ -387,7 +387,7 @@
 .sw-empty-state__eyebrow {
   margin: 0 0 8px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -483,7 +483,7 @@
 
 .sw-section__label {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -591,12 +591,12 @@
 
 .sw-file__size {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .sw-file__hint {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   opacity: 0;
   transition: opacity 100ms;
   margin-left: 6px;
@@ -665,7 +665,7 @@
 .sw-revision-dialog__eyebrow {
   margin-bottom: 6px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -718,7 +718,7 @@
   line-height: 1.55;
 }
 
-.sw-revision-dialog__input:focus {
+.sw-revision-dialog__input:focus-visible {
   outline: none;
   border-color: var(--border-strong);
   box-shadow: none;
@@ -1072,7 +1072,7 @@
 }
 
 .sw-today__date {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--muted);
@@ -1158,7 +1158,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--accent);
@@ -1199,7 +1199,7 @@
 }
 
 .sw-today__does-h {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--muted);
@@ -1256,7 +1256,7 @@
   border-radius: 50%;
   background: linear-gradient(135deg, #14b8a6, #0891b2);
   color: white;
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -1313,7 +1313,7 @@
 }
 
 .sw-today__big-sub {
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 400;
   line-height: 1.25;
   opacity: 0.66;
@@ -1434,7 +1434,7 @@
 }
 
 .sw-today__mini-meta {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   color: var(--muted);
   margin-top: 10px;
   font-family: var(--mono, ui-monospace, monospace);

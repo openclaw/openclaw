@@ -3,6 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
+import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 type AnthropicContentBlock = {
@@ -20,14 +21,6 @@ type UserContentBlock = Extract<
 
 function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
-}
-
-function isThinkingLikeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
 }
 
 function isAbortedAssistantTurn(message: AgentMessage): boolean {
@@ -386,8 +379,15 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
-  // First, strip dangling tool-call blocks from assistant messages.
-  const stripped = stripDanglingAnthropicToolUses(messages);
+  // Merge first so an injected assistant turn cannot hide the tool result that
+  // resolves the preceding signed tool call. Stripping first would destroy the
+  // active Anthropic tool-use turn before the adjacent turns can be repaired.
+  const mergedAssistant = validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "assistant",
+    merge: mergeConsecutiveAssistantTurns,
+  });
+  const stripped = stripDanglingAnthropicToolUses(mergedAssistant);
 
   return validateTurnsWithConsecutiveMerge({
     messages: stripped,

@@ -462,18 +462,6 @@ export class GatewayPlugin extends Plugin {
     return this.outboundLimiter.getStatus();
   }
 
-  getIntentsInfo() {
-    const intents = this.options.intents ?? 0;
-    return {
-      intents,
-      hasGuilds: this.hasIntent(GatewayIntentBits.Guilds),
-      hasGuildMembers: this.hasIntent(GatewayIntentBits.GuildMembers),
-      hasGuildPresences: this.hasIntent(GatewayIntentBits.GuildPresences),
-      hasGuildMessages: this.hasIntent(GatewayIntentBits.GuildMessages),
-      hasMessageContent: this.hasIntent(GatewayIntentBits.MessageContent),
-    };
-  }
-
   hasIntent(intent: number): boolean {
     return Boolean((this.options.intents ?? 0) & intent);
   }

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
   buildValidatedExecRemoteCommand,
@@ -209,6 +210,30 @@ describe("sandbox ssh helpers", () => {
       await expect(
         fs.stat(path.join(realParent, "runtime", "workspace", ".openclaw", "sandbox-skills")),
       ).resolves.toMatchObject({ dev: expect.any(Number) });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves caller positional args for commands after remote directory validation",
+    async () => {
+      const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
+      const root = path.join(realParent, "runtime");
+      const target = path.join(root, "workspace", ".openclaw", "sandbox-skills");
+
+      const { stdout } = await execFileAsync("/bin/sh", [
+        "-c",
+        [
+          ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+          'printf "%s\\n%s\\n" "$1" "$2"',
+          'touch "$1/proof"',
+          'find "$1" -mindepth 1 -maxdepth 1 -name proof -print',
+        ].join("\n"),
+        "openclaw-remote-dir",
+        target,
+        root,
+      ]);
+
+      expect(stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
     },
   );
 
