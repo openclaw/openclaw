@@ -1,6 +1,6 @@
 ---
 name: xurl
-description: "xurl CLI for authenticated X posts, replies, reads/search, DMs, media upload, followers, auth status, or raw v2 API calls."
+description: "xurl CLI for authenticated X posts, replies, reading X Article full text via raw API, search, DMs, media upload, followers, auth status, or raw v2 API calls."
 metadata:
   {
     "openclaw":
@@ -71,7 +71,25 @@ xurl dm @handle "message"
 xurl dms -n 10
 ```
 
-`POST_ID` can be a full `https://x.com/<user>/status/<id>` URL.
+## Reading X posts and X Articles from a URL
+
+Pass a full `https://x.com/<user>/status/<id>` URL directly as `POST_ID`:
+
+```bash
+xurl read https://x.com/username/status/1234567890123456789
+```
+
+**X Articles require raw API mode.** `xurl read` returns only tweet metadata and
+the article title for Article-type posts — the body is not included. Use the
+`article` tweet field to retrieve full content:
+
+```bash
+xurl '/2/tweets/<TWEET_ID>?tweet.fields=article,text,entities'
+```
+
+Read `data.article.plain_text` from the response for the full article body.
+
+The `/2/articles/<id>` endpoint is not accessible with xurl's current auth scope.
 
 ## Media
 
