@@ -35,7 +35,7 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
  */
-function normalizeForFuzzyMatch(text: string): string {
+export function normalizeForFuzzyMatch(text: string): string {
   return (
     text
       .normalize("NFKC")
@@ -58,7 +58,7 @@ function normalizeForFuzzyMatch(text: string): string {
   );
 }
 
-interface FuzzyMatchResult {
+export interface FuzzyMatchResult {
   /** Whether a match was found */
   found: boolean;
   /** The index where the match starts (in the content that should be used for replacement) */
@@ -86,13 +86,18 @@ interface MatchedEdit {
   newText: string;
 }
 
+export interface AppliedEditsResult {
+  baseContent: string;
+  newContent: string;
+}
+
 /**
  * Find oldText in content, trying exact match first, then fuzzy match.
  * When fuzzy matching is used, the returned contentForReplacement is the
  * fuzzy-normalized version of the content (trailing whitespace stripped,
  * Unicode quotes/dashes normalized to ASCII).
  */
-function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
@@ -189,18 +194,114 @@ function getNoChangeError(path: string, totalEdits: number): Error {
 }
 
 /**
+ * Map a character offset within a single line from its position in the
+ * fuzzy-normalized form back to the corresponding position in the original
+ * line. NFKC normalization can expand compatibility characters (e.g.,
+ * U+FB03 "ﬃ" becomes "ffi") and compose adjacent code points (e.g.,
+ * e + U+0301 combining acute → é), shifting subsequent positions on that
+ * line. The other fuzzy normalizations (trimEnd, smart quotes, dashes,
+ * special spaces) are same-length replacements that do not shift positions.
+ *
+ * This function groups each base character with its following combining marks
+ * and normalizes the complete segment, so cross-code-point NFKC composition
+ * is handled correctly.
+ */
+function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEnd = false): number {
+  const nfkcLine = origLine.normalize("NFKC");
+  // Fast path: NFKC produced a byte-identical string, so positions map 1:1.
+  // Do NOT use length equality alone — NFKC can preserve total length while
+  // shifting positions (e.g. "\uFB01 X e\u0301" → "fi X é", both length 6, but
+  // X moves from offset 2 to 3). Only skip the segment mapper when the
+  // normalized line is literally identical to the original.
+  if (nfkcLine === origLine) {
+    return Math.min(normOffset, origLine.length);
+  }
+
+  // Walk through original code points, grouping each base character with its
+  // following combining marks. Normalize each complete group with NFKC to
+  // find how many normalized code units it produces.
+  let origPos = 0;
+  let nfkcPos = 0;
+  const codePoints = Array.from(origLine);
+  let i = 0;
+
+  while (i < codePoints.length) {
+    if (nfkcPos >= normOffset) {
+      return origPos;
+    }
+
+    // Collect base code point + any following combining marks as one segment.
+    let segment = codePoints[i];
+    let segOrigLen = codePoints[i].length;
+    i++;
+    while (i < codePoints.length && /^\p{M}/u.test(codePoints[i])) {
+      segment += codePoints[i];
+      segOrigLen += codePoints[i].length;
+      i++;
+    }
+
+    const segNfkc = segment.normalize("NFKC");
+    // Target falls inside this segment.
+    // When mapping end-of-match offsets (snapToEnd), snap to the segment end
+    // so partial matches inside NFKC-expanded characters produce a nonzero
+    // original range instead of a zero-length splice.
+    if (nfkcPos + segNfkc.length > normOffset) {
+      return snapToEnd ? origPos + segOrigLen : origPos;
+    }
+
+    origPos += segOrigLen;
+    nfkcPos += segNfkc.length;
+  }
+
+  return origPos;
+}
+
+/**
+ * Map a character offset in fuzzy-normalized content back to the corresponding
+ * offset in the original (LF-normalized only) content. Both contents have the
+ * same number of lines because normalizeForFuzzyMatch only performs per-line
+ * trimEnd and same-length character replacements. Within each line, NFKC
+ * normalization may change character counts for compatibility characters, so
+ * the per-line mapping delegates to mapLineOffsetThroughNfkc.
+ */
+function mapNormalizedOffsetToOriginal(
+  origLines: string[],
+  normLines: string[],
+  normalizedOffset: number,
+  snapToEnd = false,
+): number {
+  let normPos = 0;
+  let origPos = 0;
+
+  for (let i = 0; i < normLines.length; i++) {
+    const normLineLen = normLines[i].length;
+    const origLineLen = origLines[i].length;
+
+    if (normalizedOffset <= normPos + normLineLen) {
+      const offsetInNormLine = normalizedOffset - normPos;
+      return origPos + mapLineOffsetThroughNfkc(origLines[i], offsetInNormLine, snapToEnd);
+    }
+
+    normPos += normLineLen + 1;
+    origPos += origLineLen + 1;
+  }
+
+  return origPos;
+}
+
+/**
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space to
- * preserve current single-edit behavior.
+ * then applied in reverse order so offsets remain stable. When fuzzy matching
+ * is needed, match positions are mapped back to the original content so that
+ * only the matched region is affected — unrelated lines are never normalized.
  */
 export function applyEditsToNormalizedContent(
   normalizedContent: string,
   edits: Edit[],
   path: string,
-): { baseContent: string; newContent: string } {
+): AppliedEditsResult {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -212,32 +313,52 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  const initialMatches = normalizedEdits.map((edit) =>
-    fuzzyFindText(normalizedContent, edit.oldText),
-  );
-  const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
-    ? normalizeForFuzzyMatch(normalizedContent)
-    : normalizedContent;
+  const baseContent = normalizedContent;
+
+  // Lazily computed for position mapping when fuzzy matches are used
+  let origLines: string[] | undefined;
+  let normLines: string[] | undefined;
 
   const matchedEdits: MatchedEdit[] = [];
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i];
-    const matchResult = fuzzyFindText(baseContent, edit.oldText);
+    const matchResult = fuzzyFindText(normalizedContent, edit.oldText);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length);
     }
 
-    const occurrences = countOccurrences(baseContent, edit.oldText);
+    const occurrences = countOccurrences(normalizedContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
 
-    matchedEdits.push({
-      editIndex: i,
-      matchIndex: matchResult.index,
-      matchLength: matchResult.matchLength,
-      newText: edit.newText,
-    });
+    if (matchResult.usedFuzzyMatch) {
+      // Map the fuzzy match position back to the original content
+      if (!origLines || !normLines) {
+        origLines = normalizedContent.split("\n");
+        normLines = normalizeForFuzzyMatch(normalizedContent).split("\n");
+      }
+      const origStart = mapNormalizedOffsetToOriginal(origLines, normLines, matchResult.index);
+      const origEnd = mapNormalizedOffsetToOriginal(
+        origLines,
+        normLines,
+        matchResult.index + matchResult.matchLength,
+        true,
+      );
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: origStart,
+        matchLength: origEnd - origStart,
+        newText: edit.newText,
+      });
+    } else {
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: matchResult.index,
+        matchLength: matchResult.matchLength,
+        newText: edit.newText,
+      });
+    }
   }
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
@@ -418,6 +539,11 @@ export interface EditDiffError {
   error: string;
 }
 
+export interface EditDiffOperations {
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  access: (absolutePath: string) => Promise<void>;
+}
+
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -426,10 +552,7 @@ export async function computeEditsDiff(
   path: string,
   edits: Edit[],
   cwd: string,
-  operations?: {
-    readFile: (absolutePath: string) => Promise<Buffer | string>;
-    access: (absolutePath: string) => Promise<void>;
-  },
+  operations?: EditDiffOperations,
 ): Promise<EditDiffResult | EditDiffError> {
   const absolutePath = resolveToCwd(path, cwd);
 
@@ -470,4 +593,17 @@ export async function computeEditsDiff(
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Compute the diff for a single edit operation without applying it.
+ * Kept as a convenience wrapper for single-edit callers.
+ */
+export async function computeEditDiff(
+  path: string,
+  oldText: string,
+  newText: string,
+  cwd: string,
+): Promise<EditDiffResult | EditDiffError> {
+  return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }
