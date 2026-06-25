@@ -1351,14 +1351,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
     };
+    const reportPendingWorkError = (
+      err: unknown,
+      source: "pending-sync" | "pending-provider-init",
+    ) => {
+      const reason =
+        source === "pending-sync" ? "memory sync failed" : "memory provider init failed";
+      log.warn(`${reason} during close: ${String(err)}`);
+    };
     const awaitCurrentSync = async () => {
       const pendingSync = this.syncing;
       if (!pendingSync) {
         return;
       }
-      await awaitPendingManagerWork({ pendingSync });
+      await awaitPendingManagerWork({ pendingSync, onError: reportPendingWorkError });
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
+    await awaitPendingManagerWork({ pendingProviderInit, onError: reportPendingWorkError });
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();
