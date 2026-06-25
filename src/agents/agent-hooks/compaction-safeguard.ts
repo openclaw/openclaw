@@ -10,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
   computeAdaptiveChunkRatioWithWorker,
@@ -445,6 +446,17 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       isError?: unknown;
     };
     if (toolResult.isError !== true) {
+      continue;
+    }
+    // Accepted sessions_spawn launches are successes, not failures, even when a legacy
+    // transcript persisted them with isError:true. Mirror the observer's detection
+    // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
+    // so only real failures stay in the summary and non-spawn tools are never matched by shape.
+    if (
+      typeof toolResult.toolName === "string" &&
+      toolResult.toolName.trim() === "sessions_spawn" &&
+      normalizeAcceptedSessionSpawnResult(toolResult)
+    ) {
       continue;
     }
     const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
