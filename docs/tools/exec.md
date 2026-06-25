@@ -95,6 +95,7 @@ Notes:
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in
   `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
 - `openclaw channels login` is blocked from `exec` because it is an interactive channel-auth flow; run it in a terminal on the gateway host, or use the channel-native login tool from chat when one exists.
+- OpenClaw sets `OPENCLAW_AGENT_ID` and `OPENCLAW_SESSION_KEY` in the spawned command environment so scripts can reliably identify their agent and session without relying on model parameter passing.
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto`
   resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently
   running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
