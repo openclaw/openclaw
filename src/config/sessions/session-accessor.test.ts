@@ -378,7 +378,7 @@ describe("session accessor seam", () => {
     if (!committed.ok) {
       throw new Error("expected reply session initialization to commit");
     }
-    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-session.jsonl");
+    expect(committed.sessionEntry.sessionFile).toBe(`sqlite:main:next-session:${storePath}`);
     expect(committed.sessionStoreView[sessionKey]).toMatchObject({
       sessionId: "next-session",
       sessionFile: committed.sessionEntry.sessionFile,
@@ -419,7 +419,7 @@ describe("session accessor seam", () => {
     if (!committed.ok) {
       throw new Error("expected reply session initialization to commit");
     }
-    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-rotation.jsonl");
+    expect(committed.sessionEntry.sessionFile).toBe(`sqlite:main:next-rotation:${storePath}`);
   });
 
   it("rejects stale reply session initialization snapshots without writing", async () => {
@@ -1205,29 +1205,50 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
-  it("resolves store-backed runtime transcript targets to filesystem paths", async () => {
-    const explicitSessionFile = path.join(tempDir, "explicit-session.jsonl");
+  it("resolves store-backed runtime transcript targets with stale file paths to markers", async () => {
+    const staleSessionFile = path.join(tempDir, "session-1.jsonl");
     const scope = {
       agentId: "main",
-      sessionFile: explicitSessionFile,
       sessionId: "session-1",
       sessionKey: "agent:main:main",
       storePath,
     };
+    const marker = `sqlite:main:${scope.sessionId}:${storePath}`;
 
     await upsertSessionEntry(scope, {
       sessionId: scope.sessionId,
+      sessionFile: staleSessionFile,
       updatedAt: 10,
     });
 
     const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
     const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
 
-    expect(path.basename(readTarget.sessionFile)).toBe("session-1.jsonl");
-    expect(path.basename(writeTarget.sessionFile)).toBe("session-1.jsonl");
-    expect(readTarget.sessionFile).not.toContain("sqlite:");
-    expect(writeTarget.sessionFile).not.toContain("sqlite:");
-    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+    expect(readTarget.sessionFile).toBe(marker);
+    expect(writeTarget.sessionFile).toBe(marker);
+    expect(loadSessionEntry(scope)?.sessionFile).toBe(staleSessionFile);
+  });
+
+  it("resolves SQLite-backed runtime transcript targets to markers", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const marker = `sqlite:main:${scope.sessionId}:${storePath}`;
+
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      sessionFile: marker,
+      updatedAt: 10,
+    });
+
+    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
+
+    expect(readTarget.sessionFile).toBe(marker);
+    expect(writeTarget.sessionFile).toBe(marker);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {
