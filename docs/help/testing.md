@@ -205,6 +205,9 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+  - For slow live-frontier providers, set `OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS`
+    to a positive millisecond value to raise the per-turn timeout floor while
+    preserving provider-specific minimums.
 - `pnpm openclaw qa coverage --match <query>`
   - Searches scenario IDs, titles, surfaces, coverage IDs, docs refs, code refs,
     plugins, and provider requirements, then prints matching suite targets.
