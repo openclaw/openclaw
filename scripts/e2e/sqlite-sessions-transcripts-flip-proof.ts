@@ -160,6 +160,19 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     });
     try {
       await requireHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
+      await sendGatewayUserMessage(
+        restartedClient,
+        context.resetSessionKey,
+        "sqlite user-facing send before reset",
+      );
+      await waitForHistoryContains(
+        restartedClient,
+        context.resetSessionKey,
+        "sqlite user-facing send before reset",
+      );
+      await waitForSqliteEvents(context.agentDbPath, context.legacySessionId, 3);
+      await record("after-chat-send");
+
       const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
       await record("after-sessions-reset");
 
@@ -363,6 +376,26 @@ async function resetSession(
   return result.entry.sessionId;
 }
 
+async function sendGatewayUserMessage(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  sessionKey: string,
+  message: string,
+): Promise<string> {
+  const result: { runId?: string; status?: string } = await client.request(
+    "chat.send",
+    {
+      sessionKey,
+      message,
+      idempotencyKey: `sqlite-send-${randomUUID()}`,
+    },
+    { timeoutMs: 20_000 },
+  );
+  if (result?.status !== "started" || typeof result.runId !== "string") {
+    throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
+  }
+  return result.runId;
+}
+
 async function deleteSession(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   key: string,
@@ -399,6 +432,23 @@ async function requireHistoryContains(
   if (!text.includes(expected)) {
     throw new Error(`chat.history for ${sessionKey} did not contain ${JSON.stringify(expected)}`);
   }
+}
+
+async function waitForHistoryContains(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  sessionKey: string,
+  expected: string,
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      await requireHistoryContains(client, sessionKey, expected);
+      return;
+    } catch {
+      await sleep(50);
+    }
+  }
+  await requireHistoryContains(client, sessionKey, expected);
 }
 
 async function waitForSqliteEvents(

@@ -6,6 +6,7 @@ import type {
   QueuedFileWriter,
   QueuedFileWriterDiagnostics,
 } from "../agents/queued-file-writer.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertNoSymlinkParents, writeSiblingTempFile } from "../infra/fs-safe-advanced.js";
 import { readRegularFileSync } from "../infra/fs-safe.js";
@@ -68,7 +69,7 @@ function writeTrajectoryPointerBestEffort(params: {
   sessionFile?: string;
   sessionId: string;
 }): void {
-  if (!params.sessionFile) {
+  if (!params.sessionFile || parseSqliteSessionFileMarker(params.sessionFile)) {
     return;
   }
   const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);

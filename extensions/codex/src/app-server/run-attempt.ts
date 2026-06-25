@@ -1411,6 +1411,7 @@ export async function runCodexAppServerAttempt(
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
   });
   let client: CodexAppServerClient;
