@@ -43,6 +43,7 @@ export type SessionFilePathOptions = {
 };
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
@@ -285,10 +286,12 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
-    try {
-      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
-    } catch {
-      // Keep handlers alive when persisted metadata is stale/corrupt.
+    if (!candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
+      try {
+        return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+      } catch {
+        // Keep handlers alive when persisted metadata is stale/corrupt.
+      }
     }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);

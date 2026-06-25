@@ -204,6 +204,299 @@ describe("overflow compaction in run loop", () => {
     await successPromise;
   });
 
+  it("persists the canonical user turn when the embedded runtime writes its prompt file", async () => {
+    const persistedMessage = { role: "user" as const, content: baseParams.prompt };
+    const persistApproved = vi.fn(async () => ({
+      sessionFile: "/tmp/openclaw-transcript.jsonl",
+      sessionEntry: undefined,
+      messageId: "msg-user-1",
+      message: persistedMessage,
+    }));
+    const markRuntimePersistencePending = vi.fn();
+    const markRuntimePersisted = vi.fn();
+    const onUserMessagePersisted = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      (
+        attemptParams as {
+          onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+        }
+      ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      userTurnTranscriptRecorder: {
+        message: { role: "user", content: baseParams.prompt },
+        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        markRuntimePersistencePending,
+        markRuntimePersisted,
+        markBlocked: vi.fn(),
+        hasPersisted: vi.fn(() => false),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => false),
+        waitForRuntimePersistence: vi.fn(async () => undefined),
+        persistApproved,
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+      onUserMessagePersisted,
+    });
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(markRuntimePersistencePending).toHaveBeenCalledOnce();
+    expect(markRuntimePersisted).not.toHaveBeenCalled();
+    expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
+  });
+
+  it("suppresses retry persistence when the runtime already marked the user turn persisted", async () => {
+    const overflowError = makeOverflowError();
+    const runtimeMessage = { role: "user" as const, content: baseParams.prompt };
+    const persistApproved = vi.fn(async () => undefined);
+    const onUserMessagePersisted = vi.fn();
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: typeof runtimeMessage) => void;
+          }
+        ).onUserMessagePersisted?.(runtimeMessage);
+        return makeAttemptResult({ promptError: overflowError });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-runtime-persisted",
+      onUserMessagePersisted,
+      userTurnTranscriptRecorder: {
+        message: runtimeMessage,
+        resolveMessage: vi.fn(async () => runtimeMessage),
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        hasPersisted: vi.fn(() => true),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => false),
+        waitForRuntimePersistence: vi.fn(async () => undefined),
+        persistApproved,
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(onUserMessagePersisted).toHaveBeenCalledWith(runtimeMessage);
+    expectRetryContinuesFromTranscript();
+  });
+
+  it("does not persist the original embedded prompt when before_agent_run writes a block marker", async () => {
+    const blockedMessage = {
+      role: "user" as const,
+      content: "[blocked by before_agent_run]",
+      __openclaw: {
+        beforeAgentRunBlocked: {
+          blockedBy: "before_agent_run",
+          blockedAt: 123,
+        },
+      },
+    };
+    const persistBlocked = vi.fn(async (message: typeof blockedMessage) => ({
+      sessionFile: "/tmp/openclaw-transcript.jsonl",
+      sessionEntry: undefined,
+      messageId: "msg-user-1",
+      message,
+    }));
+    const persistApproved = vi.fn(async () => ({
+      sessionFile: "/tmp/openclaw-transcript.jsonl",
+      sessionEntry: undefined,
+      messageId: "msg-user-1",
+      message: { role: "user" as const, content: baseParams.prompt },
+    }));
+    const markBlocked = vi.fn();
+    const markRuntimePersistencePending = vi.fn();
+    const markRuntimePersisted = vi.fn();
+    const onUserMessagePersisted = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      (
+        attemptParams as {
+          onUserMessagePersisted?: (message: typeof blockedMessage) => void;
+        }
+      ).onUserMessagePersisted?.(blockedMessage);
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      onUserMessagePersisted,
+      userTurnTranscriptRecorder: {
+        message: { role: "user", content: baseParams.prompt },
+        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        markRuntimePersistencePending,
+        markRuntimePersisted,
+        markBlocked,
+        hasPersisted: vi.fn(() => false),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => false),
+        waitForRuntimePersistence: vi.fn(async () => undefined),
+        persistApproved,
+        persistBlocked,
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(persistApproved).not.toHaveBeenCalled();
+    expect(persistBlocked).toHaveBeenCalledWith(blockedMessage);
+    expect(markRuntimePersistencePending).toHaveBeenCalledOnce();
+    expect(markBlocked).not.toHaveBeenCalled();
+    expect(markRuntimePersisted).not.toHaveBeenCalled();
+    expect(onUserMessagePersisted).toHaveBeenCalledWith(blockedMessage);
+  });
+
+  it("does not suppress retry persistence when canonical embedded user turn write is blocked", async () => {
+    const overflowError = makeOverflowError();
+    const persistApproved = vi.fn(async () => undefined);
+    const onUserMessagePersisted = vi.fn();
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        return makeAttemptResult({ promptError: overflowError });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-blocked",
+      onUserMessagePersisted,
+      userTurnTranscriptRecorder: {
+        message: { role: "user", content: baseParams.prompt },
+        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        hasPersisted: vi.fn(() => false),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => false),
+        waitForRuntimePersistence: vi.fn(async () => undefined),
+        persistApproved,
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
+    expect(retryParams.prompt).toBe(baseParams.prompt);
+    expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
+  });
+
+  it("waits for pending canonical embedded user turn persistence before retry suppression", async () => {
+    const overflowError = makeOverflowError();
+    const persistedMessage = { role: "user" as const, content: baseParams.prompt };
+    let resolvePersistApproved:
+      | ((result: {
+          sessionFile: string;
+          sessionEntry: undefined;
+          messageId: string;
+          message: typeof persistedMessage;
+        }) => void)
+      | undefined;
+    let pendingPersistence: Promise<void> | undefined;
+    const persistApproved = vi.fn(
+      () =>
+        new Promise<{
+          sessionFile: string;
+          sessionEntry: undefined;
+          messageId: string;
+          message: typeof persistedMessage;
+        }>((resolve) => {
+          resolvePersistApproved = resolve;
+        }),
+    );
+    const onUserMessagePersisted = vi.fn();
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        return makeAttemptResult({ promptError: overflowError });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const runPromise = runEmbeddedAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-delayed",
+      onUserMessagePersisted,
+      userTurnTranscriptRecorder: {
+        message: persistedMessage,
+        resolveMessage: vi.fn(async () => persistedMessage),
+        markRuntimePersistencePending: vi.fn((pending) => {
+          pendingPersistence = pending;
+        }),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        hasPersisted: vi.fn(() => false),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => pendingPersistence !== undefined),
+        waitForRuntimePersistence: vi.fn(async () => {
+          await pendingPersistence;
+        }),
+        persistApproved,
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(persistApproved).toHaveBeenCalledOnce();
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+
+    resolvePersistApproved?.({
+      sessionFile: "/tmp/openclaw-transcript.jsonl",
+      sessionEntry: undefined,
+      messageId: "msg-user-delayed",
+      message: persistedMessage,
+    });
+    await runPromise;
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+  });
+
   it("continues from transcript after compaction when the current inbound message was persisted", async () => {
     const overflowError = makeOverflowError();
 

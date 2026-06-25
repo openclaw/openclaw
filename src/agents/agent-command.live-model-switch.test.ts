@@ -1879,6 +1879,78 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
 
+  it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
+    type AttemptCall = {
+      onUserMessagePersisted?: () => void;
+    };
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptParams.onUserMessagePersisted?.();
+      return result;
+    });
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      userTurnTranscriptRecorder: {} as NonNullable<
+        Parameters<typeof agentCommand>[0]["userTurnTranscriptRecorder"]
+      >,
+    });
+
+    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
+      embeddedAssistantGapFill: true,
+    });
+  });
+
+  it("persists the full embedded turn when no canonical user recorder exists", async () => {
+    type AttemptCall = {
+      onUserMessagePersisted?: () => void;
+    };
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "embedded",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptParams.onUserMessagePersisted?.();
+      return result;
+    });
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
+      embeddedAssistantGapFill: false,
+    });
+  });
+
   it("does not treat backend CLI session id as OpenClaw session identity", async () => {
     setupSingleAttemptFallback();
     setupSessionTouchStore();

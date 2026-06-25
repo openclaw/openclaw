@@ -679,6 +679,147 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("passes a canonical user-turn recorder to gateway agent runs", async () => {
+    primeMainAgentRun();
+
+    await runMainAgent("persist me", "idem-user-turn-recorder");
+
+    const call = await waitForAgentCommandCall();
+    expect(call.userTurnTranscriptRecorder).toEqual(
+      expect.objectContaining({
+        persistApproved: expect.any(Function),
+        persistFallback: expect.any(Function),
+      }),
+    );
+  });
+
+  it("does not persist a gateway user-turn recorder after the session key is rebound", async () => {
+    primeMainAgentRun({ sessionId: "accepted-session-id" });
+
+    await runMainAgent("stale after reset", "idem-user-turn-rebound");
+
+    const call = await waitForAgentCommandCall();
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "new-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+      store: {
+        "agent:main:main": {
+          sessionId: "new-session-id",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    await expect(call.userTurnTranscriptRecorder?.persistApproved()).resolves.toBeUndefined();
+  });
+
+  it("does not pass a text-only user-turn recorder for image agent runs", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      model: "vision-model",
+      modelProvider: "test",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const context = {
+      ...makeContext(),
+      loadGatewayModelCatalog: vi.fn(async () => [
+        {
+          id: "vision-model",
+          name: "vision-model",
+          provider: "test",
+          input: ["image"],
+        },
+      ]),
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      {
+        message: "describe this image",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-image-user-turn-recorder",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "test.png",
+            content: Buffer.from("fake-png-data").toString("base64"),
+          },
+        ],
+      },
+      { context, reqId: "idem-image-user-turn-recorder" },
+    );
+
+    const call = await waitForAgentCommandCall();
+    expect(call.images).toEqual([
+      expect.objectContaining({
+        type: "image",
+        mimeType: "image/png",
+      }),
+    ]);
+    expect(call.userTurnTranscriptRecorder).toBeUndefined();
+  });
+
+  it("does not pass a text-only user-turn recorder for offloaded image agent runs", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
+      useTestStateDir(root);
+      mockMainSessionEntry({
+        sessionId: "existing-session-id",
+        model: "vision-model",
+        modelProvider: "test",
+      });
+      mocks.updateSessionStore.mockResolvedValue(undefined);
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+      const context = {
+        ...makeContext(),
+        loadGatewayModelCatalog: vi.fn(async () => [
+          {
+            id: "vision-model",
+            name: "vision-model",
+            provider: "test",
+            input: ["image"],
+          },
+        ]),
+      } as unknown as GatewayRequestContext;
+
+      await invokeAgent(
+        {
+          message: "describe this large image",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "idem-offloaded-image-user-turn-recorder",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "image/png",
+              fileName: "large.png",
+              content: Buffer.alloc(2_000_001, 1).toString("base64"),
+            },
+          ],
+        },
+        { context, reqId: "idem-offloaded-image-user-turn-recorder" },
+      );
+
+      const call = await waitForAgentCommandCall();
+      expect(call.images).toEqual([]);
+      expect(call.imageOrder).toEqual(["offloaded"]);
+      expect(call.message).toContain("[media attached: media://inbound/");
+      expect(call.userTurnTranscriptRecorder).toBeUndefined();
+    });
+  });
+
   it("disables single-entry persistence when admission prunes legacy store keys", async () => {
     mocks.loadConfigReturn = {
       session: { mainKey: "work" },
@@ -2184,11 +2325,24 @@ describe("gateway agent handler", () => {
       { reqId: "inter-session-marker" },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ message?: string }>();
+    const callArgs = await waitForAgentCommandCall<
+      AgentCommandCall & {
+        message?: string;
+      }
+    >();
     expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
     expect(callArgs.message).toContain("isUser=false");
     expect(callArgs.message).toContain("forwarded reply");
     expect(callArgs.message).not.toContain("[Wed 2026-01-28 20:30 EST]");
+    expect(callArgs.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "forwarded reply",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:discord:source",
+        sourceTool: "sessions_send",
+      },
+    });
 
     resetTimeConfig();
   });
@@ -5493,6 +5647,35 @@ describe("gateway agent handler", () => {
     };
     expect(result.payloads?.[0]?.text).toBe("✅ New session started.");
     expect(result.meta?.agentMeta?.sessionId).toBe("reset-session-id");
+  });
+
+  it("persists the post-reset follow-up prompt in the canonical user-turn recorder", async () => {
+    mockSessionResetSuccess({ reason: "new", sessionId: "reset-session-id" });
+    mockMainSessionEntry({ sessionId: "reset-session-id" });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "/new continue with this prompt",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-new-followup-recorder",
+      },
+      {
+        reqId: "4-new-followup-recorder",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      message?: string;
+      userTurnTranscriptRecorder?: { message?: { content?: string } };
+    }>();
+    expect(call.message).toBe("continue with this prompt");
+    expect(call.userTurnTranscriptRecorder?.message?.content).toBe("continue with this prompt");
   });
 
   it("handles bare /reset by resetting the same session without running the model", async () => {

@@ -1,5 +1,6 @@
 // Session file persistence resolves transcript paths and syncs store metadata.
 import { resolveSessionFilePath } from "./paths.js";
+import { sqliteSessionFileMarkerMatchesSession } from "./sqlite-marker.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -36,14 +37,18 @@ export async function resolveAndPersistSessionFile(params: {
     agentId: params.agentId,
     sessionsDir: params.sessionsDir,
   });
+  const preserveSqliteMarker =
+    shouldReusePersistedSessionFile &&
+    sqliteSessionFileMarkerMatchesSession(baseEntry.sessionFile, sessionId);
+  const persistedSessionFile = preserveSqliteMarker ? baseEntry.sessionFile : sessionFile;
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
     updatedAt: now,
     sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
-    sessionFile,
+    sessionFile: persistedSessionFile,
   };
-  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
+  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== persistedSessionFile) {
     sessionStore[sessionKey] = persistedEntry;
     await updateSessionStore(
       storePath,

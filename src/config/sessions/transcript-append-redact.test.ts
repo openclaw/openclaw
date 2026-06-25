@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { loadTranscriptEvents } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
@@ -35,6 +36,17 @@ function readMessages(sessionFile: string) {
     .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
     .filter((r) => r.type === "message")
     .map((r) => r.message);
+}
+
+async function readStoredMessages(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  return (await loadTranscriptEvents(params))
+    .map((event) => event as { type?: string; message?: unknown })
+    .filter((record) => record.type === "message")
+    .map((record) => record.message);
 }
 
 describe("appendSessionTranscriptMessage - redaction", () => {
@@ -408,7 +420,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       return;
     }
 
-    const raw = fs.readFileSync(result.sessionFile, "utf-8");
+    const raw = JSON.stringify(await readStoredMessages({ sessionId, sessionKey, storePath }));
     expect(raw).toContain(fakeApiKey);
   });
 
@@ -457,7 +469,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
         return;
       }
 
-      const [diskMessage] = readMessages(result.sessionFile);
+      const [diskMessage] = await readStoredMessages({ sessionId, sessionKey, storePath });
       expect(JSON.stringify(diskMessage)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]?.message).toEqual(diskMessage);
@@ -501,9 +513,11 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     }
     expect(second.messageId).toBe(first.messageId);
 
-    const raw = fs.readFileSync(second.sessionFile, "utf-8");
-    expect(raw).not.toContain(fakeApiKey);
-    expect(readMessages(second.sessionFile)).toHaveLength(1);
+    const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+    expect(JSON.stringify(events)).not.toContain(fakeApiKey);
+    expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
+      1,
+    );
   });
 
   it("dedupes delivery mirrors against older unredacted assistant entries", async () => {
@@ -554,8 +568,10 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     }
     expect(deduped.messageId).toBe(unredacted.messageId);
 
-    const raw = fs.readFileSync(deduped.sessionFile, "utf-8");
-    expect(raw).toContain(fakeApiKey);
-    expect(readMessages(deduped.sessionFile)).toHaveLength(1);
+    const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+    expect(JSON.stringify(events)).toContain(fakeApiKey);
+    expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
+      1,
+    );
   });
 });

@@ -2181,13 +2181,19 @@ async function agentCommandInternal(
       }
 
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
-      const embeddedAssistantGapFill =
+      const embeddedRunnerNeedsTranscriptPersistence =
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
+      const canonicalUserTurnAlreadyPersisted =
+        attemptLifecycleState.currentTurnUserMessagePersisted &&
+        Boolean(opts.userTurnTranscriptRecorder);
+      const assistantOnlyTranscriptPersistence =
+        canonicalUserTurnAlreadyPersisted &&
+        (transcriptPersistenceRunner === "cli" || embeddedRunnerNeedsTranscriptPersistence);
       if (
         !sessionReboundDuringRun &&
-        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+        (transcriptPersistenceRunner === "cli" || embeddedRunnerNeedsTranscriptPersistence)
       ) {
         let persistedCliTurnTranscript = false;
         try {
@@ -2215,7 +2221,7 @@ async function agentCommandInternal(
             threadId: opts.threadId,
             sessionCwd: effectiveCwd,
             config: cfg,
-            embeddedAssistantGapFill,
+            embeddedAssistantGapFill: assistantOnlyTranscriptPersistence,
           });
           sessionEntry = transcriptResult.sessionEntry;
           sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
