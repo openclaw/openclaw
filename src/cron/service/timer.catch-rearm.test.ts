@@ -18,7 +18,6 @@ const noopLogger = {
 
 /** Create a minimal CronServiceState with a due job so armTimer sets a timer. */
 function makeMinimalState() {
-  const now = Date.now();
   return createCronServiceState({
     storePath: "/tmp/test-cron-catch-rearm.json",
     cronEnabled: true,
@@ -63,7 +62,7 @@ describe("cron timer .catch() re-arm", () => {
           sessionTarget: "main",
           payload: { kind: "systemEvent", text: "test" },
           state: { nextRunAtMs: Date.now() - 1 },
-        },
+        } as any,
       ],
     };
 
