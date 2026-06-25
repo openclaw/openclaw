@@ -331,7 +331,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.categoryFulfillmentPercent}%)`,
   );
   lines.push(
-    `- Fulfilled taxonomy features: ${report.fulfilledFeatureCount}/${report.requiredFeatureCount} (${report.taxonomyFulfillmentPercent}%)`,
+    `- Fulfilled taxonomy coverage IDs: ${report.fulfilledCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdFulfillmentPercent}%)`,
   );
   lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);

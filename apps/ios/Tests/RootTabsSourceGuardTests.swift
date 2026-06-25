@@ -550,6 +550,20 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
     }
 
+    @Test func `push enrollment stays behind notification disclosure flow`() throws {
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+
+        #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
+        #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
+        #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
+        #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(modelSource.contains("notifications_not_authorized"))
+        #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
+    }
+
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
         let settingsSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
         let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
@@ -580,6 +594,7 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
+        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
         #expect(actionsSource.contains("await TCPProbe.probe(host: trimmed, port: port"))
         #expect(actionsSource.contains("Check Tailscale or LAN."))
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
@@ -594,6 +609,32 @@ struct RootTabsSourceGuardTests {
         #expect(trustSource.contains("Trust and connect"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
+    }
+
+    @Test func `local network access is requested from visible gateway flows`() throws {
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+
+        #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
+        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
+        #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\")"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_last_known\")"))
+
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"scene_active\")"))
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"onboarding_dismissed\")"))
+        #expect(rootSource.contains("self.requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
+        #expect(rootSource.contains("guard self.didEvaluateOnboarding else { return }"))
+        #expect(rootSource.contains("onRequestLocalNetworkAccess: { reason in"))
+
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 
     @Test func `gateway settings preview matrix covers primary states`() throws {
@@ -784,6 +825,20 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsProTab.swift")
+    }
+
+    private static func onboardingWizardSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func openClawAppSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OpenClawApp.swift")
     }
 
     private static func notificationPermissionGuidanceDialogSourceURL() -> URL {

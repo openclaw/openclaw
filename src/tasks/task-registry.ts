@@ -17,8 +17,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -2092,7 +2092,7 @@ export async function cancelTaskById(params: {
           };
         }
       } else if (!childSessionKey) {
-        if (!isChildlessCodexNativeSubagentTask(task)) {
+        if (!isChildlessNativeSubagentTask(task)) {
           return {
             found: true,
             cancelled: false,

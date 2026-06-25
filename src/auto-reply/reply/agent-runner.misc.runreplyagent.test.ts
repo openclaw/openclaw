@@ -25,6 +25,7 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
@@ -446,6 +447,50 @@ describe("runReplyAgent auto-compaction token update", () => {
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   }, 180_000);
+
+  it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";

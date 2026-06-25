@@ -7,7 +7,7 @@ import {
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type StartedOpenClawCrablineAdapter,
-} from "crabline";
+} from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -33,6 +33,7 @@ const RECORDER_SYNC_INTERVAL_MS = 50;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
+  rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
 
 async function waitForCrablineReady(params: {
@@ -101,7 +102,10 @@ async function postCrablineInbound(params: {
     url: params.adapter.manifest.endpoints.adminInboundUrl,
     init: {
       body: JSON.stringify(params.providerBody),
-      headers: { "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${params.adapter.manifest.adminToken}`,
+        "content-type": "application/json",
+      },
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },
@@ -190,6 +194,9 @@ function createCrablineState(params: {
       });
       return message;
     },
+    rememberProviderTarget(providerTargetKey, qaTarget) {
+      targetByProviderTarget.set(providerTargetKey, qaTarget);
+    },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
     async searchMessages(input: QaBusSearchMessagesInput) {
@@ -244,8 +251,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       channel: this.#adapter.channel,
     });
 
-  buildAgentDelivery = ({ target }: { target: string }) =>
-    this.#adapter.createAgentDelivery({ target });
+  buildAgentDelivery = ({ target }: { target: string }) => {
+    const delivery = this.#adapter.createAgentDelivery({ target });
+    this.#state.rememberProviderTarget(delivery.to ?? delivery.replyTo, target);
+    return delivery;
+  };
 
   handleAction = async (_params: {
     action: QaTransportActionName;

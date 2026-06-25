@@ -2583,6 +2583,8 @@ export async function loadSessionLogs(params: {
     }
   }
   const limit = params.limit ?? 50;
+  const boundedLimit = Number.isInteger(limit);
+  const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
@@ -2714,15 +2716,25 @@ export async function loadSessionLogs(params: {
         tokens,
         cost,
       });
+      // Timestamps can arrive out of order, so keep a bounded sorted window instead
+      // of relying on transcript append order or retaining the whole file.
+      if (boundedLimit && logs.length > retentionLimit) {
+        logs.sort((a, b) => a.timestamp - b.timestamp);
+        logs.splice(0, logs.length - limit);
+      }
     } catch {
       // Ignore malformed lines
     }
   }
 
   // Sort by timestamp and limit
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+  if (boundedLimit) {
+    logs.sort((a, b) => a.timestamp - b.timestamp);
+    return logs.length > limit ? logs.slice(-limit) : logs;
+  }
 
   // Return most recent logs
+  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
   if (sortedLogs.length > limit) {
     return sortedLogs.slice(-limit);
   }

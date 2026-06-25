@@ -100,6 +100,7 @@ import {
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -444,6 +445,7 @@ type RunPreparedReplyParams = {
   resetTriggered: boolean;
   systemSent: boolean;
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   sessionId?: string;
@@ -491,6 +493,7 @@ export async function runPreparedReply(
     sessionId,
     storePath,
     workspaceDir,
+    sessionEntryHandle,
     sessionStore,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
@@ -779,11 +782,13 @@ export async function runPreparedReply(
     baseBody: effectiveBaseBody,
     abortedLastRun,
     sessionEntry,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     storePath,
     abortKey: command.abortKey,
   });
+  sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   // Extract first-token think hint from the user body BEFORE prepending system events.
@@ -863,6 +868,7 @@ export async function runPreparedReply(
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
           return await ensureSkillSnapshot({
             sessionEntry,
+            sessionEntryHandle,
             sessionStore,
             sessionKey,
             storePath,
@@ -874,6 +880,9 @@ export async function runPreparedReply(
           });
         });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+  if (sessionEntry) {
+    sessionEntryHandle?.replaceCurrent(sessionEntry);
+  }
   const skillsSnapshot = skillResult.skillsSnapshot;
   let {
     prefixedCommandBody,

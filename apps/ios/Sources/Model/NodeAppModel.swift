@@ -4103,6 +4103,9 @@ extension NodeAppModel {
 
     private func registerAPNsTokenIfNeeded() async {
         let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        guard await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport) else {
+            return
+        }
         guard self.gatewayConnected else {
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.skipped("gateway_offline")
@@ -4161,6 +4164,23 @@ extension NodeAppModel {
                 GatewayDiagnostics.pushRelay.failed("registration", error: error)
             }
         }
+    }
+
+    private func canPublishAPNsRegistration(usesRelayTransport: Bool) async -> Bool {
+        guard PushEnrollmentConsent.disclosureAccepted else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+            }
+            return false
+        }
+        let status = await self.notificationAuthorizationStatus()
+        guard Self.isNotificationAuthorizationAllowed(status) else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("notifications_not_authorized")
+            }
+            return false
+        }
+        return true
     }
 
     private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
@@ -5124,6 +5144,10 @@ extension NodeAppModel {
 
     func _test_setOperatorConnected(_ connected: Bool) {
         self.setOperatorConnected(connected)
+    }
+
+    func _test_canPublishAPNsRegistration(usesRelayTransport: Bool = true) async -> Bool {
+        await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport)
     }
 
     nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {

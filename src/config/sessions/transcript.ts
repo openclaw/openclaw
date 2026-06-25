@@ -4,13 +4,18 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   extractAssistantVisibleText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "./paths.js";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "./paths.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
@@ -396,7 +401,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "message role must be assistant" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const explicitAgentId = params.agentId?.trim() || undefined;
+  const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const transcriptAgentId = explicitAgentId ?? sessionAgentId;
+  const storeAgentId = transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath, { skipCache: true });
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;
@@ -427,7 +437,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ? applyBeforeMessageWriteToAssistant({
             message,
             beforeMessageWrite: params.beforeMessageWrite,
-            agentId: params.agentId,
+            agentId: transcriptAgentId,
             sessionKey: resolved.normalizedKey,
           })
         : message;
@@ -449,7 +459,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         sessionKey: resolved.normalizedKey,
         storePath,
         ...(sessionFile ? { sessionFile } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
       },
       {
         cwd: currentEntry.spawnedCwd,
@@ -468,7 +478,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                       message: candidate as Parameters<SessionManager["appendMessage"]>[0],
                       beforeMessageWrite: params.beforeMessageWrite,
                       explicitIdempotencyKey,
-                      agentId: params.agentId,
+                      agentId: transcriptAgentId,
                       sessionKey: resolved.normalizedKey,
                     }),
                 }
@@ -522,7 +532,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         sessionStore: store,
         storePath,
         sessionEntry: entry,
-        agentId: params.agentId,
+        agentId: transcriptAgentId,
         sessionsDir: path.dirname(storePath),
       });
       sessionFile = resolvedSessionFile.sessionFile;

@@ -740,7 +740,16 @@ describe("gateway agent handler", () => {
   });
 
   it("disables single-entry persistence when admission prunes legacy store keys", async () => {
-    mockMainSessionEntry({});
+    mocks.loadConfigReturn = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "existing-session-id", updatedAt: Date.now() },
+      canonicalKey: "agent:main:work",
+    });
     let capturedOptions:
       | {
           resolveSingleEntryPersistence?: (result: unknown) => unknown;
@@ -749,8 +758,8 @@ describe("gateway agent handler", () => {
     let persistedResult: unknown;
     mocks.updateSessionStore.mockImplementation(async (_path, updater, opts) => {
       const store: Record<string, Record<string, unknown>> = {
-        "agent:main:main": buildExistingMainStoreEntry({ updatedAt: 100 }),
-        "Agent:main:main": buildExistingMainStoreEntry({ updatedAt: 50 }),
+        "agent:main:work": buildExistingMainStoreEntry({ updatedAt: 100 }),
+        "agent:main:main": buildExistingMainStoreEntry({ updatedAt: 50 }),
       };
       persistedResult = await updater(store);
       capturedOptions = opts;
@@ -5227,7 +5236,7 @@ describe("gateway agent handler", () => {
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:work": { sessionId: "existing-session-id", updatedAt: 10 },
-        "agent:main:MAIN": { sessionId: "legacy-session-id", updatedAt: 5 },
+        "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 5 },
       };
       await updater(store);
       capturedStore = store;
@@ -5251,7 +5260,7 @@ describe("gateway agent handler", () => {
     expect(mocks.updateSessionStore).toHaveBeenCalled();
     const sessionStore = requireValue(capturedStore, "updated session store missing");
     expect(sessionStore).toHaveProperty("agent:main:work");
-    expect(sessionStore["agent:main:MAIN"]).toBeUndefined();
+    expect(sessionStore["agent:main:main"]).toBeUndefined();
   });
 
   it("handles bare /new by resetting the same session without running the model", async () => {

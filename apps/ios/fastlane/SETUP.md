@@ -104,7 +104,7 @@ Generate deterministic App Store screenshots:
 pnpm ios:screenshots
 ```
 
-The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it captures the tab set on `iPhone 16 Pro Max` and `iPad Pro 13-inch (M4)`; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
+The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
 Upload to App Store Connect:
 
@@ -169,5 +169,5 @@ Versioning rules:
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
-- `pnpm ios:release:upload` generates and uploads screenshots and release notes before archiving, then uploads the IPA without submitting it for App Review
+- `pnpm ios:release:upload` generates and uploads screenshots, release notes, and the App Review PDF attachment before archiving, then uploads the IPA without submitting it for App Review or uploading the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

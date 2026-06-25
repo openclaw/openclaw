@@ -611,7 +611,7 @@ describe("qa scenario catalog", () => {
       "this seeded scenario is mock-openai only",
     );
     expect(heartbeatFlow).toContain("sessionKey");
-    expect(heartbeatFlow).toContain("targetOutbound.length === 0");
+    expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");
   });
 

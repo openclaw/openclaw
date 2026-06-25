@@ -14,6 +14,7 @@ scenario:
     - Agent starts from the seeded project README instead of guessing.
     - Agent inspects docs and source files across multiple directories.
     - Agent writes a JSON audit and a Markdown handoff with all required findings.
+    - Each JSON finding carries a boolean verified field; missing current source evidence is verified false.
     - Agent verifies the generated JSON before finalizing.
   docsRefs:
     - docs/help/testing.md
@@ -131,7 +132,8 @@ scenario:
         Do a release readiness audit for the small project under `audit-fixture/`.
         Start from `audit-fixture/README.md`, find the current checklist, inspect the referenced docs/source, then create `audit-fixture/release-audit.json` and `audit-fixture/release-handoff.md`.
 
-        The JSON should include current finding ids, source files, statuses, and a boolean `verified`.
+        The JSON should include current finding ids, source files, statuses, and a boolean `verified` on each finding.
+        If a current checklist source is referenced but missing from the fixture, include that source as a finding with `verified: false`.
         The Markdown handoff should summarize what is ready and what needs follow-up.
         Check your generated JSON before finalizing.
         Final reply exactly: RELEASE-AUDIT-COMPLETE
@@ -211,14 +213,20 @@ flow:
             expr: "!JSON.stringify(Array.isArray(report.findings) ? report.findings : report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
             message:
               expr: "`stale archive finding leaked into audit: report=${reportText}\\nhandoff=${handoffText}`"
+        - set: reportFindings
+          value:
+            expr: "Array.isArray(report) ? report : (Array.isArray(report.findings) ? report.findings : [])"
+        - set: uiFinding
+          value:
+            expr: "reportFindings.find((finding) => JSON.stringify(finding).includes('ui/control-panel.ts'))"
         - assert:
-            expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found|no current source file|no matching source file/i.test(`${reportText}\\n${handoffText}`)"
+            expr: "uiFinding && uiFinding.verified === false"
             message:
-              expr: "`missing UI evidence was not explicitly blocked: report=${reportText}\\nhandoff=${handoffText}`"
+              expr: "`missing UI evidence was not marked unverified: report=${reportText}\\nhandoff=${handoffText}`"
         - assert:
-            expr: "JSON.stringify(report).includes('verified')"
+            expr: "reportFindings.length > 0 && reportFindings.every((finding) => typeof finding?.verified === 'boolean')"
             message:
-              expr: "`report did not include a verification field: ${reportText}`"
+              expr: "`each report finding must include a boolean verified field: ${reportText}`"
         - call: waitForAgentHistoryReply
           saveAs: outbound
           args:

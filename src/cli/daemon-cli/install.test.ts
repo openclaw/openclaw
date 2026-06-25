@@ -390,6 +390,23 @@ describe("runDaemonInstall", () => {
     });
   });
 
+  it("captures service install warnings in json install output", async () => {
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
+      await (params as { install: () => Promise<void> }).install();
+    });
+    service.install.mockImplementationOnce(async (args?: unknown) => {
+      (args as { warn?: (message: string) => void }).warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+    });
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+  });
+
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },

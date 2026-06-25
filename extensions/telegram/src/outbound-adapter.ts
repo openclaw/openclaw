@@ -2,6 +2,7 @@
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,
+  sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
@@ -19,6 +20,7 @@ import {
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
@@ -198,6 +200,7 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+    sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,

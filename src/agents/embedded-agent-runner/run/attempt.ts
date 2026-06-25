@@ -3172,7 +3172,11 @@ export async function runEmbeddedAttempt(
         trigger: params.trigger,
         runTimeoutMs: resolvedRunTimeoutMs,
         modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-        model: params.model as { baseUrl?: string },
+        model: {
+          baseUrl: params.model.baseUrl,
+          id: params.modelId,
+          provider: params.provider,
+        },
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
@@ -3649,6 +3653,7 @@ export async function runEmbeddedAttempt(
           },
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
+          suppressLiveStreamOutput: params.suppressLiveStreamOutput,
           config: params.config,
           sessionKey: sandboxSessionKey,
           currentChannelId: params.currentChannelId,

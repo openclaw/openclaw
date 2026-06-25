@@ -17,6 +17,8 @@ export {
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
+  resolveEffectiveResponseUsage,
+  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
 } from "./thinking.shared.js";
 export type {
@@ -24,6 +26,8 @@ export type {
   FastMode,
   NoticeLevel,
   ReasoningLevel,
+  ResponseUsageDefaultConfig,
+  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,

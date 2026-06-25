@@ -883,6 +883,7 @@ describe("test-projects args", () => {
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
           "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/check-workflows.test.ts",
           "test/scripts/ci-hydrate-testbox-env.test.ts",
           "test/scripts/clawhub-fixture-server.test.ts",
           "test/scripts/codex-install-assertions.test.ts",
@@ -907,6 +908,7 @@ describe("test-projects args", () => {
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
           "test/scripts/proxy-install-ca.test.ts",
           "test/scripts/release-preflight.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
           "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",
@@ -925,6 +927,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/agent-bundle-mcp-runtime.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
         ],

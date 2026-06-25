@@ -4,6 +4,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import type {
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+} from "../config/sessions/session-accessor.js";
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -80,7 +86,48 @@ const mocks = vi.hoisted(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
-  loadSessionStore: vi.fn(() => ({})),
+  loadSessionEntry: vi.fn((scope: SessionAccessScope) => {
+    const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+      string,
+      SessionEntry
+    >;
+    return store[scope.sessionKey];
+  }),
+  loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
+  patchSessionEntry: vi.fn(
+    async (
+      scope: SessionAccessScope,
+      update: (
+        entry: SessionEntry,
+        context: SessionEntryPatchContext,
+      ) => Partial<SessionEntry> | null | Promise<Partial<SessionEntry> | null>,
+      options: SessionEntryPatchOptions = {},
+    ) => {
+      let updatedEntry: SessionEntry | null = null;
+      const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+        string,
+        SessionEntry
+      >;
+      const currentEntry = store[scope.sessionKey];
+      if (!currentEntry) {
+        return null;
+      }
+      const patch = await update(currentEntry, { existingEntry: { ...currentEntry } });
+      if (!patch) {
+        return currentEntry;
+      }
+      const applyPatch = (targetStore: Record<string, SessionEntry>) => {
+        const targetEntry = targetStore[scope.sessionKey] ?? currentEntry;
+        updatedEntry = options.replaceEntry
+          ? (patch as SessionEntry)
+          : { ...targetEntry, ...patch };
+        targetStore[scope.sessionKey] = updatedEntry;
+      };
+      mocks.updateSessionStore(scope.storePath, applyPatch);
+      applyPatch(store);
+      return updatedEntry;
+    },
+  ),
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
@@ -138,6 +185,11 @@ vi.mock("../config/sessions.js", () => ({
   resolveSessionStoreEntry: mocks.resolveSessionStoreEntry,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: mocks.loadSessionEntry,
+  patchSessionEntry: mocks.patchSessionEntry,
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({

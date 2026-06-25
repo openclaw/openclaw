@@ -98,7 +98,7 @@ import {
   callGateway,
   dispatchGatewayMethodInProcess,
   emitSessionLifecycleEvent,
-  forkSessionFromParent,
+  forkSessionEntryFromParent,
   getGlobalHookRunner,
   getSessionBindingService,
   getRuntimeConfig,
@@ -109,7 +109,6 @@ import {
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
-  resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
@@ -143,26 +142,24 @@ function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  forkSessionFromParent: typeof forkSessionFromParent;
+  forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
-  resolveParentForkDecision: typeof resolveParentForkDecision;
   updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
   dispatchGatewayMethodInProcess,
-  forkSessionFromParent,
+  forkSessionEntryFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
-  resolveParentForkDecision,
   updateSessionStore,
 };
 
@@ -544,52 +541,45 @@ async function prepareSubagentSessionContext(params: {
   const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
-    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
-      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
-      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+    if (params.targetAgentId !== params.requesterAgentId) {
+      throw new Error(
+        'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+      );
+    }
 
-      if (params.targetAgentId !== params.requesterAgentId) {
-        throw new Error(
-          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
-        );
-      }
-      if (!parentEntry?.sessionId) {
-        throw new Error(
-          'context="fork" requested but the requester session transcript is not available.',
-        );
-      }
-      const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
-        parentEntry,
-        storePath: parentTarget.storePath,
-      });
-      if (forkDecision.status === "skip") {
-        forkFallbackNote = forkDecision.message;
-        return null;
-      }
-
-      const fork = await subagentSpawnDeps.forkSessionFromParent({
-        parentEntry,
-        agentId: params.requesterAgentId,
-        sessionsDir,
-      });
-      if (!fork) {
-        throw new Error(
-          'context="fork" requested but OpenClaw could not fork the requester transcript.',
-        );
-      }
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: childTarget.canonicalKey,
-        candidates: childTarget.storeKeys,
-      });
-      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
-        sessionId: fork.sessionId,
-        sessionFile: fork.sessionFile,
-        forkedFromParent: true,
-      });
-      childEntry = store[childTarget.canonicalKey];
-      return fork;
-    })) as { sessionId: string; sessionFile: string } | null;
+    const forkedResult = await subagentSpawnDeps.forkSessionEntryFromParent({
+      storePath: childTarget.storePath,
+      parentSessionKey: parentTarget.canonicalKey,
+      parentStoreKeys: parentTarget.storeKeys,
+      sessionKey: childTarget.canonicalKey,
+      sessionStoreKeys: childTarget.storeKeys,
+      fallbackEntry: { sessionId: "", updatedAt: Date.now() },
+      agentId: params.requesterAgentId,
+      sessionsDir,
+    });
+    if (forkedResult.status === "missing-parent") {
+      throw new Error(
+        'context="fork" requested but the requester session transcript is not available.',
+      );
+    }
+    if (forkedResult.status === "failed" || forkedResult.status === "missing-entry") {
+      throw new Error(
+        'context="fork" requested but OpenClaw could not fork the requester transcript.',
+      );
+    }
+    parentEntry = forkedResult.parentEntry;
+    childEntry = forkedResult.sessionEntry;
+    if (forkedResult.status === "skipped") {
+      forkFallbackNote =
+        forkedResult.decision?.status === "skip" ? forkedResult.decision.message : undefined;
+    }
+    const forked =
+      forkedResult.status === "forked"
+        ? {
+            sessionId: forkedResult.fork.sessionId,
+            sessionFile: forkedResult.fork.sessionFile,
+          }
+        : null;
 
     if (params.contextMode === "fork") {
       if (!parentEntry || !forked) {
