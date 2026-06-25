@@ -4,7 +4,7 @@
 > This bridge lets you do exactly that — via safeTok, a privacy-first Nostr client.
 > No API keys required beyond what OpenClaw already has.
 
-A bidirectional DM bridge that connects [safeTok](https://safetok.app) to OpenClaw via the Gateway WebSocket API. Incoming safeTok DMs are routed to a dedicated OpenClaw session; the assistant's reply is encrypted and published back to the Nostr relays — end-to-end encrypted, decentralized, no middleman.
+A bidirectional DM bridge that connects [safeTok](https://safetok.me) to OpenClaw via the Gateway WebSocket API. Incoming safeTok DMs are routed to a dedicated OpenClaw session; the assistant's reply is encrypted and published back to the Nostr relays — end-to-end encrypted, decentralized, no middleman.
 
 ![safeTok DMs appearing in OpenClaw Control UI](docs/preview.png)
 
@@ -35,6 +35,7 @@ safeTok uses a **custom NIP-44 variant** (documented in `nip44.mjs`):
 
 ## Prerequisites
 
+- **safeTok** — download at [safetok.me](https://safetok.me)
 - Node.js ≥ 22
 - A running OpenClaw gateway
 - A Nostr keypair for the bot account
