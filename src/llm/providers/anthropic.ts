@@ -15,6 +15,7 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "../../agents/anthropic-tool-projection.js";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -72,6 +73,11 @@ import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.j
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+// Cap on the streaming 200 success-body SSE read for Anthropic Messages.
+// Mirrors the 16 MiB provider-JSON cap from `readProviderJsonResponse` so a
+// hostile or malfunctioning Anthropic-compatible endpoint cannot exhaust
+// process memory by streaming an unbounded SSE body.
+const ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -346,7 +352,12 @@ async function* iterateSseMessages(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
 ): AsyncGenerator<ServerSentEvent> {
-  const reader = body.getReader();
+  const rawReader = body.getReader();
+  const guard = createSseByteGuard(rawReader, {
+    maxBytes: ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Anthropic Messages success body exceeded ${maxBytes} bytes (received ${size})`),
+  });
   const decoder = new TextDecoder();
   const state: SseDecoderState = { event: null, data: [], raw: [] };
   let buffer = "";
@@ -357,7 +368,7 @@ async function* iterateSseMessages(
         throw new Error("Request was aborted");
       }
 
-      const { value, done } = await reader.read();
+      const { value, done } = await guard.read();
       if (done) {
         break;
       }
@@ -397,7 +408,7 @@ async function* iterateSseMessages(
       yield trailingEvent;
     }
   } finally {
-    reader.releaseLock();
+    rawReader.releaseLock();
   }
 }
 

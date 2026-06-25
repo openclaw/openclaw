@@ -53,6 +53,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
+import { createSseByteGuard } from "./streaming-byte-guard.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -69,6 +70,11 @@ const CLAUDE_CODE_VERSION = "2.1.75";
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+// Cap on the streaming 200 success-body SSE read for Anthropic Messages.
+// Mirrors the 16 MiB provider-JSON cap from `readProviderJsonResponse` so a
+// hostile or malfunctioning Anthropic-compatible endpoint cannot exhaust
+// process memory by streaming an unbounded SSE body.
+const ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -613,7 +619,10 @@ function createAbortError(signal: AbortSignal): Error {
 }
 
 function readAnthropicSseChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: {
+    read: () => Promise<ReadableStreamReadResult<Uint8Array>>;
+    cancel: (reason?: unknown) => Promise<void>;
+  },
   signal?: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (!signal) {
@@ -670,17 +679,27 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   }
 }
 
-async function* parseAnthropicSseBody(
+/**
+ * Internal — exported under a separate name so production callers go through
+ * the `client.messages.stream()` entrypoint. Tests can drive it directly to
+ * exercise the bounded-reader behaviour without the surrounding client.
+ */
+export async function* parseAnthropicSseBodyForTest(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
-  const reader = body.getReader();
+  const rawReader = body.getReader();
+  const guard = createSseByteGuard(rawReader, {
+    maxBytes: ANTHROPIC_MESSAGES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Anthropic Messages success body exceeded ${maxBytes} bytes (received ${size})`),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
   try {
     while (true) {
-      const { done, value } = await readAnthropicSseChunk(reader, signal);
+      const { done, value } = await readAnthropicSseChunk(guard, signal);
       if (done) {
         completed = true;
         break;
@@ -714,9 +733,9 @@ async function* parseAnthropicSseBody(
     }
   } finally {
     if (!completed) {
-      await reader.cancel(signal?.reason).catch(() => undefined);
+      await rawReader.cancel(signal?.reason).catch(() => undefined);
     }
-    reader.releaseLock();
+    rawReader.releaseLock();
   }
 }
 
@@ -755,7 +774,7 @@ function createAnthropicMessagesClient(params: {
         if (!response.body) {
           return;
         }
-        yield* parseAnthropicSseBody(response.body, options?.signal);
+        yield* parseAnthropicSseBodyForTest(response.body, options?.signal);
       },
     },
   };
