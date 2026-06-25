@@ -47,7 +47,7 @@ jobs:
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
       - name: Checkout target
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
@@ -216,7 +216,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -252,7 +252,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -325,7 +325,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -357,7 +357,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1

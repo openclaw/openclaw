@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -37,7 +37,7 @@ jobs:
           install-bun: "false"
 
       - name: Checkout ClawHub docs source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: openclaw/clawhub
           path: clawhub-source

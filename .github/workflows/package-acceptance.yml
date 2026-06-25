@@ -325,7 +325,7 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
@@ -541,7 +541,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 1

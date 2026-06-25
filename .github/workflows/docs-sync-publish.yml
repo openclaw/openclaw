@@ -25,13 +25,13 @@ jobs:
 
       - name: Checkout source repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Checkout ClawHub docs source
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: openclaw/clawhub
           path: clawhub-source

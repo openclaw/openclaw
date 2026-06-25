@@ -45,7 +45,7 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -270,7 +270,7 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 

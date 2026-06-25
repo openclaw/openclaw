@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install ShellCheck
         run: sudo apt-get update -y && sudo apt-get install -y shellcheck
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: install.sh in Docker
         run: |
@@ -93,7 +93,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -115,7 +115,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -141,13 +141,13 @@ jobs:
 
       - name: Checkout OpenClaw
         if: env.OPENCLAW_GH_TOKEN != ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: openclaw
 
       - name: Checkout openclaw.ai
         if: env.OPENCLAW_GH_TOKEN != ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: openclaw/openclaw.ai
           token: ${{ env.OPENCLAW_GH_TOKEN }}

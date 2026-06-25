@@ -50,7 +50,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ github.ref }}
@@ -242,7 +242,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ github.ref }}
@@ -266,7 +266,7 @@ jobs:
           install-deps: "true"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
@@ -336,7 +336,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           ref: ${{ github.ref }}
@@ -360,7 +360,7 @@ jobs:
           install-deps: "true"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
