@@ -11,7 +11,6 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type {
-  MemorySearchOutcomeResult,
   MemorySearchResult,
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -91,11 +90,18 @@ function isActiveMemoryManagerContext(
 
 type ActiveMemoryManager = ActiveMemoryManagerContext["manager"];
 
+type ActiveMemorySearchOutcome = "ok" | "scope-denied" | "empty-query" | "no-collections";
+type ActiveMemorySearchOutcomeResult = {
+  outcome: ActiveMemorySearchOutcome;
+  hits: MemorySearchResult[];
+  reason?: string;
+};
+
 async function searchActiveMemoryManager(
   manager: ActiveMemoryManager,
   query: string,
   searchOptions: Parameters<ActiveMemoryManager["search"]>[1],
-): Promise<MemorySearchOutcomeResult & { detailed: boolean }> {
+): Promise<ActiveMemorySearchOutcomeResult & { detailed: boolean }> {
   if (typeof manager.searchWithOutcome === "function") {
     const result = await manager.searchWithOutcome(query, searchOptions);
     return { ...result, detailed: true };
@@ -525,7 +531,7 @@ export function createMemorySearchTool(options: {
                     },
                     ...(searchSources ? { sources: searchSources } : {}),
                   };
-                  let searchResult: MemorySearchOutcomeResult & { detailed: boolean };
+                  let searchResult: ActiveMemorySearchOutcomeResult & { detailed: boolean };
                   try {
                     searchResult = await searchActiveMemoryManager(
                       activeMemory.manager,
@@ -561,10 +567,12 @@ export function createMemorySearchTool(options: {
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  const syncAfterZeroResults = activeMemory.manager.sync;
+                  const syncAfterZeroResults = activeMemory.manager.sync?.bind(
+                    activeMemory.manager,
+                  );
                   const shouldSyncAfterZeroResults =
                     rawResults.length === 0 &&
-                    !!syncAfterZeroResults &&
+                    syncAfterZeroResults !== undefined &&
                     (searchResult.detailed
                       ? searchResult.outcome === "ok" && statusBeforeRetry.dirty === true
                       : true);

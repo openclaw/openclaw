@@ -45,7 +45,7 @@ function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
   expect(result.stderr).toBe("");
 
   const totalsMatch =
-    /public package SDK entrypoints:[\s\S]*?\n  exports: (\d+)\n  callable exports: (\d+)/u.exec(
+    /public package SDK entrypoints:[\s\S]*?\n {2}exports: (\d+)\n {2}callable exports: (\d+)/u.exec(
       result.stdout,
     );
   const wildcardsMatch = /public wildcard reexports: (\d+)/u.exec(result.stdout);
