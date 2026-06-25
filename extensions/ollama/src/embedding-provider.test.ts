@@ -731,6 +731,41 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  it("passes custom provider ID through adapter to resolve custom baseUrl (#96742)", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {
+        models: {
+          providers: {
+            "ollama-proxy": {
+              baseUrl: "https://ollama-proxy.home.lab",
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-proxy",
+      model: "nomic-embed-text",
+      fallback: "none",
+    });
+
+    // Verify the provider was created and points to the custom baseUrl
+    expect(result.provider).not.toBeNull();
+    await result.provider!.embedQuery("hello");
+    expectEmbeddingFetch(fetchMock, "https://ollama-proxy.home.lab/api/embed", {
+      model: "nomic-embed-text",
+      input: "search_query: hello",
+    });
+
+    // Verify cacheKeyData uses the custom provider id and baseUrl for distinct index identity
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "ollama-proxy",
+      baseUrl: "https://ollama-proxy.home.lab",
+      model: "nomic-embed-text",
+    });
+  });
+
   it("marks inline memory batches as local-server timeout work", async () => {
     const result = await ollamaMemoryEmbeddingProviderAdapter.create({
       config: {} as OpenClawConfig,
