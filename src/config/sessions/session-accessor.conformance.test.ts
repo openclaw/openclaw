@@ -121,23 +121,27 @@ type TestPaths = {
   transcriptPath: string;
 };
 
-const fileBackedAdapter: AccessorAdapter = {
-  name: "file-backed",
-  publishesTranscriptUpdates: true,
+const publicAccessorAdapter: AccessorAdapter = {
+  name: "public-accessor",
+  publishesTranscriptUpdates: false,
   entryScope: (paths) => ({
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionKey: "agent:main:main",
-    storePath: paths.storePath,
+    storePath: paths.sqlitePath,
   }),
   transcriptScope: (paths, id = "session-1") => ({
-    sessionFile: paths.transcriptPath,
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionId: id,
     sessionKey: "agent:main:main",
-    storePath: paths.storePath,
+    storePath: paths.sqlitePath,
   }),
   transcriptReadScope: (paths, id = "session-1") => ({
-    sessionFile: paths.transcriptPath,
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionId: id,
-    storePath: paths.storePath,
+    storePath: paths.sqlitePath,
   }),
   loadSessionEntry,
   loadExactSessionEntry,
@@ -199,7 +203,7 @@ afterEach(() => {
   vi.mocked(getRuntimeConfig).mockReset();
 });
 
-describe.each([fileBackedAdapter, sqliteAdapter])(
+describe.each([publicAccessorAdapter, sqliteAdapter])(
   "session accessor conformance: $name",
   (adapter) => {
     let paths: TestPaths;
@@ -329,10 +333,10 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
     it("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
-      const cleanupStorePath =
-        adapter.name === "sqlite"
-          ? path.join(paths.stateDir, "agents", "main", "sessions", "sessions.json")
-          : paths.storePath;
+      const usesSqliteStore = !adapter.publishesTranscriptUpdates;
+      const cleanupStorePath = usesSqliteStore
+        ? path.join(paths.stateDir, "agents", "main", "sessions", "sessions.json")
+        : paths.storePath;
       const scopedEntry = (sessionKey: string): SessionAccessScope => ({
         ...adapter.entryScope(paths),
         sessionKey,
@@ -358,7 +362,7 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
           timestamp: new Date(timestamp).toISOString(),
           type: "metadata",
         };
-        if (adapter.name === "sqlite") {
+        if (usesSqliteStore) {
           await adapter.appendTranscriptEvent(
             scopedTranscript(params.sessionKey, params.sessionId),
             event,
@@ -446,7 +450,7 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       expect(adapter.loadSessionEntry(scopedEntry("agent:main:regular"))).toMatchObject({
         sessionId: "referenced",
       });
-      if (adapter.name === "sqlite") {
+      if (usesSqliteStore) {
         expect(fs.existsSync(cleanupStorePath)).toBe(false);
         const database = openOpenClawAgentDatabase({
           agentId: "main",
