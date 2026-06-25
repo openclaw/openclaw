@@ -1057,9 +1057,17 @@ function createSessionMcpRuntimeManager(
     return merged ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
   };
 
-  const attachSessionToRuntimeKey = (sessionId: string, runtimeKey: string, idleTtlMs: number) => {
+  const attachSessionToRuntimeKey = (
+    sessionId: string,
+    runtimeKey: string,
+    idleTtlMs: number,
+    sessionKey?: string,
+  ) => {
     runtimeKeyBySessionId.set(sessionId, runtimeKey);
     idleTtlMsBySessionId.set(sessionId, idleTtlMs);
+    if (sessionKey) {
+      sessionIdBySessionKey.set(sessionKey, sessionId);
+    }
     const sessionIds = sessionIdsByRuntimeKey.get(runtimeKey) ?? new Set<string>();
     sessionIds.add(sessionId);
     sessionIdsByRuntimeKey.set(runtimeKey, sessionIds);
@@ -1187,15 +1195,12 @@ function createSessionMcpRuntimeManager(
       if (idleTtlMs > 0) {
         ensureIdleSweepTimer();
       }
-      if (params.sessionKey) {
-        sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
-      }
       if (previousRuntimeKey && previousRuntimeKey !== runtimeKey) {
         await detachSessionFromRuntimeKey(params.sessionId, previousRuntimeKey, {
           disposeIfUnreferenced: true,
         });
       }
-      attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
+      attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs, params.sessionKey);
 
       const existing = runtimesByRuntimeKey.get(runtimeKey);
       if (existing) {
@@ -1205,7 +1210,7 @@ function createSessionMcpRuntimeManager(
         ) {
           detachAllSessionsForRuntimeKey(runtimeKey);
           await disposeRuntimeKey(runtimeKey);
-          attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
+          attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs, params.sessionKey);
         } else {
           existing.markUsed();
           return existing;
@@ -1228,7 +1233,7 @@ function createSessionMcpRuntimeManager(
         }
         detachAllSessionsForRuntimeKey(runtimeKey);
         await disposeRuntimeKey(runtimeKey);
-        attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs);
+        attachSessionToRuntimeKey(params.sessionId, runtimeKey, idleTtlMs, params.sessionKey);
       }
       const runtimeSessionId = scope === "shared" ? runtimeKey : params.sessionId;
       const created = Promise.resolve()

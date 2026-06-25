@@ -1538,6 +1538,54 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).toEqual([]);
   });
 
+  it("preserves session-key lookup when a shared runtime session reattaches", async () => {
+    const created: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const sessionId = "session-reattach";
+    const sessionKey = "agent:test:session-reattach";
+    const cfgA = {
+      mcp: {
+        runtimeScope: "shared" as const,
+        servers: { probe: { command: "node", args: ["server-a.mjs"] } },
+      },
+    };
+    const cfgB = {
+      mcp: {
+        runtimeScope: "shared" as const,
+        servers: { probe: { command: "node", args: ["server-b.mjs"] } },
+      },
+    };
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace",
+      cfg: cfgA,
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace",
+      cfg: cfgB,
+    });
+
+    expect(runtimeB).not.toBe(runtimeA);
+    expect(created).toHaveLength(2);
+    expect(manager.resolveSessionId(sessionKey)).toBe(sessionId);
+    expect(manager.peekSession({ sessionKey })).toBe(runtimeB);
+    expect(manager.peekSession({ sessionId })).toBe(runtimeB);
+  });
+
   it("shares one real stdio MCP server process across matching shared-scope sessions", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-shared-stdio-"));
     const serverPath = path.join(tempDir, "shared-stdio.mjs");
@@ -1874,6 +1922,44 @@ process.on("SIGINT", shutdown);`,
     await expect(
       retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
     ).resolves.toBe(false);
+  });
+
+  it("retires global session runtimes by session key after shared runtime reattach", async () => {
+    const sessionId = "session-retire-key-reattach";
+    const sessionKey = "agent:test:session-retire-key-reattach";
+    const cfg = { mcp: { runtimeScope: "shared" as const, servers: {} } };
+
+    try {
+      const runtimeA = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey,
+        workspaceDir: "/workspace-a",
+        cfg,
+      });
+      const runtimeB = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey,
+        workspaceDir: "/workspace-b",
+        cfg,
+      });
+
+      expect(runtimeB).not.toBe(runtimeA);
+      expect(testing.getCachedSessionIds()).toContain(sessionId);
+
+      await expect(
+        retireSessionMcpRuntimeForSessionKey({
+          sessionKey,
+          reason: "test",
+        }),
+      ).resolves.toBe(true);
+      expect(testing.getCachedSessionIds()).not.toContain(sessionId);
+
+      await expect(
+        retireSessionMcpRuntimeForSessionKey({ sessionKey, reason: "test" }),
+      ).resolves.toBe(false);
+    } finally {
+      await testing.resetSessionMcpRuntimeManager();
+    }
   });
 
   it("evicts idle runtimes after the configured TTL but skips active leases", async () => {
