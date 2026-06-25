@@ -104,7 +104,7 @@ describe("agent tool definition adapter", () => {
     const [definition] = toToolDefinitions([tool]);
     const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
 
-    const existing = await definition!.execute(
+    const existing = await definition.execute(
       "call-denied-existing-cwd",
       {
         command: "echo denied",
@@ -114,7 +114,7 @@ describe("agent tool definition adapter", () => {
       undefined,
       extensionContext,
     );
-    const missing = await definition!.execute(
+    const missing = await definition.execute(
       "call-denied-missing-cwd",
       {
         command: "echo denied",
@@ -150,7 +150,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition!.execute(
+    const result = await definition.execute(
       "call-denied-backend-cwd",
       {
         command: "echo denied",
@@ -175,7 +175,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition!.execute(
+    const result = await definition.execute(
       "call-malformed-exec-params",
       "not-an-object",
       undefined,
@@ -197,7 +197,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition!.execute(
+    const result = await definition.execute(
       "call-malformed-elevated-exec-params",
       {},
       undefined,
@@ -227,7 +227,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition!.execute(
+    const result = await definition.execute(
       "call-malformed-backend-sandbox-exec-params",
       {
         workdir: "/remote/workspace/generated",
