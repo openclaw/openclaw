@@ -906,27 +906,35 @@ export async function updateResolvedSessionEntry<T>(
   if (!target.entry) {
     return { canonicalKey: target.canonicalKey, found: false };
   }
-  return await updateSessionStore(target.storePath, async (store) => {
-    const entry = store[target.storeKey];
-    if (!entry) {
-      return { canonicalKey: target.canonicalKey, found: false };
-    }
-    const context: ResolvedSessionEntryUpdateContext = {
-      agentId: target.agentId,
-      canonicalKey: target.canonicalKey,
-      entry,
-      requestedKey: target.requestedKey,
-      storeKey: target.storeKey,
-    };
-    const result = await update(entry, context);
-    return {
-      canonicalKey: target.canonicalKey,
-      entry: structuredClone(entry),
-      found: true,
-      result,
-      storeKey: target.storeKey,
-    };
-  });
+  let updateResult: T | undefined;
+  const updated = await patchSessionEntry(
+    { sessionKey: target.storeKey, storePath: target.storePath },
+    async (entry) => {
+      const context: ResolvedSessionEntryUpdateContext = {
+        agentId: target.agentId,
+        canonicalKey: target.canonicalKey,
+        entry,
+        requestedKey: target.requestedKey,
+        storeKey: target.storeKey,
+      };
+      updateResult = await update(entry, context);
+      return entry;
+    },
+    {
+      replaceEntry: true,
+      skipMaintenance: true,
+    },
+  );
+  if (!updated) {
+    return { canonicalKey: target.canonicalKey, found: false };
+  }
+  return {
+    canonicalKey: target.canonicalKey,
+    entry: structuredClone(updated),
+    found: true,
+    result: updateResult as T,
+    storeKey: target.storeKey,
+  };
 }
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
