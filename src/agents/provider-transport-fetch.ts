@@ -112,11 +112,19 @@ function sanitizeOpenAISdkSseResponse(
             const chunk = await reader?.read();
             if (!chunk || chunk.done) {
               buffer += decoder.decode();
-              const data = buffer.trim();
-              if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              // If the upstream gateway already returned SSE-formatted data
+              // (lines starting with "data:"), pass it through without
+              // re-wrapping to avoid a double "data: data:" prefix.
+              // See: https://github.com/openclaw/openclaw/issues/96497
+              if (/(?:^|\n)data:\s/m.test(buffer)) {
+                controller.enqueue(encoder.encode(buffer));
+              } else {
+                const data = buffer.trim();
+                if (data) {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               }
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();
               return;
             }
