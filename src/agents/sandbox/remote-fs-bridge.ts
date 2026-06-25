@@ -41,6 +41,14 @@ function hasMultipleHardlinks(raw: string): boolean {
   return /^\d+$/.test(raw);
 }
 
+function parseJsonStringArray(raw: string, displayPath: string): string[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error(`Invalid directory listing for ${displayPath}`);
+  }
+  return parsed;
+}
+
 type MountInfo = {
   localRoot: string;
   containerRoot: string;
@@ -266,6 +274,35 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       size: parseSandboxStatSize(sizeRaw),
       mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
+  }
+
+  async readdir(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string[]> {
+    const target = this.resolveTarget(params);
+    const exists = await this.remotePathExists(target.containerPath, params.signal);
+    if (!exists) {
+      throw new Error(`Path not found: ${target.containerPath}`);
+    }
+    const canonical = await this.resolveCanonicalPath({
+      containerPath: target.containerPath,
+      action: "list directories",
+      signal: params.signal,
+    });
+    const result = await this.runRemoteScript({
+      script: [
+        "set -eu",
+        "python3 - \"$1\" <<'PY'",
+        "import json, os, sys",
+        "print(json.dumps(os.listdir(sys.argv[1])))",
+        "PY",
+      ].join("\n"),
+      args: [canonical],
+      signal: params.signal,
+    });
+    return parseJsonStringArray(result.stdout.toString("utf8"), target.containerPath);
   }
 
   private getMounts(): MountInfo[] {

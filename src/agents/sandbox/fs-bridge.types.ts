@@ -44,4 +44,5 @@ export type SandboxFsBridge = {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null>;
+  readdir(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<string[]>;
 };

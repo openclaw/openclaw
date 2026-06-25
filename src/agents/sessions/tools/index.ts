@@ -44,6 +44,8 @@ export {
   createGrepTool,
   createGrepToolDefinition,
   type GrepOperations,
+  type GrepSearchMatch,
+  type GrepSearchOptions,
   type GrepToolOptions,
 } from "./grep.js";
 export {

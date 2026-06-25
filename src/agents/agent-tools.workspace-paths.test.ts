@@ -11,6 +11,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   expectReadWriteEditTools,
   expectTool,
@@ -512,6 +513,60 @@ describe("sandboxed workspace paths", () => {
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");
+      });
+    });
+  });
+
+  it("uses sandbox bridge operations for grep/find/ls", async () => {
+    await withTempDir("openclaw-sandbox-discovery-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-discovery-", async (workspaceDir) => {
+        await fs.writeFile(path.join(sandboxDir, "sandbox-only.txt"), "sandbox needle", "utf8");
+        await fs.writeFile(path.join(workspaceDir, "host-only.txt"), "host needle", "utf8");
+        const hostBridge = createHostSandboxFsBridge(sandboxDir);
+        const calls = { readFile: 0, readdir: 0, stat: 0 };
+        const bridge: SandboxFsBridge = {
+          ...hostBridge,
+          readFile: async (params) => {
+            calls.readFile++;
+            return hostBridge.readFile(params);
+          },
+          readdir: async (params) => {
+            calls.readdir++;
+            return hostBridge.readdir(params);
+          },
+          stat: async (params) => {
+            calls.stat++;
+            return hostBridge.stat(params);
+          },
+        };
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceAccess: "rw" as const,
+          fsBridge: bridge,
+          tools: { allow: [], deny: [] },
+        });
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+
+        const grepResult = await expectTool(tools, "grep").execute("sbx-grep", {
+          pattern: "needle",
+          literal: true,
+        });
+        expect(getTextContent(grepResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(grepResult)).not.toContain("host-only.txt");
+
+        const findResult = await expectTool(tools, "find").execute("sbx-find", {
+          pattern: "*.txt",
+        });
+        expect(getTextContent(findResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(findResult)).not.toContain("host-only.txt");
+
+        const lsResult = await expectTool(tools, "ls").execute("sbx-ls", {});
+        expect(getTextContent(lsResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(lsResult)).not.toContain("host-only.txt");
+        expect(calls.readFile).toBeGreaterThan(0);
+        expect(calls.readdir).toBeGreaterThan(0);
+        expect(calls.stat).toBeGreaterThan(0);
       });
     });
   });
