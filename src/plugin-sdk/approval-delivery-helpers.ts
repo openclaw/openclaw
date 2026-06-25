@@ -146,11 +146,18 @@ function buildApproverRestrictedNativeApprovalCapability(
     getActionAvailabilityState: ({
       cfg,
       accountId,
+      approvalKind,
     }: {
       cfg: OpenClawConfig;
       accountId?: string | null;
       action: "approve";
-    }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
+      approvalKind?: ApprovalKind;
+    }) =>
+      availabilityState(
+        approvalKind === "plugin"
+          ? isExecInitiatingSurfaceEnabled({ cfg, accountId })
+          : hasConfiguredApprovers({ cfg, accountId }),
+      ),
     getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     describePluginApprovalSetup:
