@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { findInitialModel, restoreModelFromSession } from "./model-resolver.js";
+import { findInitialModel, parseModelPattern, restoreModelFromSession } from "./model-resolver.js";
 
 function model(provider: string, id: string): Model {
   return {
@@ -55,5 +55,43 @@ describe("model resolver fallback selection", () => {
     );
 
     expect(result.model).toBe(firstAvailable);
+  });
+});
+
+describe("parseModelPattern alias resolution", () => {
+  it("selects the numerically newest alias when minor versions reach double digits", () => {
+    const models = [model("anthropic", "claude-opus-4-9"), model("anthropic", "claude-opus-4-10")];
+    const result = parseModelPattern("opus", models);
+
+    expect(result.model).toBe(models[1]);
+    expect(result.model?.id).toBe("claude-opus-4-10");
+  });
+
+  it("selects the numerically newest alias across mixed single and double digits", () => {
+    const models = [
+      model("anthropic", "claude-opus-4-2"),
+      model("anthropic", "claude-opus-4-10"),
+      model("anthropic", "claude-opus-4-9"),
+    ];
+    const result = parseModelPattern("opus", models);
+
+    expect(result.model?.id).toBe("claude-opus-4-10");
+  });
+
+  it("keeps single-digit alias ordering unchanged", () => {
+    const models = [model("anthropic", "claude-opus-4-2"), model("anthropic", "claude-opus-4-9")];
+    const result = parseModelPattern("opus", models);
+
+    expect(result.model?.id).toBe("claude-opus-4-9");
+  });
+
+  it("uses numeric ordering for dated version buckets too", () => {
+    const models = [
+      model("anthropic", "claude-opus-4-9-20251001"),
+      model("anthropic", "claude-opus-4-10-20250901"),
+    ];
+    const result = parseModelPattern("opus", models);
+
+    expect(result.model?.id).toBe("claude-opus-4-10-20250901");
   });
 });

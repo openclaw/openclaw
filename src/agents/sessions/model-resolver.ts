@@ -115,12 +115,16 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
   const datedVersions = matches.filter((m) => !isAlias(m.id));
 
   if (aliases.length > 0) {
-    // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    // Prefer alias - if multiple aliases, pick the one that sorts highest.
+    // Use numeric collation so version segments like "4-10" sort above "4-9"
+    // instead of being ordered lexicographically.
+    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     return aliases[0];
   }
-  // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  // No alias found, pick latest dated version. Numeric collation keeps the
+  // comparator consistent with the alias branch even though -YYYYMMDD suffixes
+  // currently make lexicographic and numeric ordering coincide.
+  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
   return datedVersions[0];
 }
 
