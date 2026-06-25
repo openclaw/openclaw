@@ -123,7 +123,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
         approvalKind: "plugin",
       }),
-    ).toEqual({ kind: "disabled" });
+    ).toEqual({ kind: "enabled" });
     expect(
       getExecInitiatingSurfaceState({
         cfg: {} as never,
@@ -141,7 +141,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     });
   });
 
-  it("reports disabled plugin availability when approvers exist but native delivery is off", () => {
+  it("keeps plugin availability approver-based when native delivery is off", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -171,7 +171,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
         approvalKind: "plugin",
       }),
-    ).toEqual({ kind: "disabled" });
+    ).toEqual({ kind: "enabled" });
     expect(
       getExecInitiatingSurfaceState({
         cfg: {} as never,
