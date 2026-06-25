@@ -145,7 +145,6 @@ import {
   handleUpdated,
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
-import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   applySettings as applySettingsInternal,
@@ -745,7 +744,6 @@ export class OpenClawApp extends LitElement {
   nodesPollInterval: number | null = null;
   logsPollInterval: number | null = null;
   debugPollInterval: number | null = null;
-  sessionsChangedReloadTimer: number | ReturnType<typeof globalThis.setTimeout> | null = null;
   logsScrollFrame: number | null = null;
   activityScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
@@ -859,9 +857,6 @@ export class OpenClawApp extends LitElement {
     super.connectedCallback();
     this.onSlashAction = async (action: string) => {
       switch (action) {
-        case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
-          break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;

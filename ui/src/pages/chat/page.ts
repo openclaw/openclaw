@@ -40,6 +40,7 @@ import {
 import {
   resolveSessionCreateParams,
   scopedAgentParamsForSession,
+  type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
   dismissChatError,
@@ -130,6 +131,7 @@ const NEW_SESSION_CREATE_FAILED_MESSAGE =
 type ChatPageHost = ChatHost &
   ChatState &
   SessionWorkspaceHost & {
+    sessions: SessionCapability;
     settings: UiSettings;
     password: string;
     onboarding: boolean;
@@ -485,6 +487,7 @@ function createPageState(
   const settings = loadSettings();
   const identity = loadLocalUserIdentity();
   const state = {
+    sessions: context.sessions,
     settings,
     password: "",
     onboarding: false,
@@ -1051,6 +1054,7 @@ export class ChatPage extends LitElement {
       return;
     }
     state.sessionsResult = snapshot.result;
+    state.sessionsResultAgentId = snapshot.agentId;
     state.sessionsLoading = snapshot.loading;
     state.sessionsError = snapshot.error;
     state.requestUpdate?.();

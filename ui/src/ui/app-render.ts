@@ -37,11 +37,7 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { resetChatStateForSessionSwitch } from "../pages/chat/session-switch.ts";
 import { runUpdate } from "../pages/config/data.ts";
-import {
-  createChatSession,
-  resolveDashboardHeaderContext,
-  switchChatSession,
-} from "./app-render.helpers.ts";
+import { resolveDashboardHeaderContext, switchChatSession } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -299,11 +295,6 @@ function renderConnectedApp(
             surface: "sidebar",
           })}
           .themeMode=${state.themeMode}
-          .onCreateSession=${async () => {
-            if (!newSessionDisabled && (await createChatSession(state, { source: "user" }))) {
-              navigate("chat");
-            }
-          }}
           .onToggleCollapsed=${() => {
             if (navDrawerOpen) {
               state.navDrawerOpen = false;

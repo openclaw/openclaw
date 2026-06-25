@@ -80,7 +80,6 @@ type LifecycleHost = {
   chatScrollTimeout?: number | null;
   logsScrollFrame?: number | null;
   activityScrollFrame?: number | null;
-  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
   topbarObserver: ResizeObserver | null;
@@ -181,11 +180,6 @@ function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
   }, CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS);
 }
 
-function clearPendingSessionsChangedReload(host: LifecycleHost) {
-  clearHostGlobalTimeout(host.sessionsChangedReloadTimer);
-  host.sessionsChangedReloadTimer = null;
-}
-
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   appRouter.stop();
@@ -203,7 +197,6 @@ export function handleDisconnected(host: LifecycleHost) {
   host.activityScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);
   host.chatScrollTimeout = null;
-  clearPendingSessionsChangedReload(host);
   host.realtimeTalkSession?.stop();
   host.realtimeTalkSession = null;
   host.realtimeTalkActive = false;

@@ -3,9 +3,9 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
-import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import { warnQueryToken } from "../../ui/app-settings.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
+import { switchChatSession } from "../chat/session-switch.ts";
 import { loadOverview } from "./data.ts";
 import { renderOverview } from "./view.ts";
 

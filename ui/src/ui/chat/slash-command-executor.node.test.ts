@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -8,7 +9,38 @@ import {
   OPENAI_GPT5_MINI_MODEL,
 } from "../chat-model.test-helpers.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { executeSlashCommand } from "./slash-command-executor.ts";
+import { executeSlashCommand as executeSlashCommandImpl } from "./slash-command-executor.ts";
+
+function createSessionCapability(client: GatewayBrowserClient): SessionCapability {
+  const request = client.request.bind(client);
+  return {
+    snapshot: {
+      result: null,
+      loading: false,
+      error: null,
+    },
+    list: (options = {}) => request("sessions.list", options),
+    refresh: async () => undefined,
+    create: async () => null,
+    patch: (key, patch, options = {}) => request("sessions.patch", { key, ...options, ...patch }),
+    delete: async () => false,
+    subscribe: () => () => undefined,
+    dispose: () => undefined,
+  } as unknown as SessionCapability;
+}
+
+function executeSlashCommand(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  commandName: string,
+  args: string,
+  context: Omit<Parameters<typeof executeSlashCommandImpl>[4], "sessions"> = {},
+) {
+  return executeSlashCommandImpl(client, sessionKey, commandName, args, {
+    sessions: createSessionCapability(client),
+    ...context,
+  });
+}
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
   return {

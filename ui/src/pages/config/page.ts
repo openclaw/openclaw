@@ -5,12 +5,17 @@ import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../lib/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/session-key.ts";
+import { requestSessionPatch, type SessionPatch } from "../../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
 import { renderMcp } from "../../ui/views/mcp.ts";
-import { patchSession } from "../sessions/data.ts";
 import {
   applyConfig,
   loadConfig,
@@ -41,6 +46,20 @@ type ConfigRenderContext = {
   pageId: ConfigPageId;
   navigate: RouteRenderContext["navigate"];
 };
+
+async function patchActiveSession(state: AppViewState, patch: SessionPatch): Promise<void> {
+  const key = state.sessionKey.trim();
+  if (!state.client || !state.connected || !key) {
+    return;
+  }
+  try {
+    await requestSessionPatch(state.client, key, patch, {
+      agentId: isUiGlobalSessionKey(key) ? resolveUiSelectedGlobalAgentId(state) : undefined,
+    });
+  } catch (error) {
+    state.sessionsError = String(error);
+  }
+}
 
 const COMMUNICATION_SECTION_KEYS = [
   "messages",
@@ -608,10 +627,8 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
           onAdvancedSettings: () => {
             state.configSettingsMode = "advanced";
           },
-          onThinkingChange: (level) =>
-            void patchSession(state, state.sessionKey, { thinkingLevel: level }),
-          onFastModeChange: (mode) =>
-            void patchSession(state, state.sessionKey, { fastMode: mode }),
+          onThinkingChange: (level) => void patchActiveSession(state, { thinkingLevel: level }),
+          onFastModeChange: (mode) => void patchActiveSession(state, { fastMode: mode }),
           onChannelConfigure: () => navigate("channels"),
           onManageCron: () => navigate("cron"),
           onBrowseSkills: () => navigate("skills"),

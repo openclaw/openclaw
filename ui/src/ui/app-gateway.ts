@@ -60,31 +60,12 @@ import {
 import { setLastActiveSessionKey } from "../pages/chat/last-active-session.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
-import {
-  createChatSessionsLoadOverrides,
-  scopedAgentListParamsForRefreshTarget,
-  scopedAgentListParamsForSession,
-  scopedAgentParamsForSession,
-} from "../pages/chat/session-scope.ts";
+import { scopedAgentParamsForSession } from "../pages/chat/session-scope.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
-import type { ChatQueueItem, ChatSessionRefreshTarget } from "../pages/chat/types.ts";
+import type { ChatQueueItem } from "../pages/chat/types.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
-import {
-  applySessionsChangedEvent,
-  loadSessions,
-  subscribeSessions,
-  syncSelectedSessionMessageSubscription,
-  type SessionsState,
-} from "../pages/sessions/data.ts";
-import { switchChatSession } from "./app-render.helpers.ts";
 import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";
-import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  resetToolStream,
-  type AgentEventPayload,
-  type SessionOperationEventPayload,
-} from "./app-tool-stream.ts";
+import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   recordControlUiConnectTiming,
@@ -142,11 +123,8 @@ type GatewayHost = {
   pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
-  sessionsShowArchived: boolean;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
-  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
-  sessionsLoading?: boolean;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
   chatComposerProvisionalRestore?: {
@@ -163,12 +141,7 @@ type GatewayHost = {
   reconcileWebPushState?: () => Promise<void> | void;
   realtimeTalkOptionsOpen?: boolean;
   fetchRealtimeTalkCatalog?: () => Promise<void>;
-  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
-};
-
-type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
-  pendingSessionMessageReloadSessionKey?: string | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -188,9 +161,6 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
-const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
-const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
-const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
 const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
 const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 const UPDATE_HANDOFF_POLL_MS = 1_000;
@@ -220,44 +190,6 @@ function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
 ): state is "final" | "aborted" | "error" {
   return state === "final" || state === "aborted" || state === "error";
-}
-
-function isChatTurnSessionChangedPayload(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as { phase?: unknown; reason?: unknown };
-  return (
-    record.phase === "start" ||
-    record.phase === "message" ||
-    record.phase === "end" ||
-    record.phase === "error" ||
-    record.reason === "send" ||
-    record.reason === "steer"
-  );
-}
-
-function clearSessionsChangedReloadTimer(host: GatewayHost) {
-  if (host.sessionsChangedReloadTimer == null) {
-    return;
-  }
-  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
-  host.sessionsChangedReloadTimer = null;
-}
-
-function shouldRunDeferredSessionsReload(host: GatewayHost): boolean {
-  return host.connected && Boolean(host.client) && getVisibleRouteId() !== "chat";
-}
-
-function scheduleSessionsChangedReload(host: GatewayHost) {
-  clearSessionsChangedReloadTimer(host);
-  host.sessionsChangedReloadTimer = globalThis.setTimeout(() => {
-    host.sessionsChangedReloadTimer = null;
-    if (!shouldRunDeferredSessionsReload(host)) {
-      return;
-    }
-    void loadSessions(host as unknown as SessionsState);
-  }, SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS);
 }
 
 type ConnectGatewayOptions = {
@@ -558,31 +490,6 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
-function resolveDeletedSessionFallback(
-  host: GatewayHost,
-  deletedSession: { key: string; agentId?: string },
-): string {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  const defaults = snapshot?.sessionDefaults;
-  const configuredMainKey = defaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
-  const parsedConfiguredMainKey = parseAgentSessionKey(configuredMainKey ?? "");
-  const parsedSelectedKey = parseAgentSessionKey(host.sessionKey);
-  const parsedDeletedKey = parseAgentSessionKey(deletedSession.key);
-  return buildAgentMainSessionKey({
-    agentId:
-      parsedSelectedKey?.agentId ??
-      parsedDeletedKey?.agentId ??
-      deletedSession.agentId ??
-      resolveDefaultAgentId(host),
-    mainKey:
-      parsedConfiguredMainKey?.rest ??
-      configuredMainKey ??
-      parseAgentSessionKey(defaults?.mainSessionKey ?? "")?.rest,
-  });
-}
-
 function resolveDefaultAgentId(host: GatewayHost): string {
   return resolveUiDefaultAgentId(host);
 }
@@ -824,7 +731,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
-  clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
   host.chatError = null;
@@ -935,11 +841,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
         );
       }
-      void subscribeSessions(host as unknown as SessionsState);
-      void syncSelectedSessionMessageSubscription(
-        host as unknown as SessionsState & { sessionKey: string },
-        { force: true },
-      );
       void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
@@ -1060,16 +961,6 @@ function handleTerminalChatEvent(
     payload?.runId,
   );
   const runId = payload?.runId;
-  const refreshTarget = runId ? host.refreshSessionsAfterChat.get(runId) : undefined;
-  if (runId && refreshTarget) {
-    host.refreshSessionsAfterChat.delete(runId);
-    if (state === "final") {
-      void loadSessions(host as unknown as SessionsState, {
-        ...createChatSessionsLoadOverrides(host),
-        ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
-      });
-    }
-  }
   // Reload history when tools were used only if the terminal event did not carry
   // a renderable assistant message. Source-reply finals already contain the UI
   // response; an immediate transcript reload replaces the optimistic user bubble
@@ -1129,202 +1020,12 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     activeRunIdBeforeEvent,
   );
   const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
-  const payloadSessionKey = payload?.sessionKey?.trim();
   const finalEventNeedsHistoryReload =
     state === "final" && shouldReloadHistoryForFinalEvent(payload);
-  const shouldResolveDeferredSessionMessageReload = Boolean(
-    deferredSessionKey &&
-    payloadSessionKey &&
-    areUiSessionKeysEquivalent(deferredSessionKey, payloadSessionKey) &&
-    isTerminalChatState(state) &&
-    !terminalEventIsForDifferentActiveRun &&
-    areUiSessionKeysEquivalent(payloadSessionKey, host.sessionKey) &&
-    !host.chatRunId,
-  );
-  const shouldReplayDeferredSessionMessageReload =
-    shouldResolveDeferredSessionMessageReload &&
-    (state !== "final" || finalEventNeedsHistoryReload);
-  if (shouldResolveDeferredSessionMessageReload) {
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-  }
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }
-  if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
-    void loadChatHistory(host as unknown as ChatState);
-  }
-}
-
-function flushChatQueueAfterSessionRunReconcile(
-  host: GatewayHost,
-  result: ReturnType<typeof applySessionsChangedEvent>,
-  payload: { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown } | undefined,
-  fallbackRunId?: string | null,
-): boolean {
-  const runId =
-    typeof payload?.clientRunId === "string" && payload.clientRunId.trim()
-      ? payload.clientRunId
-      : typeof payload?.runId === "string" && payload.runId.trim()
-        ? payload.runId
-        : (fallbackRunId ?? undefined);
-  clearPendingQueueItemsForRun(
-    host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
-    runId,
-  );
-  const flushQueue = () =>
-    void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
-  const publishRunStatus = () => {
-    if (!result.applied || !result.clearedChatRunStatus || host.chatRunId) {
-      return;
-    }
-    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
-      outcome: result.clearedChatRunStatus.phase,
-      runId: result.clearedChatRunStatus.runId,
-      sessionKey: result.clearedChatRunStatus.sessionKey,
-      clearIndicators: false,
-    });
-  };
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  const pendingSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
-  const eventSessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey.trim() : "";
-  if (
-    pendingSessionKey &&
-    areUiSessionKeysEquivalent(pendingSessionKey, host.sessionKey) &&
-    (!eventSessionKey || areUiSessionKeysEquivalent(eventSessionKey, pendingSessionKey))
-  ) {
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-    const reloadSessionKey = pendingSessionKey;
-    void Promise.resolve(loadChatHistory(host as unknown as ChatState)).finally(() => {
-      if (areUiSessionKeysEquivalent(host.sessionKey, reloadSessionKey)) {
-        publishRunStatus();
-        flushQueue();
-      }
-    });
-    return true;
-  }
-  publishRunStatus();
-  flushQueue();
-  return false;
-}
-
-function handleSessionMessageGatewayEvent(
-  host: GatewayHost,
-  payload: { sessionKey?: string; agentId?: string; runId?: unknown } | undefined,
-) {
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  const sessionKey = payload?.sessionKey?.trim();
-  if (!globalAgentScopeMatches(host, sessionKey, payload?.agentId)) {
-    return;
-  }
-  const sessionMatchesHost = sessionMessageMatchesHost(host, sessionKey, payload?.agentId);
-  const runIdBeforeApply = host.chatRunId;
-  const result = applySessionsChangedEvent(host as unknown as SessionsState, payload);
-  if (result.applied && result.clearedChatRun) {
-    if (sessionMatchesHost) {
-      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
-    }
-    if (flushChatQueueAfterSessionRunReconcile(host, result, payload, runIdBeforeApply)) {
-      return;
-    }
-  }
-  if (!sessionKey || !sessionMatchesHost) {
-    return;
-  }
-  // Skip history reload while a chat run is active. The chat event handler
-  // manages streaming state and appends the final assistant message. Reloading
-  // history mid-run races with the optimistic user-message update and resets
-  // chatStream, which delays the user message card from appearing until the
-  // first LLM delta arrives.
-  if (host.chatRunId) {
-    // Gateway confirms the run is still active (plugin hook window, etc.).
-    // Skip reload — the pending chat terminal owns history reconciliation.
-    if ((payload as Record<string, unknown> | null)?.hasActiveRun === true) {
-      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
-      return;
-    }
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
-    const refreshStartedAt = Date.now();
-    const runIdBeforeRefresh = host.chatRunId;
-    void loadSessions(host as unknown as SessionsState, {
-      ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentListParamsForSession(host, host.sessionKey),
-      publishChatRunStatus: false,
-    }).finally(() =>
-      replayDeferredSessionMessageReloadAfterSessionsRefresh(
-        host,
-        sessionKey,
-        payload?.agentId,
-        refreshStartedAt,
-        runIdBeforeRefresh,
-      ),
-    );
-    return;
-  }
-  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(host as unknown as ChatState);
-}
-
-function replayDeferredSessionMessageReloadAfterSessionsRefresh(
-  host: GatewayHost,
-  sessionKey: string,
-  agentId: string | undefined | null,
-  startedAt: number,
-  completedRunId?: string | null,
-) {
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  if (
-    !areUiSessionKeysEquivalent(
-      deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() ?? "",
-      sessionKey,
-    ) ||
-    !sessionMessageMatchesHost(host, sessionKey, agentId)
-  ) {
-    return;
-  }
-  if (host.chatRunId) {
-    if (
-      host.sessionsLoading === true &&
-      Date.now() - startedAt < DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS
-    ) {
-      globalThis.setTimeout(
-        () =>
-          replayDeferredSessionMessageReloadAfterSessionsRefresh(
-            host,
-            sessionKey,
-            agentId,
-            startedAt,
-            completedRunId,
-          ),
-        DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS,
-      );
-    }
-    return;
-  }
-  const row = (host as unknown as SessionsState).sessionsResult?.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
-  );
-  flushChatQueueAfterSessionRunReconcile(
-    host,
-    {
-      applied: true,
-      change: "updated",
-      clearedChatRun: true,
-      ...(row
-        ? {
-            clearedChatRunStatus: {
-              phase: row.status === "done" ? "done" : "interrupted",
-              runId: completedRunId ?? null,
-              sessionKey,
-            },
-          }
-        : {}),
-    },
-    { sessionKey },
-    completedRunId,
-  );
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
@@ -1375,22 +1076,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     return;
   }
 
-  if (evt.event === "session.message") {
-    handleSessionMessageGatewayEvent(
-      host,
-      evt.payload as { sessionKey?: string; agentId?: string } | undefined,
-    );
-    return;
-  }
-
-  if (evt.event === "session.operation") {
-    handleSessionOperationEvent(
-      host as unknown as Parameters<typeof handleSessionOperationEvent>[0],
-      evt.payload as SessionOperationEventPayload | undefined,
-    );
-    return;
-  }
-
   if (evt.event === "presence") {
     const payload = evt.payload as { presence?: PresenceEntry[] } | undefined;
     if (payload?.presence && Array.isArray(payload.presence)) {
@@ -1414,35 +1099,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     (host as GatewayHostWithShutdownMessage).pendingShutdownMessage = shutdownMessage;
     host.lastError = shutdownMessage;
     host.lastErrorCode = null;
-    return;
-  }
-
-  if (evt.event === "sessions.changed") {
-    const runIdBeforeApply = host.chatRunId;
-    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    if (result.applied) {
-      if (result.clearedChatRun) {
-        flushChatQueueAfterSessionRunReconcile(
-          host,
-          result,
-          evt.payload as
-            | { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown }
-            | undefined,
-          runIdBeforeApply,
-        );
-      }
-      if (result.deletedSession?.selected) {
-        switchChatSession(
-          host as unknown as Parameters<typeof switchChatSession>[0],
-          resolveDeletedSessionFallback(host, result.deletedSession),
-        );
-      }
-      return;
-    }
-    if (isChatTurnSessionChangedPayload(evt.payload)) {
-      return;
-    }
-    scheduleSessionsChangedReload(host);
     return;
   }
 

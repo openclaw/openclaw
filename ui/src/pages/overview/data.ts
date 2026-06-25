@@ -14,7 +14,6 @@ import { loadChannels } from "../channels/data.ts";
 import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";
 import { loadPresence } from "../instances/data.ts";
-import { loadSessions } from "../sessions/data.ts";
 import { loadSkills } from "../skills/data.ts";
 import { loadUsage } from "../usage/data.ts";
 
@@ -33,7 +32,6 @@ export async function loadOverview(
   await Promise.allSettled([
     loadChannels(app, false),
     loadPresence(app),
-    loadSessions(app),
     loadCronStatus(app),
     loadCronJobsPage(app),
   ]);

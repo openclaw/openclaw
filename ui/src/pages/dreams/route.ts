@@ -4,13 +4,13 @@ import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { definePage } from "../../router/index.ts";
-import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   resolveChatAgentFilterId,
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "../../ui/chat/session-controls.ts";
+import { switchChatSession } from "../chat/session-switch.ts";
 import { loadConfig, openConfigFile } from "../config/data.ts";
 import { loadDreamsPage } from "../loaders.ts";
 import {

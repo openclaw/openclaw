@@ -15,7 +15,6 @@ import {
   loadWikiImportInsights,
   loadWikiMemoryPalace,
 } from "./dreams/data.ts";
-import { loadSessions } from "./sessions/data.ts";
 import { loadUsage } from "./usage/data.ts";
 
 export async function loadSettingsPage(host: SettingsHost, app: SettingsAppHost) {

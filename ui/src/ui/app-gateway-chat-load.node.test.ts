@@ -206,6 +206,8 @@ vi.mock("../pages/sessions/data.ts", () => ({
   applySessionsChangedEvent: vi.fn(() => ({ applied: false })),
   loadSessions: vi.fn(async () => undefined),
   subscribeSessions: subscribeSessionsMock,
+}));
+vi.mock("../pages/chat/session-switch.ts", () => ({
   syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 
@@ -224,6 +226,7 @@ afterAll(() => {
   vi.doUnmock("./controllers/model-auth-status.ts");
   vi.doUnmock("../pages/nodes/data.ts");
   vi.doUnmock("../pages/sessions/data.ts");
+  vi.doUnmock("../pages/chat/session-switch.ts");
   vi.resetModules();
 });
 

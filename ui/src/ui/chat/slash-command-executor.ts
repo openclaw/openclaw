@@ -16,10 +16,10 @@ import type {
   FastMode,
   ModelCatalogEntry,
   SessionsListResult,
-  SessionsPatchResult,
 } from "../../api/types.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
+import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -53,6 +53,7 @@ export type SlashCommandResult = {
 };
 
 export type SlashCommandContext = {
+  sessions: SessionCapability;
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
@@ -89,7 +90,7 @@ export async function executeSlashCommand(
   sessionKey: string,
   commandName: string,
   args: string,
-  context: SlashCommandContext = {},
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
@@ -115,7 +116,7 @@ export async function executeSlashCommand(
     case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
-      return await executeUsage(client, sessionKey);
+      return await executeUsage(sessionKey, context);
     case "agents":
       return await executeAgents(client);
     case "steer":
@@ -192,7 +193,7 @@ async function executeModel(
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
-        client.request<SessionsListResult>("sessions.list", {}),
+        listSessions(context),
         modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
@@ -216,9 +217,7 @@ async function executeModel(
   try {
     const requestedModel = args.trim();
     const [patched, resolvedModelCatalog] = await Promise.all([
-      client.request<SessionsPatchResult>("sessions.patch", {
-        key: sessionKey,
-        ...selectedGlobalScope(sessionKey, context),
+      patchSession(context, sessionKey, {
         model: requestedModel,
       }),
       modelCatalog
@@ -262,7 +261,11 @@ async function executeThink(
 
   if (!rawLevel) {
     try {
-      const { session, defaults, models } = await loadThinkingCommandState(client, sessionKey);
+      const { session, defaults, models } = await loadThinkingCommandState(
+        client,
+        context,
+        sessionKey,
+      );
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, defaults, models)}.`,
@@ -276,9 +279,7 @@ async function executeThink(
 
   if (isSessionDefaultDirectiveValue(rawLevel)) {
     try {
-      await client.request("sessions.patch", {
-        key: sessionKey,
-        ...selectedGlobalScope(sessionKey, context),
+      await patchSession(context, sessionKey, {
         thinkingLevel: null,
       });
       return {
@@ -291,7 +292,7 @@ async function executeThink(
   }
 
   try {
-    const { session, defaults } = await loadCurrentSessionState(client, sessionKey);
+    const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
     const level = resolveThinkingLevelInput(rawLevel, session, defaults);
     if (!level) {
       return {
@@ -303,9 +304,7 @@ async function executeThink(
         content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingCommandOptionsForSession(session, defaults)}.`,
       };
     }
-    await client.request("sessions.patch", {
-      key: sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
+    await patchSession(context, sessionKey, {
       thinkingLevel: level,
     });
     return {
@@ -327,7 +326,7 @@ async function executeVerbose(
 
   if (!rawLevel) {
     try {
-      const session = await loadCurrentSession(client, sessionKey);
+      const session = await loadCurrentSession(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           `Current verbose level: ${normalizeVerboseLevel(session?.verboseLevel) ?? "off"}.`,
@@ -347,9 +346,7 @@ async function executeVerbose(
   }
 
   try {
-    await client.request("sessions.patch", {
-      key: sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
+    await patchSession(context, sessionKey, {
       verboseLevel: level,
     });
     return {
@@ -384,7 +381,7 @@ async function executeFast(
 
   if (!rawMode || rawMode === "status") {
     try {
-      const session = await loadCurrentSession(client, sessionKey);
+      const session = await loadCurrentSession(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           resolveCurrentFastModeStatus(session),
@@ -400,9 +397,7 @@ async function executeFast(
 
   if (isSessionDefaultDirectiveValue(rawMode)) {
     try {
-      await client.request("sessions.patch", {
-        key: sessionKey,
-        ...selectedGlobalScope(sessionKey, context),
+      await patchSession(context, sessionKey, {
         fastMode: null,
       });
       return {
@@ -422,9 +417,7 @@ async function executeFast(
   }
 
   try {
-    await client.request("sessions.patch", {
-      key: sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
+    await patchSession(context, sessionKey, {
       fastMode: nextMode,
     });
     return {
@@ -440,11 +433,11 @@ async function executeFast(
 }
 
 async function executeUsage(
-  client: GatewayBrowserClient,
   sessionKey: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const sessions = await client.request<SessionsListResult>("sessions.list", {});
+    const sessions = await listSessions(context);
     const session = resolveCurrentSession(sessions, sessionKey);
     if (!session) {
       return { content: "No active session." };
@@ -625,21 +618,48 @@ function resolveThinkingLevelOptionsForSession(
   }));
 }
 
+async function listSessions(
+  context: SlashCommandContext,
+  options?: Parameters<SessionCapability["list"]>[0],
+): Promise<SessionsListResult> {
+  const result = await context.sessions.list(options);
+  if (!result) {
+    throw new Error("Session capability is unavailable");
+  }
+  return result;
+}
+
+async function patchSession(
+  context: SlashCommandContext,
+  sessionKey: string,
+  patch: SessionPatch,
+): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
+  const result = await context.sessions.patch(
+    sessionKey,
+    patch,
+    selectedGlobalScope(sessionKey, context),
+  );
+  if (!result) {
+    throw new Error("Session capability is unavailable");
+  }
+  return result;
+}
+
 async function loadCurrentSession(
-  client: GatewayBrowserClient,
+  context: SlashCommandContext,
   sessionKey: string,
 ): Promise<GatewaySessionRow | undefined> {
-  return (await loadCurrentSessionState(client, sessionKey)).session;
+  return (await loadCurrentSessionState(context, sessionKey)).session;
 }
 
 async function loadCurrentSessionState(
-  client: GatewayBrowserClient,
+  context: SlashCommandContext,
   sessionKey: string,
 ): Promise<{
   session: GatewaySessionRow | undefined;
   defaults: SessionsListResult["defaults"] | undefined;
 }> {
-  const sessions = await client.request<SessionsListResult>("sessions.list", {});
+  const sessions = await listSessions(context);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
     defaults: sessions?.defaults,
@@ -663,11 +683,12 @@ function resolveCurrentSession(
   });
 }
 
-async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
-  const [sessions, models] = await Promise.all([
-    client.request<SessionsListResult>("sessions.list", {}),
-    loadModelCatalog(client),
-  ]);
+async function loadThinkingCommandState(
+  client: GatewayBrowserClient,
+  context: SlashCommandContext,
+  sessionKey: string,
+) {
+  const [sessions, models] = await Promise.all([listSessions(context), loadModelCatalog(client)]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
     defaults: sessions?.defaults,
@@ -798,10 +819,7 @@ async function executeSteer(
     }
     const sessions =
       context.sessionsResult ??
-      (await client.request<SessionsListResult>(
-        "sessions.list",
-        selectedGlobalScope(sessionKey, context),
-      ));
+      (await listSessions(context, selectedGlobalScope(sessionKey, context)));
     const targetSession = resolveCurrentSession(sessions, resolved.key);
     if (!isActiveSteerSession(targetSession)) {
       return {

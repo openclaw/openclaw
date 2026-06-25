@@ -3,12 +3,12 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
-import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   resolveConfiguredCronModelSuggestions,
   sortLocaleStrings,
 } from "../../ui/views/agents-utils.ts";
+import { switchChatSession } from "../chat/session-switch.ts";
 import {
   DEFAULT_CRON_FORM,
   addCronJob,

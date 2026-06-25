@@ -2,8 +2,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
 import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import { loadSessions } from "../sessions/data.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -194,7 +194,21 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     updateComplete: Promise.resolve(),
     ...overrides,
   };
-  return host as ChatHost;
+  const sessions = createSessionCapability({
+    snapshot: {
+      client: host.client,
+      connected: host.connected,
+    },
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  });
+  for (const session of host.sessionsResult?.sessions ?? []) {
+    sessions.reconcile(session, host.sessionsResult?.defaults, {
+      selectedGlobalAgentId: host.assistantAgentId,
+      showArchived: host.sessionsShowArchived,
+    });
+  }
+  return { ...host, sessions } as ChatHost;
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -2471,43 +2485,6 @@ describe("handleSendChat", () => {
     expect(host.chatMessages[0]).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "/reset examples" }],
-    });
-  });
-
-  it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "chat.send") {
-        const payload = requireRecord(params, "chat send payload");
-        return { runId: payload.idempotencyKey, status: "ok" };
-      }
-      if (method === "chat.history") {
-        return { messages: [] };
-      }
-      if (method === "sessions.list") {
-        return createSessionsResult([
-          row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
-        ]);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatMessage: "already done",
-      sessionsResult: createSessionsResult([
-        row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
-      ]),
-    });
-
-    await handleSendChat(host);
-    await Promise.resolve();
-    await loadSessions(host as unknown as Parameters<typeof loadSessions>[0]);
-
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatStream).toBeNull();
-    expect(hasAbortableSessionRun(host)).toBe(false);
-    expect(host.sessionsResult?.sessions[0]).toMatchObject({
-      hasActiveRun: false,
-      status: "done",
     });
   });
 

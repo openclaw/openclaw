@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { requestSessionCreate } from "../../lib/sessions/index.ts";
 // Control UI controller manages workboard gateway state.
 import { GatewayRequestError, type GatewayBrowserClient } from "../../ui/gateway.ts";
 
@@ -3918,11 +3919,13 @@ export async function startWorkboardCard(params: {
             bootstrapContextMode: "lightweight",
             idempotencyKey: buildCardRunIdempotencyKey(card),
           })
-        : await params.client.request("sessions.create", {
-            ...(card.agentId ? { agentId: card.agentId } : {}),
-            label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-          });
+        : {
+            key: await requestSessionCreate(params.client, {
+              ...(card.agentId ? { agentId: card.agentId } : {}),
+              label: buildCardSessionLabel(card),
+              ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+            }),
+          };
     const sessionKey =
       isRecord(created) && typeof created.sessionKey === "string" && created.sessionKey.trim()
         ? created.sessionKey.trim()

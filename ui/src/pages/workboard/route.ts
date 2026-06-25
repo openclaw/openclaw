@@ -3,11 +3,10 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { definePage } from "../../router/index.ts";
-import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadAgents } from "../agents/data.ts";
+import { switchChatSession } from "../chat/session-switch.ts";
 import { loadConfig } from "../config/data.ts";
-import { loadSessions } from "../sessions/data.ts";
 import { loadWorkboard, stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./data.ts";
 
 type WorkboardRenderContext = RouteRenderContext;
@@ -19,7 +18,6 @@ export const page = definePage({
   loader: ({ host, app }: WorkboardLoadContext) =>
     Promise.all([
       loadConfig(app),
-      loadSessions(app),
       loadAgents(app),
       loadWorkboard({
         host,
