@@ -1,16 +1,15 @@
 /**
  * Shared helpers for bash exec/process tools.
- * Owns sandbox workdir mapping, Docker exec argument construction, output
- * slicing, environment coercion, and compact session labels.
+ * Owns Docker exec argument construction, output slicing, environment
+ * coercion, and compact session labels.
  */
-import { existsSync, statSync } from "node:fs";
-import fs from "node:fs/promises";
-import { homedir } from "node:os";
-import path from "node:path";
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "../utils.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
-import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
+import type {
+  SandboxBackendExecSpec,
+  SandboxBackendWorkdirValidation,
+  SandboxBackendWorkdirValidator,
+} from "./sandbox/backend-handle.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
@@ -19,6 +18,10 @@ export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
+  workdirValidation?: SandboxBackendWorkdirValidation;
+  validateWorkdir?: SandboxBackendWorkdirValidator;
+  discardPreparedWorkdir?: (workdir: string) => void;
+  workdirRoots?: readonly string[];
   env?: Record<string, string>;
   buildExecSpec?: (params: {
     command: string;
@@ -107,117 +110,6 @@ export function buildDockerExecArgs(params: {
   // Use absolute path for sh to avoid dependency on PATH resolution during exec.
   args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
   return args;
-}
-
-/** Resolves a requested workdir to both host and container paths for a sandbox. */
-export async function resolveSandboxWorkdir(params: {
-  workdir: string;
-  sandbox: BashSandboxConfig;
-  warnings: string[];
-}) {
-  const fallback = params.sandbox.workspaceDir;
-  const mappedHostWorkdir = mapContainerWorkdirToHost({
-    workdir: params.workdir,
-    sandbox: params.sandbox,
-  });
-  const candidateWorkdir = mappedHostWorkdir ?? params.workdir;
-  try {
-    const resolved = await assertSandboxPath({
-      filePath: candidateWorkdir,
-      cwd: process.cwd(),
-      root: params.sandbox.workspaceDir,
-    });
-    const stats = await fs.stat(resolved.resolved);
-    if (!stats.isDirectory()) {
-      throw new Error("workdir is not a directory");
-    }
-    const relative = resolved.relative
-      ? resolved.relative.split(path.sep).join(path.posix.sep)
-      : "";
-    const containerWorkdir = relative
-      ? path.posix.join(params.sandbox.containerWorkdir, relative)
-      : params.sandbox.containerWorkdir;
-    return { hostWorkdir: resolved.resolved, containerWorkdir };
-  } catch {
-    params.warnings.push(
-      `Warning: workdir "${params.workdir}" is unavailable; using "${fallback}".`,
-    );
-    return {
-      hostWorkdir: fallback,
-      containerWorkdir: params.sandbox.containerWorkdir,
-    };
-  }
-}
-
-function mapContainerWorkdirToHost(params: {
-  workdir: string;
-  sandbox: BashSandboxConfig;
-}): string | undefined {
-  const workdir = normalizeContainerPath(params.workdir);
-  const containerRoot = normalizeContainerPath(params.sandbox.containerWorkdir);
-  if (containerRoot === ".") {
-    return undefined;
-  }
-  if (workdir === containerRoot) {
-    return path.resolve(params.sandbox.workspaceDir);
-  }
-  if (!workdir.startsWith(`${containerRoot}/`)) {
-    return undefined;
-  }
-  const rel = workdir
-    .slice(containerRoot.length + 1)
-    .split("/")
-    .filter(Boolean);
-  return path.resolve(params.sandbox.workspaceDir, ...rel);
-}
-
-function normalizeContainerPath(input: string): string {
-  const normalized = input.trim().replace(/\\/g, "/");
-  if (!normalized) {
-    return ".";
-  }
-  return path.posix.normalize(normalized);
-}
-
-/** Returns a host workdir only when it exists and is a directory. */
-export function resolveExistingWorkdir(workdir: string): string | null {
-  try {
-    const stats = statSync(workdir);
-    if (stats.isDirectory()) {
-      return workdir;
-    }
-  } catch {
-    // caller decides whether unavailable workdirs should fail or fall back
-  }
-  return null;
-}
-
-export function formatUnavailableWorkdirFailure(workdir: string) {
-  return [
-    `workdir "${workdir}" not found: command was not executed.`,
-    'workdir is treated as a literal path; shell expansions such as "~" are not applied. Use an existing path or omit workdir.',
-  ].join(" ");
-}
-
-/** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
-export function resolveWorkdir(workdir: string, warnings: string[]) {
-  const current = safeCwd();
-  const fallback = current ?? homedir();
-  const resolved = resolveExistingWorkdir(workdir);
-  if (resolved) {
-    return resolved;
-  }
-  warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
-  return fallback;
-}
-
-function safeCwd() {
-  try {
-    const cwd = process.cwd();
-    return existsSync(cwd) ? cwd : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
