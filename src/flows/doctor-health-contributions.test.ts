@@ -1005,6 +1005,50 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("does not re-render a repairable check's pre-repair findings in fix mode", async () => {
+    // browser-clawd-profile-residue owns a repair: after --fix archives the
+    // residue, its detected finding stays in `result.findings` but must not be
+    // re-printed as a fresh warning (the repair outcome is reported via changes).
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: {},
+      findings: [
+        {
+          checkId: "core/doctor/browser-clawd-profile-residue",
+          severity: "warning",
+          message: "Legacy managed browser profile residue was found.",
+          path: "/tmp/legacy-profile",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["Would archive legacy clawd managed browser profile residue."],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 1,
+    });
+
+    const contribution = requireDoctorContribution("doctor:browser");
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("browser-clawd-profile-residue"),
+    );
+    expect(ctx.runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("browser-clawd-profile-residue"),
+    );
+  });
+
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-health");
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
