@@ -4,10 +4,9 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
-import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
+  beginActionDownloadCaptureOnPage,
   ensurePageState,
-  isDownloadStartingNavigationError,
   refLocator,
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
@@ -41,14 +40,6 @@ function fakePage(): {
     handlers.set(event, list);
     return undefined as unknown;
   });
-  const off = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-    const list = handlers.get(event) ?? [];
-    handlers.set(
-      event,
-      list.filter((handler) => handler !== cb),
-    );
-    return undefined as unknown;
-  });
   const getByRole = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
   const frameLocator = vi.fn(() => ({
     getByRole: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
@@ -58,7 +49,6 @@ function fakePage(): {
 
   const page = {
     on,
-    off,
     getByRole,
     frameLocator,
     locator,
@@ -250,94 +240,79 @@ describe("pw-session ensurePageState", () => {
     expect(download.saveAs).not.toHaveBeenCalled();
   });
 
-  it("captures navigation downloads under managed paths", async () => {
+  it("captures only downloads owned by an active action", async () => {
     const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-    const capture = createDownloadCaptureForPage(page, state, 1_000);
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
     const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "attachment", "utf8");
+      await fs.writeFile(outPath, "action-download", "utf8");
     });
-    const download = {
-      url: () => "https://example.com/export.csv",
-      suggestedFilename: () => "export.csv",
+    const download: MutableDownload = {
+      suggestedFilename: () => "clicked.txt",
       saveAs,
     };
 
-    for (const handler of handlers.get("download") ?? []) {
-      handler(download);
-    }
+    handlers.get("download")?.[0]?.(download);
+    const result = await capture.drain();
+    capture.dispose();
 
-    const result = await capture.promise;
-    expect(result.url).toBe("https://example.com/export.csv");
-    expect(result.suggestedFilename).toBe("export.csv");
-    expect(path.dirname(result.path)).toBe(DEFAULT_DOWNLOAD_DIR);
-    expect(path.basename(result.path)).toMatch(/-export\.csv$/);
-    expect(firstSavePath(saveAs)).not.toBe(result.path);
-    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("attachment");
+    expect(result).toEqual({
+      count: 1,
+      recent: [
+        {
+          suggestedFilename: "clicked.txt",
+          savedPath: expect.stringMatching(/clicked\.txt$/),
+        },
+      ],
+    });
+    const savedPath = result?.recent[0]?.savedPath ?? "";
+    expect(path.dirname(savedPath)).toBe(DEFAULT_DOWNLOAD_DIR);
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toBe("action-download");
   });
 
-  it("validates captured navigation downloads before saving managed bytes", async () => {
+  it("waits briefly for action downloads that arrive after the action returns", async () => {
     const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-    const blocked = new Error("blocked download");
-    const beforeSave = vi.fn(async () => {
-      throw blocked;
-    });
-    const capture = createDownloadCaptureForPage(page, state, 1_000, { beforeSave });
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
     const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "blocked", "utf8");
+      await fs.writeFile(outPath, "late-download", "utf8");
     });
-    const download = {
-      url: () => "http://127.0.0.1:18080/export.csv",
-      suggestedFilename: () => "export.csv",
-      saveAs,
-    };
+    const drain = capture.drain({ graceMs: 1000 });
 
-    for (const handler of handlers.get("download") ?? []) {
-      handler(download);
-    }
+    setTimeout(() => {
+      handlers.get("download")?.[0]?.({
+        suggestedFilename: () => "late.txt",
+        saveAs,
+      });
+    }, 0);
 
-    await expect(capture.promise).rejects.toBe(blocked);
-    expect(beforeSave).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:18080/export.csv",
-      suggestedFilename: "export.csv",
-    });
-    expect(saveAs).not.toHaveBeenCalled();
+    const result = await drain;
+    capture.dispose();
+
+    expect(result?.count).toBe(1);
+    expect(result?.recent[0]?.suggestedFilename).toBe("late.txt");
+    await expect(fs.readFile(result?.recent[0]?.savedPath ?? "", "utf8")).resolves.toBe(
+      "late-download",
+    );
   });
 
-  it("lets explicit download owners arm while passive capture yields", () => {
-    const { page } = fakePage();
+  it("does not let action captures steal explicit waiter downloads", async () => {
+    const { page, handlers } = fakePage();
     const state = ensurePageState(page);
     state.downloadWaiterDepth = 1;
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const download = {
+      suggestedFilename: () => "report.pdf",
+      saveAs: vi.fn(async () => {}),
+    };
 
-    const passive = createDownloadCaptureForPage(page, state, 1_000);
-    const explicit = createDownloadCaptureForPage(page, state, 1_000, { mode: "explicit" });
+    handlers.get("download")?.[0]?.(download);
+    const result = await capture.drain();
+    capture.dispose();
 
-    expect(passive.armed).toBe(false);
-    expect(explicit.armed).toBe(true);
-    expect(state.downloadWaiterDepth).toBe(2);
-    explicit.cancel();
-    expect(state.downloadWaiterDepth).toBe(1);
-  });
-
-  it("recognizes Playwright download-starting navigation aborts", () => {
-    expect(isDownloadStartingNavigationError(new Error("page.goto: Download is starting"))).toBe(
-      true,
-    );
-    expect(isDownloadStartingNavigationError(new Error("page.goto: net::ERR_ABORTED"))).toBe(false);
-    expect(
-      isDownloadStartingNavigationError(
-        new Error("page.goto: net::ERR_ABORTED at http://127.0.0.1:3333/download"),
-        "http://127.0.0.1:3333/download",
-      ),
-    ).toBe(true);
-    expect(
-      isDownloadStartingNavigationError(
-        new Error("page.goto: net::ERR_ABORTED at http://127.0.0.1:3333/other"),
-        "http://127.0.0.1:3333/download",
-      ),
-    ).toBe(false);
-    expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
+    expect(result).toBeUndefined();
+    expect(download).not.toHaveProperty("path");
+    expect(download.saveAs).not.toHaveBeenCalled();
   });
 
   it("tracks page errors and network requests (best-effort)", () => {

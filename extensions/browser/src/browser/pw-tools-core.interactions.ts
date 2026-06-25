@@ -25,7 +25,9 @@ import {
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
+  beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
+  type BrowserActionDownload,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -57,6 +59,7 @@ type TargetOpts = {
 };
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
+const ACT_DOWNLOAD_GRACE_MS = 500;
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -1691,6 +1694,18 @@ async function executeSingleAction(
   return undefined;
 }
 
+function actionDownloadGraceMs(action: BrowserActRequest): number {
+  switch (action.kind) {
+    case "batch":
+    case "click":
+    case "clickCoords":
+    case "evaluate":
+      return ACT_DOWNLOAD_GRACE_MS;
+    default:
+      return 0;
+  }
+}
+
 /** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
@@ -1704,17 +1719,15 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
-  downloads?: { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> };
+  downloads?: { count: number; recent: BrowserActionDownload[] };
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
-  const state = ensurePageState(page);
-  // Monotonic cursor — not bounded-list length — so we don't miss downloads
-  // when the buffer is full and shift() cancels out push().
-  const downloadSeqBefore = state.downloadSeq;
+  const downloadCapture = beginActionDownloadCaptureOnPage(page);
+  const downloadGraceMs = actionDownloadGraceMs(opts.action);
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
@@ -1730,8 +1743,7 @@ export async function executeActViaPlaywright(opts: {
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
       });
-      await drainPendingDownloadSaves(state);
-      const newDownloads = pickNewDownloads(state, downloadSeqBefore);
+      const newDownloads = await downloadCapture.drain({ graceMs: downloadGraceMs });
       return {
         results: batch.results,
         ...(newDownloads ? { downloads: newDownloads } : {}),
@@ -1746,8 +1758,7 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
-    await drainPendingDownloadSaves(state);
-    const newDownloads = pickNewDownloads(state, downloadSeqBefore);
+    const newDownloads = await downloadCapture.drain({ graceMs: downloadGraceMs });
     if (opts.action.kind === "evaluate") {
       return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
     }
@@ -1758,35 +1769,9 @@ export async function executeActViaPlaywright(opts: {
     }
     throw err;
   } finally {
+    downloadCapture.dispose();
     dialogAbort.cleanup();
   }
-}
-
-/** Wait for any in-flight auto-save downloads to finish before sampling. */
-async function drainPendingDownloadSaves(state: ReturnType<typeof ensurePageState>): Promise<void> {
-  if (state.downloadSavePromises.length === 0) {
-    return;
-  }
-  await Promise.all(state.downloadSavePromises);
-  state.downloadSavePromises = [];
-}
-
-/** Collect downloads with seq > cursor, or undefined if none. */
-function pickNewDownloads(
-  state: ReturnType<typeof ensurePageState>,
-  seqBefore: number,
-): { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> } | undefined {
-  const newDownloads = state.recentDownloads.filter((d) => d.seq > seqBefore);
-  if (newDownloads.length === 0) {
-    return undefined;
-  }
-  return {
-    count: newDownloads.length,
-    recent: newDownloads.map((d) => ({
-      suggestedFilename: d.suggestedFilename,
-      savedPath: d.savedPath,
-    })),
-  };
 }
 
 /** Executes a bounded sequence of browser actions and returns per-step results. */
