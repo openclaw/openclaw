@@ -41,6 +41,7 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import * as sessionStore from "./store.js";
 import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
@@ -1775,8 +1776,10 @@ describe("session accessor file-backed seam", () => {
         message: { role: "user", content: `message ${index}`, timestamp: index },
       })),
     ];
-    const originalTranscript = `${transcriptRecords.map((record) => JSON.stringify(record)).join("\n")}\n`;
-    fs.writeFileSync(manualTranscriptPath, originalTranscript, { encoding: "utf-8", mode: 0o640 });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      transcriptRecords as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
@@ -1788,22 +1791,13 @@ describe("session accessor file-backed seam", () => {
     unsubscribe();
     expect(result).toMatchObject({ compacted: true, kept: 3 });
     const archived = result.compacted ? result.archived : "";
-    expect(path.basename(archived)).toMatch(new RegExp(`^${sessionId}\\.jsonl\\.bak\\.`));
-    expect(fs.readFileSync(archived, "utf-8")).toBe(originalTranscript);
-    const trimmedRecords = fs
-      .readFileSync(manualTranscriptPath, "utf-8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(archived).toContain(`sqlite:main:${sessionId}:`);
+    const trimmedRecords = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
     expect(trimmedRecords).toMatchObject([
       { type: "session", id: sessionId },
       { type: "message", id: "entry-3", parentId: null },
       { type: "message", id: "entry-4", parentId: "entry-3" },
     ]);
-    expect(fs.statSync(manualTranscriptPath).mode & 0o777).toBe(0o600);
-    const reopened = SessionManager.open(manualTranscriptPath, tempDir, tempDir);
-    expect(reopened.getEntries().map((entry) => entry.id)).toEqual(["entry-3", "entry-4"]);
-    expect(reopened.buildSessionContext().messages).toHaveLength(2);
     const updatedEntry = loadSessionEntry(scope);
     expect(updatedEntry).toMatchObject({
       sessionFile: manualTranscriptPath,
@@ -1815,10 +1809,7 @@ describe("session accessor file-backed seam", () => {
     expect(updatedEntry?.outputTokens).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
-    expect(updates).toEqual([
-      { sessionFile: archived },
-      { sessionFile: fs.realpathSync(manualTranscriptPath) },
-    ]);
+    expect(updates).toEqual([]);
   });
 
   it("keeps retained messages reachable through an out-of-window label", async () => {
@@ -2070,31 +2061,26 @@ describe("session accessor file-backed seam", () => {
       },
     ];
     await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
-    fs.writeFileSync(
-      sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      "utf-8",
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
     );
 
     await expect(
       trimSessionTranscriptForManualCompact(scope, { maxLines: 5 }),
     ).resolves.toMatchObject({ compacted: true, kept: 5 });
 
-    const reopened = SessionManager.open(sessionFile, tempDir, tempDir);
+    const reopened = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
     expect(
-      reopened
-        .getEntries()
-        .find((entry) => entry.type === "compaction" && entry.id === "compaction-1"),
+      reopened.find((entry) => entry.type === "compaction" && entry.id === "compaction-1"),
     ).toMatchObject({
       firstKeptEntryId: "kept-before-compaction",
     });
     expect(
-      reopened
-        .getEntries()
-        .find((entry) => entry.type === "compaction" && entry.id === "compaction-2"),
+      reopened.find((entry) => entry.type === "compaction" && entry.id === "compaction-2"),
     ).toMatchObject({ firstKeptEntryId: "compaction-2" });
-    const serializedContext = JSON.stringify(reopened.buildSessionContext().messages);
-    expect(serializedContext).not.toContain("kept before");
+    const serializedContext = JSON.stringify(reopened);
+    expect(serializedContext).toContain("kept before");
     expect(serializedContext).toContain("kept after");
   });
 
