@@ -359,12 +359,14 @@ function classifyConfiguredTargetRefs(params: {
   hasActiveConfiguredRef: boolean;
   hasUnknownConfiguredRef: boolean;
   diagnostics: string[];
+  activeConfiguredRefPaths: Set<string>;
 } {
   if (params.configuredTargetRefPaths.size === 0) {
     return {
       hasActiveConfiguredRef: false,
       hasUnknownConfiguredRef: false,
       diagnostics: [],
+      activeConfiguredRefPaths: new Set(),
     };
   }
   const context = createResolverContext({
@@ -386,6 +388,7 @@ function classifyConfiguredTargetRefs(params: {
   }
 
   const diagnostics = new Set<string>();
+  const activeConfiguredRefPaths = new Set<string>();
   let hasActiveConfiguredRef = false;
   let hasUnknownConfiguredRef = false;
 
@@ -395,6 +398,7 @@ function classifyConfiguredTargetRefs(params: {
       params.forcedActivePaths?.has(path) ||
       params.optionalActivePaths?.has(path)
     ) {
+      activeConfiguredRefPaths.add(path);
       hasActiveConfiguredRef = true;
       continue;
     }
@@ -410,6 +414,7 @@ function classifyConfiguredTargetRefs(params: {
     hasActiveConfiguredRef,
     hasUnknownConfiguredRef,
     diagnostics: [...diagnostics],
+    activeConfiguredRefPaths,
   };
 }
 
@@ -520,6 +525,42 @@ function collectActiveGatewayExecSecretRefCredentialPaths(
       })
     );
   });
+}
+
+/**
+ * Collect target ref paths whose current value is an exec SecretRef and are
+ * active for the current command. Gateway cannot resolve exec refs, so these
+ * targets force local resolution. Inactive exec refs should not bypass
+ * gateway snapshot resolution for unrelated active targets.
+ */
+function collectActiveExecTargetRefPaths(
+  config: OpenClawConfig,
+  targetIds: Set<string>,
+  allowedPaths: ReadonlySet<string> | undefined,
+  activeConfiguredRefPaths: Set<string>,
+): string[] {
+  const defaults = config.secrets?.defaults;
+  const execPaths: string[] = [];
+  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+    config,
+    targetIds,
+  )) {
+    if (allowedPaths && !allowedPaths.has(target.path)) {
+      continue;
+    }
+    if (!activeConfiguredRefPaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref?.source === "exec") {
+      execPaths.push(target.path);
+    }
+  }
+  return execPaths;
 }
 
 async function resolveCommandSecretRefsWithoutGateway(params: {
@@ -938,7 +979,16 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
     ? []
     : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
-  if (gatewayExecSecretRefCredentialPaths.length > 0) {
+  const targetExecRefPaths = resolutionPolicy.allowExecSecretRefs
+    ? collectActiveExecTargetRefPaths(
+        params.config,
+        params.targetIds,
+        params.allowedPaths,
+        preflight.activeConfiguredRefPaths,
+      )
+    : [];
+  const activeExecRefPaths = [...gatewayExecSecretRefCredentialPaths, ...targetExecRefPaths];
+  if (activeExecRefPaths.length > 0) {
     return await resolveCommandSecretRefsWithoutGateway({
       config: params.config,
       commandName: params.commandName,
@@ -949,7 +999,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       forcedActivePaths: params.forcedActivePaths,
       optionalActivePaths: params.optionalActivePaths,
       resolutionPolicy,
-      reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at ${gatewayExecSecretRefCredentialPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`,
+      reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because SecretRefs use exec providers at ${activeExecRefPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`,
     });
   }
 

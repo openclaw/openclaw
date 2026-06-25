@@ -635,7 +635,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(await markerExists(markerPath)).toBe(true);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          "memory status: skipped gateway secrets.resolve because SecretRefs use exec providers at talk.providers.acme-speech.apiKey",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
@@ -659,14 +665,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(
       result.diagnostics.some((entry) =>
         entry.includes(
-          "doctor preview: skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
+          "skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
         ),
       ),
     ).toBe(true);
     expect(
-      result.diagnostics.some((entry) =>
-        entry.includes("attempted local command-secret resolution"),
-      ),
+      result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
     ).toBe(true);
   });
 
@@ -740,12 +744,166 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         expect(
           result.diagnostics.some((entry) =>
             entry.includes(
-              "doctor preview: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at gateway.auth.token",
+              "doctor preview: skipped gateway secrets.resolve because SecretRefs use exec providers at gateway.auth.token",
             ),
           ),
         ).toBe(true);
       },
     );
+  });
+
+  it("skips gateway resolution when target SecretRefs include exec providers", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: {
+            ...buildTalkTestProviderConfig({
+              source: "exec",
+              provider: "vault",
+              id: "talk/provider/key",
+            }),
+            gateway: {
+              auth: {
+                mode: "token",
+                token: "my-plaintext-token",
+              },
+            },
+            secrets: {
+              providers: {
+                vault: {
+                  source: "exec",
+                  command: process.execPath,
+                  args: [
+                    "-e",
+                    'process.stdout.write(\'{"protocolVersion":1,"values":{"talk/provider/key":"resolved-via-exec"}}\')',
+                  ],
+                  allowInsecurePath: true,
+                  allowSymlinkCommand: true,
+                  jsonOnly: true,
+                },
+              },
+            },
+          } as OpenClawConfig,
+          commandName: "reply",
+          targetIds: new Set(["talk.providers.*.apiKey"]),
+          mode: "read_only_status",
+        });
+
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("resolved-via-exec");
+        expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+        expect(
+          result.diagnostics.some((entry) =>
+            entry.includes(
+              "reply: skipped gateway secrets.resolve because SecretRefs use exec providers at talk.providers.acme-speech.apiKey",
+            ),
+          ),
+        ).toBe(true);
+      },
+    );
+  });
+
+  it("does not skip gateway resolution when only inactive targets use exec SecretRefs", async () => {
+    const inactiveExecRefPath = "plugins.entries.disabled_service.config.apiKey";
+    const inactiveExecRefPathSegments = [
+      "plugins",
+      "entries",
+      "disabled_service",
+      "config",
+      "apiKey",
+    ];
+    const mixedEnvKey = "TALK_API_KEY_MIXED_TARGETS";
+
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "sk-live-mixed",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
+      collectConfigAssignments: ({ context }) => {
+        // Active talk target
+        context.assignments.push({ path: TALK_TEST_PROVIDER_API_KEY_PATH } as never);
+        // Inactive exec ref target — inactive warning but NOT in assignments
+        context.warnings.push({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: inactiveExecRefPath,
+          message: `${inactiveExecRefPath}: disabled service is inactive.`,
+        } as never);
+      },
+      discoverConfigSecretTargetsByIds: (config) =>
+        [
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            value: readPath(config, TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS),
+          },
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: inactiveExecRefPath,
+            pathSegments: inactiveExecRefPathSegments,
+            value: { source: "exec", provider: "vault", id: "inactive/key" },
+          },
+        ] as never,
+      analyzeCommandSecretAssignmentsFromSnapshot: ({ resolvedConfig }) => {
+        const value = readPath(resolvedConfig, TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS);
+        const resolved = typeof value === "string" && value.length > 0;
+        return {
+          assignments: resolved
+            ? [
+                {
+                  path: TALK_TEST_PROVIDER_API_KEY_PATH,
+                  pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+                  value,
+                },
+              ]
+            : [],
+          diagnostics: [],
+          inactive: [],
+          unresolved: resolved
+            ? []
+            : [
+                {
+                  path: TALK_TEST_PROVIDER_API_KEY_PATH,
+                  pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+                },
+              ],
+        } as never;
+      },
+    });
+
+    try {
+      await withEnvAsync({ [mixedEnvKey]: "sk-live-mixed" }, async () => {
+        const config = buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: mixedEnvKey,
+        });
+
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: config as OpenClawConfig,
+          commandName: "reply",
+          targetIds: new Set(["talk.providers.*.apiKey", inactiveExecRefPath]),
+        });
+
+        // Gateway SHOULD be called — the only active target is talk (env ref)
+        expect(callGateway).toHaveBeenCalled();
+        expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live-mixed");
+        expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
+      });
+    } finally {
+      restoreDeps();
+    }
   });
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
