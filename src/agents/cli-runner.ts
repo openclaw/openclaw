@@ -24,6 +24,7 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
@@ -144,12 +145,18 @@ export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
   workspaceDir?: string,
+  options?: { skipTranscriptProbe?: boolean },
 ): Promise<boolean> {
   if (!provider || !isClaudeCliProvider(provider)) {
     return true;
   }
   if (!sessionId) {
     return false;
+  }
+  // Warm-stdin sessions keep continuity in the managed stdio child and do not
+  // write native transcripts. Probing them would always clear a valid binding.
+  if (options?.skipTranscriptProbe) {
+    return true;
   }
   for (const delayMs of [0, 50, 150]) {
     if (delayMs > 0) {
@@ -1110,6 +1117,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           params.provider,
           context.cwd ?? context.workspaceDir,
+          { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
         );
         await runCliAgentEndHook(params, {
           event: {
