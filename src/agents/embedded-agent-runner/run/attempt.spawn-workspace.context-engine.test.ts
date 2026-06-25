@@ -2026,7 +2026,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             throw new Error("expected model prompt transform");
           }
           providerMessages = await transformContext([
-            ...session.messages,
+            ...(session.messages as AgentMessage[]),
             {
               role: "user",
               content: [{ type: "text", text: prompt }],
