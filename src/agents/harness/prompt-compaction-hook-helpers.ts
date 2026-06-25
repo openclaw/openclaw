@@ -5,8 +5,8 @@
  * compaction while keeping hook failures non-fatal.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { drainPluginNextTurnInjectionContext } from "../../plugins/host-hook-state.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { drainPluginNextTurnInjectionContext } from "../../plugins/host-hook-state.js";
 import type {
   PluginAgentTurnPrepareResult,
   PluginHookBeforeAgentStartResult,

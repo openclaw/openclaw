@@ -4,7 +4,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
-import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
+import {
+  forgetHarnessPromptBuildDrainCacheForRun,
+  resolveAgentHarnessBeforePromptBuildResult,
+} from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
   resetGlobalHookRunner();
@@ -146,5 +149,82 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(handler).not.toHaveBeenCalled();
     expect(result.prompt).toBe("hello");
+  });
+
+  it("runs agent_turn_prepare hook and prepends its contribution", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "agent_turn_prepare",
+          handler: () => ({ prependContext: "prepare context" }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "test",
+      developerInstructions: "base",
+      messages: [],
+      ctx: { agentId: "a", sessionKey: "s" },
+    });
+
+    expect(result.prompt).toBe("prepare context\n\ntest");
+  });
+
+  it("runs agent_turn_prepare before heartbeat contributions in hook ordering", async () => {
+    const calls: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "agent_turn_prepare",
+          handler: () => {
+            calls.push("agent_turn_prepare");
+            return { prependContext: "prepare" };
+          },
+        },
+        {
+          hookName: "heartbeat_prompt_contribution",
+          handler: () => {
+            calls.push("heartbeat");
+            return { prependContext: "heartbeat" };
+          },
+        },
+      ]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "test",
+      developerInstructions: "base",
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "a", sessionKey: "s" },
+    });
+
+    expect(calls).toEqual(["agent_turn_prepare", "heartbeat"]);
+  });
+
+  it("skips agent_turn_prepare when no hooks are registered", async () => {
+    const handler = vi.fn(() => ({ prependContext: "should not appear" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "test",
+      developerInstructions: "base",
+      messages: [],
+      ctx: { agentId: "a", sessionKey: "s" },
+    });
+
+    expect(result.prompt).toBe("should not appear\n\ntest");
+  });
+});
+
+describe("forgetHarnessPromptBuildDrainCacheForRun", () => {
+  it("is a no-op when runId is undefined", () => {
+    expect(() => forgetHarnessPromptBuildDrainCacheForRun(undefined)).not.toThrow();
+  });
+
+  it("is a no-op when runId is an empty string", () => {
+    expect(() => forgetHarnessPromptBuildDrainCacheForRun("")).not.toThrow();
   });
 });
