@@ -110,6 +110,32 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("imports explicit stores into the agent database owned by the path", async () => {
+    const store = createLegacyStore({ agentDirName: "codex-proof" });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.targets[0]?.agentId).toBe("codex-proof");
+    expect(report.totals).toMatchObject({
+      importedEntries: 1,
+      importedTranscriptEvents: 2,
+      issues: 0,
+      sqliteEntries: 1,
+    });
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "codex-proof",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toHaveLength(2);
+  });
+
   it("reports malformed transcripts without importing partial rows", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });
 
@@ -130,11 +156,13 @@ describe("runDoctorSessionSqlite", () => {
   });
 });
 
-function createLegacyStore(params: { transcriptLines?: string[] } = {}): TestStore {
+function createLegacyStore(
+  params: { agentDirName?: string; transcriptLines?: string[] } = {},
+): TestStore {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
   const stateDir = path.join(tempDir, "state");
   const configPath = path.join(tempDir, "openclaw.json");
-  const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+  const sessionDir = path.join(stateDir, "agents", params.agentDirName ?? "main", "sessions");
   const storePath = path.join(sessionDir, "sessions.json");
   const transcriptPath = path.join(sessionDir, "session-1.jsonl");
   fs.mkdirSync(sessionDir, { recursive: true });
