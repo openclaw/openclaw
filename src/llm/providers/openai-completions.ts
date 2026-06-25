@@ -401,11 +401,13 @@ export const streamOpenAICompletions: StreamFunction<
           const deltaFields = choice.delta as Record<string, unknown>;
           const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
-          for (const field of reasoningFields) {
-            const value = deltaFields[field];
-            if (typeof value === "string" && value.length > 0) {
-              foundReasoningField = field;
-              break;
+          if (shouldEmitReasoning) {
+            for (const field of reasoningFields) {
+              const value = deltaFields[field];
+              if (typeof value === "string" && value.length > 0) {
+                foundReasoningField = field;
+                break;
+              }
             }
           }
           if (foundReasoningField) {
