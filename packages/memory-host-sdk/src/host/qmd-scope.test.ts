@@ -26,6 +26,13 @@ describe("qmd scope", () => {
     expect(isQmdScopeAllowed(allowDirect, "agent:agent-1:peer:group:abc")).toBe(false);
   });
 
+  it("treats internal subagent sessions as direct chats", () => {
+    const key = "agent:vision:subagent:9d550d28-a145-452a-a022-8778ff556654";
+    expect(deriveQmdScopeChannel(key)).toBeUndefined();
+    expect(deriveQmdScopeChatType(key)).toBe("direct");
+    expect(isQmdScopeAllowed(allowDirect, key)).toBe(true);
+  });
+
   it("applies scoped key-prefix checks against normalized key", () => {
     const scope: ResolvedQmdConfig["scope"] = {
       default: "deny",

@@ -16,7 +16,9 @@ import {
 import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
+  type MemorySearchOptions,
   type MemorySearchManager,
+  type MemorySearchOutcomeResult,
   type MemorySearchRuntimeDebug,
   type MemorySource,
   type MemorySyncParams,
@@ -466,18 +468,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     private readonly onClose?: () => void,
   ) {}
 
-  async search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      signal?: AbortSignal;
-    },
-  ) {
+  async search(query: string, opts?: MemorySearchOptions) {
     this.ensureOpen();
     if (!this.primaryFailed) {
       try {
@@ -499,6 +490,39 @@ class FallbackMemoryManager implements MemorySearchManager {
     const fallback = await this.ensureFallback();
     if (fallback) {
       return await fallback.search(query, opts);
+    }
+    throw new Error(this.lastError ?? "memory search unavailable");
+  }
+
+  async searchWithOutcome(
+    query: string,
+    opts?: MemorySearchOptions,
+  ): Promise<MemorySearchOutcomeResult> {
+    this.ensureOpen();
+    if (!this.primaryFailed) {
+      const primary = this.deps.primary;
+      try {
+        if (typeof primary.searchWithOutcome === "function") {
+          return await primary.searchWithOutcome(query, opts);
+        }
+        return { outcome: "ok", hits: await primary.search(query, opts) };
+      } catch (err) {
+        if (opts?.signal?.aborted) {
+          throw err;
+        }
+        this.primaryFailed = true;
+        this.lastError = formatErrorMessage(err);
+        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        await this.deps.primary.close?.().catch(() => {});
+        this.evictCacheEntry();
+      }
+    }
+    const fallback = await this.ensureFallback();
+    if (typeof fallback?.searchWithOutcome === "function") {
+      return await fallback.searchWithOutcome(query, opts);
+    }
+    if (fallback) {
+      return { outcome: "ok", hits: await fallback.search(query, opts) };
     }
     throw new Error(this.lastError ?? "memory search unavailable");
   }
