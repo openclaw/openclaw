@@ -6,7 +6,8 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.js";
+import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 vi.mock("./embeddings.js", () => ({
@@ -53,7 +54,7 @@ class RecoveryTestHarness extends MemoryManagerSyncOps {
   protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
-  protected providerLifecycle: { mode: string; providerId?: string; fallbackFrom?: string; reason?: string } =
+  protected providerLifecycle: MemoryProviderLifecycleState =
     { mode: "active", providerId: "openai" };
   protected db = {} as DatabaseSync;
 
@@ -102,6 +103,10 @@ class RecoveryTestHarness extends MemoryManagerSyncOps {
     return this.providerLifecycle;
   }
 
+  setProviderLifecycle(state: MemoryProviderLifecycleState): void {
+    this.providerLifecycle = state;
+  }
+
   protected computeProviderKey(): string {
     return "test-key";
   }
@@ -110,7 +115,7 @@ class RecoveryTestHarness extends MemoryManagerSyncOps {
     return [];
   }
 
-  protected resolveBatchConfig() {
+  protected override resolveBatchConfig() {
     return this.batch;
   }
 
@@ -258,7 +263,7 @@ describe("fallback provider recovery", () => {
 
     // Set up primary provider that will fail
     harness.setProvider(createMockProvider("openai"));
-    harness.providerLifecycle = { mode: "active", providerId: "openai" };
+    harness.setProviderLifecycle({ mode: "active", providerId: "openai" });
 
     const beforeActivation = Date.now();
     await harness.testActivateFallbackProvider("connection refused");
