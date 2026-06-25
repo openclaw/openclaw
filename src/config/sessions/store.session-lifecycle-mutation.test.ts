@@ -45,6 +45,7 @@ describe("session store lifecycle mutations", () => {
       [createTranscriptEvent("old-session", "before reset")],
     );
     const transcriptUpdates = recordTranscriptUpdateFiles();
+    let callbackTranscriptEvents: TestTranscriptEvent[] = [];
 
     const result = await resetSessionEntryLifecycle({
       storePath,
@@ -59,6 +60,13 @@ describe("session store lifecycle mutations", () => {
         systemSent: false,
         abortedLastRun: false,
       }),
+      afterEntryMutation: async () => {
+        callbackTranscriptEvents = await loadTranscriptEvents({
+          sessionKey: "agent:main:room",
+          sessionId: "old-session",
+          storePath,
+        });
+      },
     });
     transcriptUpdates.unsubscribe();
 
@@ -68,6 +76,9 @@ describe("session store lifecycle mutations", () => {
     expect(result.archivedTranscripts).toHaveLength(1);
     expect(result.archivedTranscripts[0]?.archivedPath).toContain("old-session.jsonl.reset.");
     expect(transcriptUpdates.files).toContain(result.archivedTranscripts[0]?.archivedPath);
+    expect(callbackTranscriptEvents).toEqual([
+      createTranscriptEvent("old-session", "before reset"),
+    ]);
     expect(readArchiveLines(result.archivedTranscripts[0]?.archivedPath)).toEqual([
       createTranscriptEventLine("old-session", "before reset"),
     ]);
