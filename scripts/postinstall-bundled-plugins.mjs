@@ -20,6 +20,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1040,7 +1041,337 @@ export function isDirectPostinstallInvocation(params = {}) {
   }
 }
 
+/** @returns {boolean} true unless the value is falsy, "0", or "false" */
+function isTruthyEnvValue(value) {
+  return value !== undefined && value !== "" && value !== "0" && value !== "false";
+}
+
+/** OpenClaw gateway default TCP port */
+const DEFAULT_GATEWAY_PORT = 18789;
+
+/**
+ * Parse a TCP port from a string value.
+ * Accepts bare port numbers ("18789") and Docker-style host:port
+ * strings ("127.0.0.1:18789", "[::1]:18789").
+ * @param {string} raw
+ * @returns {number | null}
+ */
+function parseTcpPortFromString(raw) {
+  // Bare port number
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0 && n <= 65535) {
+      return n;
+    }
+    return null;
+  }
+  // Docker-style host:port — accept only explicit host:port forms
+  const bracketedMatch = raw.match(/^\[[^\]]+\]:(\d+)$/);
+  if (bracketedMatch?.[1]) {
+    const n = Number(bracketedMatch[1]);
+    if (Number.isFinite(n) && n > 0 && n <= 65535) {
+      return n;
+    }
+    return null;
+  }
+  const colonIdx = raw.indexOf(":");
+  if (colonIdx > 0 && colonIdx === raw.lastIndexOf(":")) {
+    const n = Number(raw.slice(colonIdx + 1));
+    if (Number.isFinite(n) && n > 0 && n <= 65535) {
+      return n;
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to read gateway.port from the openclaw.json config file.
+ * Searches OPENCLAW_CONFIG_PATH first, then ~/.openclaw/openclaw.json.
+ * @param {object} [params]
+ * @param {typeof process.env} [params.env]
+ * @param {(path: string) => boolean} [params.existsSync]
+ * @param {(path: string, encoding: string) => string} [params.readFileSync]
+ * @param {() => string} [params.homedir]
+ * @returns {number | null}
+ */
+function readGatewayPortFromConfig({
+  env = process.env,
+  existsSync: exists = existsSync,
+  readFileSync: readFile = readFileSync,
+  homedir: homeDir = homedir,
+} = {}) {
+  const candidates = [
+    env.OPENCLAW_CONFIG_PATH?.trim(),
+    env.OPENCLAW_STATE_DIR?.trim() && join(env.OPENCLAW_STATE_DIR.trim(), "openclaw.json"),
+    join(homeDir(), ".openclaw", "openclaw.json"),
+  ].filter(Boolean);
+  for (const configPath of candidates) {
+    if (!exists(configPath)) {
+      continue;
+    }
+    try {
+      const content = readFile(configPath, "utf8");
+      const parsed = JSON.parse(content);
+      const port = parsed?.gateway?.port;
+      if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
+        return port;
+      }
+    } catch {
+      // Unreadable or invalid config — try next candidate
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to read the effective gateway port from the installed service environment metadata.
+ *
+ * When a gateway is installed as a service (openclaw gateway install --port <N>),
+ * the resolved port is persisted in a service env file at:
+ *   <state-dir>/service-env/<label>.env
+ *
+ * The file contains shell-exported variables, among them:
+ *   export OPENCLAW_GATEWAY_PORT='19003'
+ *
+ * This function reads the first available .env file from the service-env
+ * directory to extract the installed gateway port, so the postinstall probe
+ * can detect gateways running on non-default ports.
+ *
+ * @param {object} [params]
+ * @param {typeof process.env} [params.env]
+ * @param {(path: string) => boolean} [params.existsSync]
+ * @param {(path: string) => string[]} [params.readdirSync]
+ * @param {(path: string, encoding: string) => string} [params.readFileSync]
+ * @param {() => string} [params.homedir]
+ * @returns {number | null}
+ */
+function readGatewayPortFromServiceEnv({
+  env = process.env,
+  existsSync: exists = existsSync,
+  readdirSync: readdir = readdirSync,
+  readFileSync: readFile = readFileSync,
+  homedir: homeDir = homedir,
+} = {}) {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || join(homeDir(), ".openclaw");
+  const serviceEnvDir = join(stateDir, "service-env");
+  if (!exists(serviceEnvDir)) {
+    return null;
+  }
+  let envFiles;
+  try {
+    envFiles = readdir(serviceEnvDir).filter((f) => f.endsWith(".env"));
+  } catch {
+    return null;
+  }
+  for (const file of envFiles) {
+    try {
+      const content = readFile(join(serviceEnvDir, file), "utf8");
+      const match = content.match(/^export OPENCLAW_GATEWAY_PORT='(\d+)'$/m);
+      if (match?.[1]) {
+        const port = Number(match[1]);
+        if (Number.isFinite(port) && port > 0 && port <= 65535) {
+          return port;
+        }
+      }
+    } catch {
+      // Unreadable env file — try the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to read the effective gateway port from the systemd service environment file.
+ *
+ * On Linux/systemd, the gateway service environment is persisted to:
+ *   <state-dir>/gateway.systemd.env
+ *
+ * The file contains dotenv-style entries (KEY=VALUE), among them:
+ *   OPENCLAW_GATEWAY_PORT=19003
+ *
+ * @param {object} [params]
+ * @param {typeof process.env} [params.env]
+ * @param {(path: string) => boolean} [params.existsSync]
+ * @param {(path: string, encoding: string) => string} [params.readFileSync]
+ * @param {() => string} [params.homedir]
+ * @returns {number | null}
+ */
+function readGatewayPortFromSystemdEnv({
+  env = process.env,
+  existsSync: exists = existsSync,
+  readFileSync: readFile = readFileSync,
+  homedir: homeDir = homedir,
+} = {}) {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || join(homeDir(), ".openclaw");
+  const envFilePath = join(stateDir, "gateway.systemd.env");
+  if (!exists(envFilePath)) {
+    return null;
+  }
+  try {
+    const content = readFile(envFilePath, "utf8");
+    const match = content.match(/^OPENCLAW_GATEWAY_PORT=(\d+)$/m);
+    if (match?.[1]) {
+      const port = Number(match[1]);
+      if (Number.isFinite(port) && port > 0 && port <= 65535) {
+        return port;
+      }
+    }
+  } catch {
+    // Unreadable env file -- ignore
+  }
+  return null;
+}
+
+/**
+ * Resolve the effective gateway port, checking env override, installed
+ * per-platform service metadata, and config file before falling back to the
+ * default port (18789).
+ *
+ * Precedence:
+ * 1. OPENCLAW_GATEWAY_PORT environment variable (runtime override)
+ * 2. Installed launchd service metadata (service-env/*.env)
+ * 3. Installed systemd service metadata (gateway.systemd.env)
+ * 4. gateway.port from the openclaw.json config file
+ * 5. DEFAULT_GATEWAY_PORT (18789)
+ *
+ * @param {object} [params]
+ * @param {typeof process.env} [params.env]
+ * @param {(path: string) => boolean} [params.existsSync]
+ * @param {(path: string) => string[]} [params.readdirSync]
+ * @param {(path: string, encoding: string) => string} [params.readFileSync]
+ * @param {() => string} [params.homedir]
+ * @returns {number}
+ */
+export function resolveGatewayPort({
+  env = process.env,
+  existsSync: exists = existsSync,
+  readdirSync: readdir = readdirSync,
+  readFileSync: readFile = readFileSync,
+  homedir: homeDir = homedir,
+} = {}) {
+  // 1. Environment override
+  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim();
+  if (envRaw) {
+    const port = parseTcpPortFromString(envRaw);
+    if (port !== null) {
+      return port;
+    }
+  }
+  // 2. Installed launchd service metadata (service-env/*.env)
+  const launchdPort = readGatewayPortFromServiceEnv({
+    env,
+    existsSync: exists,
+    readdirSync: readdir,
+    readFileSync: readFile,
+    homedir: homeDir,
+  });
+  if (launchdPort !== null) {
+    return launchdPort;
+  }
+  // 3. Installed systemd service metadata (gateway.systemd.env)
+  const systemdPort = readGatewayPortFromSystemdEnv({
+    env,
+    existsSync: exists,
+    readFileSync: readFile,
+    homedir: homeDir,
+  });
+  if (systemdPort !== null) {
+    return systemdPort;
+  }
+  // 4. Config file gateway.port
+  const configPort = readGatewayPortFromConfig({
+    env,
+    existsSync: exists,
+    readFileSync: readFile,
+    homedir: homeDir,
+  });
+  if (configPort !== null) {
+    return configPort;
+  }
+  // 5. Default
+  return DEFAULT_GATEWAY_PORT;
+}
+
+/**
+ * Print the gateway restart warning box to the given warn function.
+ * @param {(msg: string) => void} warnFn
+ */
+function printGatewayRestartWarning(warnFn) {
+  warnFn("");
+  warnFn("  ╔══════════════════════════════════════════════════════════════╗");
+  warnFn("  ║  WARNING: OpenClaw gateway restart recommended              ║");
+  warnFn("  ║                                                              ║");
+  warnFn("  ║  The OpenClaw package has been updated but the running       ║");
+  warnFn("  ║  gateway process still holds cached module references from   ║");
+  warnFn("  ║  the previous install. Inbound messages may fail with        ║");
+  warnFn("  ║  ERR_MODULE_NOT_FOUND until the gateway is restarted.        ║");
+  warnFn("  ║                                                              ║");
+  warnFn("  ║  Run:  openclaw gateway restart                              ║");
+  warnFn("  ╚══════════════════════════════════════════════════════════════╝");
+  warnFn("");
+}
+
+/**
+ * Probe whether a TCP port on loopback is reachable (best-effort, 1s timeout).
+ * @param {number} port
+ * @param {object} [params]
+ * @param {(port: number, host: string, cb: () => void) => import("node:net").Socket} [params.connect]
+ * @returns {Promise<boolean>}
+ */
+function probeTcpPort(port, { connect: tcpConnect = connect } = {}) {
+  return new Promise((resolve) => {
+    const socket = tcpConnect(port, "127.0.0.1", () => {
+      socket.end();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.setTimeout(1000, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Check whether a gateway process appears to be running on the configured port.
+ * If so, print a visible warning that the gateway should be restarted so it
+ * picks up the newly installed dist files rather than holding stale ESM
+ * module caches from the previous install.
+ *
+ * The port is resolved from (in precedence order): OPENCLAW_GATEWAY_PORT env,
+ * installed service metadata, gateway.port from openclaw.json, or 18789.
+ *
+ * This is best-effort: the check may miss gateways behind TLS proxies or in
+ * containers. Even when it succeeds, restart is the user's responsibility.
+ *
+ * @param {object} [params]
+ * @param {typeof process.env} [params.env]
+ * @param {(msg: string) => void} [params.warn]
+ * @param {(port: number) => Promise<boolean>} [params.probe]
+ */
+export async function warnIfGatewayNeedsRestart({
+  env = process.env,
+  warn: warnFn = console.warn,
+  probe = probeTcpPort,
+} = {}) {
+  const envVar = env.OPENCLAW_DISABLE_POSTINSTALL_RESTART_WARNING;
+  if (isTruthyEnvValue(envVar)) {
+    return;
+  }
+  const port = resolveGatewayPort({ env });
+  let reachable = false;
+  try {
+    reachable = await probe(port);
+  } catch {
+    // Probe failed unexpectedly — skip warning
+  }
+  if (reachable) {
+    printGatewayRestartWarning(warnFn);
+  }
+}
+
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
   await runPluginRegistryPostinstallMigration();
+  await warnIfGatewayNeedsRestart();
 }
