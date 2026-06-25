@@ -31,6 +31,8 @@ import {
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
 import type {
@@ -295,6 +297,18 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      // Classify returned result-level terminal failures (reasoning-only /
+      // empty-visible / fallback-safe incomplete_turn) so the configured
+      // fallback chain engages, matching the interactive and auto-reply
+      // callers. Non-embedded (CLI) results classify to null, so CLI cron runs
+      // are unaffected. (#96525)
+      classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: providerLocal,
+          model: modelLocal,
+          result: resultLocal,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());

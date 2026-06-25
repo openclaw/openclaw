@@ -1,5 +1,7 @@
+import { createContractRunResult } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 // Cron model override forwarding tests cover passing overrides into agent runs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -664,5 +666,49 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     await runCronIsolatedAgentTurn(makeParams({ job: jobWithFallbacks }));
 
     expect(capturedFallbacksOverride).toEqual(["openai/gpt-4o"]);
+  });
+
+  it("forwards a working result classifier and merge helper so result-level failures engage the fallback chain (#96525)", async () => {
+    let captured: Record<string, unknown> | undefined;
+    runWithModelFallbackMock.mockImplementation(async (params: Record<string, unknown>) => {
+      captured = params;
+      return makeSuccessfulRunResult();
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+    expect(result.status).toBe("ok");
+
+    // Cron must forward both, exactly like the interactive (agent-command) and
+    // auto-reply callers, so a returned result-level terminal failure advances
+    // the configured fallback chain instead of being delivered as the answer.
+    expect(typeof captured?.classifyResult).toBe("function");
+    expect(captured?.mergeExhaustedResult).toBe(
+      mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+    );
+
+    const classify = captured?.classifyResult as (input: {
+      provider: string;
+      model: string;
+      result: unknown;
+    }) => unknown;
+
+    // A fallback-safe incomplete_turn (reasoning-only) embedded result classifies
+    // non-null, which is what makes runWithModelFallback try the next candidate.
+    const reasoningOnly = createContractRunResult({
+      payloads: [{ text: "Agent couldn't generate a response.", isError: true }],
+      meta: {
+        durationMs: 1,
+        agentHarnessResultClassification: "reasoning-only",
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+          terminalPresentation: false,
+        },
+      },
+    });
+    expect(
+      classify({ provider: "anthropic", model: "claude-opus-4-6", result: reasoningOnly }),
+    ).not.toBeNull();
   });
 });

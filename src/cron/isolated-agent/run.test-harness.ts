@@ -1,6 +1,10 @@
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
@@ -238,6 +242,8 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
   isCliProvider: isCliProviderMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
