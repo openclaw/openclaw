@@ -577,7 +577,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
 }
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
-let chatHistoryPlaceholderEmitCount = 0;
+let chatHistoryOmittedEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -1674,28 +1674,36 @@ export function replaceOversizedChatHistoryMessages(params: {
 
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
-  placeholderCount: number;
+  // Number of input messages that lost their verbatim representation to fit the
+  // byte budget (dropped outright or swapped for a placeholder). The caller logs
+  // truncation only when this is positive, so every omitting branch must report
+  // it — a zero here while history is silently discarded hides truncation from
+  // operators.
+  omittedCount: number;
 } {
   const { messages, maxBytes } = params;
   if (messages.length === 0) {
-    return { messages, placeholderCount: 0 };
+    return { messages, omittedCount: 0 };
   }
   if (jsonUtf8Bytes(messages) <= maxBytes) {
-    return { messages, placeholderCount: 0 };
+    return { messages, omittedCount: 0 };
   }
   const last = messages.at(-1);
   if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    return { messages: [last], placeholderCount: 0 };
+    // Keep only the final message; every earlier message is dropped.
+    return { messages: [last], omittedCount: messages.length - 1 };
   }
   const placeholder = buildOversizedHistoryPlaceholder(last);
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
-    return { messages: [placeholder], placeholderCount: 1 };
+    // Even the final message is over budget, so it too is replaced — no input
+    // message survives verbatim.
+    return { messages: [placeholder], omittedCount: messages.length };
   }
   // The oversized placeholder still does not fit (e.g. the source message
   // carried very large metadata). Never return an empty history — that renders
   // as a blank transcript and reads as data loss even though the on-disk
   // transcript is intact. Fall back to a small metadata-free sentinel.
-  return { messages: [buildChatHistoryUnavailableSentinel()], placeholderCount: 1 };
+  return { messages: [buildChatHistoryUnavailableSentinel()], omittedCount: messages.length };
 }
 
 function resolveTranscriptPath(params: {
@@ -2759,20 +2767,23 @@ async function handleChatHistoryRequest({
     context,
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+  // Front byte cap drops the oldest messages without reporting a count, so derive
+  // it from the length delta to keep that omission visible in truncation logs.
+  const frontCapDropped = replaced.messages.length - capped.length;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-  const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
-  if (placeholderCount > 0) {
-    chatHistoryPlaceholderEmitCount += placeholderCount;
+  const omittedCount = replaced.replacedCount + frontCapDropped + bounded.omittedCount;
+  if (omittedCount > 0) {
+    chatHistoryOmittedEmitCount += omittedCount;
     logLargePayload({
       surface: "gateway.chat.history",
       action: "truncated",
       bytes: jsonUtf8Bytes(normalized),
       limitBytes: maxHistoryBytes,
-      count: placeholderCount,
+      count: omittedCount,
       reason: "chat_history_budget",
     });
     context.logGateway.debug(
-      `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
+      `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
     );
   }
   const modelCatalog = await modelCatalogPromise;
