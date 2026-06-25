@@ -478,6 +478,14 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
+  if (
+    isCodexNativeExecutionBlockedByWorkspaceOnlyFs(params, {
+      agentId: options.agentId,
+      runtimeSessionKey: options.runtimeSessionKey,
+    })
+  ) {
+    return false;
+  }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
@@ -489,6 +497,85 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     hasWildcardCodexToolsAllow(toolsAllow) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
+}
+
+function isCodexNativeExecutionBlockedByWorkspaceOnlyFs(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+  } = {},
+): boolean {
+  const config = params.config as
+    | {
+        tools?: { fs?: { workspaceOnly?: unknown } };
+        agents?: {
+          list?: Array<{
+            id?: unknown;
+            default?: unknown;
+            tools?: { fs?: { workspaceOnly?: unknown } };
+          }>;
+        };
+      }
+    | undefined;
+  const agent = resolveWorkspaceOnlyPolicyAgent(config, params, options);
+  const agentWorkspaceOnly = readWorkspaceOnlyFs(agent?.tools?.fs);
+  if (agentWorkspaceOnly !== undefined) {
+    return agentWorkspaceOnly;
+  }
+  return readWorkspaceOnlyFs(config?.tools?.fs) === true;
+}
+
+function readWorkspaceOnlyFs(
+  fsConfig: { workspaceOnly?: unknown } | undefined,
+): boolean | undefined {
+  if (!fsConfig || typeof fsConfig !== "object" || !("workspaceOnly" in fsConfig)) {
+    return undefined;
+  }
+  return fsConfig.workspaceOnly === true;
+}
+
+function resolveWorkspaceOnlyPolicyAgent(
+  config:
+    | {
+        agents?: {
+          list?: Array<{
+            id?: unknown;
+            default?: unknown;
+            tools?: { fs?: { workspaceOnly?: unknown } };
+          }>;
+        };
+      }
+    | undefined,
+  params: EmbeddedRunAttemptParams,
+  options: { agentId?: string; runtimeSessionKey?: string },
+): { id?: unknown; default?: unknown; tools?: { fs?: { workspaceOnly?: unknown } } } | undefined {
+  const agents = Array.isArray(config?.agents?.list) ? config?.agents?.list : [];
+  const agentId = normalizeWorkspaceOnlyAgentId(
+    options.agentId ??
+      parseWorkspaceOnlyAgentIdFromSessionKey(options.runtimeSessionKey) ??
+      parseWorkspaceOnlyAgentIdFromSessionKey(params.sandboxSessionKey) ??
+      parseWorkspaceOnlyAgentIdFromSessionKey(params.sessionKey),
+  );
+  if (agentId) {
+    const match = agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
+    if (match) {
+      return match;
+    }
+  }
+  return agents.find((entry) => entry?.default === true);
+}
+
+function parseWorkspaceOnlyAgentIdFromSessionKey(
+  sessionKey: string | undefined,
+): string | undefined {
+  const parts = sessionKey?.trim().split(":") ?? [];
+  return parts.length >= 3 && parts[0] === "agent" ? parts[1] : undefined;
+}
+
+function normalizeWorkspaceOnlyAgentId(value: unknown): string | undefined {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized || undefined;
 }
 
 /** Returns true when OpenClaw policy requires the Node-owned exec/process tools instead. */

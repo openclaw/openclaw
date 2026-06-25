@@ -1293,6 +1293,43 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(true);
   });
 
+  it("disables Codex native tool surfaces when workspace-only fs policy is active", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.sessionKey = "agent:poly:discord:group:test";
+    params.config = {
+      agents: {
+        list: [
+          {
+            id: "poly",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+          {
+            id: "coder",
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        agentId: "poly",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        agentId: "coder",
+      }),
+    ).toBe(true);
+  });
+
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
