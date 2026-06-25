@@ -502,6 +502,10 @@ async function runCoreContributionHealthRepair(
     { checks },
   );
   ctx.cfg = result.config;
+  // Detection-only core checks (e.g. default-account-routing) report through
+  // `findings`, not `changes`/`warnings`. Render them so `doctor --fix` keeps
+  // surfacing the warning the direct doctor-config-flow path used to print.
+  renderStructuredHealthFindings(ctx, result.findings);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }

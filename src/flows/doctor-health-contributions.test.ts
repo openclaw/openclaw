@@ -954,10 +954,20 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("routes default-account-routing check through gateway-services repair", async () => {
+  it("renders default-account-routing findings in gateway-services repair mode", async () => {
+    // default-account-routing is a detection-only check: it reports through
+    // `findings`, so repair mode must render findings or the warning is dropped.
     mocks.runDoctorHealthRepairs.mockResolvedValue({
       config: { gateway: { mode: "local" } },
-      findings: [],
+      findings: [
+        {
+          checkId: "core/doctor/default-account-routing",
+          severity: "warning",
+          message: "telegram has multiple accounts but no explicit default",
+          path: "openclaw.json",
+          line: 7,
+        },
+      ],
       remainingFindings: [],
       changes: [],
       warnings: [],
@@ -987,6 +997,11 @@ describe("doctor health contributions", () => {
           expect.objectContaining({ id: "core/doctor/default-account-routing" }),
         ]),
       }),
+    );
+    // The finding text must reach output; asserting the call alone would pass
+    // even when repair mode silently dropped the warning (the original defect).
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      "[warning] core/doctor/default-account-routing openclaw.json:7 - telegram has multiple accounts but no explicit default",
     );
   });
 
