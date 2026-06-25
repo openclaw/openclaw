@@ -31,6 +31,7 @@ import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
   applySqliteSessionEntryLifecycleMutation,
+  appendSqliteExpectedSessionTranscriptTurn,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
@@ -2096,7 +2097,35 @@ async function appendTranscriptTurnMessages(
   target: SessionTranscriptTurnWriteContext,
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<TranscriptMessageAppendResult<unknown>[]> {
+  const selectedMessages = await selectAppendableTranscriptTurnMessages(target, options);
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+  for (const append of selectedMessages) {
+    const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+    const result = await appendTranscriptMessage(
+      {
+        ...(target.agentId ? { agentId: target.agentId } : {}),
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+        ...(target.storePath ? { storePath: target.storePath } : {}),
+      },
+      {
+        ...appendOptions,
+        ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
+        ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
+      },
+    );
+    if (result) {
+      appendedMessages.push(result);
+    }
+  }
+  return appendedMessages;
+}
+
+async function selectAppendableTranscriptTurnMessages(
+  target: SessionTranscriptTurnWriteContext,
+  options: SessionTranscriptTurnPersistOptions,
+): Promise<SessionTranscriptTurnMessageAppend[]> {
+  const selectedMessages: SessionTranscriptTurnMessageAppend[] = [];
   for (const append of options.messages) {
     const shouldAppend = append.shouldAppend
       ? await append.shouldAppend({
@@ -2110,32 +2139,9 @@ async function appendTranscriptTurnMessages(
     if (!shouldAppend) {
       continue;
     }
-    const result = await appendTranscriptMessage(
-      {
-        ...(target.agentId ? { agentId: target.agentId } : {}),
-        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-        ...(target.storePath ? { storePath: target.storePath } : {}),
-      },
-      {
-        message: append.message,
-        ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
-        ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
-        ...(append.idempotencyLookup ? { idempotencyLookup: append.idempotencyLookup } : {}),
-        ...(append.now !== undefined ? { now: append.now } : {}),
-        ...(append.prepareMessageAfterIdempotencyCheck
-          ? { prepareMessageAfterIdempotencyCheck: append.prepareMessageAfterIdempotencyCheck }
-          : {}),
-        ...(append.useRawWhenLinear !== undefined
-          ? { useRawWhenLinear: append.useRawWhenLinear }
-          : {}),
-      },
-    );
-    if (result) {
-      appendedMessages.push(result);
-    }
+    selectedMessages.push(append);
   }
-  return appendedMessages;
+  return selectedMessages;
 }
 
 function countAppendedTranscriptMessages(
@@ -2167,8 +2173,7 @@ async function persistExpectedSessionTranscriptTurn(
       listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  let appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-  let target: SessionTranscriptTurnWriteContext = {
+  const target: SessionTranscriptTurnWriteContext = {
     agentId,
     sessionFile:
       scope.sessionFile ??
@@ -2181,56 +2186,29 @@ async function persistExpectedSessionTranscriptTurn(
     sessionKey: resolved.normalizedKey,
     storePath,
   };
-  let rejectedEntry: SessionEntry | undefined;
-  let touchUpdatedAt: number | undefined;
-
-  const updated = await updateSessionEntry(
+  const turn = await appendSqliteExpectedSessionTranscriptTurn(
     {
       sessionKey: resolved.normalizedKey,
+      sessionId: expectedSessionId,
       storePath,
     },
-    async (currentEntry) => {
-      if (currentEntry.sessionId !== expectedSessionId) {
-        rejectedEntry = currentEntry;
-        return null;
-      }
-      const sessionFile =
-        scope.sessionFile ??
-        formatSqliteSessionFileTarget({
-          agentId,
-          sessionId: currentEntry.sessionId,
-          storePath,
-        });
-      target = {
-        agentId,
-        sessionFile,
-        sessionId: currentEntry.sessionId,
-        sessionKey: resolved.normalizedKey,
-        storePath,
-      };
-      appendedMessages = await appendTranscriptTurnMessages(target, options);
-      const appendedCount = countAppendedTranscriptMessages(appendedMessages);
-      if (options.touchSessionEntry === true && appendedCount > 0) {
-        touchUpdatedAt = Date.now();
-      }
-      const patch = {
-        ...(currentEntry.sessionFile === sessionFile ? {} : { sessionFile }),
-        ...(touchUpdatedAt !== undefined
-          ? { updatedAt: Math.max(currentEntry.updatedAt ?? 0, touchUpdatedAt) }
-          : {}),
-      };
-      return Object.keys(patch).length > 0 ? patch : null;
+    {
+      config: options.config,
+      cwd: options.cwd,
+      expectedSessionId,
+      messages: options.messages,
+      sessionFile: target.sessionFile,
+      touchSessionEntry: options.touchSessionEntry,
     },
-    { skipMaintenance: true },
   );
 
-  if (rejectedEntry || updated?.sessionId !== expectedSessionId) {
+  if (turn.rejectedReason === "session-rebound") {
     return {
       appendedCount: 0,
       messages: [],
       rejectedReason: "session-rebound",
-      sessionEntry: rejectedEntry ?? updated ?? undefined,
-      sessionFile: target.sessionFile,
+      sessionEntry: turn.sessionEntry,
+      sessionFile: turn.sessionFile,
     };
   }
 
@@ -2238,17 +2216,17 @@ async function persistExpectedSessionTranscriptTurn(
     target,
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
-    appendedMessages,
+    appendedMessages: turn.appendedMessages,
   });
 
-  if (updated && scope.sessionStore) {
-    scope.sessionStore[resolved.normalizedKey] = updated;
+  if (turn.sessionEntry && scope.sessionStore) {
+    scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
   }
   return {
-    appendedCount: countAppendedTranscriptMessages(appendedMessages),
-    messages: appendedMessages,
-    sessionEntry: updated ?? scope.sessionEntry,
-    sessionFile: target.sessionFile,
+    appendedCount: countAppendedTranscriptMessages(turn.appendedMessages),
+    messages: turn.appendedMessages,
+    sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
+    sessionFile: turn.sessionFile,
   };
 }
 

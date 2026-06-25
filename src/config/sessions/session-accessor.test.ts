@@ -942,6 +942,48 @@ describe("session accessor seam", () => {
     await results;
   });
 
+  it("persists expected-session SQLite transcript turns without reentering the writer queue", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-expected",
+      sessionKey: "agent:main:expected",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    const turnPromise = persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      expectedSessionId: scope.sessionId,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "expected reply",
+            timestamp: 100,
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    const completed = await Promise.race([
+      turnPromise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    expect(completed).toBe(true);
+    const result = await turnPromise;
+
+    expect(result.appendedCount).toBe(1);
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
+  });
+
   it("rejects expected-session transcript turns after a session rebind", async () => {
     const scope = {
       agentId: "main",
