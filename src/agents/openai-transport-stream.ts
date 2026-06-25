@@ -2953,6 +2953,13 @@ async function processOpenAICompletionsStream(
   };
   const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
     flushPendingPostToolCallDeltas();
+    if (
+      reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() &&
+      !reasoningTagTextPartitioner.isInsideReasoning()
+    ) {
+      appendTextDelta(reasoningDelta.text);
+      return;
+    }
     appendThinkingDeltaInternal(reasoningDelta);
   };
   const appendTextDelta = (text: string) => {

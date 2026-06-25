@@ -294,4 +294,22 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
     expect(partitioner.flush()).toEqual([]);
   });
+
+  it("reports unclosed visible inline code across chunks", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.isInsideUnclosedVisibleInlineCode()).toBe(false);
+    partitioner.pushVisible("text with `");
+    expect(partitioner.isInsideUnclosedVisibleInlineCode()).toBe(true);
+    partitioner.pushVisible("closer` rest");
+    expect(partitioner.isInsideUnclosedVisibleInlineCode()).toBe(false);
+  });
+
+  it("does not report unclosed visible inline code while inside reasoning", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    partitioner.pushVisible("before <reasoning>hidden");
+    expect(partitioner.isInsideReasoning()).toBe(true);
+    expect(partitioner.isInsideUnclosedVisibleInlineCode()).toBe(false);
+  });
 });
