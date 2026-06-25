@@ -146,10 +146,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
+      expect(call.sessionFile).toBe(
+        `sqlite:main:${call.sessionId}:${path.join(
+          home,
+          ".openclaw",
+          "sessions",
+          "sessions.json",
+        )}`,
       );
-      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
     });
   });
 
