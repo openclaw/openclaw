@@ -1,8 +1,10 @@
 # safeTok ↔ OpenClaw Bridge
 
-> **Using a Claude monthly subscription and want to DM your AI agent from your phone?**
-> This bridge lets you do exactly that — via safeTok, a privacy-first Nostr client.
-> No API keys required beyond what OpenClaw already has.
+> **Want to use OpenClaw with Claude OAuth (no API key) and talk to your agent over Nostr?**
+> This bridge enables two things:
+>
+> 1. Use OpenClaw with Claude OAuth — no Anthropic API key needed.
+> 2. Communicate with your OpenClaw agent via Nostr — specifically safeTok NIP-44 DMs.
 
 A bidirectional DM bridge that connects [safeTok](https://safetok.me) to OpenClaw via the Gateway WebSocket API. Incoming safeTok DMs are routed to a dedicated OpenClaw session; the assistant's reply is encrypted and published back to the Nostr relays — end-to-end encrypted, decentralized, no middleman.
 
