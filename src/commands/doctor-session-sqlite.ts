@@ -551,10 +551,20 @@ function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  for (const summary of listSqliteSessionEntries({
-    agentId: target.agentId,
-    storePath: target.storePath,
-  })) {
+  let summaries: ReturnType<typeof listSqliteSessionEntries>;
+  try {
+    summaries = listSqliteSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    });
+  } catch (err) {
+    report.issues.push({
+      code: "sqlite_active_transcript_scan_failed",
+      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(err)}`,
+    });
+    return;
+  }
+  for (const summary of summaries) {
     const transcriptPath = resolveActiveSqliteTranscriptFile(target, summary.entry);
     if (!transcriptPath) {
       continue;

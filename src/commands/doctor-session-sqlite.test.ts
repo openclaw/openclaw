@@ -199,6 +199,28 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets[0]?.issues[0]?.message).toContain("session-1.jsonl");
   });
 
+  it("reports active JSONL scan failures without aborting inspect", async () => {
+    const store = createLegacyStore();
+    const sqlitePath = path.join(
+      store.stateDir,
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(1);
+    expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_active_transcript_scan_failed");
+  });
+
   it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
     const store = createLegacyStore({
       transcriptLines: [
