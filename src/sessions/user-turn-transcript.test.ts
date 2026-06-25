@@ -627,6 +627,68 @@ describe("user turn transcript persistence", () => {
       expect(fs.existsSync(transcriptPath)).toBe(false);
     });
 
+    it("approved persistence skips file targets after runtime persistence is marked", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-runtime-approved-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "runtime-owned turn",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      recorder.markRuntimePersisted({
+        role: "user",
+        content: "runtime-owned turn",
+        timestamp: 123,
+      });
+
+      await expect(recorder.persistApproved()).resolves.toBeUndefined();
+      expect(fs.existsSync(transcriptPath)).toBe(false);
+    });
+
+    it("approved persistence still writes canonical targets after runtime persistence is marked", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-runtime-canonical-");
+      const storePath = path.join(dir, "sessions.json");
+      const sessionStore = {};
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "runtime-owned turn",
+          timestamp: 123,
+        },
+        target: {
+          agentId: "main",
+          sessionEntry: undefined,
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionStore,
+          storePath,
+        },
+        updateMode: "none",
+      });
+
+      recorder.markRuntimePersisted({
+        role: "user",
+        content: "runtime-owned turn",
+        timestamp: 123,
+      });
+
+      const persisted = await recorder.persistApproved();
+
+      expect(persisted?.message).toMatchObject({
+        role: "user",
+        content: "runtime-owned turn",
+      });
+      expect(persisted?.sessionFile).toContain("sqlite:main:session-1:");
+    });
+
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-blocked-");
       const transcriptPath = path.join(dir, "session.jsonl");

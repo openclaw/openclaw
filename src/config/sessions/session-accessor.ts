@@ -37,8 +37,11 @@ import {
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
+  loadLatestSqliteAssistantMessage,
+  loadLatestSqliteMessage,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
+  loadSqliteTranscriptEventsSync,
   patchSqliteSessionEntry,
   publishSqliteTranscriptUpdate,
   purgeSqliteDeletedAgentSessionEntries,
@@ -50,6 +53,7 @@ import {
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
 } from "./session-accessor.sqlite.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
   ResolvedSessionMaintenanceConfig,
@@ -83,6 +87,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
+import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -280,6 +285,16 @@ export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
+};
+
+export type LatestTranscriptAssistantMessage = {
+  id?: string;
+  message: unknown;
+};
+
+export type LatestTranscriptMessage = {
+  id?: string;
+  message: unknown;
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
@@ -1089,7 +1104,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  const sessionFile = formatSqliteSessionFileTarget({
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: created.entry.sessionId,
     storePath,
@@ -1132,14 +1147,6 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   return Object.fromEntries(
     Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
   );
-}
-
-function formatSqliteSessionFileTarget(params: {
-  agentId: string;
-  sessionId: string;
-  storePath: string;
-}): string {
-  return `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
 }
 
 function createReplySessionInitializationRevision(params: {
@@ -1848,11 +1855,33 @@ export async function loadTranscriptEvents(
   return await loadSqliteTranscriptEvents(scope);
 }
 
+/** Reads parsed transcript records synchronously from the SQLite transcript store. */
+export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
+  return loadSqliteTranscriptEventsSync(scope);
+}
+
 /** Reads the latest visible assistant text without materializing the whole transcript. */
 export function readLatestTranscriptAssistantText(
   scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
-  return loadLatestSqliteAssistantText(scope);
+  return loadLatestSqliteAssistantText(scope, options);
+}
+
+/** Reads the latest assistant message payload without materializing the whole transcript. */
+export function readLatestTranscriptAssistantMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantMessage | undefined {
+  return loadLatestSqliteAssistantMessage(scope, options);
+}
+
+/** Reads the latest transcript message payload without materializing the whole transcript. */
+export function readLatestTranscriptMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptMessage | undefined {
+  return loadLatestSqliteMessage(scope, options);
 }
 
 /**
@@ -1940,7 +1969,7 @@ export async function trimSessionTranscriptForManualCompact(
   if (!agentId) {
     throw new Error(`Cannot resolve manual compact transcript scope: ${scope.sessionKey}`);
   }
-  const archived = `${formatSqliteSessionFileTarget({
+  const archived = `${formatSqliteSessionFileMarker({
     agentId,
     sessionId: scope.sessionId,
     storePath: scope.storePath ?? "",
@@ -2071,7 +2100,13 @@ export async function persistSessionTranscriptTurn(
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
   const target = await resolveTranscriptTurnTarget(scope);
-  const appendedMessages = await appendTranscriptTurnMessages(target, options);
+  const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
+    {
+      sessionFile: target.sessionFile,
+      sessionKey: target.sessionKey,
+    },
+    () => appendTranscriptTurnMessages(target, options),
+  );
   const appendedCount = countAppendedTranscriptMessages(appendedMessages);
   const sessionEntry = await touchTranscriptTurnSessionEntry({
     scope,
@@ -2173,33 +2208,39 @@ async function persistExpectedSessionTranscriptTurn(
       listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: expectedSessionId,
+    storePath,
+  });
   const target: SessionTranscriptTurnWriteContext = {
     agentId,
-    sessionFile:
-      scope.sessionFile ??
-      formatSqliteSessionFileTarget({
-        agentId,
-        sessionId: expectedSessionId,
-        storePath,
-      }),
+    sessionFile,
     sessionId: expectedSessionId,
     sessionKey: resolved.normalizedKey,
     storePath,
   };
-  const turn = await appendSqliteExpectedSessionTranscriptTurn(
+  const turn = await runWithOwnedSessionTranscriptWriteLock(
     {
-      sessionKey: resolved.normalizedKey,
-      sessionId: expectedSessionId,
-      storePath,
-    },
-    {
-      config: options.config,
-      cwd: options.cwd,
-      expectedSessionId,
-      messages: options.messages,
       sessionFile: target.sessionFile,
-      touchSessionEntry: options.touchSessionEntry,
+      sessionKey: target.sessionKey,
     },
+    () =>
+      appendSqliteExpectedSessionTranscriptTurn(
+        {
+          sessionKey: resolved.normalizedKey,
+          sessionId: expectedSessionId,
+          storePath,
+        },
+        {
+          config: options.config,
+          cwd: options.cwd,
+          expectedSessionId,
+          messages: options.messages,
+          sessionFile: target.sessionFile,
+          touchSessionEntry: options.touchSessionEntry,
+        },
+      ),
   );
 
   if (turn.rejectedReason === "session-rebound") {
@@ -2231,32 +2272,28 @@ async function persistExpectedSessionTranscriptTurn(
 }
 
 /**
- * Resolves the current storage-neutral runtime transcript target. Callers use
- * the scope as identity; sessionFile is only a legacy locator for older
- * command payloads and must not be treated as a readable JSONL path.
+ * Resolves the current storage-neutral runtime transcript target. Runtime
+ * callers still pass sessionFile into file-backed session managers, so the
+ * returned locator remains a filesystem path while SQLite identity comes from
+ * sessionId/sessionKey/storePath.
  */
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
   const { agentId, sessionEntry, sessionKey, sessionStore } =
     resolveSessionTranscriptRuntimeContext(scope);
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       agentId,
-      sessionFile: scope.sessionFile,
+      sessionFile: scope.sessionFile.trim(),
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  void sessionEntry;
   void sessionStore;
   return {
     agentId,
-    sessionFile: formatSqliteSessionFileTarget({
-      agentId,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath ?? "",
-    }),
+    sessionFile: resolveRuntimeSessionFile(scope, agentId, sessionEntry),
     sessionId: scope.sessionId,
     sessionKey,
   };
@@ -2270,25 +2307,39 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
   const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       agentId,
-      sessionFile: scope.sessionFile,
+      sessionFile: scope.sessionFile.trim(),
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  void sessionEntry;
   return {
     agentId,
-    sessionFile: formatSqliteSessionFileTarget({
-      agentId,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath ?? "",
-    }),
+    sessionFile: resolveRuntimeSessionFile(scope, agentId, sessionEntry),
     sessionId: scope.sessionId,
     sessionKey,
   };
+}
+
+function resolveRuntimeSessionFile(
+  scope: SessionTranscriptRuntimeScope,
+  agentId: string,
+  sessionEntry: SessionEntry | undefined,
+): string {
+  const matchingSessionEntry =
+    sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
+      ? sessionEntry
+      : undefined;
+  return resolveSessionFilePath(
+    scope.sessionId,
+    matchingSessionEntry,
+    resolveSessionFilePathOptions({
+      agentId,
+      storePath: scope.storePath,
+    }),
+  );
 }
 
 type SessionTranscriptRuntimeContext = {
@@ -2359,17 +2410,8 @@ export function resolveSessionTranscriptReadTarget(
             sessionKey: scope.sessionKey,
           })
         : undefined;
-  const sessionEntry =
-    scope.sessionEntry ??
-    resolvedStoreEntry?.existing ??
-    (scope.sessionKey ? loadSessionEntry({ ...scope, sessionKey: scope.sessionKey }) : undefined);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
-  const matchingSessionEntry =
-    sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
-      ? sessionEntry
-      : undefined;
-  void matchingSessionEntry;
-  const sessionFile = formatSqliteSessionFileTarget({
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: scope.sessionId,
     storePath: storePath ?? "",
@@ -2490,10 +2532,10 @@ async function resolveTranscriptTurnTarget(
     sessionEntry: SessionEntry | undefined;
   }
 > {
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       ...(scope.agentId ? { agentId: scope.agentId } : {}),
-      sessionFile: scope.sessionFile,
+      sessionFile: scope.sessionFile.trim(),
       ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
       ...(scope.storePath ? { storePath: scope.storePath } : {}),
@@ -2523,7 +2565,7 @@ async function resolveTranscriptTurnTarget(
   const resolved = store ? resolveSessionStoreEntry({ store, sessionKey }) : undefined;
   const sessionEntry =
     resolved?.existing ?? scope.sessionEntry ?? loadSessionEntry({ ...scope, sessionKey });
-  const sessionFile = formatSqliteSessionFileTarget({
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: scope.sessionId,
     storePath: scope.storePath ?? "",
@@ -2536,6 +2578,24 @@ async function resolveTranscriptTurnTarget(
     ...(scope.storePath ? { storePath: scope.storePath } : {}),
     sessionEntry,
   };
+}
+
+function shouldUseExplicitTranscriptFile<
+  TScope extends {
+    sessionFile?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  },
+>(scope: TScope): scope is TScope & { sessionFile: string } {
+  const explicitSessionFile = scope.sessionFile?.trim();
+  if (!explicitSessionFile) {
+    return false;
+  }
+  const hasStoreIdentity = Boolean(
+    scope.storePath?.trim() && scope.sessionKey?.trim() && scope.sessionId?.trim(),
+  );
+  return !hasStoreIdentity;
 }
 
 async function touchTranscriptTurnSessionEntry(params: {
@@ -2590,9 +2650,18 @@ async function publishTranscriptTurnUpdate(params: {
   if (params.publishWhen === "when-appended" && !lastAppended) {
     return;
   }
+  const target =
+    params.target.agentId && params.target.sessionId && params.target.sessionKey
+      ? {
+          agentId: params.target.agentId,
+          sessionId: params.target.sessionId,
+          sessionKey: params.target.sessionKey,
+        }
+      : undefined;
   emitSessionTranscriptUpdate({
     ...(params.target.sessionKey ? { sessionKey: params.target.sessionKey } : {}),
     ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+    ...(target ? { target } : {}),
     ...(params.updateMode === "inline" && lastAppended
       ? {
           message: lastAppended.message,

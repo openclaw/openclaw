@@ -242,34 +242,6 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
-  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
-    return;
-  }
-
-  const target = {
-    transcriptPath: params.sessionFile,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    cwd: params.cwd ?? params.workspaceDir,
-    ...(params.config ? { config: params.config } : {}),
-  };
-  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
-  if (persisted) {
-    try {
-      const notification = params.onUserMessagePersisted?.(persisted.message);
-      if (notification) {
-        void Promise.resolve(notification).catch((error: unknown) => {
-          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
-        });
-      }
-    } catch (error) {
-      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
-    }
-  }
-}
-
 async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
@@ -323,6 +295,35 @@ async function persistCliAssistantTranscript(params: {
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return false;
+  }
+}
+
+async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
+  if (params.suppressNextUserMessagePersistence === true) {
+    return;
+  }
+  const recorder = params.userTurnTranscriptRecorder;
+  if (!recorder) {
+    return;
+  }
+  const persisted = await recorder.persistApproved({
+    cwd: params.cwd ?? params.workspaceDir,
+  });
+  if (!persisted?.message) {
+    return;
+  }
+  await notifyCliUserMessagePersisted(params, persisted.message, "CLI user-turn persistence");
+}
+
+async function notifyCliUserMessagePersisted(
+  params: RunCliAgentParams,
+  message: Extract<AgentMessage, { role: "user" }>,
+  context: string,
+): Promise<void> {
+  try {
+    await Promise.resolve(params.onUserMessagePersisted?.(message));
+  } catch (err) {
+    log.warn(`${context} notification failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -749,21 +750,43 @@ export async function runPreparedCliAgent(
     message: string;
     pluginId: string;
   }): Promise<void> => {
-    try {
-      const nowMs = Date.now();
-      const sessionManager = SessionManager.open(params.sessionFile);
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: block.message }],
-        timestamp: nowMs,
-        idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-        __openclaw: {
-          beforeAgentRunBlocked: {
-            blockedBy: block.pluginId,
-            blockedAt: nowMs,
-          },
+    const nowMs = Date.now();
+    const redactedUserMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: block.message }],
+      timestamp: nowMs,
+      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+      __openclaw: {
+        beforeAgentRunBlocked: {
+          blockedBy: block.pluginId,
+          blockedAt: nowMs,
         },
-      } as Parameters<typeof sessionManager.appendMessage>[0]);
+      },
+    };
+    try {
+      const persisted =
+        await params.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
+      if (persisted) {
+        await notifyCliUserMessagePersisted(
+          params,
+          persisted.message,
+          "before_agent_run block user-turn persistence",
+        );
+        return;
+      }
+    } catch (err) {
+      log.warn(
+        `before_agent_run block: failed to persist canonical CLI user message: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+    }
+
+    try {
+      const sessionManager = SessionManager.open(params.sessionFile);
+      sessionManager.appendMessage(
+        redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
+      );
       flushSessionManagerFile(sessionManager);
     } catch (err) {
       log.warn(

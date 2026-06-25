@@ -1677,15 +1677,57 @@ async function runEmbeddedAgentInternal(
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
       ) => {
-        if (params.currentMessageId !== undefined) {
-          lastPersistedCurrentMessageId = params.currentMessageId;
+        const blockedBeforeAgentRun = (
+          message as { __openclaw?: { beforeAgentRunBlocked?: unknown } }
+        ).__openclaw?.beforeAgentRunBlocked;
+        const markCurrentUserMessagePersisted = () => {
+          if (params.currentMessageId !== undefined) {
+            lastPersistedCurrentMessageId = params.currentMessageId;
+          }
+          params.onUserMessagePersisted?.(message);
+        };
+        const recorder = params.userTurnTranscriptRecorder;
+        if (!recorder) {
+          markCurrentUserMessagePersisted();
+          return;
         }
-        params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
-        params.onUserMessagePersisted?.(message);
+        const markWhenPersisted = (persisted: { message?: unknown } | undefined) => {
+          if (persisted?.message || recorder.hasPersisted()) {
+            markCurrentUserMessagePersisted();
+          }
+        };
+        if (blockedBeforeAgentRun !== undefined) {
+          const canonicalPersistence = recorder
+            .persistBlocked(message)
+            .then(markWhenPersisted)
+            .catch((error: unknown) => {
+              log.warn(
+                `failed to persist canonical blocked embedded user turn transcript: ${formatErrorMessage(
+                  error,
+                )}`,
+              );
+            });
+          recorder.markRuntimePersistencePending(canonicalPersistence);
+          return;
+        }
+        const canonicalPersistence = recorder
+          .persistApproved()
+          .then(markWhenPersisted)
+          .catch((error: unknown) => {
+            log.warn(
+              `failed to persist canonical embedded user turn transcript: ${formatErrorMessage(error)}`,
+            );
+          });
+        recorder.markRuntimePersistencePending(canonicalPersistence);
       };
       const continueFromCurrentTranscript = () => {
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
+      };
+      const waitForCurrentUserMessagePersistence = async () => {
+        if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
+          await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
+        }
       };
       const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
@@ -2283,6 +2325,7 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          await waitForCurrentUserMessagePersistence();
 
           const {
             aborted,
@@ -2854,15 +2897,18 @@ async function runEmbeddedAgentInternal(
                 postCompactionGuard.armPostCompaction();
                 if (preflightRecovery?.source === "mid-turn") {
                   continueFromCurrentTranscript();
-                } else if (
-                  params.currentMessageId !== undefined &&
-                  params.currentMessageId === lastPersistedCurrentMessageId
-                ) {
-                  // The first attempt reached the embedded agent far enough to persist this user turn.
-                  // Retrying the original prompt would replay it, so resume from the
-                  // compacted transcript and suppress the next user append.
-                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-                  suppressNextUserMessagePersistence = true;
+                } else {
+                  await waitForCurrentUserMessagePersistence();
+                  if (
+                    params.currentMessageId !== undefined &&
+                    params.currentMessageId === lastPersistedCurrentMessageId
+                  ) {
+                    // The first attempt reached the embedded agent far enough to persist this user turn.
+                    // Retrying the original prompt would replay it, so resume from the
+                    // compacted transcript and suppress the next user append.
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    suppressNextUserMessagePersistence = true;
+                  }
                 }
                 continue;
               }

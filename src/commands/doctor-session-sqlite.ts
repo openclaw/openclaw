@@ -12,6 +12,7 @@ import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -40,6 +41,7 @@ export type DoctorSessionSqliteIssue = {
 
 export type DoctorSessionSqliteTargetReport = {
   agentId: string;
+  archivedTranscriptFiles: string[];
   importedEntries: number;
   importedTranscriptEvents: number;
   issues: DoctorSessionSqliteIssue[];
@@ -57,6 +59,7 @@ export type DoctorSessionSqliteReport = {
   mode: DoctorSessionSqliteMode;
   targets: DoctorSessionSqliteTargetReport[];
   totals: {
+    archivedTranscriptFiles: number;
     importedEntries: number;
     importedTranscriptEvents: number;
     issues: number;
@@ -138,6 +141,7 @@ async function inspectOrMigrateTarget(params: {
   );
   const report: DoctorSessionSqliteTargetReport = {
     agentId: params.target.agentId,
+    archivedTranscriptFiles: [],
     importedEntries: 0,
     importedTranscriptEvents: 0,
     issues,
@@ -257,11 +261,15 @@ async function importLegacySessionRecord(
 ): Promise<void> {
   const result = countTranscriptEvents(record);
   if (result.status === "missing") {
+    if (markAlreadyMigratedTranscript(target, record, report)) {
+      return;
+    }
     report.issues.push({
       code: "transcript_missing",
       message: `Transcript file is missing: ${record.transcriptPath}`,
       sessionKey: record.sessionKey,
     });
+    return;
   } else if (result.status === "malformed") {
     report.issues.push({
       code: "transcript_malformed",
@@ -272,7 +280,7 @@ async function importLegacySessionRecord(
   }
   const imported = await importSqliteSessionRows({
     agentId: target.agentId,
-    entry: record.entry,
+    entry: normalizeImportedSqliteSessionEntry(target, record),
     sessionKey: record.sessionKey,
     storePath: target.storePath,
     ...(record.transcriptPath && result.status === "ok"
@@ -281,6 +289,58 @@ async function importLegacySessionRecord(
   });
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
+  if (record.transcriptPath && result.status === "ok") {
+    archiveImportedTranscript(target, record, report);
+  }
+}
+
+function normalizeImportedSqliteSessionEntry(
+  target: SessionStoreTarget,
+  record: LegacySessionRecord,
+): SessionEntry {
+  return {
+    ...record.entry,
+    sessionFile: formatSqliteSessionFileMarker({
+      agentId: target.agentId,
+      sessionId: record.entry.sessionId,
+      storePath: target.storePath,
+    }),
+  };
+}
+
+function markAlreadyMigratedTranscript(
+  target: SessionStoreTarget,
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+): boolean {
+  const migratedEvents = countAlreadyMigratedTranscriptEvents(target, record);
+  if (migratedEvents === undefined) {
+    return false;
+  }
+  report.validatedEntries += 1;
+  report.validatedTranscriptEvents += migratedEvents;
+  return true;
+}
+
+function archiveImportedTranscript(
+  target: SessionStoreTarget,
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  if (!record.transcriptPath || !fs.existsSync(record.transcriptPath)) {
+    return;
+  }
+  try {
+    report.archivedTranscriptFiles.push(
+      moveImportedTranscriptToArchive(target, record.sessionKey, record.transcriptPath),
+    );
+  } catch (err) {
+    report.issues.push({
+      code: "transcript_archive_failed",
+      message: `${record.transcriptPath}: ${String(err)}`,
+      sessionKey: record.sessionKey,
+    });
+  }
 }
 
 function validateLegacySessionRecord(
@@ -320,6 +380,13 @@ function validateTranscriptEventCount(
   report: DoctorSessionSqliteTargetReport,
 ): void {
   const result = countTranscriptEvents(record);
+  if (result.status === "missing") {
+    const migratedEvents = countAlreadyMigratedTranscriptEvents(target, record);
+    if (migratedEvents !== undefined) {
+      report.validatedTranscriptEvents += migratedEvents;
+    }
+    return;
+  }
   if (result.status !== "ok") {
     return;
   }
@@ -338,6 +405,27 @@ function validateTranscriptEventCount(
     return;
   }
   report.validatedTranscriptEvents += sqliteEvents.length;
+}
+
+function countAlreadyMigratedTranscriptEvents(
+  target: SessionStoreTarget,
+  record: LegacySessionRecord,
+): number | undefined {
+  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
+  const sqliteEntry = loadExactSqliteSessionEntry({
+    agentId: target.agentId,
+    sessionKey: normalizedKey,
+    storePath: target.storePath,
+  });
+  if (sqliteEntry?.entry.sessionId !== record.entry.sessionId) {
+    return undefined;
+  }
+  return loadSqliteTranscriptEventsSync({
+    agentId: target.agentId,
+    sessionId: record.entry.sessionId,
+    sessionKey: normalizedKey,
+    storePath: target.storePath,
+  }).length;
 }
 
 function countTranscriptEvents(
@@ -428,6 +516,47 @@ function listUnreferencedJsonlFiles(
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function moveImportedTranscriptToArchive(
+  target: SessionStoreTarget,
+  sessionKey: string,
+  transcriptPath: string,
+): string {
+  const sourcePath = path.resolve(transcriptPath);
+  const stat = fs.statSync(sourcePath);
+  if (!stat.isFile()) {
+    throw new Error("source is not a regular file");
+  }
+  const archiveDir = resolveImportedTranscriptArchiveDir(target.storePath);
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const baseName = path.basename(sourcePath);
+  const keySlug = sessionKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? "" : `.${attempt}`;
+    const archivePath = path.join(
+      archiveDir,
+      `${keySlug}.${baseName}.imported-${Date.now()}${suffix}`,
+    );
+    if (fs.existsSync(archivePath)) {
+      continue;
+    }
+    try {
+      fs.renameSync(sourcePath, archivePath);
+      return archivePath;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "EEXIST") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`Could not archive imported transcript for ${sessionKey}`);
+}
+
+function resolveImportedTranscriptArchiveDir(storePath: string): string {
+  const storeDir = path.dirname(path.resolve(storePath));
+  return path.join(path.dirname(storeDir), "session-sqlite-import-archive");
+}
+
 function canonicalFilePath(filePath: string): string {
   try {
     return fs.realpathSync.native(filePath);
@@ -475,6 +604,10 @@ function summarizeDoctorSessionSqliteReport(
     mode,
     targets,
     totals: {
+      archivedTranscriptFiles: targets.reduce(
+        (total, target) => total + target.archivedTranscriptFiles.length,
+        0,
+      ),
       importedEntries: sumTargets(targets, "importedEntries"),
       importedTranscriptEvents: sumTargets(targets, "importedTranscriptEvents"),
       issues: targets.reduce((total, target) => total + target.issues.length, 0),

@@ -86,9 +86,19 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: {
+      target?: UserTurnTranscriptTargetResolver;
+      updateMode?: UserTurnTranscriptUpdateMode;
+      cwd?: string;
+    },
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

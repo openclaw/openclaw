@@ -29,6 +29,8 @@ import {
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type {
   ExactSessionEntry,
+  LatestTranscriptAssistantMessage,
+  LatestTranscriptMessage,
   LatestTranscriptAssistantText,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -67,6 +69,7 @@ import {
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
+import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -590,6 +593,7 @@ function loadSqliteTranscriptEventsFromDatabase(
 /** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
 export function loadLatestSqliteAssistantText(
   scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
@@ -604,7 +608,37 @@ export function loadLatestSqliteAssistantText(
     ORDER BY te.seq DESC
   `);
   for (const row of statement.iterate(resolved.sessionId) as Iterable<{ event_json: string }>) {
-    const latest = parseLatestAssistantTextEvent(row.event_json);
+    const latest = parseLatestAssistantMessageEvent(row.event_json, options);
+    if (!latest) {
+      continue;
+    }
+    const text = parseLatestAssistantText(latest);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+/** Reads the latest assistant message payload from SQLite transcript rows in reverse order. */
+export function loadLatestSqliteAssistantMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantMessage | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const statement = database.db.prepare(`
+    SELECT te.event_json AS event_json
+    FROM transcript_events te
+    INNER JOIN transcript_event_identities ti
+      ON ti.session_id = te.session_id
+      AND ti.seq = te.seq
+    WHERE te.session_id = ?
+      AND ti.event_type = 'message'
+    ORDER BY te.seq DESC
+  `);
+  for (const row of statement.iterate(resolved.sessionId) as Iterable<{ event_json: string }>) {
+    const latest = parseLatestAssistantMessageEvent(row.event_json, options);
     if (latest) {
       return latest;
     }
@@ -612,7 +646,51 @@ export function loadLatestSqliteAssistantText(
   return undefined;
 }
 
-function parseLatestAssistantTextEvent(raw: string): LatestTranscriptAssistantText | undefined {
+/** Reads the newest transcript message payload from SQLite transcript rows. */
+export function loadLatestSqliteMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptMessage | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const statement = database.db.prepare(`
+    SELECT te.event_json AS event_json
+    FROM transcript_events te
+    INNER JOIN transcript_event_identities ti
+      ON ti.session_id = te.session_id
+      AND ti.seq = te.seq
+    WHERE te.session_id = ?
+      AND ti.event_type = 'message'
+    ORDER BY te.seq DESC
+    LIMIT 1
+  `);
+  const row = statement.get(resolved.sessionId) as { event_json: string } | undefined;
+  return row ? parseLatestMessageEvent(row.event_json, options) : undefined;
+}
+
+function parseLatestAssistantText(
+  latest: LatestTranscriptAssistantMessage,
+): LatestTranscriptAssistantText | undefined {
+  const message = latest.message as {
+    timestamp?: unknown;
+  };
+  const text = extractAssistantVisibleText(latest.message)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return {
+    ...(latest.id ? { id: latest.id } : {}),
+    text,
+    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? { timestamp: message.timestamp }
+      : {}),
+  };
+}
+
+function parseLatestAssistantMessageEvent(
+  raw: string,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantMessage | undefined {
   let parsed: {
     id?: unknown;
     message?: {
@@ -631,19 +709,49 @@ function parseLatestAssistantTextEvent(raw: string): LatestTranscriptAssistantTe
   if (!message || message.role !== "assistant") {
     return undefined;
   }
-  if (isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)) {
-    return undefined;
-  }
-  const text = extractAssistantVisibleText(message)?.trim();
-  if (!text) {
+  if (
+    !options.includeTranscriptOnlyOpenClawAssistant &&
+    isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)
+  ) {
     return undefined;
   }
   return {
     ...(typeof parsed.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
-    text,
-    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-      ? { timestamp: message.timestamp }
-      : {}),
+    message,
+  };
+}
+
+function parseLatestMessageEvent(
+  raw: string,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptMessage | undefined {
+  let parsed: {
+    id?: unknown;
+    message?: {
+      model?: unknown;
+      provider?: unknown;
+      role?: unknown;
+    };
+  };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    return undefined;
+  }
+  const message = parsed.message;
+  if (!message || typeof message.role !== "string") {
+    return undefined;
+  }
+  if (
+    message.role === "assistant" &&
+    !options.includeTranscriptOnlyOpenClawAssistant &&
+    isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)
+  ) {
+    return undefined;
+  }
+  return {
+    ...(typeof parsed.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
+    message,
   };
 }
 
@@ -942,7 +1050,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   const now = options.now ?? Date.now();
   const finalMessage = redactTranscriptMessageForStorage(prepared, options);
   ensureTranscriptHeader(database, resolved, options.cwd, now);
-  const parentId = readLatestTranscriptMessageId(database, resolved.sessionId);
+  const parentId = readActiveTranscriptAppendParentId(database, resolved.sessionId);
   const event = {
     type: "message",
     id: messageId,
@@ -2469,22 +2577,13 @@ function ensureTranscriptHeader(
   ensureTranscriptSessionRoot(database, scope, now);
 }
 
-function readLatestTranscriptMessageId(
+function readActiveTranscriptAppendParentId(
   database: OpenClawAgentDatabase,
   sessionId: string,
-): string | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_event_identities")
-      .select(["event_id"])
-      .where("session_id", "=", sessionId)
-      .where("event_type", "=", "message")
-      .orderBy("seq", "desc")
-      .limit(1),
+): string | null {
+  return resolveVisibleTranscriptAppendParentId(
+    loadSqliteTranscriptEventsFromDatabase(database, sessionId),
   );
-  return row?.event_id;
 }
 
 function readTranscriptIdentityByEventId(

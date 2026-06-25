@@ -195,6 +195,129 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([expect.objectContaining({ id: "session-1", type: "session" })]);
   });
 
+  it("persists store-backed turns to SQLite when an old sessionFile path is present", async () => {
+    const legacyTranscript = path.join(tempDir, "legacy-topic.jsonl");
+    const scope = {
+      agentId: "main",
+      sessionId: "legacy-topic-session",
+      sessionKey: "agent:main:telegram:group:1:topic:2",
+      storePath,
+      sessionFile: legacyTranscript,
+    };
+    await upsertSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      {
+        sessionId: scope.sessionId,
+        sessionFile: legacyTranscript,
+        updatedAt: 10,
+      },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "store-backed sqlite turn" } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.sessionFile).toContain("sqlite:main:legacy-topic-session:");
+    const entry = loadSessionEntry({ sessionKey: scope.sessionKey, storePath });
+    expect(entry?.sessionFile).toBe(result.sessionFile);
+    await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "store-backed sqlite turn",
+        }),
+      }),
+    );
+    expect(fs.existsSync(legacyTranscript)).toBe(false);
+  });
+
+  it("guards store-backed turns in SQLite when an old sessionFile path is present", async () => {
+    const legacyTranscript = path.join(tempDir, "guarded-legacy-topic.jsonl");
+    const scope = {
+      agentId: "main",
+      sessionId: "guarded-topic-session",
+      sessionKey: "agent:main:telegram:group:1:topic:3",
+      storePath,
+      sessionFile: legacyTranscript,
+    };
+    await upsertSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      {
+        sessionId: scope.sessionId,
+        sessionFile: legacyTranscript,
+        updatedAt: 10,
+      },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      expectedSessionId: scope.sessionId,
+      messages: [{ message: { role: "assistant", content: "guarded sqlite turn" } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBeUndefined();
+    expect(result.sessionFile).toContain("sqlite:main:guarded-topic-session:");
+    const entry = loadSessionEntry({ sessionKey: scope.sessionKey, storePath });
+    expect(entry?.sessionFile).toBe(result.sessionFile);
+    await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: "guarded sqlite turn",
+        }),
+      }),
+    );
+    expect(fs.existsSync(legacyTranscript)).toBe(false);
+  });
+
+  it("appends SQLite turns to the active transcript leaf", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "branched-topic-session",
+      sessionKey: "agent:main:telegram:group:1:topic:4",
+      storePath,
+    };
+    await replaceSqliteTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root prompt" },
+      },
+      {
+        type: "message",
+        id: "abandoned",
+        parentId: "root",
+        message: { role: "assistant", content: "abandoned answer" },
+      },
+      {
+        type: "leaf",
+        id: "select-root",
+        parentId: "abandoned",
+        targetId: "root",
+        appendParentId: "root",
+      },
+    ]);
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "assistant", content: "active answer" } }],
+      updateMode: "none",
+    });
+
+    const appended = (await loadTranscriptEvents(scope)).at(-1);
+    expect(appended).toMatchObject({
+      type: "message",
+      parentId: "root",
+      message: { role: "assistant", content: "active answer" },
+    });
+  });
+
   it("does not persist the entry when creation validation fails", async () => {
     const scope = {
       agentId: "main",
@@ -831,11 +954,13 @@ describe("session accessor seam", () => {
     });
     const updates: Array<{
       sessionFile: string | undefined;
+      target: unknown;
       updatedAt: number | undefined;
     }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => {
       updates.push({
         sessionFile: update.sessionFile,
+        target: update.target,
         updatedAt: loadSessionEntry(scope)?.updatedAt,
       });
     });
@@ -875,6 +1000,11 @@ describe("session accessor seam", () => {
     expect(updates).toEqual([
       {
         sessionFile: result.sessionFile,
+        target: {
+          agentId: "main",
+          sessionId: "session-lock-order",
+          sessionKey: "agent:main:lock-order",
+        },
         updatedAt: expect.any(Number),
       },
     ]);
@@ -1030,7 +1160,7 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("does not route SQLite transcript turn appends through an active owned file lock", async () => {
+  it("routes SQLite transcript turn appends through an active owned file lock", async () => {
     const scope = {
       agentId: "main",
       sessionFile: transcriptPath,
@@ -1070,12 +1200,12 @@ describe("session accessor seam", () => {
         }),
     );
 
-    expect(publishOptions).toEqual([]);
-    expect(publishedEntryBatches).toEqual([]);
+    expect(publishOptions).toEqual([undefined]);
+    expect(publishedEntryBatches).toEqual([[]]);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
-  it("preserves an explicitly resolved runtime transcript file target", async () => {
+  it("resolves store-backed runtime transcript targets to filesystem paths", async () => {
     const explicitSessionFile = path.join(tempDir, "explicit-session.jsonl");
     const scope = {
       agentId: "main",
@@ -1093,8 +1223,10 @@ describe("session accessor seam", () => {
     const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
     const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
 
-    expect(readTarget.sessionFile).toBe(explicitSessionFile);
-    expect(writeTarget.sessionFile).toBe(explicitSessionFile);
+    expect(path.basename(readTarget.sessionFile)).toBe("session-1.jsonl");
+    expect(path.basename(writeTarget.sessionFile)).toBe("session-1.jsonl");
+    expect(readTarget.sessionFile).not.toContain("sqlite:");
+    expect(writeTarget.sessionFile).not.toContain("sqlite:");
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
   });
 
@@ -1110,5 +1242,27 @@ describe("session accessor seam", () => {
       sessionFile: explicitSessionFile,
       sessionId: "session-1",
     });
+  });
+
+  it("does not expose legacy custom transcript paths as read fallbacks after SQLite migration", async () => {
+    const legacyTranscript = path.join(tempDir, "custom-topic-transcript.jsonl");
+    const sessionKey = "agent:main:telegram:group:1:topic:9";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "custom-topic-session",
+        sessionFile: legacyTranscript,
+        updatedAt: 10,
+      },
+    );
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionId: "custom-topic-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target.sessionFile).toContain("sqlite:main:custom-topic-session:");
   });
 });

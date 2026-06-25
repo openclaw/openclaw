@@ -492,6 +492,7 @@ export function createUserTurnTranscriptRecorder(
   const message = resolvePersistedUserTurnMessage(params);
   let blocked = false;
   let persisted = false;
+  let runtimePersisted = false;
   let persistedResult: UserTurnTranscriptPersistResult | undefined;
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
@@ -551,8 +552,10 @@ export function createUserTurnTranscriptRecorder(
   const persistPrepared = async (options: {
     waitForRuntime: boolean;
     skipWhenBlocked: boolean;
+    message?: PersistedUserTurnMessage;
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (persisted) {
       return persistedResult;
@@ -560,7 +563,7 @@ export function createUserTurnTranscriptRecorder(
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }
-    if (!message && !params.resolveInput) {
+    if (!options.message && !message && !params.resolveInput) {
       return undefined;
     }
     if (options.waitForRuntime) {
@@ -570,12 +573,15 @@ export function createUserTurnTranscriptRecorder(
       if (persisted) {
         return persistedResult;
       }
+      if (runtimePersisted) {
+        return undefined;
+      }
     }
     if (selfPersistencePromise) {
       return await selfPersistencePromise;
     }
     selfPersistencePromise = (async () => {
-      const resolvedMessage = await resolveMessageForPersistence();
+      const resolvedMessage = options.message ?? (await resolveMessageForPersistence());
       if (!resolvedMessage) {
         return undefined;
       }
@@ -583,16 +589,20 @@ export function createUserTurnTranscriptRecorder(
       if (!target) {
         return undefined;
       }
+      const resolvedTarget = options.cwd ? { ...target, cwd: options.cwd } : target;
+      if (runtimePersisted && isUserTurnTranscriptFileTarget(resolvedTarget)) {
+        return undefined;
+      }
       const updateMode = options.updateMode ?? params.updateMode ?? "inline";
-      const result = isUserTurnTranscriptFileTarget(target)
+      const result = isUserTurnTranscriptFileTarget(resolvedTarget)
         ? await appendFileTargetUserTurnTranscript({
-            target,
+            target: resolvedTarget,
             message: resolvedMessage,
             updateMode,
             beforeMessageWrite: params.beforeMessageWrite,
           })
         : await persistUserTurnTranscript({
-            ...target,
+            ...resolvedTarget,
             message: resolvedMessage,
             updateMode,
             ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -618,7 +628,7 @@ export function createUserTurnTranscriptRecorder(
       runtimePersistencePromise = pending;
     },
     markRuntimePersisted: (persistedMessage) => {
-      persisted = true;
+      runtimePersisted = true;
       if (persistedMessage && persistedResult) {
         persistedResult = {
           ...persistedResult,
@@ -629,7 +639,7 @@ export function createUserTurnTranscriptRecorder(
     markBlocked: () => {
       blocked = true;
     },
-    hasPersisted: () => persisted,
+    hasPersisted: () => persisted || runtimePersisted,
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => runtimePersistencePromise !== undefined,
     waitForRuntimePersistence,
@@ -639,13 +649,26 @@ export function createUserTurnTranscriptRecorder(
         skipWhenBlocked: true,
         target: options?.target,
         updateMode: options?.updateMode,
+        cwd: options?.cwd,
       }),
+    persistBlocked: async (blockedMessage, options) => {
+      blocked = true;
+      return await persistPrepared({
+        waitForRuntime: false,
+        skipWhenBlocked: false,
+        message: blockedMessage,
+        target: options?.target,
+        updateMode: options?.updateMode,
+        cwd: options?.cwd,
+      });
+    },
     persistFallback: async (options) =>
       await persistPrepared({
         waitForRuntime: true,
         skipWhenBlocked: true,
         target: options?.target,
         updateMode: options?.updateMode,
+        cwd: options?.cwd,
       }),
   };
 }

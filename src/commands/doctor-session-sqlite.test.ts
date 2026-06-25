@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSqliteTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite.js";
+import {
+  loadExactSqliteSessionEntry,
+  loadSqliteTranscriptEventsSync,
+} from "../config/sessions/session-accessor.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -83,23 +86,40 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(firstImport.totals).toMatchObject({
+      archivedTranscriptFiles: 1,
       importedEntries: 1,
       importedTranscriptEvents: 2,
       issues: 0,
       sqliteEntries: 1,
     });
     expect(secondImport.totals).toMatchObject({
-      importedEntries: 1,
-      importedTranscriptEvents: 2,
+      archivedTranscriptFiles: 0,
+      importedEntries: 0,
+      importedTranscriptEvents: 0,
       issues: 0,
       sqliteEntries: 1,
+      validatedEntries: 1,
+      validatedTranscriptEvents: 2,
     });
     expect(validation.totals).toMatchObject({
       issues: 0,
       validatedEntries: 1,
       validatedTranscriptEvents: 2,
     });
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expect(firstImport.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
+    const archivedTranscriptPath = firstImport.targets[0]?.archivedTranscriptFiles[0];
+    expect(archivedTranscriptPath).toBeTruthy();
+    expect(archivedTranscriptPath).not.toContain(`${path.sep}sessions${path.sep}`);
+    expect(fs.existsSync(archivedTranscriptPath!)).toBe(true);
     expect(inspect.totals.sqliteEntries).toBe(1);
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry.sessionFile,
+    ).toContain("sqlite:main:session-1:");
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",
