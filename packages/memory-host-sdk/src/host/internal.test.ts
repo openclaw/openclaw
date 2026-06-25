@@ -235,6 +235,23 @@ describe("memory host SDK package internals", () => {
     }
   });
 
+  it("keeps overlapping chunks of one long line free of injected newlines", () => {
+    // A single line longer than maxChars with no newlines (minified JSON,
+    // base64, a long URL, a pasted log) is coarse-split into fragments that all
+    // share one lineNo. With overlap on (the production default), flush()
+    // previously re-joined those fragments with "\n", so chunk text was no
+    // longer a substring of the source — that corrupted text was then embedded
+    // and surfaced verbatim in search snippets.
+    const source = "The quick brown fox jumps over the lazy dog. ".repeat(89);
+    expect(source).not.toContain("\n");
+    const chunks = chunkMarkdown(source, { tokens: 400, overlap: 80 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.text).not.toContain("\n");
+      expect(source).toContain(chunk.text);
+    }
+  });
+
   it("remaps chunk lines using JSONL source line maps", () => {
     const lineMap = [4, 6, 7, 10, 13];
     const chunks = chunkMarkdown(

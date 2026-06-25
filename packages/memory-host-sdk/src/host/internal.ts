@@ -408,7 +408,17 @@ export function chunkMarkdown(
     if (!firstEntry || !lastEntry) {
       return;
     }
-    const text = current.map((entry) => entry.line).join("\n");
+    // Coarse/fine splits of one physical line share lineNo; joining them with
+    // "\n" would inject a newline the source never had, so the chunk text stops
+    // being a substring of the file and corrupts embeddings + search snippets.
+    const text = current.reduce((acc, entry, index) => {
+      if (index === 0) {
+        return entry.line;
+      }
+      const prev = current[index - 1];
+      const separator = prev && prev.lineNo === entry.lineNo ? "" : "\n";
+      return acc + separator + entry.line;
+    }, "");
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
     chunks.push({
