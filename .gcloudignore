@@ -1,0 +1,60 @@
+# Cloud Build ignore – controls what gets uploaded to Cloud Build.
+# We intentionally do NOT use #!include:.dockerignore because the .dockerignore
+# pattern of "exclude apps/ then re-include !apps/shared/" is not reliably
+# honored by gcloud's upload filter. Instead we replicate the relevant excludes
+# here with targeted apps/* excludes that spare apps/shared/.
+
+.git
+.worktrees
+.env
+.env.*
+.bun-cache
+.bun
+.tmp
+**/.tmp
+.DS_Store
+**/.DS_Store
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.mp4
+*.mov
+*.wav
+*.mp3
+node_modules
+**/node_modules
+.pnpm-store
+**/.pnpm-store
+.turbo
+**/.turbo
+.cache
+**/.cache
+.next
+**/.next
+coverage
+**/coverage
+*.log
+tmp
+**/tmp
+
+# build artifacts
+dist
+**/dist
+apps/macos/.build
+apps/ios/build
+**/*.trace
+
+# Large app trees — exclude specific subdirs instead of blanket apps/
+apps/android/
+apps/ios/
+apps/macos/
+assets/
+Peekaboo/
+Swabble/
+Core/
+Users/
+
+# Include the lockfile (gitignored but required for Docker build)
+!pnpm-lock.yaml
