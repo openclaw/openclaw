@@ -313,6 +313,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
     const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    const sourceActor = params.sender.sourceActor;
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -336,6 +337,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       SenderId: params.sender.id,
       SenderUsername: params.sender.username,
       CanDetectMention: params.access?.mentions?.canDetectMention,
+      SourceActor: sourceActor,
+      SourceActorId: sourceActor?.id,
+      SourceActorPeerId: sourceActor?.peerId,
+      SourceActorDisplayName: sourceActor?.displayName,
+      SourceActorRole: sourceActor?.role,
+      SourceActorContext: sourceActor?.context,
       Timestamp: params.timestamp,
       WasMentioned: params.access?.mentions?.wasMentioned,
       HasAnyMention: params.access?.mentions?.hasAnyMention,
