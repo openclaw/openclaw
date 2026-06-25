@@ -55,7 +55,9 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
     !row.failure_alert_mode &&
     !row.failure_alert_account_id
   ) {
-    return undefined;
+    // Enabled-with-defaults (failureAlert = {}).  An all-null row with
+    // failure_alert_disabled = 0 is a valid enabled config, not "no config".
+    return {};
   }
   return {
     ...(row.failure_alert_after != null ? { after: normalizeNumber(row.failure_alert_after) } : {}),
