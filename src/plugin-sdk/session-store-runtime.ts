@@ -1,6 +1,8 @@
 // Narrow session-store helpers for channel hot paths.
 
+import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
+  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
@@ -10,13 +12,15 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
-import type { ResolvedSessionMaintenanceConfig } from "../config/sessions/store.js";
+import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 type SessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
+  readConsistency?: "latest";
   sessionKey: string;
   storePath?: string;
 };
@@ -39,7 +43,7 @@ type SessionStoreEntryPatch = (
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: SessionStoreEntryPatch;
@@ -60,6 +64,23 @@ type UpsertSessionEntryParams = SessionStoreReadParams & {
   entry: SessionEntry;
 };
 
+type SessionLifecycleArtifactsCleanupParams = {
+  agentId?: string;
+  archiveRemovedEntryTranscripts?: boolean;
+  env?: NodeJS.ProcessEnv;
+  orphanTranscriptMinAgeMs: number;
+  sessionStore?: string;
+  sessionKeySegmentPrefix: string;
+  storePath?: string;
+  transcriptContentMarker: string;
+  nowMs?: number;
+};
+
+type SessionLifecycleArtifactsCleanupResult = {
+  archivedTranscriptArtifacts: number;
+  removedEntries: number;
+};
+
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
   // Maintainer note: keep this adapter narrow so plugin callers retain the
   // object-parameter API while internal accessor-only options stay private.
@@ -70,6 +91,7 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }
@@ -107,7 +129,10 @@ export async function patchSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     fallbackEntry: params.fallbackEntry,
-    maintenanceConfig: params.maintenanceConfig,
+    maintenanceConfig:
+      params.maintenanceConfig !== undefined
+        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+        : undefined,
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
@@ -139,6 +164,26 @@ export async function updateSessionStoreEntry(
 /** Replaces or creates one session entry by agent/session identity. */
 export async function upsertSessionEntry(params: UpsertSessionEntryParams): Promise<void> {
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
+}
+
+/** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
+export async function cleanupSessionLifecycleArtifacts(
+  params: SessionLifecycleArtifactsCleanupParams,
+): Promise<SessionLifecycleArtifactsCleanupResult> {
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(params.sessionStore, {
+      agentId: params.agentId,
+      env: params.env,
+    });
+  return await cleanupAccessorSessionLifecycleArtifacts({
+    storePath,
+    archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
+    sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
+    transcriptContentMarker: params.transcriptContentMarker,
+    orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+    nowMs: params.nowMs,
+  });
 }
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";

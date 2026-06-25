@@ -66,6 +66,26 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expectNoNodeStack(result.stderr);
   });
 
+  it("reports duplicate evidence producer args without a Node stack trace", () => {
+    const duplicateCases = [
+      ["--artifact-base", ["--artifact-base", ".artifacts/a", "--artifact-base", ".artifacts/b"]],
+      ["--repo-root", ["--artifact-base", ".artifacts/a", "--repo-root", ".", "--repo-root", ".."]],
+      [
+        "--skip-visual-proof",
+        ["--artifact-base", ".artifacts/a", "--skip-visual-proof", "--skip-visual-proof"],
+      ],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      const result = runCli(...args);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`${flag} was provided more than once`);
+      expectNoNodeStack(result.stderr);
+    }
+  });
+
   it("reports short flag values without treating them as help", () => {
     const artifactBaseResult = runCli("--artifact-base", "-h");
     const repoRootResult = runCli("--artifact-base", "/tmp/openclaw-ux-test", "--repo-root", "-h");

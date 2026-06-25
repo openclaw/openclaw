@@ -8,6 +8,7 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -213,17 +214,13 @@ async function runMessageActionRequest(
 }
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   try {
     return await test(stateDir);
   } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
+    envSnapshot.restore();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
@@ -924,6 +921,37 @@ describe("gateway send mirroring", () => {
     expect(response?.[1]).toBeUndefined();
     expect(response?.[2]?.message).toContain("unsupported channel: webchat");
     expect(response?.[2]?.message).toContain("Use `chat.send`");
+  });
+
+  it("accepts bundled channels before plugin registry normalization for message actions", async () => {
+    const { respond } = await runMessageActionRequest({
+      channel: "TELEGRAM",
+      action: "send",
+      params: { target: "123", message: "hi" },
+      idempotencyKey: "idem-telegram-message-action",
+    });
+
+    const call = lastDispatchChannelMessageActionCall();
+    expect(call?.channel).toBe("telegram");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("rejects unknown send channels without delivering", async () => {
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+
+    const { respond } = await runSend({
+      to: "x",
+      message: "hi",
+      channel: "definitely-not-a-real-channel-xyz",
+      idempotencyKey: "idem-unknown-channel",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toContain(
+      "unsupported channel: definitely-not-a-real-channel-xyz",
+    );
   });
 
   it("auto-picks the single configured channel for send", async () => {
