@@ -1,6 +1,5 @@
 // Google plugin module implements oauth.project behavior.
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,
@@ -25,7 +24,7 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
-      JSON.parse(
+      const data = JSON.parse(
         (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
           onOverflow: ({ maxBytes }) =>
             new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
@@ -83,7 +82,7 @@ async function pollOperation(
     if (!response.ok) {
       continue;
     }
-    JSON.parse(
+    const data = JSON.parse(
         (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
           onOverflow: ({ maxBytes }) =>
             new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
@@ -149,7 +148,7 @@ async function discoverProject(accessToken: string): Promise<string> {
       });
 
       if (!response.ok) {
-        JSON.parse(
+        const errorPayload = JSON.parse(
         (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
           onOverflow: ({ maxBytes }) =>
             new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
