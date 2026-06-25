@@ -173,6 +173,32 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("reports active JSONL files left beside SQLite-backed sessions", async () => {
+    const store = createLegacyStore();
+
+    await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    fs.writeFileSync(store.transcriptPath, '{"type":"event","id":"heartbeat"}\n', {
+      mode: 0o600,
+    });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(1);
+    expect(report.targets[0]?.issues[0]).toMatchObject({
+      code: "active_sqlite_transcript_jsonl",
+      sessionKey: "agent:main:main",
+    });
+    expect(report.targets[0]?.issues[0]?.message).toContain("session-1.jsonl");
+  });
+
   it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
     const store = createLegacyStore({
       transcriptLines: [
