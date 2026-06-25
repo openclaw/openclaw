@@ -346,6 +346,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     promptState.client = next.client;
     if (!next.connected || !next.client) {
       promptState.execApprovalQueue = [];
+      promptState.execApprovalBusy = false;
       promptState.execApprovalError = null;
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
       for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
@@ -500,9 +501,25 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         const method =
           active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
         await client.request(method, { id: active.id, decision });
+        if (
+          disposed ||
+          activeClient !== client ||
+          gateway.snapshot.client !== client ||
+          !gateway.snapshot.connected
+        ) {
+          return;
+        }
         dismissExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
+          if (
+            disposed ||
+            activeClient !== client ||
+            gateway.snapshot.client !== client ||
+            !gateway.snapshot.connected
+          ) {
+            return;
+          }
           dismissExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
           if (
