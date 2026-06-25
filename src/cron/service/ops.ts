@@ -956,6 +956,7 @@ async function finishPreparedManualRun(
         status: coreResult.status,
         error: coreResult.error,
         summary: coreResult.summary,
+        deliverySummary: coreResult.deliverySummary,
         diagnostics: coreResult.diagnostics,
         delivered: job.state.lastDelivered,
         deliveryStatus: job.state.lastDeliveryStatus,

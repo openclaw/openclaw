@@ -584,6 +584,69 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("uses delivery summary for command cron webhook while preserving interactive run summary", async () => {
+    const cfg = createCronConfig("server-cron-command-webhook-tail");
+    loadConfigMock.mockReturnValue(cfg);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      release: vi.fn(async () => {}),
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const promptUrl = "https://login.microsoft.com/device";
+      const promptCode = "FAKE-CODE-270";
+      const script = [
+        `process.stdout.write('Open ${promptUrl} and enter the code ${promptCode}.\\n');`,
+        "for (let i = 0; i < 80; i += 1) process.stdout.write(`noise-${i}-xxxxxxxxxxxxxxxxxxxxxxxx\\n`);",
+        "process.stdout.write('tail marker\\n');",
+      ].join("");
+      const job = await state.cron.add({
+        name: "webhook-tail-only-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", script],
+          outputMaxBytes: 80,
+        },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      const request = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
+        "fetch request",
+      );
+      const init = requireRecord(request.init, "fetch init");
+      const body = JSON.parse(String(init.body)) as {
+        diagnostics?: { summary?: string };
+        summary?: string;
+      };
+      expect(body.summary).toContain("tail marker");
+      expect(body.summary).not.toContain(promptUrl);
+      expect(body.diagnostics?.summary).toContain("tail marker");
+      expect(body.diagnostics?.summary).not.toContain(promptUrl);
+
+      const storedJob = state.cron.getJob(job.id);
+      expect(storedJob?.state.lastDiagnosticSummary).toContain(promptUrl);
+      expect(storedJob?.state.lastDiagnosticSummary).toContain(promptCode);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("routes global-scope main cron jobs through the global queue for queued wakes", async () => {
     const cfg = {
       ...createCronConfig("server-cron-global-queued"),

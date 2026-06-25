@@ -176,6 +176,8 @@ export type CronRunOutcome = {
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
+  /** Optional non-interactive delivery summary when it must differ from operator history. */
+  deliverySummary?: string;
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;

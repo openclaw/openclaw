@@ -106,23 +106,37 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
+  const webhookSummary = typeof evt.deliverySummary === "string" ? evt.deliverySummary : undefined;
+  const {
+    deliverySummary: _deliverySummary,
+    summary: _summary,
+    diagnostics: _diagnostics,
+    ...payload
+  } = evt;
+  const sanitizedPayload =
+    webhookSummary === undefined
+      ? evt
+      : {
+          ...payload,
+          summary: webhookSummary,
+          diagnostics: evt.diagnostics ? { summary: webhookSummary, entries: [] } : undefined,
+        };
   if (evt.status !== "error") {
-    return evt;
+    return sanitizedPayload;
   }
-  const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
   if (evt.job) {
     const state = { ...evt.job.state };
     delete state.lastDiagnostics;
     delete state.lastDiagnosticSummary;
     return {
-      ...payload,
+      ...sanitizedPayload,
       job: {
         ...evt.job,
         state,
       },
     };
   }
-  return payload;
+  return sanitizedPayload;
 }
 
 /** Posts a cron webhook without throwing back into scheduler completion flow. */

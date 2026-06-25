@@ -31,6 +31,7 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  deliverySummary?: string;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;

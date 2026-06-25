@@ -433,10 +433,14 @@ export function buildGatewayCronService(params: {
           ["channel", "to", "accountId", "threadId", "source"],
         ),
       };
-      const summaryIsSilent =
-        typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
-      if (summaryIsSilent) {
-        const { summary: _summary, ...silentResult } = result;
+      const message =
+        "deliverySummary" in result && typeof result.deliverySummary === "string"
+          ? result.deliverySummary
+          : result.summary;
+      const messageIsSilent =
+        typeof message === "string" && isSilentReplyText(message, SILENT_REPLY_TOKEN);
+      if (messageIsSilent) {
+        const { summary: _summary, deliverySummary: _deliverySummary, ...silentResult } = result;
         return {
           ...silentResult,
           deliveryAttempted: false,
@@ -445,7 +449,7 @@ export function buildGatewayCronService(params: {
         };
       }
       const shouldAnnounce =
-        plan.mode === "announce" && typeof result.summary === "string" && result.summary.trim();
+        plan.mode === "announce" && typeof message === "string" && message.trim();
       if (!shouldAnnounce) {
         return {
           ...result,
@@ -454,7 +458,6 @@ export function buildGatewayCronService(params: {
           delivery: deliveryTrace,
         };
       }
-      const message = result.summary;
       if (typeof message !== "string") {
         return {
           ...result,

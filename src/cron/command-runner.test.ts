@@ -75,6 +75,57 @@ describe("runCronCommandJob", () => {
     });
   });
 
+  it("preserves action-critical auth prompts when command output is truncated", async () => {
+    const script = [
+      "process.stdout.write('To sign in, open https://login.microsoft.com/device and enter the code FAKE-CODE-270 to authenticate.\\n');",
+      "process.stdout.write('early filler that should be omitted\\n');",
+      "for (let i = 0; i < 80; i += 1) process.stdout.write(`CRON-FILLER-${i}-xxxxxxxxxxxxxxxxxxxxxxxx\\n`);",
+      "process.stdout.write('DONE\\n');",
+    ].join("");
+
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", script],
+        timeoutSeconds: 5,
+        outputMaxBytes: 120,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("https://login.microsoft.com/device");
+    expect(result.summary).toContain("enter the code FAKE-CODE-270");
+    expect(result.summary).toContain("[output truncated:");
+    expect(result.summary).toContain("Recovery: openclaw cron runs --id command-job");
+    expect(result.summary).toContain("DONE");
+    expect(result.summary).not.toContain("early filler that should be omitted");
+    expect(result.deliverySummary).toContain("DONE");
+    expect(result.deliverySummary).not.toContain("https://login.microsoft.com/device");
+    expect(result.diagnostics?.entries[0]?.truncated).toBe(true);
+  });
+
+  it("keeps non-actionable truncated output bounded to the captured tail", async () => {
+    const script = [
+      "process.stdout.write('first line should be dropped\\n');",
+      "for (let i = 0; i < 80; i += 1) process.stdout.write(`noise-${i}-xxxxxxxxxxxxxxxxxxxxxxxx\\n`);",
+      "process.stdout.write('tail marker\\n');",
+    ].join("");
+
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", script],
+        timeoutSeconds: 5,
+        outputMaxBytes: 120,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("tail marker");
+    expect(result.summary).toContain("[output truncated:");
+    expect(result.summary).not.toContain("first line should be dropped");
+  });
+
   it("marks command timeouts as cron errors", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({

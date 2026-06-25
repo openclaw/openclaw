@@ -1,10 +1,19 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type PreservedOutputLine } from "../process/exec.js";
 import type { CronRunDiagnostics, CronRunOutcome, CronRunStatus, CronJob } from "./types.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const EFFECTIVELY_UNBOUNDED_TIMEOUT_MS = 2_147_483_647;
+const ACTION_CRITICAL_OUTPUT_PATTERNS = [
+  /login\.microsoft\.com\/device/i,
+  /microsoft\.com\/devicelogin/i,
+  /\bcode\s*[:=]\s*[a-z0-9][a-z0-9-]{3,}\b/i,
+  /\benter\s+the\s+code\b/i,
+  /\b(open|enter|use|copy|paste)\b.{0,80}\b(code|url|link|browser|callback)\b/i,
+  /\b(localhost|127\.0\.0\.1)(?::\d+)?\/[^\s]*/i,
+  /\b(callback|redirect|verification|device|setup|one[- ]time|auth|login|sign in)\b.{0,80}\b(code|url|link|browser|callback)\b/i,
+];
 
 function secondsToMs(value: number | undefined): number | undefined {
   if (typeof value !== "number") {
@@ -31,6 +40,61 @@ function buildCommandSummary(params: { stdout: string; stderr: string }): string
     return `stdout:\n${stdout}\n\nstderr:\n${stderr}`;
   }
   return stdout ?? stderr;
+}
+
+function isActionCriticalOutputLine(line: PreservedOutputLine): boolean {
+  return ACTION_CRITICAL_OUTPUT_PATTERNS.some((pattern) => pattern.test(line.line));
+}
+
+function appendSummarySection(
+  sections: string[],
+  heading: string,
+  value: string | undefined,
+): void {
+  if (value) {
+    sections.push(`${heading}:\n${value}`);
+  }
+}
+
+function buildInteractiveCommandSummary(params: {
+  stdout: string;
+  stderr: string;
+  preservedOutputLines?: PreservedOutputLine[];
+  stdoutTruncatedBytes?: number;
+  stderrTruncatedBytes?: number;
+  jobId: string;
+}): string | undefined {
+  const summary = buildCommandSummary({ stdout: params.stdout, stderr: params.stderr });
+  const truncated =
+    Boolean(params.stdoutTruncatedBytes && params.stdoutTruncatedBytes > 0) ||
+    Boolean(params.stderrTruncatedBytes && params.stderrTruncatedBytes > 0);
+  const preservedLines = (params.preservedOutputLines ?? [])
+    .filter((line) => !summary?.includes(line.line))
+    .map((line) => `${line.stream}: ${line.line}`)
+    .filter((line) => line.trim());
+  if (!truncated && preservedLines.length === 0) {
+    return summary;
+  }
+
+  const sections: string[] = [];
+  appendSummarySection(
+    sections,
+    "action-critical output preserved before truncation",
+    preservedLines.join("\n"),
+  );
+  appendSummarySection(sections, "captured output tail", summary);
+  if (truncated) {
+    const omitted = [
+      params.stdoutTruncatedBytes ? `stdout ${params.stdoutTruncatedBytes} bytes` : undefined,
+      params.stderrTruncatedBytes ? `stderr ${params.stderrTruncatedBytes} bytes` : undefined,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    sections.push(
+      `[output truncated: omitted earlier ${omitted || "output"}. Recovery: openclaw cron runs --id ${params.jobId}]`,
+    );
+  }
+  return sections.join("\n\n");
 }
 
 function commandErrorMessage(params: {
@@ -115,6 +179,7 @@ export async function runCronCommandJob(params: {
       ...(payload.env ? { env: payload.env } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(payload.outputMaxBytes !== undefined ? { maxOutputBytes: payload.outputMaxBytes } : {}),
+      preserveOutputLine: isActionCriticalOutputLine,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       killProcessTree: true,
     });
@@ -125,7 +190,15 @@ export async function runCronCommandJob(params: {
       result.termination !== "no-output-timeout" &&
       result.termination !== "signal";
     const status: CronRunStatus = ok ? "ok" : "error";
-    const summary = buildCommandSummary({ stdout: result.stdout, stderr: result.stderr });
+    const deliverySummary = buildCommandSummary({ stdout: result.stdout, stderr: result.stderr });
+    const summary = buildInteractiveCommandSummary({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      preservedOutputLines: result.preservedOutputLines,
+      stdoutTruncatedBytes: result.stdoutTruncatedBytes,
+      stderrTruncatedBytes: result.stderrTruncatedBytes,
+      jobId: params.job.id,
+    });
     const error = ok
       ? undefined
       : commandErrorMessage({
@@ -137,6 +210,7 @@ export async function runCronCommandJob(params: {
       status,
       ...(error ? { error } : {}),
       ...(summary ? { summary } : {}),
+      ...(deliverySummary && deliverySummary !== summary ? { deliverySummary } : {}),
       diagnostics: buildDiagnostics({
         command,
         status,
