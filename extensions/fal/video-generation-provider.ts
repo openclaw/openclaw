@@ -488,7 +488,7 @@ async function fetchFalJson(params: {
       return JSON.parse(buffer.toString("utf8")) as unknown;
     } catch (err) {
       if (err instanceof SyntaxError) {
-        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: err });
       }
       throw err;
     }
