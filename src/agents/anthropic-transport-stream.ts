@@ -456,9 +456,19 @@ function convertAnthropicMessages(
             continue;
           }
           if (block.redacted) {
+            // The encrypted payload lives in thinkingSignature; if it is missing
+            // or blank (aborted stream or corrupted persistence) Anthropic rejects
+            // the replay with an invalid-signature error and the session bricks on
+            // every retry. Drop the unreplayable block instead, mirroring the
+            // empty-signature guard for non-redacted thinking below and the native
+            // Anthropic provider.
+            if (!thinkingSignature) {
+              omittedThinking = true;
+              continue;
+            }
             blocks.push({
               type: "redacted_thinking",
-              data: block.thinkingSignature,
+              data: thinkingSignature,
             });
             continue;
           }

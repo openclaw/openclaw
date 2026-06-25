@@ -1848,6 +1848,119 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "alongside visible text",
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: "",
+          redacted: true,
+        },
+        { type: "text" as const, text: "Visible answer." },
+      ],
+      // Redacted block dropped; the visible text keeps the turn intact.
+      expectedContent: [{ type: "text", text: "Visible answer." }],
+    },
+    {
+      label: "as the only block",
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: "   ",
+          redacted: true,
+        },
+      ],
+      // Redacted block dropped; the turn falls back to neutral placeholder text
+      // so the assistant turn survives provider converters that drop blank turns.
+      expectedContent: [{ type: "text", text: "[assistant reasoning omitted]" }],
+    },
+  ])(
+    "drops a redacted thinking block with a blank signature ($label) instead of replaying invalid data",
+    async ({ content, expectedContent }) => {
+      // claude-fable-5 enables historical thinking replay, so the redacted block
+      // reaches the converter branch under test instead of being dropped earlier.
+      await runTransportStream(
+        makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+        {
+          messages: [
+            { role: "user", content: "hello" },
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-fable-5",
+              stopReason: "stop",
+              timestamp: 0,
+              content,
+            },
+            { role: "user", content: "again" },
+          ],
+        } as AnthropicStreamContext,
+        {
+          apiKey: "sk-ant-api",
+          reasoning: "high",
+        } as AnthropicStreamOptions,
+      );
+
+      const assistantMessage = findRecord(
+        latestAnthropicRequest().payload.messages,
+        (record) => record.role === "assistant",
+      );
+      expect(assistantMessage.content).toEqual(expectedContent);
+      // No redacted_thinking block is replayed with an empty/blank `data` payload.
+      expect(
+        (assistantMessage.content as Array<Record<string, unknown>>).some(
+          (block) => block.type === "redacted_thinking" && !((block.data as string) ?? "").trim(),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("replays a redacted thinking block that still carries its opaque signature", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-fable-5",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_keep",
+                redacted: true,
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.content).toEqual([
+      { type: "redacted_thinking", data: "opaque_keep" },
+      { type: "text", text: "Visible answer." },
+    ]);
+  });
+
   it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
     await runTransportStream(
       makeAnthropicTransportModel(),
