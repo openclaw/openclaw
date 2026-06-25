@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { MemorySourceActorContext } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -1373,6 +1374,7 @@ export async function recordShortTermRecalls(params: {
   dayBucket?: string;
   nowMs?: number;
   timezone?: string;
+  sourceActor?: MemorySourceActorContext;
 }): Promise<void> {
   const workspaceDir = params.workspaceDir?.trim();
   if (!workspaceDir) {

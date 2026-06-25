@@ -6,6 +6,14 @@ import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
+export type MemorySourceActorContext = {
+  id: string;
+  peerId?: string;
+  displayName?: string;
+  role?: string;
+  context?: string;
+};
+
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
@@ -49,12 +57,14 @@ export type MemoryCorpusSupplement = {
     query: string;
     maxResults?: number;
     agentSessionKey?: string;
+    sourceActor?: MemorySourceActorContext;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
     agentSessionKey?: string;
+    sourceActor?: MemorySourceActorContext;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 

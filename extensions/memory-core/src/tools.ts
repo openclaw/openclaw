@@ -11,6 +11,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
   type MemoryCorpusSearchResult,
+  type MemorySourceActorContext,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type {
@@ -269,6 +270,7 @@ function queueShortTermRecallTracking(params: {
   rawResults: MemorySearchResult[];
   surfacedResults: MemorySearchResult[];
   timezone?: string;
+  sourceActor?: MemorySourceActorContext;
 }): void {
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
   void recordShortTermRecalls({
@@ -276,6 +278,7 @@ function queueShortTermRecallTracking(params: {
     query: params.query,
     results: trackingResults,
     timezone: params.timezone,
+    sourceActor: params.sourceActor,
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
@@ -320,6 +323,7 @@ async function getSupplementMemoryReadResult(params: {
   from?: number;
   lines?: number;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
   corpus?: "memory" | "wiki" | "all";
 }) {
   const supplement = await getMemoryCorpusSupplementResult({
@@ -327,6 +331,7 @@ async function getSupplementMemoryReadResult(params: {
     fromLine: params.from,
     lineCount: params.lines,
     agentSessionKey: params.agentSessionKey,
+    sourceActor: params.sourceActor,
     corpus: params.corpus,
   });
   if (!supplement) {
@@ -346,6 +351,7 @@ async function resolveMemoryReadFailureResult(params: {
   from?: number;
   lines?: number;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
 }) {
   if (params.requestedCorpus === "all") {
     try {
@@ -354,6 +360,7 @@ async function resolveMemoryReadFailureResult(params: {
         from: params.from,
         lines: params.lines,
         agentSessionKey: params.agentSessionKey,
+        sourceActor: params.sourceActor,
         corpus: params.requestedCorpus,
       });
       if (supplement) {
@@ -379,6 +386,7 @@ async function executeMemoryReadResult(params: {
   from?: number;
   lines?: number;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
 }) {
   try {
     const result = await params.read();
@@ -403,6 +411,7 @@ async function executeMemoryReadResult(params: {
       from: params.from,
       lines: params.lines,
       agentSessionKey: params.agentSessionKey,
+      sourceActor: params.sourceActor,
     });
   }
 }
@@ -412,6 +421,7 @@ export function createMemorySearchTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
 }) {
@@ -640,6 +650,7 @@ export function createMemorySearchTool(options: {
                       rawResults,
                       surfacedResults: memoryResults,
                       timezone: dreaming.timezone,
+                      sourceActor: options.sourceActor,
                     });
                   }
                   provider = status.provider;
@@ -678,6 +689,7 @@ export function createMemorySearchTool(options: {
                         query,
                         maxResults,
                         agentSessionKey: options.agentSessionKey,
+                        sourceActor: options.sourceActor,
                         corpus: requestedCorpus,
                       }),
                   )
@@ -733,6 +745,7 @@ export function createMemoryGetTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
 }) {
   return createMemoryTool({
     options,
@@ -760,6 +773,7 @@ export function createMemoryGetTool(options: {
             from: from ?? undefined,
             lines: lines ?? undefined,
             agentSessionKey: options.agentSessionKey,
+            sourceActor: options.sourceActor,
             corpus: requestedCorpus,
           });
           return jsonResult(
@@ -787,6 +801,7 @@ export function createMemoryGetTool(options: {
             from: from ?? undefined,
             lines: lines ?? undefined,
             agentSessionKey: options.agentSessionKey,
+            sourceActor: options.sourceActor,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -809,6 +824,7 @@ export function createMemoryGetTool(options: {
           from: from ?? undefined,
           lines: lines ?? undefined,
           agentSessionKey: options.agentSessionKey,
+          sourceActor: options.sourceActor,
         });
       },
   });

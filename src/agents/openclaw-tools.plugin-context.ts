@@ -4,6 +4,7 @@
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawPluginSourceActorContext } from "../plugins/tool-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -25,6 +26,7 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  sourceActor?: OpenClawPluginSourceActorContext;
   senderIsOwner?: boolean;
   requesterAgentIdOverride?: string;
   sessionId?: string;
@@ -96,6 +98,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      sourceActor: options?.sourceActor,
       senderIsOwner: options?.senderIsOwner,
       sandboxed: options?.sandboxed,
       oneShotCliRun: options?.oneShotCliRun,
