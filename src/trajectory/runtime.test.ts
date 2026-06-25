@@ -9,10 +9,7 @@ import {
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
-import {
-  createTrajectoryRuntimeRecorder,
-  toTrajectoryToolDefinitions,
-} from "./runtime.js";
+import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
@@ -57,7 +54,7 @@ describe("trajectory runtime", () => {
         env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
         sessionId: "../evil/session",
       }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
+    ).toBe(path.join(path.resolve("/tmp/traces"), "___evil_session.jsonl"));
   });
 
   it("records sanitized runtime events by default", () => {
@@ -131,6 +128,54 @@ describe("trajectory runtime", () => {
     const parsed = JSON.parse(writes[0]);
     expect(parsed.data.prompt.truncated).toBe(true);
     expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
+    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
+    );
+  });
+
+  it("preserves usage when truncating oversized runtime events", () => {
+    const writes: string[] = [];
+    const usage = {
+      input: 384_954,
+      output: 5_624,
+      cacheRead: 333_824,
+      reasoningTokens: 2_038,
+      total: 724_402,
+    };
+    const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("model.completed", {
+      usage,
+      promptCache,
+      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(32_000)}`,
+      })),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.type).toBe("model.completed");
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      usage,
+      promptCache,
+    });
+    expect(parsed.data.messagesSnapshot).toBeUndefined();
+    expect(parsed.data.droppedFields).toContain("messagesSnapshot");
     expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
     );
