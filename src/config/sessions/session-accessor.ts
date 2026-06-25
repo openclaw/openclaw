@@ -666,7 +666,7 @@ export type ResetSessionEntryLifecycleParams = {
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
+  }) => Promise<SessionEntry | undefined> | SessionEntry | undefined;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */

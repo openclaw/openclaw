@@ -68,7 +68,9 @@ Sessions are reused until they expire:
 
 - **Daily reset** (default) -- new session at 4:00 AM local time on the gateway
   host. Daily freshness is based on when the current `sessionId` started, not
-  on later metadata writes.
+  on later metadata writes. The gateway also runs a maintenance sweep, so stale
+  daily sessions can roll over shortly after the boundary even when no inbound
+  message arrives.
 - **Idle reset** (optional) -- new session after a period of inactivity. Set
   `session.reset.idleMinutes`. Idle freshness is based on the last real
   user/channel interaction, so heartbeat, cron, and exec system events do not

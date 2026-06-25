@@ -16,6 +16,7 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
@@ -609,6 +610,59 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
   expectTranscriptResetEvent({ event, sessionFile: newTranscriptPath, content: "new transcript" });
   expectMainHookContext(context, "sess-new");
+});
+
+test("scheduled daily reset skips cleanup side effects when the row changes after command hooks", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const staleUpdatedAt = Date.now() - 86_400_000;
+  const freshUpdatedAt = Date.now();
+  await writeSingleLineSession(dir, "sess-stale", "stale transcript");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-stale", {
+        updatedAt: staleUpdatedAt,
+      }),
+    },
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-fresh", {
+          updatedAt: freshUpdatedAt,
+        }),
+      },
+    });
+  });
+
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "daily",
+    commandSource: "daily-session-reset-scheduler",
+    expectedDailySession: {
+      sessionId: "sess-stale",
+      updatedAt: staleUpdatedAt,
+    },
+  });
+
+  expect(reset.ok).toBe(false);
+  if (!reset.ok) {
+    expect(reset.error.details).toEqual({ skippedDailyReset: true });
+  }
+  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string; updatedAt?: number }
+  >;
+  expect(store["agent:main:main"]?.sessionId).toBe("sess-fresh");
+  expect(store["agent:main:main"]?.updatedAt).toBe(freshUpdatedAt);
 });
 
 test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {

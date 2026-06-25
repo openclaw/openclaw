@@ -2,6 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import {
@@ -22,6 +23,71 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { startDailySessionResetScheduler } from "./session-daily-reset-scheduler.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
+
+function broadcastScheduledDailyReset(params: {
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => void;
+  nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
+  sessionKey: string;
+  agentId?: string;
+}) {
+  const sessionRow = loadGatewaySessionRow(
+    params.sessionKey,
+    params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : undefined,
+  );
+  const payload = {
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    reason: "reset",
+    ts: Date.now(),
+    ...(sessionRow
+      ? {
+          updatedAt: sessionRow.updatedAt ?? undefined,
+          sessionId: sessionRow.sessionId,
+          kind: sessionRow.kind,
+          channel: sessionRow.channel,
+          subject: sessionRow.subject,
+          groupChannel: sessionRow.groupChannel,
+          space: sessionRow.space,
+          chatType: sessionRow.chatType,
+          origin: sessionRow.origin,
+          label: sessionRow.label,
+          displayName: sessionRow.displayName,
+          deliveryContext: sessionRow.deliveryContext,
+          parentSessionKey: sessionRow.parentSessionKey,
+          sendPolicy: sessionRow.sendPolicy,
+          systemSent: sessionRow.systemSent,
+          abortedLastRun: sessionRow.abortedLastRun,
+          inputTokens: sessionRow.inputTokens,
+          outputTokens: sessionRow.outputTokens,
+          lastChannel: sessionRow.lastChannel,
+          lastTo: sessionRow.lastTo,
+          lastAccountId: sessionRow.lastAccountId,
+          lastThreadId: sessionRow.lastThreadId,
+          totalTokens: sessionRow.totalTokens,
+          totalTokensFresh: sessionRow.totalTokensFresh,
+          contextTokens: sessionRow.contextTokens,
+          responseUsage: sessionRow.responseUsage,
+          modelProvider: sessionRow.modelProvider,
+          model: sessionRow.model,
+          status: sessionRow.status,
+          startedAt: sessionRow.startedAt,
+          endedAt: sessionRow.endedAt,
+          runtimeMs: sessionRow.runtimeMs,
+        }
+      : {}),
+  };
+  params.broadcast("sessions.changed", payload, { dropIfSlow: true });
+  params.nodeSendToAllSubscribed("sessions.changed", payload);
+}
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -62,12 +128,15 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  cfg?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  dailySessionReset: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -284,8 +353,30 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
+  const dailySessionReset =
+    params.cfg || params.getConfig
+      ? startDailySessionResetScheduler({
+          cfg: params.cfg ?? params.getConfig?.() ?? {},
+          getConfig: params.getConfig,
+          getActiveSessionKeys: () =>
+            new Set(
+              [...params.chatAbortControllers.values()]
+                .map((entry) => entry.sessionKey)
+                .filter((sessionKey) => sessionKey.trim()),
+            ),
+          onSuccessfulReset: ({ sessionKey, agentId }) => {
+            broadcastScheduledDailyReset({
+              broadcast: params.broadcast,
+              nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
+              sessionKey,
+              agentId,
+            });
+          },
+        })
+      : null;
+
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null, dailySessionReset };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -312,5 +403,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup, dailySessionReset };
 }

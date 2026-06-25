@@ -263,16 +263,19 @@ export type SessionLifecycleArchivedTranscript = {
 
 export type ResetSessionEntryLifecycleResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
+  nextEntry?: SessionEntry;
   previousEntry?: SessionEntry;
   previousSessionFile?: string;
   previousSessionId?: string;
-  nextEntry: SessionEntry;
+  skipped?: boolean;
 };
 
 export type ResetSessionEntryLifecycleMutation = Omit<
   ResetSessionEntryLifecycleResult,
-  "archivedTranscripts"
->;
+  "archivedTranscripts" | "nextEntry" | "skipped"
+> & {
+  nextEntry: SessionEntry;
+};
 
 export type DeleteSessionEntryLifecycleResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
@@ -1148,7 +1151,7 @@ export async function resetSessionEntryLifecycle(params: {
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
+  }) => Promise<SessionEntry | undefined> | SessionEntry | undefined;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 }): Promise<ResetSessionEntryLifecycleResult> {
@@ -1160,10 +1163,20 @@ export async function resetSessionEntryLifecycle(params: {
     });
     const previousSessionId = currentEntry?.sessionId;
     const previousSessionFile = currentEntry?.sessionFile;
+    const previousEntry = cloneOptionalSessionEntry(currentEntry);
     const nextEntry = await params.buildNextEntry({
-      currentEntry: cloneOptionalSessionEntry(currentEntry),
+      currentEntry: previousEntry,
       primaryKey: params.target.canonicalKey,
     });
+    if (!nextEntry) {
+      return {
+        archivedTranscripts: [],
+        ...(previousEntry ? { previousEntry } : {}),
+        ...(previousSessionFile ? { previousSessionFile } : {}),
+        ...(previousSessionId ? { previousSessionId } : {}),
+        skipped: true,
+      };
+    }
     const nextSessionFile = nextEntry.sessionFile?.trim();
     if (!nextSessionFile) {
       throw new Error("reset session lifecycle requires next entry sessionFile");
@@ -1173,7 +1186,6 @@ export async function resetSessionEntryLifecycle(params: {
     const mutation: ResetSessionEntryLifecycleMutation = {
       nextEntry: cloneSessionEntry(nextEntry),
     };
-    const previousEntry = cloneOptionalSessionEntry(currentEntry);
     if (previousEntry) {
       mutation.previousEntry = previousEntry;
     }

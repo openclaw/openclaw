@@ -69,6 +69,38 @@ describe("session store lifecycle mutations", () => {
     expect(fs.readFileSync(nextTranscriptPath, "utf-8")).toContain('"id":"next-session"');
   });
 
+  it("skips a reset lifecycle mutation without changing store state", async () => {
+    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
+    const now = Date.now();
+    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:room": {
+          sessionFile: oldTranscriptPath,
+          sessionId: "old-session",
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await resetSessionEntryLifecycle({
+      storePath,
+      target: {
+        canonicalKey: "agent:main:room",
+        storeKeys: ["agent:main:room"],
+      },
+      buildNextEntry: () => undefined,
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(result.skipped).toBe(true);
+    expect(result.archivedTranscripts).toHaveLength(0);
+    expect(store["agent:main:room"]?.sessionId).toBe("old-session");
+    expect(fs.existsSync(oldTranscriptPath)).toBe(true);
+  });
+
   it("deletes an entry while archiving its transcript in the same lifecycle operation", async () => {
     const transcriptPath = path.join(tempDir, "delete-session.jsonl");
     const now = Date.now();
