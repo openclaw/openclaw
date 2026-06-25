@@ -45,7 +45,6 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
-import { resolveConfiguredTimezone } from "../../agents/date-time.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -2276,7 +2275,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         canonicalKey: target.canonicalKey,
         storeKeys: target.storeKeys,
       },
-      timeZone: resolveConfiguredTimezone(cfg.agents?.defaults?.userTimezone),
+      timeZone: (() => {
+        const tz = cfg.agents?.defaults?.userTimezone?.trim();
+        if (!tz) {
+          return undefined;
+        }
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+          return tz;
+        } catch {
+          return undefined;
+        }
+      })(),
     });
     const deleted = deletion.deleted;
     const sessionId = deletion.deletedSessionId;

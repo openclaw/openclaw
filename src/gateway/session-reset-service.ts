@@ -17,7 +17,6 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
-import { resolveConfiguredTimezone } from "../agents/date-time.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -965,7 +964,18 @@ export async function performGatewaySessionReset(params: {
     reason: "session-reset",
   });
 
-  const lifecycleTimeZone = resolveConfiguredTimezone(cfg.agents?.defaults?.userTimezone);
+  const lifecycleTimeZone = (() => {
+    const tz = cfg.agents?.defaults?.userTimezone?.trim();
+    if (!tz) {
+      return undefined;
+    }
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+      return tz;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const lifecycle = await resetSessionEntryLifecycle({
     agentId: target.agentId,
