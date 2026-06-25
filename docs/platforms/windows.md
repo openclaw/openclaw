@@ -280,6 +280,16 @@ openclaw devices approve <request-id>
 If the device already had a token, reconnect from the Connections tab after
 approval.
 
+If you are developing from source instead of doing first-time onboarding, use the
+source dev loop from [Setup](/start/setup):
+
+```bash
+pnpm install
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw onboard --skip-ui
+pnpm gateway:watch
+```
+
 ### Web chat cannot reach a remote Gateway
 
 Remote web chat needs HTTPS or localhost. For self-signed certificates, trust

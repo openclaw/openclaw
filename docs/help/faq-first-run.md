@@ -104,7 +104,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="How do I open the dashboard after onboarding?">
-    The wizard opens your browser with a clean (non-tokenized) dashboard URL right after onboarding and also prints the link in the summary. Keep that tab open; if it didn't launch, copy/paste the printed URL on the same machine.
+    The default onboarding flow opens the local agent, not the dashboard. Run `openclaw dashboard` when you are ready to open the Control UI. The advanced infrastructure wizard (`openclaw onboard --flow advanced`) can open the dashboard after it configures the Gateway.
   </Accordion>
 
   <Accordion title="How do I authenticate the dashboard on localhost vs remote?">
@@ -499,7 +499,9 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What does onboarding actually do?">
-    `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
+    `openclaw onboard` is the recommended setup path. The default local flow configures model authentication and the workspace, then opens the local agent so it can help configure only the optional infrastructure you need.
+
+    Run `openclaw onboard --flow advanced` for the full local wizard, which walks you through:
 
     - **Model/auth setup** (provider OAuth, API keys, Anthropic setup-token, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files

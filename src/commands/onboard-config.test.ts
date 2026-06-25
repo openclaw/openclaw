@@ -70,4 +70,49 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
     expect(result.bindings).toEqual(baseConfig.bindings);
   });
+
+  it("updates an explicitly selected agent workspace without moving the default workspace", () => {
+    const baseConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/tmp/main-workspace" },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", workspace: "/tmp/old-ops-workspace" },
+        ],
+      },
+    };
+
+    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/ops-workspace", {
+      agentId: "ops",
+    });
+
+    expect(result.agents?.defaults?.workspace).toBe("/tmp/main-workspace");
+    expect(result.agents?.list?.find((entry) => entry.id === "ops")?.workspace).toBe(
+      "/tmp/ops-workspace",
+    );
+  });
+
+  it("preserves an inherited selected-agent workspace during recovery", () => {
+    const baseConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/tmp/main-workspace" },
+        list: [{ id: "ops", default: true }],
+      },
+    };
+    const recoveryOptions = {
+      agentId: "ops",
+      preserveInheritedAgentWorkspace: true,
+    };
+
+    const result = applyLocalSetupWorkspaceConfig(
+      baseConfig,
+      "/tmp/main-workspace",
+      recoveryOptions,
+    );
+
+    expect(result.agents?.defaults?.workspace).toBe("/tmp/main-workspace");
+    expect(result.agents?.list?.find((entry) => entry.id === "ops")).not.toHaveProperty(
+      "workspace",
+    );
+  });
 });

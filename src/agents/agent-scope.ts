@@ -627,3 +627,19 @@ export function resolveAgentIdByWorkspacePath(
 ): string | undefined {
   return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
 }
+
+export function resolveAgentIdFromSessionOrWorkspace(params: {
+  cfg: OpenClawConfig;
+  fallbackAgentId: string;
+  sessionKey?: string;
+  workspacePath: string;
+}): string {
+  const parsed = parseAgentSessionKey((params.sessionKey ?? "").trim());
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return (
+    resolveAgentIdByWorkspacePath(params.cfg, params.workspacePath) ??
+    normalizeAgentId(params.fallbackAgentId)
+  );
+}

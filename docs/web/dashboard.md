@@ -37,8 +37,13 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 ## Fast path (recommended)
 
-- After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
-- Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- Default onboarding uses a temporary Gateway that stops when the assisted TUI
+  exits. Keep that TUI open while using its dashboard, or start a Gateway first
+  with `openclaw gateway run`, `openclaw onboard --install-daemon`, or the
+  advanced onboarding flow.
+- With a Gateway running, run `openclaw dashboard` (copies link, opens browser
+  if possible, shows SSH hint if headless).
+- Re-open anytime while the Gateway is running: `openclaw dashboard`.
 - If clipboard and browser delivery fail, `openclaw dashboard` still prints the
   clean URL and tells you to use the token from `OPENCLAW_GATEWAY_TOKEN` or
   `gateway.auth.token` as the URL fragment key `token`; it does not print token

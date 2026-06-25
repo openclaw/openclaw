@@ -7,7 +7,7 @@ import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
-  shouldStartCrestodianForBareRoot,
+  shouldHandleBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
@@ -144,8 +144,6 @@ describe("shouldEnsureCliPath", () => {
   });
 
   it("skips path bootstrap for read-only fast paths", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "approvals"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "channels"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "cron"])).toBe(false);
@@ -160,6 +158,12 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "tools", "effective"])).toBe(false);
   });
 
+  it("keeps path bootstrap for bare root invocations", () => {
+    expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--dev"])).toBe(true);
+  });
+
   it("keeps path bootstrap for mutating or unknown commands", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
@@ -167,17 +171,17 @@ describe("shouldEnsureCliPath", () => {
   });
 });
 
-describe("shouldStartCrestodianForBareRoot", () => {
-  it("starts Crestodian for bare root invocations", () => {
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw"])).toBe(true);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--profile", "work"])).toBe(true);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--dev"])).toBe(true);
+describe("shouldHandleBareRoot", () => {
+  it("handles bare root invocations", () => {
+    expect(shouldHandleBareRoot(["node", "openclaw"])).toBe(true);
+    expect(shouldHandleBareRoot(["node", "openclaw", "--profile", "work"])).toBe(true);
+    expect(shouldHandleBareRoot(["node", "openclaw", "--dev"])).toBe(true);
   });
 
-  it("does not start Crestodian for help, version, or commands", () => {
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--help"])).toBe(false);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "status"])).toBe(false);
+  it("does not handle help, version, or commands", () => {
+    expect(shouldHandleBareRoot(["node", "openclaw", "--help"])).toBe(false);
+    expect(shouldHandleBareRoot(["node", "openclaw", "-V"])).toBe(false);
+    expect(shouldHandleBareRoot(["node", "openclaw", "status"])).toBe(false);
   });
 });
 

@@ -24,7 +24,7 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
-  ["openclaw setup", "Create the baseline config, workspace, and session folders."],
+  ["openclaw setup", "Alias for guided onboarding."],
   ["openclaw configure", "Change models, Gateway, channels, plugins, skills, and health checks."],
   ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
   ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],

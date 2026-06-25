@@ -64,20 +64,20 @@ openclaw gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (non-tokenized) link. If the dashboard prompts for auth, paste the configured shared secret into Control UI settings. Onboarding uses a token by default (`gateway.auth.token`), but password auth works too if you switched `gateway.auth.mode` to `password`. To reopen later: `openclaw dashboard`.
+The default onboarding flow opens the local agent as soon as model authentication and the workspace are ready. Ask the agent to set up the Gateway and channels you need, or run `openclaw onboard --flow advanced` for the full infrastructure wizard. Its temporary Gateway remains available only while the assisted TUI is open. To use the Control UI afterward, start a foreground Gateway with `openclaw gateway run` or install a persistent one with `openclaw onboard --install-daemon`, then run `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
 OpenClaw reads operating instructions and "memory" from its workspace directory.
 
-By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
+By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically during onboarding or the first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
 
 <Tip>
 Treat this folder like OpenClaw's memory and make it a git repo (ideally private) so your `AGENTS.md` and memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
 </Tip>
 
 ```bash
-openclaw setup
+openclaw onboard --skip-ui
 ```
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)

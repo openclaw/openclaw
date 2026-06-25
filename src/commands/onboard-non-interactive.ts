@@ -5,6 +5,7 @@
  * setup, and handles explicit migration imports without interactive prompts.
  */
 import { formatCliCommand } from "../cli/command-format.js";
+import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -39,6 +40,7 @@ async function runNonInteractiveMigrationImport(params: {
     config: params.baseConfig,
     runtime: params.runtime,
   });
+  let writeBaseHash = params.baseHash;
   await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
@@ -50,13 +52,20 @@ async function runNonInteractiveMigrationImport(params: {
     ),
     runtime: params.runtime,
     async commitConfigFile(config) {
-      await replaceConfigFile({
+      const committed = await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: config,
-        ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         writeOptions: { allowConfigSizeDrop: true },
+        commit: async (nextConfig, writeOptions) => {
+          return await replaceConfigFile({
+            nextConfig,
+            ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+            ...(writeOptions ? { writeOptions } : {}),
+          });
+        },
       });
+      writeBaseHash = committed.persistedHash ?? undefined;
       logConfigUpdated(params.runtime);
-      return config;
+      return committed.config;
     },
   });
 }

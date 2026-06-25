@@ -180,4 +180,28 @@ describe("launchTuiCli", () => {
     expect(options.env?.OPENCLAW_GATEWAY_URL).toBe("ws://127.0.0.1:18789");
     expect(options.env?.OPENCLAW_TUI_SETUP_AUTH_SOURCE).toBe("config");
   });
+
+  it("passes runtime-only setup instructions through the child environment", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli(
+      { local: true, deliver: false, message: "Help me finish setting up OpenClaw." },
+      { extraSystemPrompt: "Use official channel setup instructions." },
+    );
+
+    const options = expectSpawned([
+      "/repo/openclaw.mjs",
+      "tui",
+      "--local",
+      "--message",
+      "Help me finish setting up OpenClaw.",
+    ]);
+    expect(options.env?.OPENCLAW_TUI_SETUP_EXTRA_SYSTEM_PROMPT).toBe(
+      "Use official channel setup instructions.",
+    );
+  });
 });

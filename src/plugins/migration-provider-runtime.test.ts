@@ -166,6 +166,36 @@ describe("migration provider runtime", () => {
     });
   });
 
+  it("force-loads an explicitly installed provider before manifest lookup can discover it", () => {
+    ensureStandaloneMigrationProviderRegistryLoaded({
+      cfg: {
+        plugins: {
+          entries: { codex: { enabled: true } },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/tmp/openclaw-codex",
+            },
+          },
+        },
+      },
+      forceLoad: true,
+      requiredPluginIds: ["codex"],
+    });
+
+    expect(mocks.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceLoad: true,
+        requiredPluginIds: expect.arrayContaining(["codex"]),
+        loadOptions: expect.objectContaining({
+          onlyPluginIds: expect.arrayContaining(["codex"]),
+          activate: false,
+        }),
+      }),
+    );
+  });
+
   it("loads configured external migration-provider plugins from manifest contracts", () => {
     const cfg = {
       plugins: { entries: { "external-migration": { enabled: true } } },

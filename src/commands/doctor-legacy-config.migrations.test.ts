@@ -213,10 +213,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.list).toEqual([
-      { id: "main", workspace: "/main" },
-      { id: "beta" },
-    ]);
+    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 

@@ -995,6 +995,53 @@ describe("finalizeSetupWizard", () => {
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
+  it("uses a trusted-proxy password fallback for direct health checks", async () => {
+    resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            password: "configured-password",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "trusted-proxy",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(resolveSetupSecretInputString).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "gateway.auth.password" }),
+    );
+    expect(requireMockArg(waitForGatewayReachable)).toEqual(
+      expect.objectContaining({ password: "session-password" }),
+    );
+    expect(requireMockArg(healthCommand)).toEqual(
+      expect.objectContaining({ password: "session-password" }),
+    );
+  });
+
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
     waitForGatewayReachable.mockResolvedValue({
       ok: false,

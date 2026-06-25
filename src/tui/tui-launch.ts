@@ -3,12 +3,17 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
+import {
+  TUI_SETUP_AUTH_SOURCE_CONFIG,
+  TUI_SETUP_AUTH_SOURCE_ENV,
+  TUI_SETUP_EXTRA_SYSTEM_PROMPT_ENV,
+} from "./setup-launch-env.js";
 import type { TuiOptions } from "./tui.js";
 
 // Relaunch helper used when setup wants to hand control to an inherited-stdio TUI process.
 type TuiLaunchOptions = {
   authSource?: "config";
+  extraSystemPrompt?: string;
   gatewayUrl?: string;
 };
 
@@ -87,12 +92,15 @@ export async function launchTuiCli(
 ): Promise<void> {
   const args = buildTuiCliArgs(opts);
   const env =
-    launchOptions.gatewayUrl || launchOptions.authSource
+    launchOptions.gatewayUrl || launchOptions.authSource || launchOptions.extraSystemPrompt
       ? {
           ...process.env,
           ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
           ...(launchOptions.authSource === "config"
             ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
+            : {}),
+          ...(launchOptions.extraSystemPrompt
+            ? { [TUI_SETUP_EXTRA_SYSTEM_PROMPT_ENV]: launchOptions.extraSystemPrompt }
             : {}),
         }
       : process.env;

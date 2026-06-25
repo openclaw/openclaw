@@ -193,6 +193,7 @@ function makeFakePool(sdk: FakeSdk) {
       key,
     })),
     dispose: vi.fn(async () => []),
+    invalidate: vi.fn(async () => undefined),
     release: vi.fn(async () => undefined),
     size: vi.fn(() => 0),
   } satisfies CopilotClientPool;

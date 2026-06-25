@@ -33,7 +33,7 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 }
 ```
 
-`openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the workspace and seed the bootstrap files if they are missing.
+`openclaw onboard`, `openclaw configure`, or the first agent run will create the workspace and seed the bootstrap files if they are missing.
 
 <Note>
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.
@@ -99,7 +99,7 @@ These are the standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If any bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `openclaw setup` can recreate missing defaults without overwriting existing files.
+If any bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and `agents.defaults.bootstrapTotalMaxChars` (default: 60000). Onboarding and the first agent run can recreate missing defaults without overwriting existing files.
 </Note>
 
 ## What is NOT in the workspace
@@ -210,7 +210,7 @@ Suggested `.gitignore` starter:
     Set `agents.defaults.workspace` to that path in `~/.openclaw/openclaw.json`.
   </Step>
   <Step title="Seed missing files">
-    Run `openclaw setup --workspace <path>` to seed any missing files.
+    Run `openclaw onboard --workspace <path> --skip-ui` to seed any missing files without opening the local agent afterward.
   </Step>
   <Step title="Copy sessions (optional)">
     If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the old machine separately.

@@ -302,7 +302,7 @@ export async function finalizeSetupWizard(
     }
   }
 
-  if (settings.authMode === "password") {
+  if (settings.authMode === "password" || settings.authMode === "trusted-proxy") {
     try {
       resolvedGatewayPassword =
         (await resolveSetupSecretInputString({
@@ -321,6 +321,10 @@ export async function finalizeSetupWizard(
       );
     }
   }
+  const gatewayProbePassword =
+    settings.authMode === "password" || settings.authMode === "trusted-proxy"
+      ? resolvedGatewayPassword || undefined
+      : undefined;
 
   if (!opts.skipHealth) {
     const probeLinks = resolveControlUiLinks({
@@ -334,7 +338,7 @@ export async function finalizeSetupWizard(
     gatewayProbe = await waitForGatewayReachable({
       url: probeLinks.wsUrl,
       token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-      password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+      password: gatewayProbePassword,
       deadlineMs: 15_000,
     });
     if (gatewayProbe.ok) {
@@ -359,7 +363,7 @@ export async function finalizeSetupWizard(
             timeoutMs: 10_000,
             config: healthConfig,
             token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-            password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+            password: gatewayProbePassword,
           },
           runtime,
         );
@@ -446,7 +450,7 @@ export async function finalizeSetupWizard(
     gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
       token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-      password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+      password: gatewayProbePassword,
     });
   }
   const gatewayStatusLine = gatewayProbe.ok

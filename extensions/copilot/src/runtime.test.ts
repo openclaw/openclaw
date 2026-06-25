@@ -10,6 +10,7 @@ interface FakeClient {
   readonly copilotHome: string;
   readonly start: ReturnType<typeof vi.fn>;
   readonly stop: ReturnType<typeof vi.fn>;
+  readonly forceStop: ReturnType<typeof vi.fn>;
   readonly createSession: ReturnType<typeof vi.fn>;
   readonly disconnect: ReturnType<typeof vi.fn>;
 }
@@ -20,6 +21,7 @@ interface FakeFactoryOptions {
     id: number,
   ) => CopilotClient | Promise<CopilotClient>;
   readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
+  readonly forceStop?: (client: FakeClient) => Promise<void> | void;
 }
 
 function createDeferred<T>() {
@@ -72,6 +74,7 @@ function makeOptions(overrides: Partial<ClientCreateOptions> = {}): ClientCreate
 
 function makeFake(options: FakeFactoryOptions = {}) {
   const stops: number[] = [];
+  const forceStops: number[] = [];
   const ctorCalls: CopilotClientOptions[] = [];
   const instances: FakeClient[] = [];
   let nextId = 0;
@@ -94,6 +97,10 @@ function makeFake(options: FakeFactoryOptions = {}) {
         }
         return [];
       }),
+      forceStop: vi.fn(async () => {
+        forceStops.push(id);
+        await options.forceStop?.(client);
+      }),
       createSession: vi.fn(async () => ({})),
       disconnect: vi.fn(),
     };
@@ -101,7 +108,7 @@ function makeFake(options: FakeFactoryOptions = {}) {
     return client as unknown as CopilotClient;
   };
 
-  return { fake, stops, ctorCalls, instances };
+  return { fake, stops, forceStops, ctorCalls, instances };
 }
 
 afterEach(() => {
@@ -313,6 +320,72 @@ describe("createCopilotClientPool", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(sdk.stops).toEqual([1]);
+  });
+
+  it("invalidate force-stops the client and prevents later reuse", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+    const options = makeOptions();
+    const first = await pool.acquire(key, options);
+
+    await pool.invalidate(first);
+    const second = await pool.acquire(key, options);
+
+    expect(sdk.forceStops).toEqual([1]);
+    expect(pool.size()).toBe(1);
+    expect(second.client).not.toBe(first.client);
+    expect(sdk.ctorCalls).toHaveLength(2);
+  });
+
+  it("invalidate retires a shared client after its remaining lease is released", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+    const options = makeOptions();
+    const first = await pool.acquire(key, options);
+    const second = await pool.acquire(key, options);
+
+    await pool.invalidate(first);
+
+    expect(sdk.forceStops).toEqual([]);
+    expect(pool.size()).toBe(1);
+    expect(second.client).toBe(first.client);
+
+    let thirdSettled = false;
+    const thirdPromise = pool.acquire(key, options).then((handle) => {
+      thirdSettled = true;
+      return handle;
+    });
+    await Promise.resolve();
+
+    expect(thirdSettled).toBe(false);
+    expect(sdk.ctorCalls).toHaveLength(1);
+
+    await pool.release(second);
+    const third = await thirdPromise;
+
+    expect(sdk.forceStops).toEqual([1]);
+    expect(third.client).not.toBe(first.client);
+    expect(sdk.ctorCalls).toHaveLength(2);
+  });
+
+  it("double invalidate does not retire a client with another active lease", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+    const options = makeOptions();
+    const first = await pool.acquire(key, options);
+    const second = await pool.acquire(key, options);
+
+    await pool.invalidate(first);
+    await pool.invalidate(first);
+
+    expect(sdk.forceStops).toEqual([]);
+
+    await pool.release(second);
+
+    expect(sdk.forceStops).toEqual([1]);
   });
 
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {

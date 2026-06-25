@@ -6,7 +6,12 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   startCalls: 0,
-  startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+  startMode: "hello" as
+    | "hello"
+    | "close"
+    | "connect-error-close"
+    | "defer"
+    | "startup-retry-then-hello",
   socketOpened: true,
   transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
@@ -99,6 +104,9 @@ class MockGatewayClient {
     gatewayClientState.startCalls += 1;
     void Promise.resolve()
       .then(async () => {
+        if (gatewayClientState.startMode === "defer") {
+          return;
+        }
         if (gatewayClientState.startMode === "close") {
           this.emitClose();
           return;
@@ -333,6 +341,25 @@ describe("probeGateway", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(1_000);
     expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(1);
+  });
+
+  it("aborts an in-flight probe when its external signal is aborted", async () => {
+    gatewayClientState.startMode = "defer";
+    const controller = new AbortController();
+    const resultPromise = runTokenLightweightProbe({
+      signal: controller.signal,
+      timeoutMs: 250,
+    });
+
+    await vi.waitFor(() => expect(gatewayClientState.startCalls).toBe(1));
+    controller.abort();
+
+    await expect(resultPromise).resolves.toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: "aborted",
+      }),
+    );
   });
 
   it("fails before connecting when event-loop readiness consumes the initial probe budget", async () => {

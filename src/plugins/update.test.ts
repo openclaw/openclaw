@@ -2378,16 +2378,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("updates bare trusted official ClawHub installs through the catalog spec", async () => {
-    installPluginFromClawHubMock.mockResolvedValue(
-      createSuccessfulClawHubUpdateResult({
-        pluginId: "diagnostics-prometheus",
-        targetDir: "/tmp/diagnostics-prometheus",
-        version: "2026.5.4",
-        clawhubPackage: "@openclaw/diagnostics-prometheus",
-      }),
-    );
-
+  it("does not promote bare ClawHub installs through the trusted catalog spec", async () => {
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -2403,14 +2394,12 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
 
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/diagnostics-prometheus");
-    expect(clawHubInstallCall()?.expectedPluginId).toBe("diagnostics-prometheus");
-    expectRecordFields(result.config.plugins?.installs?.["diagnostics-prometheus"], {
+    expect(clawHubInstallCall()).toBeUndefined();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.installs?.["diagnostics-prometheus"]).toEqual({
       source: "clawhub",
-      spec: "clawhub:@openclaw/diagnostics-prometheus",
-      version: "2026.5.4",
-      clawhubPackage: "@openclaw/diagnostics-prometheus",
-      clawhubChannel: "official",
+      spec: "clawhub:@openclaw/diagnostics-prometheus@2026.5.3",
+      installPath: "/tmp/diagnostics-prometheus",
     });
   });
 

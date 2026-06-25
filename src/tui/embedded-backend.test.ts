@@ -799,6 +799,36 @@ describe("EmbeddedTuiBackend", () => {
     }
   });
 
+  it("passes runtime-only system context into local chat turns", async () => {
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "Help me finish setting up OpenClaw.",
+        extraSystemPrompt: "Use official channel setup instructions.",
+        runId: "run-setup-context",
+      });
+      await flushMicrotasks();
+
+      expect(agentCommandFromIngressMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extraSystemPrompt: "Use official channel setup instructions.",
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      await backend.stop();
+    }
+  });
+
   it("waits for local post-turn maintenance before emitting chat final", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{

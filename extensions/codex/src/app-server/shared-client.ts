@@ -295,6 +295,8 @@ export async function createIsolatedCodexAppServerClient(
     config: options?.config,
     timeoutMs: options?.timeoutMs,
     onStartedClient: options?.onStartedClient,
+    abandonSignal: options?.abandonSignal,
+    waitForCloseOnFailure: true,
   });
 }
 
@@ -306,41 +308,39 @@ async function startInitializedCodexAppServerClient(params: {
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   onStartedClient?: (client: CodexAppServerClient) => void;
+  abandonSignal?: AbortSignal;
+  waitForCloseOnFailure?: boolean;
 }): Promise<CodexAppServerClient> {
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (let index = 0; index < startOptionsCandidates.length; index += 1) {
+    throwIfCodexAppServerStartupAbandoned(params.abandonSignal);
     const startOptions = startOptionsCandidates[index];
     const client = CodexAppServerClient.start(startOptions);
-    params.onStartedClient?.(client);
-    const initialize = client.initialize();
+    const cleanupAbandonSignal = closeCodexAppServerClientOnAbort(client, params.abandonSignal);
+    let initialize: Promise<void> | undefined;
+    let initialized = false;
     try {
+      params.onStartedClient?.(client);
+      initialize = client.initialize();
       await withTimeout(initialize, params.timeoutMs ?? 0, "codex app-server initialize timed out");
-    } catch (error) {
-      client.close();
-      void initialize.catch(() => undefined);
-      if (shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)) {
-        continue;
-      }
-      throw error;
-    }
-
-    if (params.authProfileId) {
-      // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
-      // available whether the profile came from a scoped store or persisted state.
-      client.addRequestHandler(async (request) => {
-        if (request.method !== "account/chatgptAuthTokens/refresh") {
-          return undefined;
-        }
-        return await refreshCodexAppServerAuthTokens({
-          agentDir: params.agentDir,
-          authProfileId: params.authProfileId!,
-          ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
-          config: params.config,
+      initialized = true;
+      throwIfCodexAppServerStartupAbandoned(params.abandonSignal);
+      if (params.authProfileId) {
+        // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
+        // available whether the profile came from a scoped store or persisted state.
+        client.addRequestHandler(async (request) => {
+          if (request.method !== "account/chatgptAuthTokens/refresh") {
+            return undefined;
+          }
+          return await refreshCodexAppServerAuthTokens({
+            agentDir: params.agentDir,
+            authProfileId: params.authProfileId!,
+            ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+            config: params.config,
+          });
         });
-      });
-    }
+      }
 
-    try {
       await applyCodexAppServerAuthProfile({
         client,
         agentDir: params.agentDir,
@@ -349,13 +349,58 @@ async function startInitializedCodexAppServerClient(params: {
         config: params.config,
         ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
       });
+      throwIfCodexAppServerStartupAbandoned(params.abandonSignal);
       return client;
     } catch (error) {
-      client.close();
+      void initialize?.catch(() => undefined);
+      await closeFailedStartedClient(client, params.waitForCloseOnFailure);
+      throwIfCodexAppServerStartupAbandoned(params.abandonSignal);
+      if (
+        !initialized &&
+        shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)
+      ) {
+        continue;
+      }
       throw error;
+    } finally {
+      cleanupAbandonSignal();
     }
   }
   throw new Error("Managed Codex app-server fallback candidates were exhausted.");
+}
+
+function throwIfCodexAppServerStartupAbandoned(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error("codex app-server startup aborted");
+  }
+}
+
+function closeCodexAppServerClientOnAbort(
+  client: CodexAppServerClient,
+  signal: AbortSignal | undefined,
+): () => void {
+  if (!signal) {
+    return () => undefined;
+  }
+  const close = () => client.close();
+  signal.addEventListener("abort", close, { once: true });
+  if (signal.aborted) {
+    close();
+  }
+  return () => signal.removeEventListener("abort", close);
+}
+
+async function closeFailedStartedClient(
+  client: CodexAppServerClient,
+  waitForClose: boolean | undefined,
+): Promise<void> {
+  if (waitForClose) {
+    // Isolated startup has no later owner to finish process cleanup. Wait here
+    // so a failed one-shot probe cannot leave an app-server child behind.
+    await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    return;
+  }
+  client.close();
 }
 
 function resolveManagedFallbackStartOptions(

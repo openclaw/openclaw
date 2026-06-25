@@ -1,13 +1,32 @@
 ---
-summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
+summary: "CLI reference for `openclaw onboard` (minimal first-run setup and advanced onboarding)"
 read_when:
-  - You want guided setup for gateway, workspace, auth, channels, and skills
+  - You want the fastest path to a working local agent
+  - You need advanced guided setup for Gateway, channels, or skills
 title: "Onboard"
 ---
 
 # `openclaw onboard`
 
-Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
+Canonical first-run setup for OpenClaw. The default interactive flow asks only
+for what is required to start a local agent. It first offers to import supported
+auth, skills, instructions, and settings from another agent environment. If you
+skip import, it asks you to configure a model directly. It then opens the local
+agent with a securely configured temporary local Gateway running for the assisted
+setup session. The agent can help configure optional features such as channels,
+Gateway network access, Tailscale, search, skills, and plugins.
+
+Use `--flow advanced`, remote mode, or explicit Gateway/daemon flags when you
+want the full infrastructure wizard.
+
+The temporary Gateway stops when the assisted TUI exits. To install a persistent
+background service, exit the TUI and run `openclaw onboard --install-daemon`.
+
+For source-checkout and scripting compatibility, `openclaw onboard --skip-ui`
+by itself uses the baseline setup path: it prepares config, workspace, sessions,
+and `gateway.mode` without writing quickstart Gateway defaults. Add another
+explicit onboarding flag, such as `--flow quickstart` or `--install-daemon`, to
+run onboarding without opening the final local agent.
 
 ## Related guides
 
@@ -33,24 +52,35 @@ Full guided onboarding for local or remote Gateway setup. Use this when you want
 
 ```bash
 openclaw onboard
+openclaw setup
 openclaw onboard --modern
 openclaw onboard --flow quickstart
-openclaw onboard --flow manual
+openclaw onboard --flow advanced
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
-`--flow import` uses plugin-owned migration providers such as Hermes. It only runs against a fresh OpenClaw setup; if existing config, credentials, sessions, or workspace memory/identity files are present, reset or choose a fresh setup before importing.
+The default interactive flow offers every registered plugin-owned migration
+provider, including Codex, Claude, and Hermes, before standalone model setup.
+Detected sources appear first. Supported skills and other artifacts are included
+in the migration plan; onboarding asks separately before importing supported auth
+credentials.
 
-`--modern` starts the Crestodian conversational onboarding preview. Without
-`--modern`, `openclaw onboard` keeps the classic onboarding flow.
+`--flow import` runs the same migration path directly. Migration only runs
+against a fresh OpenClaw setup; if existing config, credentials, sessions, or
+workspace memory/identity files are present, reset or choose a fresh setup before
+importing.
+
+`openclaw setup` is an alias for `openclaw onboard`.
+
+`--modern` starts Crestodian, the bounded setup and repair helper.
 
 On a fresh install where the active config file is missing or has no authored
-settings (empty or metadata-only), bare `openclaw` also starts the classic
-onboarding flow. Once a config file has authored settings, bare `openclaw`
-opens Crestodian instead.
+settings (empty or metadata-only), bare `openclaw` starts onboarding. Once a
+working setup exists, bare `openclaw` opens the normal local agent.
+For a valid remote Gateway profile, it opens the normal remote-backed TUI instead.
 
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
 Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
@@ -212,8 +242,9 @@ openclaw onboard --non-interactive \
 
 <AccordionGroup>
   <Accordion title="Flow types">
-    - `quickstart`: minimal prompts, auto-generates a gateway token.
-    - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
+    - `quickstart`: offers migration first; otherwise performs minimal model/auth setup, then opens the local agent for assisted optional configuration.
+    - `advanced`: full prompts for Gateway, channels, daemon, search, skills, hooks, and health.
+    - `manual`: alias of `advanced`.
     - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
 
   </Accordion>
@@ -232,7 +263,8 @@ openclaw onboard --non-interactive \
   </Accordion>
   <Accordion title="Other behaviors">
     - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
-    - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
+    - Fastest first chat: the local agent TUI opened by default onboarding.
+    - Control UI first chat: run `openclaw onboard --flow advanced` to configure the Gateway, then `openclaw dashboard`.
     - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
     - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
 
@@ -247,7 +279,8 @@ openclaw configure
 openclaw agents add <name>
 ```
 
-Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
+Use `openclaw setup` as an alias for this command. Use `openclaw configure`
+later for targeted changes and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

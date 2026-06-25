@@ -515,6 +515,7 @@ export type PluginHookReplyDispatchResult = {
   handled: boolean;
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  failedCounts?: Record<ReplyDispatchKind, number>;
 };
 
 /**

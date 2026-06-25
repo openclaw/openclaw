@@ -50,8 +50,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const sessionId = randomUUID();
     const opts = {
+      // Protocol clients own every prompt and cannot receive the quickstart
+      // flow's local agent-assisted TUI handoff.
+      flow: "advanced" as const,
       mode: params.mode,
       workspace: readStringValue(params.workspace),
+      // The remote wizard client owns presentation; never open a TUI in the
+      // Gateway server process after the protocol session completes.
+      skipUi: true,
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),

@@ -17,22 +17,17 @@ const setupCommandMock = mocks.setupCommandMock;
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
 const runtime = mocks.runtime;
 
-function lastSetupOptions(): Record<string, unknown> | undefined {
-  const calls = setupCommandMock.mock.calls;
-  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
-}
-
 function lastWizardOptions(): Record<string, unknown> | undefined {
   const calls = setupWizardCommandMock.mock.calls;
   return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
-vi.mock("../../commands/setup.js", () => ({
-  setupCommand: mocks.setupCommandMock,
-}));
-
 vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
+}));
+
+vi.mock("../../commands/setup.js", () => ({
+  setupCommand: mocks.setupCommandMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -52,34 +47,44 @@ describe("registerSetupCommand", () => {
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
-  it("runs setup command by default", async () => {
+  it("runs onboarding by default", async () => {
     await runCli(["setup", "--workspace", "/tmp/ws"]);
 
-    expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
-    expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.installDaemon).toBeUndefined();
+  });
+
+  it("preserves baseline setup for a bare --skip-ui invocation", async () => {
+    await runCli(["setup", "--workspace", "/tmp/ws", "--skip-ui"]);
+
+    expect(setupCommandMock).toHaveBeenCalledWith({ workspace: "/tmp/ws" }, runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs setup wizard command when --wizard is set", async () => {
-    await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
+  it("keeps --wizard as a compatibility flag", async () => {
+    await runCli(["setup", "--wizard"]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
-    expect(lastWizardOptions()?.mode).toBe("remote");
-    expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
-    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(lastWizardOptions()?.flow).toBe("advanced");
   });
 
-  it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
+  it("keeps an explicit flow when --wizard is also present", async () => {
+    await runCli(["setup", "--wizard", "--flow", "quickstart"]);
+
+    expect(lastWizardOptions()?.flow).toBe("quickstart");
+  });
+
+  it("forwards onboarding flags", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.nonInteractive).toBe(true);
     expect(lastWizardOptions()?.acceptRisk).toBe(true);
-    expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs setup wizard command for migration import flags", async () => {
+  it("forwards migration import flags", async () => {
     await runCli([
       "setup",
       "--import-from",
@@ -93,11 +98,10 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()?.importFrom).toBe("hermes");
     expect(lastWizardOptions()?.importSource).toBe("/tmp/hermes");
     expect(lastWizardOptions()?.importSecrets).toBe(true);
-    expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
   it("reports setup errors through runtime", async () => {
-    setupCommandMock.mockRejectedValueOnce(new Error("setup failed"));
+    setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 
     await runCli(["setup"]);
 

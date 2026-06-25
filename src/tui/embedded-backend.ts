@@ -412,6 +412,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId: opts.agentId,
       message: opts.message,
+      extraSystemPrompt: opts.extraSystemPrompt,
       thinking: opts.thinking,
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
@@ -1078,6 +1079,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     sessionKey: string;
     agentId?: string;
     message: string;
+    extraSystemPrompt?: string;
     thinking?: string;
     deliver?: boolean;
     timeoutMs?: number;
@@ -1149,6 +1151,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey: canonicalKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),
+          extraSystemPrompt: params.extraSystemPrompt,
           thinking: params.thinking,
           deliver: params.deliver,
           channel: INTERNAL_MESSAGE_CHANNEL,

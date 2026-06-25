@@ -24,6 +24,20 @@ export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
   | { supported: false; reason?: string };
 
+export type AgentHarnessReadinessContext = {
+  config: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+  modelApi?: string;
+  providerAuthAvailable: boolean;
+  signal?: AbortSignal;
+};
+
+export type AgentHarnessReadiness = { ready: true } | { ready: false; reason?: string };
+
 export type AgentHarnessAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
@@ -115,6 +129,12 @@ type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
+type AgentHarnessReadinessCapability = {
+  checkReadiness?(
+    ctx: AgentHarnessReadinessContext,
+  ): Promise<AgentHarnessReadiness> | AgentHarnessReadiness;
+};
+
 type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
@@ -132,6 +152,7 @@ type AgentHarnessSessionLifecycleCapability = {
 };
 
 export type AgentHarness = AgentHarnessRunCapability &
+  AgentHarnessReadinessCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &

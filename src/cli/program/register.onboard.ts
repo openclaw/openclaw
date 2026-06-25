@@ -16,6 +16,7 @@ import type {
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { hasExplicitOptions } from "../command-options.js";
 import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
@@ -40,6 +41,16 @@ function resolveInstallDaemonFlag(
     return Boolean(opts.installDaemon);
   }
   return undefined;
+}
+
+function shouldRunBaselineSetup(command: Command, opts: { skipUi?: boolean }): boolean {
+  if (opts.skipUi !== true || command.getOptionValueSource("skipUi") !== "cli") {
+    return false;
+  }
+  const onboardingOptionNames = command.options
+    .map((option) => option.attributeName())
+    .filter((name) => name !== "skipUi" && name !== "workspace");
+  return !hasExplicitOptions(command, onboardingOptionNames);
 }
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
@@ -90,14 +101,26 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command): void {
+export function registerOnboardCommand(
+  program: Command,
+  options: {
+    commandName?: "onboard" | "setup";
+    description?: string;
+    docsPath?: string;
+  } = {},
+): void {
+  const commandName = options.commandName ?? "onboard";
+  const docsPath = options.docsPath ?? "/cli/onboard";
   const command = program
-    .command("onboard")
-    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
+    .command(commandName)
+    .description(
+      options.description ??
+        "Minimal setup for a working local agent, followed by agent-assisted configuration",
+    )
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink(docsPath, `docs.openclaw.ai${docsPath}`)}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option(
@@ -178,9 +201,18 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
+  if (commandName === "setup") {
+    command.option("--wizard", "Deprecated; setup now runs onboarding by default", false);
+  }
+
   command.action(async (opts, commandRuntime) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      if (shouldRunBaselineSetup(commandRuntime, opts)) {
+        const { setupCommand } = await import("../../commands/setup.js");
+        await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
+        return;
+      }
       if (opts.modern) {
         const { runCrestodian } = await import("../../crestodian/crestodian.js");
         await runCrestodian({
@@ -192,9 +224,16 @@ export function registerOnboardCommand(program: Command): void {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
+        installDaemon: opts.installDaemon as boolean | undefined,
       });
       const gatewayPort = parsePort(opts.gatewayPort);
+      const flow = (opts.flow ??
+        (commandName === "setup" && opts.wizard ? "advanced" : undefined)) as
+        | "quickstart"
+        | "advanced"
+        | "manual"
+        | "import"
+        | undefined;
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
@@ -204,7 +243,7 @@ export function registerOnboardCommand(program: Command): void {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
-          flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
+          flow,
           mode: opts.mode as "local" | "remote" | undefined,
           authChoice: opts.authChoice as AuthChoice | undefined,
           tokenProvider: opts.tokenProvider as string | undefined,

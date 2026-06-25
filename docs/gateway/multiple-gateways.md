@@ -28,13 +28,13 @@ else:
 
 ```bash
 # Rescue bot (separate Telegram bot, separate profile, port 19789)
-openclaw --profile rescue onboard
+openclaw --profile rescue onboard --flow advanced
 openclaw --profile rescue gateway install --port 19789
 ```
 
 If your main bot is already running, that is usually all you need.
 
-During `openclaw --profile rescue onboard`:
+During `openclaw --profile rescue onboard --flow advanced`:
 
 - use the separate Telegram bot token
 - keep the `rescue` profile
@@ -85,21 +85,21 @@ own base port:
 
 ```bash
 # main (default profile)
-openclaw setup
+openclaw onboard --skip-ui
 openclaw gateway --port 18789
 
 # extra gateway
-openclaw --profile ops setup
+openclaw --profile ops onboard --skip-ui
 openclaw --profile ops gateway --port 19789
 ```
 
 If you want both Gateways to use named profiles, that also works:
 
 ```bash
-openclaw --profile main setup
+openclaw --profile main onboard --skip-ui
 openclaw --profile main gateway --port 18789
 
-openclaw --profile ops setup
+openclaw --profile ops onboard --skip-ui
 openclaw --profile ops gateway --port 19789
 ```
 
