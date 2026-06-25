@@ -365,8 +365,6 @@ async function checkAgentDirBootstrapFiles(params: {
     DEFAULT_TOOLS_FILENAME,
     DEFAULT_IDENTITY_FILENAME,
     DEFAULT_USER_FILENAME,
-    DEFAULT_HEARTBEAT_FILENAME,
-    DEFAULT_BOOTSTRAP_FILENAME,
     DEFAULT_MEMORY_FILENAME,
   } = await import("./workspace.js");
 
