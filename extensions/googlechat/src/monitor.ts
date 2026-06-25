@@ -265,13 +265,29 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
+  const inboundThreadName = message.thread?.name;
+  const shouldUseThreadSession =
+    !isGroup && account.config.threadSessions === true && Boolean(inboundThreadName);
+  const routePeerId = shouldUseThreadSession ? spaceId + ":thread:" + inboundThreadName : spaceId;
+  const threadSessionNeedsDmScope =
+    shouldUseThreadSession && (config.session?.dmScope ?? "main") === "main";
+  const routeConfig = threadSessionNeedsDmScope
+    ? ({
+        ...config,
+        session: {
+          ...(config.session ?? {}),
+          dmScope: "per-channel-peer",
+        },
+      } satisfies typeof config)
+    : config;
+
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
-    cfg: config,
+    cfg: routeConfig,
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
       kind: isGroup ? ("group" as const) : ("direct" as const),
-      id: spaceId,
+      id: routePeerId,
     },
     runtime: core.channel,
     sessionStore: config.session?.store,
@@ -299,7 +315,8 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const replyThreadName = isGroup ? message.thread?.name : undefined;
+  const shouldThreadReply = isGroup || shouldUseThreadSession;
+  const replyThreadName = shouldThreadReply ? inboundThreadName : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
     channel: "googlechat",
     accountId: route.accountId,

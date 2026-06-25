@@ -79,6 +79,12 @@ export const GoogleChatAccountSchema = z
     botUser: z.string().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    threadSessions: z
+      .boolean()
+      .optional()
+      .describe(
+        "Treat each inbound Google Chat DM thread as its own OpenClaw session and reply in that thread.",
+      ),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
