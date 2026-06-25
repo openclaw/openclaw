@@ -108,6 +108,7 @@ describe("sendMessageSlack thread participation", () => {
     });
 
     expect(result.threadTs).toBe("1712345678.123456");
+    expect(result.confirmedThreadTs).toBeUndefined();
     expect(result.receipt.threadId).toBe("1712345678.123456");
     expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
   });
@@ -133,6 +134,7 @@ describe("sendMessageSlack thread participation", () => {
 
     expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
     expect(result.threadTs).toBe("1781803536.235489");
+    expect(result.confirmedThreadTs).toBe("1781803536.235489");
     expect(result.receipt.threadId).toBe("1781803536.235489");
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
@@ -232,6 +234,7 @@ describe("sendMessageSlack chunking", () => {
     expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
     expect(postedMessage(client, 1).thread_ts).toBe("1781932168.648159");
     expect(result.threadTs).toBe("1781803536.235489");
+    expect(result.confirmedThreadTs).toBe("1781803536.235489");
     expect(result.receipt.threadId).toBe("1781803536.235489");
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
@@ -286,6 +289,7 @@ describe("sendMessageSlack blocks", () => {
 
     expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
     expect(result.threadTs).toBe("1781803536.235489");
+    expect(result.confirmedThreadTs).toBe("1781803536.235489");
     expect(result.receipt.threadId).toBe("1781803536.235489");
     expect(result.receipt.parts[0]?.kind).toBe("card");
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
@@ -351,6 +355,7 @@ describe("sendMessageSlack blocks", () => {
     expect(result.messageId).toBe("171234.567");
     expect(result.channelId).toBe("D123");
     expect(result.receipt.threadId).toBe("171234.100");
+    expect(result.confirmedThreadTs).toBeUndefined();
   });
 
   it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {

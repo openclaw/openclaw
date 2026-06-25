@@ -113,6 +113,7 @@ describe("slackOutbound", () => {
     sendMessageSlackMock.mockResolvedValueOnce({
       messageId: "m-blocks",
       threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
     });
 
     await slackOutbound.sendPayload!({
@@ -196,6 +197,7 @@ describe("slackOutbound", () => {
     sendMessageSlackMock.mockResolvedValueOnce({
       messageId: "1712349999.000001",
       threadTs: "1712340000.000001",
+      confirmedThreadTs: "1712340000.000001",
     });
 
     await expect(
@@ -219,10 +221,38 @@ describe("slackOutbound", () => {
     );
   });
 
+  it("fails threaded payload delivery when only the requested thread is echoed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "1712349999.000001",
+      threadTs: "1712345678.123456",
+    });
+
+    await expect(
+      slackOutbound.sendPayload!({
+        cfg,
+        to: "C123",
+        text: "",
+        threadId: "1712345678.123456",
+        payload: {
+          text: "fallback text",
+          channelData: {
+            slack: {
+              blocks: [{ type: "divider" }],
+            },
+          },
+        },
+        accountId: "default",
+      }),
+    ).rejects.toThrow(
+      "Slack delivery did not confirm thread 1712345678.123456 for C123; delivered message 1712349999.000001",
+    );
+  });
+
   it("accepts threaded payload delivery when Slack confirms the origin thread", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({
       messageId: "1712349999.000001",
       threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
     });
 
     const result = await slackOutbound.sendPayload!({
@@ -245,6 +275,7 @@ describe("slackOutbound", () => {
       channel: "slack",
       messageId: "1712349999.000001",
       threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
     });
   });
 });

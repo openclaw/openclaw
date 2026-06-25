@@ -75,7 +75,7 @@ function assertSlackThreadDeliveryResult(params: {
   if (!params.threadTs) {
     return;
   }
-  const deliveredThreadTs = normalizeOptionalString(params.result?.threadTs);
+  const deliveredThreadTs = normalizeOptionalString(params.result?.confirmedThreadTs);
   if (deliveredThreadTs === params.threadTs) {
     return;
   }
