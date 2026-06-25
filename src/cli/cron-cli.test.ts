@@ -661,23 +661,26 @@ describe("cron cli", () => {
   describe.each(["--no-output-timeout-seconds", "--output-max-bytes"])(
     "cron add %s validation",
     (flag) => {
-      it.each(["", "0", "-1", "1.5", "1000ms"])("rejects invalid value %j", async (value) => {
-        await expectCronCommandExit([
-          "cron",
-          "add",
-          "--name",
-          "Invalid command limit",
-          "--every",
-          "10m",
-          "--command",
-          "echo ok",
-          flag,
-          value,
-        ]);
+      it.each(["", "0", "-1", "1.5", "1000ms", "nope"])(
+        "rejects invalid value %j",
+        async (value) => {
+          await expectCronCommandExit([
+            "cron",
+            "add",
+            "--name",
+            "Invalid command limit",
+            "--every",
+            "10m",
+            "--command",
+            "echo ok",
+            flag,
+            value,
+          ]);
 
-        expectRuntimeErrorContaining(`Invalid ${flag} (must be a positive integer).`);
-        expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
-      });
+          expectRuntimeErrorContaining(`Invalid ${flag} (must be a positive integer).`);
+          expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+        },
+      );
     },
   );
 
