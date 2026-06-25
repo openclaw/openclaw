@@ -315,14 +315,29 @@ export async function resolveBootstrapFilesForRun(params: {
     runKind: params.runKind,
   });
 
+  // Apply agentDir overrides BEFORE hooks (hooks remain final override)
+  let filesWithAgentOverrides = bootstrapFiles;
+  if (params.agentId && params.config) {
+    const agentConfig = resolveAgentConfig(params.config, params.agentId);
+    // Only load from agentDir if explicitly configured (not fallback)
+    if (agentConfig?.agentDir) {
+      const agentDirFiles = await loadWorkspaceBootstrapFiles(agentConfig.agentDir);
+      const overrides = new Map(agentDirFiles.filter((f) => !f.missing).map((f) => [f.name, f]));
+      if (overrides.size > 0) {
+        filesWithAgentOverrides = bootstrapFiles.map((f) => overrides.get(f.name) ?? f);
+      }
+    }
+  }
+
   const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+    files: filesWithAgentOverrides,
     workspaceDir: params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
+
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     updated,
     workspaceSetupCompleted,

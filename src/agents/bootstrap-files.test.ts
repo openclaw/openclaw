@@ -142,6 +142,12 @@ function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
   expect(fileNames).toContain("AGENTS.md");
 }
 
+async function makeTempAgentDir(parentDir: string, agentId: string): Promise<string> {
+  const agentDir = path.join(parentDir, "agents", agentId);
+  await fs.mkdir(agentDir, { recursive: true });
+  return agentDir;
+}
+
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
@@ -339,6 +345,103 @@ describe("resolveBootstrapFilesForRun", () => {
       "IDENTITY.md",
       "USER.md",
     ]);
+  });
+
+  it("overrides workspace bootstrap files with agentDir versions when agentId is provided", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-agentdir-");
+    const agentDir = await makeTempAgentDir(workspaceDir, "test-agent");
+
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "workspace persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "agent persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      agentId: "test-agent",
+      config: {
+        agents: {
+          defaults: {},
+          list: [{ id: "test-agent", agentDir }],
+        },
+      },
+    });
+
+    const soulFile = files.find((f) => f.name === "SOUL.md");
+    const agentsFile = files.find((f) => f.name === "AGENTS.md");
+
+    expect(soulFile?.content).toBe("agent persona");
+    expect(agentsFile?.content).toBe("workspace rules");
+  });
+
+  it("falls back to workspace files when agentDir does not have them", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-fallback-");
+    const agentDir = await makeTempAgentDir(workspaceDir, "minimal-agent");
+
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "workspace persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      agentId: "minimal-agent",
+      config: {
+        agents: {
+          defaults: {},
+          list: [{ id: "minimal-agent", agentDir }],
+        },
+      },
+    });
+
+    expect(files.map((f) => f.name)).toContain("SOUL.md");
+    expect(files.map((f) => f.name)).toContain("AGENTS.md");
+
+    const soulFile = files.find((f) => f.name === "SOUL.md");
+    expect(soulFile?.content).toBe("workspace persona");
+  });
+
+  it("skips agentDir override when agentId is not provided", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-no-agentid-");
+    const agentDir = await makeTempAgentDir(workspaceDir, "ignored-agent");
+
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "workspace persona", "utf8");
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "agent persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {},
+          list: [{ id: "ignored-agent", agentDir }],
+        },
+      },
+    });
+
+    const soulFile = files.find((f) => f.name === "SOUL.md");
+    expect(soulFile?.content).toBe("workspace persona");
+  });
+
+  it("skips agentDir override when agentDir is not explicitly configured", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-no-explicit-agentdir-");
+    const stateAgentDir = path.join(workspaceDir, "state", "agents", "state-only-agent", "agent");
+    await fs.mkdir(stateAgentDir, { recursive: true });
+
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "workspace persona", "utf8");
+    // File exists in state fallback location but should NOT be used
+    await fs.writeFile(path.join(stateAgentDir, "SOUL.md"), "state fallback persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      agentId: "state-only-agent",
+      config: {
+        agents: {
+          defaults: {},
+          // No agentDir configured - should use workspace files
+          list: [{ id: "state-only-agent" }],
+        },
+      },
+    });
+
+    const soulFile = files.find((f) => f.name === "SOUL.md");
+    expect(soulFile?.content).toBe("workspace persona");
   });
 });
 
