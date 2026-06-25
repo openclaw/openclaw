@@ -65,8 +65,8 @@ export async function resolveAndPersistSessionFile(params: {
           }
         : undefined,
     );
-    return { sessionFile, sessionEntry: persistedEntry };
+    return { sessionFile: persistedSessionFile, sessionEntry: persistedEntry };
   }
   sessionStore[sessionKey] = persistedEntry;
-  return { sessionFile, sessionEntry: persistedEntry };
+  return { sessionFile: persistedSessionFile, sessionEntry: persistedEntry };
 }

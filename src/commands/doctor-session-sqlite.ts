@@ -333,7 +333,7 @@ function archiveImportedTranscript(
   }
   try {
     report.archivedTranscriptFiles.push(
-      moveImportedTranscriptToArchive(target, record.sessionKey, record.transcriptPath),
+      ...moveImportedTranscriptArtifactsToArchive(target, record.sessionKey, record.transcriptPath),
     );
   } catch (err) {
     report.issues.push({
@@ -517,12 +517,31 @@ function listUnreferencedJsonlFiles(
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-function moveImportedTranscriptToArchive(
+function moveImportedTranscriptArtifactsToArchive(
   target: SessionStoreTarget,
   sessionKey: string,
   transcriptPath: string,
+): string[] {
+  const archived = [moveImportedTranscriptToArchive(target, sessionKey, transcriptPath)];
+  const trajectoryPath = resolveTrajectoryPath(transcriptPath);
+  if (trajectoryPath && fs.existsSync(trajectoryPath)) {
+    archived.push(moveImportedTranscriptToArchive(target, sessionKey, trajectoryPath));
+  }
+  return archived;
+}
+
+function resolveTrajectoryPath(transcriptPath: string): string | undefined {
+  return transcriptPath.endsWith(".jsonl")
+    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
+    : undefined;
+}
+
+function moveImportedTranscriptToArchive(
+  target: SessionStoreTarget,
+  sessionKey: string,
+  sourcePathRaw: string,
 ): string {
-  const sourcePath = path.resolve(transcriptPath);
+  const sourcePath = path.resolve(sourcePathRaw);
   const stat = fs.statSync(sourcePath);
   if (!stat.isFile()) {
     throw new Error("source is not a regular file");

@@ -45,26 +45,24 @@ describe("createPersistCronSessionEntry", () => {
         },
       }),
     );
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
-        expect(store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
-      },
-    );
+    const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:job",
-      updateSessionStore,
+      persistSessionEntry,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
+    expect(persistSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:cron:job",
+      entry: cronSession.sessionEntry,
+    });
   });
 
   it("does not register cron sessions as resumable until the transcript exists", async () => {
@@ -79,30 +77,29 @@ describe("createPersistCronSessionEntry", () => {
         status: "running",
       }),
     );
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:cron:shell-only"]).toEqual({
-          label: "Cron: shell-only",
-          status: "running",
-          updatedAt: 1000,
-          systemSent: true,
-        });
-      },
-    );
+    const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:shell-only",
-      updateSessionStore,
+      persistSessionEntry,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
+    expect(persistSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:cron:shell-only",
+      entry: {
+        label: "Cron: shell-only",
+        status: "running",
+        updatedAt: 1000,
+        systemSent: true,
+      },
+    });
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
@@ -118,19 +115,7 @@ describe("createPersistCronSessionEntry", () => {
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:completed",
-      updateSessionStore: vi.fn(
-        async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-          const store: Record<string, SessionEntry> = {};
-          update(store);
-          expect(store["agent:main:cron:completed"]).toEqual({
-            sessionId: "run-session-id",
-            sessionFile: transcriptPath,
-            label: "Cron: completed",
-            updatedAt: 1000,
-            systemSent: true,
-          });
-        },
-      ),
+      persistSessionEntry: vi.fn(async () => {}),
     });
 
     await persist();
@@ -146,24 +131,23 @@ describe("createPersistCronSessionEntry", () => {
 
   it("persists explicit session-bound cron state under the requested session key", async () => {
     const cronSession = makeCronSession();
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:session"]).toBe(cronSession.sessionEntry);
-      },
-    );
+    const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:session",
-      updateSessionStore,
+      persistSessionEntry,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:session"]).toBe(cronSession.sessionEntry);
+    expect(persistSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:session",
+      entry: cronSession.sessionEntry,
+    });
   });
 
   it("adopts rotated run transcript metadata before persisting session-bound cron state", async () => {
@@ -181,27 +165,14 @@ describe("createPersistCronSessionEntry", () => {
         sessionFile: "/tmp/bound-session-rotated.jsonl",
       },
     });
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:telegram:direct:42"]).toEqual({
-          sessionId: "bound-session-rotated",
-          sessionFile: "/tmp/bound-session-rotated.jsonl",
-          usageFamilyKey: "agent:main:telegram:direct:42",
-          usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
-          updatedAt: 1000,
-          systemSent: true,
-        });
-      },
-    );
+    const persistSessionEntry = vi.fn(async () => {});
 
     expect(changed).toBe(true);
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:telegram:direct:42",
-      updateSessionStore,
+      persistSessionEntry,
     });
 
     await persist();
@@ -213,6 +184,18 @@ describe("createPersistCronSessionEntry", () => {
       usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
       updatedAt: 1000,
       systemSent: true,
+    });
+    expect(persistSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:telegram:direct:42",
+      entry: {
+        sessionId: "bound-session-rotated",
+        sessionFile: "/tmp/bound-session-rotated.jsonl",
+        usageFamilyKey: "agent:main:telegram:direct:42",
+        usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
+        updatedAt: 1000,
+        systemSent: true,
+      },
     });
   });
 });

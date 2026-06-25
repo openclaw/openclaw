@@ -42,11 +42,7 @@ describe("SQLite sessionFile markers", () => {
       sessionsDir: path.dirname(fixture.storePath()),
     });
 
-    const expectedSessionFile = path.join(path.dirname(fixture.storePath()), `${sessionId}.jsonl`);
-    expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
-      fs.realpathSync.native(path.dirname(expectedSessionFile)),
-    );
-    expect(path.basename(result.sessionFile)).toBe(path.basename(expectedSessionFile));
+    expect(result.sessionFile).toBe(marker);
     expect(result.sessionEntry.sessionFile).toBe(marker);
 
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
