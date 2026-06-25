@@ -116,13 +116,44 @@ function resolvePayloadReceiptKind(
   if (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length) {
     return "media";
   }
+  // Check for rich presentation content before text — a payload with both
+  // presentation blocks and a text fallback should report "card", not "text".
+  // After renderPresentationForDelivery consumes the top-level presentation
+  // field, the rendered blocks may live in channelData (e.g. Slack stores
+  // them in channelData.slack.presentationBlocks). Only channel-specific
+  // presentation data shifts the receipt kind; plain metadata does not.
+  if (
+    ctx.payload.presentation?.blocks?.length ||
+    ctx.payload.interactive ||
+    hasPresentationChannelData(ctx.payload)
+  ) {
+    return "card";
+  }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {
     return "text";
   }
-  if (ctx.payload.presentation?.blocks?.length || ctx.payload.interactive) {
-    return "card";
-  }
   return "unknown";
+}
+
+/** Returns true when channelData contains rendered presentation blocks
+ * rather than arbitrary metadata.  Channels that render presentation
+ * store them under their channel-specific key (e.g. slack.presentationBlocks). */
+function hasPresentationChannelData(payload: { channelData?: unknown }): boolean {
+  const cd = payload.channelData;
+  if (!cd || typeof cd !== "object" || Array.isArray(cd)) {
+    return false;
+  }
+  for (const channelData of Object.values(cd as Record<string, unknown>)) {
+    if (channelData && typeof channelData === "object" && !Array.isArray(channelData)) {
+      const channel = channelData as Record<string, unknown>;
+      if (
+        Array.isArray(channel.presentationBlocks) && channel.presentationBlocks.length > 0
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Converts legacy outbound send methods into a typed channel message adapter. */

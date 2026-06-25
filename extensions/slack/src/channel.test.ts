@@ -1362,3 +1362,53 @@ describe("slackPlugin config", () => {
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
   });
 });
+
+describe("slackChannelOutbound presentation", () => {
+  it("exposes renderPresentation on the channel outbound adapter", () => {
+    const renderFn = slackPlugin.outbound?.renderPresentation;
+    expect(renderFn).toBeDefined();
+    expect(typeof renderFn).toBe("function");
+  });
+
+  it("exposes presentationCapabilities on the channel outbound adapter", () => {
+    const caps = slackPlugin.outbound?.presentationCapabilities;
+    expect(caps).toBeDefined();
+    expect(caps?.supported).toBe(true);
+    expect(caps?.buttons).toBe(true);
+    expect(caps?.selects).toBe(true);
+    expect(caps?.limits?.text?.markdownDialect).toBe("slack-mrkdwn");
+  });
+
+  it("delegates renderPresentation to slackOutbound and returns presentationBlocks", async () => {
+    const renderFn = slackPlugin.outbound?.renderPresentation;
+    if (!renderFn) {
+      throw new Error("renderPresentation unavailable");
+    }
+
+    const payload = { text: "Fallback" };
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+
+    const result = await renderFn({
+      payload,
+      presentation,
+      ctx: {
+        cfg: {},
+        to: "C12345",
+        text: "Fallback",
+        payload,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    const channelData = (result as Record<string, unknown>)?.channelData as
+      | Record<string, unknown>
+      | undefined;
+    const slackData = channelData?.slack as
+      | { presentationBlocks?: Array<{ type: string }> }
+      | undefined;
+    expect(slackData?.presentationBlocks).toBeDefined();
+    expect(slackData?.presentationBlocks?.length).toBeGreaterThan(0);
+  });
+});

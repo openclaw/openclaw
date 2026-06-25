@@ -471,6 +471,36 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       },
     });
   },
+  renderPresentation: async ({ payload, presentation, ctx }) => {
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return slackOutbound.renderPresentation?.({ payload, presentation, ctx }) ?? null;
+  },
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+    limits: {
+      actions: {
+        maxActionsPerRow: 25,
+        maxLabelLength: 75,
+        maxValueBytes: 2000,
+        supportsStyles: true,
+      },
+      selects: {
+        maxOptions: 100,
+        maxLabelLength: 75,
+        maxValueBytes: 150,
+      },
+      text: {
+        maxLength: SLACK_TEXT_LIMIT,
+        encoding: "characters",
+        markdownDialect: "slack-mrkdwn",
+        supportsEdit: true,
+      },
+    },
+  },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
