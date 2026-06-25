@@ -282,7 +282,7 @@ export function normalizeMentions(
     const mentionId = mention.id.open_id;
     const replacement =
       botStripId && mentionId === botStripId
-        ? ""
+        ? `@${escapeName(mention.name)}`
         : mentionId
           ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
           : `@${mention.name}`;

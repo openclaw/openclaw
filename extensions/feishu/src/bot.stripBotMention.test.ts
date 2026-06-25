@@ -28,15 +28,15 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello world");
   });
 
-  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
+  it("preserves bot mention as @name in p2p so multi-bot groups see mention (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.content).toBe("@Bot hello");
   });
 
-  it("strips bot mention in group so slash commands work (#35994)", () => {
+  it("preserves bot mention as @name in group (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 hello",
@@ -45,10 +45,10 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.content).toBe("@Bot hello");
   });
 
-  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
+  it("preserves bot mention as @name before slash commands in group (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 /model",
@@ -57,10 +57,10 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("/model");
+    expect(ctx.content).toBe("@Bot /model");
   });
 
-  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
+  it("preserves bot mention as @name while normalizing other mentions (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 @_user_alice hello", [
         { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
@@ -68,7 +68,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
+    expect(ctx.content).toBe('@Bot <at user_id="ou_alice">Alice</at> hello');
   });
 
   it("falls back to @name when open_id is absent", () => {
