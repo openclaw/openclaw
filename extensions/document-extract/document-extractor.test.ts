@@ -66,7 +66,7 @@ describe("PDF document extractor", () => {
             bytes: Uint8Array.from(Buffer.from("png1")),
             mimeType: "image/png",
             page: 1,
-            width: 10,
+            width: 5,
             height: 10,
           },
         ],
@@ -79,7 +79,7 @@ describe("PDF document extractor", () => {
             bytes: Uint8Array.from(Buffer.from("png2")),
             mimeType: "image/png",
             page: 2,
-            width: 10,
+            width: 5,
             height: 10,
           },
         ],
@@ -97,17 +97,17 @@ describe("PDF document extractor", () => {
       maxPages: 2,
       maxTextChars: 200_000,
     });
-    // Each page renders in its own extract() call so clawpdf's pixel budget is not
-    // shared across pages (which would starve later pages down to 1x1 images).
+    // Each page renders in its own extract() call, with the aggregate pixel cap
+    // allocated across selected pages so later pages are not starved.
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(2, {
       mode: "images",
       pages: [1],
-      image: { maxDimension: 10_000, maxPixels: 100, forms: true },
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
     });
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(3, {
       mode: "images",
       pages: [2],
-      image: { maxDimension: 10_000, maxPixels: 100, forms: true },
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
     });
     expect(result).toEqual({
       text: "",

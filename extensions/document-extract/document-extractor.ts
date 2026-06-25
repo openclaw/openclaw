@@ -85,25 +85,33 @@ async function extractPdfContent(
 
     // clawpdf's image render budget (maxPixels) is shared across every page in one
     // extract() call: the first page consumes it and later pages collapse to 1x1
-    // PNGs that vision models reject. Render each page in its own call so the
-    // budget applies per page and every selected page yields a usable image.
+    // PNGs that vision models reject. Render each page separately, allocating the
+    // remaining aggregate budget across pages that still need rendering.
     const imagePages =
       pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
 
     try {
       const images: DocumentExtractedImage[] = [];
-      for (const pageNumber of imagePages) {
+      let remainingPixels = request.maxPixels;
+      for (let index = 0; index < imagePages.length; index += 1) {
+        if (remainingPixels <= 0) {
+          break;
+        }
+        const pagesRemaining = imagePages.length - index;
+        const maxPixelsPerPage = Math.max(1, Math.ceil(remainingPixels / pagesRemaining));
+        const pageNumber = imagePages[index];
         const imageResult = await pdf.extract({
           mode: "images",
           pages: [pageNumber],
           image: {
             maxDimension: MAX_RENDER_DIMENSION,
-            maxPixels: request.maxPixels,
+            maxPixels: maxPixelsPerPage,
             forms: true,
           },
         });
         for (const image of imageResult.images) {
           images.push(toDocumentImage(image));
+          remainingPixels -= image.width * image.height;
         }
       }
       return { text, images };
