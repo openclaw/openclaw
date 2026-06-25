@@ -140,6 +140,16 @@ Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 image: ghcr.io/openclaw/openclaw:latest # or pin to a specific version from https://github.com/openclaw/openclaw/releases
 ```
 
+### Memory and the Node heap
+
+The pod sets `resources.limits.memory`, but Node's V8 heap is sized from the
+host machine's RAM and ignores the cgroup limit. Under a memory limit, a
+memory-intensive operation (for example a diagnostics or health check) can grow
+the heap past the limit and the kernel OOM-kills the pod (exit 137) — even
+though `free -h` inside the pod shows plenty free. The manifest pins the heap
+with `NODE_OPTIONS=--max-old-space-size` to ~75% of the limit; if you change
+`limits.memory`, update `NODE_OPTIONS` to match.
+
 ### Expose beyond port-forward
 
 The default manifests bind the gateway to loopback inside the pod. That works with `kubectl port-forward`, but it does not work with a Kubernetes `Service` or Ingress path that needs to reach the pod IP.
