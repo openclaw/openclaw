@@ -69,6 +69,10 @@ async function readFirecrawlJsonResponse(
   label: string,
   opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`${label}: HTTP ${response.status}${body ? ` — ${body}` : ""}`);
+  }
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
