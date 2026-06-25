@@ -101,6 +101,7 @@ import {
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { switchChatSession } from "./session-switch.ts";
 import { createSessionWorkspaceProps, type SessionWorkspaceHost } from "./session-workspace.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
@@ -992,6 +993,10 @@ export class ChatPage extends LitElement {
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
       this.state.sessionKey = this.data.sessionKey;
+      const agentId = parseAgentSessionKey(this.data.sessionKey)?.agentId;
+      if (agentId) {
+        this.context.agentSelection.set(agentId);
+      }
     }
     if (this.data?.draft !== undefined) {
       this.state.handleChatDraftChange(this.data.draft);
@@ -1005,9 +1010,9 @@ export class ChatPage extends LitElement {
         handlePageGatewayEvent(state, event);
       }
     });
-    this.applySessionsSnapshot(this.context.sessions.snapshot);
-    this.stopSessionsSubscription = this.context.sessions.subscribe((snapshot) => {
-      this.applySessionsSnapshot(snapshot);
+    this.applySessionsState(this.context.sessions.state);
+    this.stopSessionsSubscription = this.context.sessions.subscribe((state) => {
+      this.applySessionsState(state);
     });
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
@@ -1048,15 +1053,18 @@ export class ChatPage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private applySessionsSnapshot(snapshot: ApplicationContext["sessions"]["snapshot"]) {
+  private applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
     const state = this.state;
     if (!state) {
       return;
     }
-    state.sessionsResult = snapshot.result;
-    state.sessionsResultAgentId = snapshot.agentId;
-    state.sessionsLoading = snapshot.loading;
-    state.sessionsError = snapshot.error;
+    for (const sessionKey of stateValue.deletedKeys) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+    }
+    state.sessionsResult = stateValue.result;
+    state.sessionsResultAgentId = stateValue.agentId;
+    state.sessionsLoading = stateValue.loading;
+    state.sessionsError = stateValue.error;
     state.requestUpdate?.();
   }
 
@@ -1189,6 +1197,7 @@ export class ChatPage extends LitElement {
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
       onAgentChange: (agentId) => {
+        this.context.agentSelection.set(agentId);
         const nextSessionKey = buildAgentMainSessionKey({ agentId });
         this.context.replace("chat", {
           search: `?session=${encodeURIComponent(nextSessionKey)}`,

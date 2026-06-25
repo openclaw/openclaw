@@ -1,11 +1,11 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type {
-  ArtifactDownloadResult,
-  SessionWorkspaceGetResult,
-  SessionWorkspaceListResult,
-} from "../../api/types.ts";
+import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../api/types.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
-import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentParamsForSession,
+  type SessionCapability,
+  type SessionScopeHost,
+} from "../../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import type { ChatProps } from "./view.ts";
@@ -38,6 +38,7 @@ export type SessionWorkspaceOpenRequest = OpenRequest;
 
 export type SessionWorkspaceHost = {
   sessionKey: string;
+  sessions: SessionCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
@@ -180,15 +181,11 @@ function loadWorkspace(
   const agentId = workspace.agentId;
   void (async () => {
     try {
-      const files = await state.client?.request<SessionWorkspaceListResult | null>(
-        "sessions.files.list",
-        {
-          sessionKey,
-          path: workspace.browserSearch ? "" : workspace.browserPath,
-          search: workspace.browserSearch,
-          ...(agentId ? { agentId } : {}),
-        },
-      );
+      const files = await state.sessions.listFiles(sessionKey, {
+        path: workspace.browserSearch ? "" : workspace.browserPath,
+        search: workspace.browserSearch,
+        agentId,
+      });
       const artifacts = await state.client?.request<{
         artifacts?: SessionWorkspaceListResult["artifacts"];
       } | null>("artifacts.list", {
@@ -311,12 +308,7 @@ function openFile(state: SessionWorkspaceHost, workspace: SessionWorkspaceState,
     state,
     workspace,
     `file:${path}`,
-    (request) =>
-      state.client!.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
-        sessionKey: request.sessionKey,
-        path,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
-      }),
+    (request) => state.sessions.getFile(request.sessionKey, path, { agentId: request.agentId }),
     (result) => {
       const file = result.file;
       return !file || typeof file.content !== "string"

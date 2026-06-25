@@ -11,7 +11,6 @@ import { page as chatPage } from "./pages/chat/route.ts";
 // import { page as logsPage } from "./pages/logs/route.ts";
 // import { page as nodesPage } from "./pages/nodes/route.ts";
 // import { page as overviewPage } from "./pages/overview/route.ts";
-// import { page as sessionsPage } from "./pages/sessions/route.ts";
 // import { page as skillsPage } from "./pages/skills/route.ts";
 // import { page as usagePage } from "./pages/usage/route.ts";
 // import { page as workboardPage } from "./pages/workboard/route.ts";

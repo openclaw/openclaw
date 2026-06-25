@@ -104,7 +104,7 @@ export async function executeSlashCommand(
     case "clear":
       return { content: "Chat history cleared.", action: "clear" };
     case "compact":
-      return await executeCompact(client, sessionKey, context);
+      return await executeCompact(sessionKey, context);
     case "model":
       return await executeModel(client, sessionKey, args, context);
     case "think":
@@ -150,17 +150,14 @@ function executeHelp(): SlashCommandResult {
 }
 
 async function executeCompact(
-  client: GatewayBrowserClient,
   sessionKey: string,
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const result = await client.request<{
-      ok?: boolean;
-      compacted?: boolean;
-      reason?: string;
-      result?: { tokensBefore?: number; tokensAfter?: number };
-    }>("sessions.compact", { key: sessionKey, ...selectedGlobalScope(sessionKey, context) });
+    const result = await context.sessions.compact(
+      sessionKey,
+      selectedGlobalScope(sessionKey, context),
+    );
     if (result?.ok !== true) {
       const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
       return { content: reason ? `Compaction failed: ${reason}` : "Compaction failed." };
@@ -863,11 +860,11 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect <message>`" : resolved.error,
       };
     }
-    const resp = await client.request<{ runId?: string; status?: unknown }>("sessions.steer", {
-      key: resolved.key,
-      ...selectedGlobalScope(resolved.key, context),
-      message: resolved.message,
-    });
+    const resp = await context.sessions.steer(
+      resolved.key,
+      resolved.message,
+      selectedGlobalScope(resolved.key, context),
+    );
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {

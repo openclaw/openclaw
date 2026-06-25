@@ -13,8 +13,10 @@ import {
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
+import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { createBrowserHistory } from "./browser.ts";
 import type {
   ApplicationGateway,
@@ -351,6 +353,8 @@ export function bootstrapApplication(): ApplicationRuntime {
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const agentIdentity = createAgentIdentityCapability(gateway);
+  const agentSelection = createAgentSelectionCapability(gateway);
   const sessions = createSessionCapability(gateway);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
@@ -413,6 +417,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     basePath,
     assistantName: identity.name || "OpenClaw",
     gateway,
+    agentIdentity,
+    agentSelection,
     sessions,
     overlays,
     navigation,

@@ -2053,7 +2053,7 @@ export async function refreshChat(
         selectedGlobalAgentId: refreshedAgentId,
         showArchived: host.sessionsShowArchived,
       });
-      const sessionsResult = reconciled ? host.sessions.snapshot.result : host.sessionsResult;
+      const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
       if (reconciled) {
         host.sessionsResult = sessionsResult;
       }

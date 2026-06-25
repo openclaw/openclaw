@@ -8,9 +8,13 @@ import type {
   SessionsCompactionRestoreResult,
   SessionsListResult,
   SessionsPatchResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
 } from "../../api/types.ts";
+import { normalizeAgentId } from "../session-key.ts";
 import { resolveSessionCreateParams } from "./create.ts";
 import {
+  filterSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
@@ -18,7 +22,11 @@ import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
-import { reconcileSessionHistory, type SessionReconcileOptions } from "./reconcile.ts";
+import {
+  reconcileSessionChanged,
+  reconcileSessionHistory,
+  type SessionReconcileOptions,
+} from "./reconcile.ts";
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -27,11 +35,12 @@ export {
 } from "./usage.ts";
 export type { SessionUsageQuery } from "./usage.ts";
 
-export type SessionSnapshot = {
+export type SessionState = {
   result: SessionsListResult | null;
   agentId: string | null;
   loading: boolean;
   error: string | null;
+  deletedKeys: readonly string[];
 };
 
 export type SessionListOptions = {
@@ -71,6 +80,28 @@ export type SessionDeleteOptions = {
   deleteTranscript?: boolean;
 };
 
+export type SessionDeleteTarget = {
+  key: string;
+  agentId?: string;
+};
+
+export type SessionDeleteBatchResult = {
+  deleted: string[];
+  errors: string[];
+};
+
+export type SessionCompactResult = {
+  ok?: boolean;
+  compacted?: boolean;
+  reason?: string;
+  result?: { tokensBefore?: number; tokensAfter?: number };
+};
+
+export type SessionSteerResult = {
+  runId?: string;
+  status?: unknown;
+};
+
 export type SessionResetOptions = {
   agentId?: string | null;
 };
@@ -92,7 +123,7 @@ export type SessionMessageSubscription = {
 };
 
 export type SessionCapability = {
-  readonly snapshot: SessionSnapshot;
+  readonly state: SessionState;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   reconcile: (
     row: GatewaySessionRow | undefined,
@@ -107,8 +138,23 @@ export type SessionCapability = {
     options?: { agentId?: string },
   ) => Promise<SessionsPatchResult | null>;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
+  deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<void>;
-  subscribeGateway: () => Promise<void>;
+  compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
+  steer: (
+    key: string,
+    message: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionSteerResult>;
+  listFiles: (
+    key: string,
+    options?: { agentId?: string | null; path?: string; search?: string },
+  ) => Promise<SessionWorkspaceListResult | null>;
+  getFile: (
+    key: string,
+    path: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionWorkspaceGetResult | null>;
   subscribeMessages: (
     key: string,
     options?: { agentId?: string | null },
@@ -128,11 +174,12 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
-  subscribe: (listener: (snapshot: SessionSnapshot) => void) => () => void;
+  subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
 
 export {
+  filterSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
@@ -267,6 +314,54 @@ export function requestSessionReset(
     .then(() => undefined);
 }
 
+export function requestSessionCompact(
+  client: SessionRequestClient,
+  key: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionCompactResult> {
+  return client.request<SessionCompactResult>("sessions.compact", {
+    ...buildSessionRequestParams(key, options.agentId),
+  });
+}
+
+export function requestSessionSteer(
+  client: SessionRequestClient,
+  key: string,
+  message: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionSteerResult> {
+  return client.request<SessionSteerResult>("sessions.steer", {
+    ...buildSessionRequestParams(key, options.agentId),
+    message,
+  });
+}
+
+export function requestSessionFilesList(
+  client: SessionRequestClient,
+  key: string,
+  options: { agentId?: string | null; path?: string; search?: string } = {},
+): Promise<SessionWorkspaceListResult | null> {
+  return client.request<SessionWorkspaceListResult | null>("sessions.files.list", {
+    sessionKey: key,
+    path: options.path ?? "",
+    search: options.search ?? "",
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+  });
+}
+
+export function requestSessionFile(
+  client: SessionRequestClient,
+  key: string,
+  path: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionWorkspaceGetResult | null> {
+  return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
+    sessionKey: key,
+    path,
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+  });
+}
+
 export function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
@@ -365,20 +460,35 @@ function appendSessionResults(
 }
 
 function isSessionEvent(event: GatewayEventFrame): boolean {
-  return event.event === "sessions.changed" || event.event === "session.operation";
+  return event.event === "sessions.changed";
+}
+
+function canReconcileSessionEvent(options: SessionListOptions): boolean {
+  return (
+    options.activeMinutes === undefined &&
+    options.search === undefined &&
+    options.offset === undefined &&
+    options.limit === undefined &&
+    options.includeGlobal !== false &&
+    options.includeUnknown !== false &&
+    options.configuredAgentsOnly !== true
+  );
 }
 
 export function createSessionCapability(gateway: SessionGateway): SessionCapability {
-  let snapshot: SessionSnapshot = {
+  let state: SessionState = {
     result: null,
     agentId: null,
     loading: false,
     error: null,
+    deletedKeys: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: (SessionListOptions & { force?: boolean }) | null = null;
   let disposed = false;
-  const listeners = new Set<(next: SessionSnapshot) => void>();
+  let subscribedClient: GatewayBrowserClient | null = null;
+  let lastListOptions: SessionListOptions = {};
+  const listeners = new Set<(next: SessionState) => void>();
 
   const requestList = async (
     options: SessionListOptions = {},
@@ -391,10 +501,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return disposed || gateway.snapshot.client !== client ? null : (result ?? null);
   };
 
-  const publish = (next: SessionSnapshot) => {
-    snapshot = next;
+  const publish = (next: SessionState) => {
+    state = next;
     for (const listener of listeners) {
-      listener(snapshot);
+      listener(state);
     }
   };
 
@@ -403,25 +513,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!client || !gateway.snapshot.connected || disposed) {
       return;
     }
-    publish({ ...snapshot, loading: true, error: null });
+    const { append: _append, force: _force, ...requestOptions } = options;
+    lastListOptions = requestOptions;
+    publish({ ...state, loading: true, error: null, deletedKeys: [] });
     try {
       const result = await requestList(options);
       if (disposed || gateway.snapshot.client !== client) {
         return;
       }
       const nextResult =
-        result && options.append && options.offset && snapshot.result
-          ? appendSessionResults(snapshot.result, result)
+        result && options.append && options.offset && state.result
+          ? appendSessionResults(state.result, result)
           : result;
       publish({
         result: nextResult,
         agentId: options.agentId?.trim() ? normalizeAgentId(options.agentId) : null,
         loading: false,
         error: null,
+        deletedKeys: [],
       });
     } catch (error) {
       if (!disposed && gateway.snapshot.client === client) {
-        publish({ ...snapshot, loading: false, error: String(error) });
+        publish({ ...state, loading: false, error: String(error), deletedKeys: [] });
       }
     }
   };
@@ -437,7 +550,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const hasListOverrides = Object.entries(options).some(
       ([key, value]) => key !== "force" && value !== undefined,
     );
-    if (snapshot.result && !options.force && !hasListOverrides) {
+    if (state.result && !options.force && !hasListOverrides) {
       return Promise.resolve();
     }
     const request = load(options).finally(() => {
@@ -454,7 +567,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const create = async (params: SessionCreateParams = {}) => {
     const client = gateway.snapshot.client;
-    if (!client || !gateway.snapshot.connected || snapshot.loading || disposed) {
+    if (!client || !gateway.snapshot.connected || state.loading || disposed) {
       return null;
     }
     try {
@@ -465,7 +578,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       await refresh({ agentId: params.agentId, force: true });
       return key;
     } catch (error) {
-      publish({ ...snapshot, error: String(error) });
+      publish({ ...state, error: String(error) });
       return null;
     }
   };
@@ -484,13 +597,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (disposed || gateway.snapshot.client !== client) {
         return null;
       }
-      await refresh({
-        agentId: options.agentId,
-        force: true,
-      });
+      await refresh({ agentId: options.agentId, force: true });
       return result;
     } catch (error) {
-      publish({ ...snapshot, error: String(error) });
+      publish({ ...state, error: String(error) });
       throw error;
     }
   };
@@ -500,16 +610,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ): boolean => {
-    const result = reconcileSessionHistory(snapshot.result, row, defaults, options);
-    if (result === snapshot.result) {
+    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    if (result === state.result) {
       return false;
     }
     publish({
-      ...snapshot,
+      ...state,
       result,
       agentId: options?.resultAgentId?.trim()
         ? normalizeAgentId(options.resultAgentId)
-        : snapshot.agentId,
+        : state.agentId,
     });
     return true;
   };
@@ -520,22 +630,47 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return false;
     }
     try {
-      const result = await requestSessionDelete(client, key, options);
+      await requestSessionDelete(client, key, options);
       if (disposed || gateway.snapshot.client !== client) {
         return false;
       }
-      if (result?.deleted !== true) {
-        return false;
-      }
-      await refresh({
-        agentId: options.agentId,
-        force: true,
-      });
+      publish({ ...state, deletedKeys: [key] });
+      await refresh({ agentId: options.agentId, force: true });
       return true;
     } catch (error) {
-      publish({ ...snapshot, error: String(error) });
+      publish({ ...state, error: String(error) });
       throw error;
     }
+  };
+
+  const removeMany = async (
+    targets: readonly SessionDeleteTarget[],
+  ): Promise<SessionDeleteBatchResult> => {
+    const client = gateway.snapshot.client;
+    if (!client || !gateway.snapshot.connected || disposed || targets.length === 0) {
+      return { deleted: [], errors: [] };
+    }
+    const deleted: string[] = [];
+    const errors: string[] = [];
+    for (const target of targets) {
+      if (disposed || gateway.snapshot.client !== client) {
+        break;
+      }
+      try {
+        await requestSessionDelete(client, target.key, target);
+        if (disposed || gateway.snapshot.client !== client) {
+          break;
+        }
+        deleted.push(target.key);
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    if (deleted.length > 0 && !disposed && gateway.snapshot.client === client) {
+      publish({ ...state, deletedKeys: deleted });
+      await refresh({ force: true });
+    }
+    return { deleted, errors };
   };
 
   const reset = async (key: string, options: SessionResetOptions = {}): Promise<void> => {
@@ -549,17 +684,65 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
     } catch (error) {
-      publish({ ...snapshot, error: String(error) });
+      publish({ ...state, error: String(error) });
       throw error;
     }
   };
 
-  const subscribeGateway = async () => {
+  const compact = async (
+    key: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionCompactResult> => {
     const client = gateway.snapshot.client;
     if (!client || !gateway.snapshot.connected || disposed) {
-      return;
+      throw new Error("Session compaction requires an active Gateway connection");
     }
-    await subscribeSessionGateway(client);
+    const result = await requestSessionCompact(client, key, options);
+    if (disposed || gateway.snapshot.client !== client) {
+      throw new Error("Session compaction completed on a replaced Gateway client");
+    }
+    return result;
+  };
+
+  const steer = async (
+    key: string,
+    message: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionSteerResult> => {
+    const client = gateway.snapshot.client;
+    if (!client || !gateway.snapshot.connected || disposed) {
+      throw new Error("Session steering requires an active Gateway connection");
+    }
+    const result = await requestSessionSteer(client, key, message, options);
+    if (disposed || gateway.snapshot.client !== client) {
+      throw new Error("Session steering completed on a replaced Gateway client");
+    }
+    return result;
+  };
+
+  const listFiles = async (
+    key: string,
+    options: { agentId?: string | null; path?: string; search?: string } = {},
+  ): Promise<SessionWorkspaceListResult | null> => {
+    const client = gateway.snapshot.client;
+    if (!client || !gateway.snapshot.connected || disposed) {
+      return null;
+    }
+    const result = await requestSessionFilesList(client, key, options);
+    return disposed || gateway.snapshot.client !== client ? null : result;
+  };
+
+  const getFile = async (
+    key: string,
+    path: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionWorkspaceGetResult | null> => {
+    const client = gateway.snapshot.client;
+    if (!client || !gateway.snapshot.connected || disposed) {
+      return null;
+    }
+    const result = await requestSessionFile(client, key, path, options);
+    return disposed || gateway.snapshot.client !== client ? null : result;
   };
 
   const subscribeMessages = async (
@@ -594,7 +777,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return [];
     }
     const result = await listSessionCheckpoints(client, key, options);
-    return result.checkpoints ?? [];
+    return disposed || gateway.snapshot.client !== client ? [] : (result.checkpoints ?? []);
   };
 
   const branchCheckpoint = async (
@@ -606,7 +789,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!client || !gateway.snapshot.connected || disposed) {
       throw new Error("Session checkpoint operation requires an active Gateway connection");
     }
-    return branchSessionCheckpoint(client, key, checkpointId, options);
+    const result = await branchSessionCheckpoint(client, key, checkpointId, options);
+    if (disposed || gateway.snapshot.client !== client) {
+      throw new Error("Session checkpoint operation completed on a replaced Gateway client");
+    }
+    await refresh({
+      agentId: options.agentId ?? state.agentId ?? undefined,
+      force: true,
+    });
+    return result;
   };
 
   const restoreCheckpoint = async (
@@ -618,25 +809,71 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!client || !gateway.snapshot.connected || disposed) {
       throw new Error("Session checkpoint operation requires an active Gateway connection");
     }
-    return restoreSessionCheckpoint(client, key, checkpointId, options);
+    const result = await restoreSessionCheckpoint(client, key, checkpointId, options);
+    if (disposed || gateway.snapshot.client !== client) {
+      throw new Error("Session checkpoint operation completed on a replaced Gateway client");
+    }
+    await refresh({
+      agentId: options.agentId ?? state.agentId ?? undefined,
+      force: true,
+    });
+    return result;
   };
 
   const stopGateway = gateway.subscribe((next) => {
     if (!next.connected || !next.client) {
-      publish({ result: null, agentId: null, loading: false, error: null });
+      subscribedClient = null;
+      publish({ result: null, agentId: null, loading: false, error: null, deletedKeys: [] });
+      return;
+    }
+    if (subscribedClient !== next.client) {
+      const client = next.client;
+      subscribedClient = client;
+      void (async () => {
+        try {
+          await subscribeSessionGateway(client);
+        } catch (error) {
+          if (!disposed && gateway.snapshot.client === client) {
+            publish({ ...state, error: String(error) });
+          }
+        } finally {
+          if (!disposed && gateway.snapshot.client === client) {
+            await refresh();
+          }
+        }
+      })();
       return;
     }
     void refresh();
   });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (isSessionEvent(event)) {
-      void refresh({ force: true });
+      if (!canReconcileSessionEvent(lastListOptions)) {
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
+      const reconciled = reconcileSessionChanged(state.result, event.payload, {
+        resultAgentId: state.agentId,
+        showArchived: lastListOptions.showArchived,
+      });
+      if (reconciled.applied) {
+        if (reconciled.result !== state.result || reconciled.deletedKey) {
+          publish({
+            ...state,
+            result: reconciled.result,
+            error: null,
+            deletedKeys: reconciled.deletedKey ? [reconciled.deletedKey] : [],
+          });
+        }
+        return;
+      }
+      void refresh({ ...lastListOptions, force: true });
     }
   });
 
   return {
-    get snapshot() {
-      return snapshot;
+    get state() {
+      return state;
     },
     list: requestList,
     reconcile,
@@ -644,8 +881,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     delete: remove,
+    deleteMany: removeMany,
     reset,
-    subscribeGateway,
+    compact,
+    steer,
+    listFiles,
+    getFile,
     subscribeMessages,
     unsubscribeMessages,
     listCheckpoints,

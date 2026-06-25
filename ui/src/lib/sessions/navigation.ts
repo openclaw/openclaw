@@ -1,4 +1,5 @@
-import type { GatewayHelloOk, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -110,6 +111,20 @@ export function visibleSessionMatches(
   return expectedAgentId
     ? normalizeAgentId(selectedAgentId ?? "") === normalizeAgentId(expectedAgentId)
     : selectedAgentId === undefined;
+}
+
+export function filterSessionRows(
+  result: SessionsListResult,
+  options: { showArchived: boolean },
+): SessionsListResult {
+  const sessions = result.sessions.filter(
+    (row) => row.key && (options.showArchived || row.archived !== true),
+  );
+  return {
+    ...result,
+    count: sessions.length,
+    sessions,
+  };
 }
 
 export function getVisibleSessionRows(
