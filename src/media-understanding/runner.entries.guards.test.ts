@@ -47,13 +47,18 @@ describe("media-understanding formatDecisionSummary guards", () => {
 });
 
 describe("media-understanding formatMissingProviderHint", () => {
-  it("returns the catalog hint for a known externalized provider (amazon-bedrock)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    expect(hint).toContain("openclaw plugins install @openclaw/amazon-bedrock-provider");
+  it("returns the catalog hint for a provider with mediaUnderstandingProviders contract (groq)", () => {
+    const hint = formatMissingProviderHint("groq");
+    expect(hint).toContain("openclaw plugins install @openclaw/groq-provider");
     expect(hint).toContain("openclaw plugins registry --refresh");
     expect(hint).toContain("restart the gateway");
     expect(hint).toContain("openclaw doctor --fix");
     expect(hint).toContain("official external plugin");
+  });
+
+  it("returns empty string for a provider with only generic providers[] entry but no mediaUnderstandingProviders contract (amazon-bedrock)", () => {
+    const hint = formatMissingProviderHint("amazon-bedrock");
+    expect(hint).toBe("");
   });
 
   it("returns empty string for a non-cataloged id (no convention fallback)", () => {
@@ -73,11 +78,9 @@ describe("media-understanding formatMissingProviderHint", () => {
   });
 
   it("preserves the legacy prefix when hint is appended (catalog-known id)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    const composed = `Media provider not available: amazon-bedrock${hint}`;
-    expect(composed).toMatch(
-      /^Media provider not available: amazon-bedrock .*openclaw plugins install/,
-    );
+    const hint = formatMissingProviderHint("groq");
+    const composed = `Media provider not available: groq${hint}`;
+    expect(composed).toMatch(/^Media provider not available: groq .*openclaw plugins install/);
     expect(composed).toMatch(/official external plugin/);
     expect(composed).toMatch(/restart the gateway/);
   });
@@ -91,5 +94,12 @@ describe("media-understanding formatMissingProviderHint", () => {
 
   it("returns empty string for a channel-only id (feishu)", () => {
     expect(formatMissingProviderHint("feishu")).toBe("");
+  });
+
+  it("returns empty string for a catalog provider without mediaUnderstandingProviders contract (amazon-bedrock legacy prefix)", () => {
+    const hint = formatMissingProviderHint("amazon-bedrock");
+    expect(`Media provider not available: amazon-bedrock${hint}`).toBe(
+      "Media provider not available: amazon-bedrock",
+    );
   });
 });

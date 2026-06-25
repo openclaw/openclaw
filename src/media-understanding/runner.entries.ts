@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
@@ -695,18 +694,16 @@ export function formatMissingProviderHint(providerId: string): string {
   if (!trimmed) {
     return "";
   }
-  // Look up the id only in the provider catalog (entries with a non-empty
-  // `providers[]` block). This deliberately skips the channel catalog so an
-  // id like `feishu` — which is an official channel, not a media provider —
-  // never returns a hint from a media-provider error.
+  // Look up the id only in catalog entries that declare
+  // `contracts.mediaUnderstandingProviders`. This ensures the install hint
+  // only fires for provider packages that actually own the missing
+  // media-understanding capability. Providers that have a generic `providers[]`
+  // catalog entry but no media-understanding contract (e.g. Amazon Bedrock)
+  // will not emit misleading hints.
   const providerEntry = listOfficialExternalProviderCatalogEntries().find((entry) => {
-    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers ?? [];
-    return providers.some((provider) => {
-      if (normalizeOptionalString(provider.id) === trimmed) {
-        return true;
-      }
-      return (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === trimmed);
-    });
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const mediaProviders = manifest?.contracts?.mediaUnderstandingProviders ?? [];
+    return mediaProviders.some((mediaId) => mediaId === trimmed);
   });
   if (!providerEntry) {
     return "";
