@@ -272,7 +272,8 @@ export function createOpenAiCompatibleImageGenerationProvider(
         );
         const parsedBody = await readProviderJsonResponse(
           response,
-          `${options.label} image generation`,
+          mode === "edit" ? `${options.label} image edit` : `${options.label} image generation`,
+          { maxBytes: 64 * 1024 * 1024 },
         );
         const images = parseOpenAiCompatibleImageResponse(parsedBody, {
           ...options.response,
