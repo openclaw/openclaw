@@ -18,6 +18,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
@@ -503,16 +504,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   );
 }
 
-type WorkspaceOnlyPolicyConfig = {
-  tools?: { fs?: { workspaceOnly?: unknown } };
-  agents?: {
-    list?: Array<{
-      id?: unknown;
-      default?: unknown;
-      tools?: { fs?: { workspaceOnly?: unknown } };
-    }>;
-  };
-};
+type WorkspaceOnlyPolicyConfig = Pick<OpenClawConfig, "agents" | "tools">;
 type WorkspaceOnlyPolicyAgent = NonNullable<
   NonNullable<WorkspaceOnlyPolicyConfig["agents"]>["list"]
 >[number];
@@ -555,12 +547,13 @@ function resolveWorkspaceOnlyPolicyAgent(
   options: { agentId?: string; runtimeSessionKey?: string },
 ): WorkspaceOnlyPolicyAgent | undefined {
   const agents = Array.isArray(config?.agents?.list) ? config?.agents?.list : [];
-  const agentId = normalizeWorkspaceOnlyAgentId(
-    options.agentId ??
-      resolveWorkspaceOnlyAgentIdFromSessionKey(options.runtimeSessionKey) ??
-      resolveWorkspaceOnlyAgentIdFromSessionKey(params.sandboxSessionKey) ??
-      resolveWorkspaceOnlyAgentIdFromSessionKey(params.sessionKey),
-  );
+  const candidateSessionKey =
+    options.runtimeSessionKey?.trim() ||
+    params.sandboxSessionKey?.trim() ||
+    params.sessionKey?.trim();
+  const agentId =
+    normalizeWorkspaceOnlyAgentId(options.agentId) ??
+    (candidateSessionKey ? resolveAgentIdFromSessionKey(candidateSessionKey) : undefined);
   if (agentId) {
     const match = agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
     if (match) {
@@ -568,13 +561,6 @@ function resolveWorkspaceOnlyPolicyAgent(
     }
   }
   return agents.find((entry) => entry?.default === true);
-}
-
-function resolveWorkspaceOnlyAgentIdFromSessionKey(
-  sessionKey: string | undefined,
-): string | undefined {
-  const trimmed = sessionKey?.trim();
-  return trimmed ? resolveAgentIdFromSessionKey(trimmed) : undefined;
 }
 
 function normalizeWorkspaceOnlyAgentId(value: unknown): string | undefined {
