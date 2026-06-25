@@ -593,8 +593,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
     | `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |
     | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                              |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Conversation history & state (per agent)                           |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Session metadata (per agent)                                       |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent SQLite state, including session rows                  |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Transcript files plus legacy session migration sources             |
 
     Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
