@@ -403,7 +403,15 @@ export async function materializeBundleMcpToolsForRun(params: {
     reservedToolNames: params.reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
-      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      // Strip null values from optional arguments — MCP servers may reject null
+      // where they accept the same argument as absent or undefined.
+      const cleaned =
+        input && typeof input === "object" && !Array.isArray(input)
+          ? Object.fromEntries(
+              Object.entries(input as Record<string, unknown>).filter(([, v]) => v !== null),
+            )
+          : input;
+      const result = await params.runtime.callTool(tool.serverName, tool.toolName, cleaned);
       return toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
