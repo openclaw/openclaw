@@ -83,6 +83,7 @@ import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import { normalizeCurrentPromptTextForLlmBoundary } from "./attempt.llm-boundary.js";
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
@@ -873,7 +874,6 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             effectivePrompt,
             hookMessagesForCurrentPrompt,
-            llmBoundaryPromptForPrecheck,
             promptForModel,
             promptForSession,
             promptSubmission,
@@ -886,6 +886,8 @@ export async function runEmbeddedAttempt(
           sessionBoundary.setCurrentUserTimestampOverride(
             promptContext.currentUserTimestampOverride,
           );
+          let modelBoundPrompt = promptForModel;
+          let beforeAgentRunTransformedPrompt = false;
           if (aggregatePressureEngaged) {
             // Compaction and aggregate truncation both target about half the window;
             // compact-then-truncate prevents re-hitting the same cap on the next turn.
@@ -906,12 +908,18 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             withOwnedSessionWriteLock,
           });
-          if (beforeAgentRunOutcome) {
+          if (beforeAgentRunOutcome?.kind === "block") {
             beforeAgentRunBlocked = true;
             beforeAgentRunBlockedBy = beforeAgentRunOutcome.blockedBy;
             promptError = beforeAgentRunOutcome.promptError;
             promptErrorSource = "hook:before_agent_run";
             skipPromptSubmission = true;
+          } else if (beforeAgentRunOutcome?.kind === "transform") {
+            modelBoundPrompt = beforeAgentRunOutcome.prompt;
+            beforeAgentRunTransformedPrompt = true;
+          }
+          if (systemPromptReport?.currentTurn) {
+            systemPromptReport.currentTurn.promptChars = modelBoundPrompt.length;
           }
 
           if (!skipPromptSubmission) {
@@ -957,8 +965,10 @@ export async function runEmbeddedAttempt(
             });
           }
 
-          // Detect and load images referenced in the visible prompt for vision-capable models.
-          // Images are prompt-local only.
+          const imageDetectionPrompt =
+            modelBoundPrompt === promptForModel ? promptSubmission.prompt : modelBoundPrompt;
+          // Images are prompt-local. A transform replaces the model-bound prompt,
+          // so image refs must follow the transformed text instead of the transcript.
           const imageResult = skipPromptSubmission
             ? {
                 images: [],
@@ -967,7 +977,7 @@ export async function runEmbeddedAttempt(
                 skippedCount: 0,
               }
             : await detectAndLoadPromptImages({
-                prompt: promptSubmission.prompt,
+                prompt: imageDetectionPrompt,
                 workspaceDir: effectiveWorkspace,
                 model: params.model,
                 existingImages: params.images,
@@ -982,13 +992,23 @@ export async function runEmbeddedAttempt(
                     : undefined,
               });
 
+          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+            prompt: modelBoundPrompt,
+            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+            ...(typeof preparedUserTurnMessage?.timestamp === "number"
+              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              : {}),
+          });
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           skipPromptSubmission = observeEmbeddedAttemptPrompt({
             attempt: params,
             cacheTrace,
             contextTokenBudget,
             diagnosticTrace,
-            effectivePrompt,
+            // A transform outcome redacts the model-bound prompt; feed that redacted
+            // text into cache/trajectory/diagnostic recording instead of the raw one.
+            effectivePrompt: beforeAgentRunTransformedPrompt ? modelBoundPrompt : effectivePrompt,
             effectiveTools,
             hookAgentId,
             hookMessagesForCurrentPrompt,
@@ -996,7 +1016,7 @@ export async function runEmbeddedAttempt(
             imageCount: imageResult.images.length,
             isRawModelRun,
             llmBoundaryPromptForPrecheck,
-            promptForModel,
+            promptForModel: modelBoundPrompt,
             promptSubmissionRuntimeOnly: promptSubmission.runtimeOnly,
             reserveTokens,
             runTrace,
@@ -1057,7 +1077,7 @@ export async function runEmbeddedAttempt(
               contextTokenBudget,
               images: imageResult.images,
               ...(leasedSteering ? { leasedSteering } : {}),
-              modelPrompt: promptForModel,
+              modelPrompt: modelBoundPrompt,
               onFinalPromptText: (prompt) => {
                 finalPromptText = prompt;
               },
@@ -1077,7 +1097,10 @@ export async function runEmbeddedAttempt(
               toolResultPromptProjectionState,
               trajectoryRecorder,
               transcriptLeafId,
-              transcriptPrompt: promptForSession,
+              // A transform outcome redacts the session-recorded prompt too, so the
+              // model-boundary swap in installModelPromptTransform (behind this call)
+              // becomes a no-op and the redacted text is what persists (#redaction fix).
+              transcriptPrompt: beforeAgentRunTransformedPrompt ? modelBoundPrompt : promptForSession,
             });
           } else {
             releaseLeasedSteering(promptError ?? "prompt submission skipped");
