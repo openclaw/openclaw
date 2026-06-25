@@ -704,7 +704,12 @@ async function processDiscordMessageInner(
     if (payload.isReasoning || payload.isCommentary) {
       return payload;
     }
-    if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
+    if (
+      draftPreview.draftStream &&
+      draftPreview.isProgressMode &&
+      draftPreview.shouldSuppressBlockReplies &&
+      info.kind === "block"
+    ) {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
         return null;
@@ -818,7 +823,12 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const draftStream = draftPreview.draftStream;
-    if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
+    if (
+      draftStream &&
+      draftPreview.isProgressMode &&
+      draftPreview.shouldSuppressBlockReplies &&
+      info.kind === "block"
+    ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {
         return { visibleReplySent: false };
@@ -1185,11 +1195,12 @@ async function processDiscordMessageInner(
             }
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages:
-          (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
-          draftPreview.suppressDefaultToolProgressMessages
+        get suppressDefaultToolProgressMessages() {
+          return (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
+            draftPreview.suppressDefaultToolProgressMessages
             ? true
-            : undefined,
+            : undefined;
+        },
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled

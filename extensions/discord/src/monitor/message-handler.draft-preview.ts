@@ -143,6 +143,9 @@ export function createDiscordDraftPreviewController(params: {
     get hasProgressDraftStarted() {
       return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
     },
+    get shouldSuppressBlockReplies() {
+      return progressDraft.hasStarted || progressDraft.suppressDefaultToolProgressMessages;
+    },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },

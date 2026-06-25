@@ -854,6 +854,15 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     return false;
   }
   if (mode === "progress") {
+    const progress = resolveChannelProgressDraftConfig(entry);
+    if (
+      progress.label === false &&
+      (options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry)) ===
+        false &&
+      resolveChannelStreamingProgressCommentary(entry) === false
+    ) {
+      return false;
+    }
     return true;
   }
   if (options?.draftStreamActive === true) {

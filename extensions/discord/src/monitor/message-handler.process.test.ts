@@ -2790,6 +2790,37 @@ describe("processDiscordMessage draft streaming", () => {
     ).toBe(true);
   });
 
+  it("restores Discord tool replies when progress preview stays empty", async () => {
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+      await params?.dispatcher.sendBlockReply({ text: "fast command finished" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            toolProgress: false,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "fast command finished" }],
+      kind: "block",
+    });
+  });
+
   it.each([
     // commentary now defaults on; only an explicit false hides it.
     ["false", false],
