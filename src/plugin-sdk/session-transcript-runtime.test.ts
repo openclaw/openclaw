@@ -2,9 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendTranscriptEvent, upsertSessionEntry } from "../config/sessions/session-accessor.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import {
+  appendTranscriptEvent,
+  listSessionEntries,
+  loadSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
@@ -73,10 +76,10 @@ describe("session transcript runtime SDK", () => {
       memoryKey: "transcript:main:read-only-session",
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
-    expect(loadSessionStore(storePath)[scope.sessionKey]?.sessionFile).toBeUndefined();
+    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
   });
 
-  it("persists and returns a file target for legacy command callers", async () => {
+  it("returns an opaque legacy locator without persisting file metadata", async () => {
     const scope = {
       agentId: "main",
       sessionId: "legacy-command-session",
@@ -96,7 +99,7 @@ describe("session transcript runtime SDK", () => {
       targetKind: "runtime-session",
     });
     expect(target.sessionFile).toContain("legacy-command-session");
-    expect(loadSessionStore(storePath)[scope.sessionKey]?.sessionFile).toBe(target.sessionFile);
+    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
   });
 
   it("appends assistant mirrors through the guarded session facade", async () => {
@@ -132,6 +135,33 @@ describe("session transcript runtime SDK", () => {
     });
     expect(assistantMessages).toHaveLength(2);
 
+    const unkeyedScope = {
+      ...scope,
+      sessionId: "unkeyed-mirror-session",
+      sessionKey: "agent:main:unkeyed",
+    };
+    await upsertSessionEntry(unkeyedScope, {
+      sessionId: unkeyedScope.sessionId,
+      updatedAt: 20,
+    });
+    const firstUnkeyed = await appendAssistantMirrorMessageByIdentity({
+      ...unkeyedScope,
+      text: "unkeyed assistant reply",
+    });
+    const secondUnkeyed = await appendAssistantMirrorMessageByIdentity({
+      ...unkeyedScope,
+      text: "unkeyed assistant reply",
+    });
+    expect(firstUnkeyed).toMatchObject({ ok: true, messageId: expect.any(String) });
+    expect(secondUnkeyed).toEqual(firstUnkeyed);
+    const unkeyedAssistantMessages = (await readSessionTranscriptEvents(unkeyedScope)).filter(
+      (event) => {
+        const message = (event as { message?: { role?: unknown } }).message;
+        return message?.role === "assistant";
+      },
+    );
+    expect(unkeyedAssistantMessages).toHaveLength(1);
+
     await upsertSessionEntry(scope, { sessionId: "new-session", updatedAt: 20 });
 
     await expect(
@@ -142,33 +172,72 @@ describe("session transcript runtime SDK", () => {
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
-  it("skips malformed transcript lines when reading by scoped identity", async () => {
+  it("publishes assistant mirror updates only for newly appended notified rows", async () => {
     const scope = {
       agentId: "main",
-      sessionFile: path.join(tempDir, "malformed-lines.jsonl"),
-      sessionId: "malformed-session",
+      sessionId: "mirror-update-mode-session",
       sessionKey: "agent:main:main",
       storePath,
     };
-    const firstEvent = { id: "event-valid-1", type: "message" };
-    const secondEvent = { id: "event-valid-2", type: "message" };
+    const internalUpdates: unknown[] = [];
+    const offInternal = transcriptEvents.onInternalSessionTranscriptUpdate((update) => {
+      internalUpdates.push(update);
+    });
 
-    fs.writeFileSync(
-      scope.sessionFile,
-      [
-        JSON.stringify(firstEvent),
-        "{malformed-json",
-        JSON.stringify(secondEvent),
-        "not-json",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
-    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([firstEvent, secondEvent]);
+    try {
+      await expect(
+        appendAssistantMirrorMessageByIdentity({
+          ...scope,
+          text: "quiet assistant reply",
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+      expect(internalUpdates).toEqual([]);
+
+      const first = await appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        idempotencyKey: "mirror-once",
+        text: "notified assistant reply",
+      });
+      const second = await appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        idempotencyKey: "mirror-once",
+        text: "notified assistant reply",
+      });
+
+      expect(second).toEqual(first);
+      expect(internalUpdates).toEqual([
+        expect.objectContaining({
+          messageId: first.ok ? first.messageId : undefined,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        }),
+      ]);
+    } finally {
+      offInternal();
+    }
   });
 
-  it("binds scoped reads to an explicit active transcript file without exposing it", async () => {
+  it("reads SQLite events by scoped identity when a legacy locator is present", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: path.join(tempDir, "legacy-locator.jsonl"),
+      sessionId: "locator-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const event = { id: "event-locator", type: "metadata" };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await appendTranscriptEvent(scope, event);
+
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
+    expect(fs.existsSync(scope.sessionFile)).toBe(false);
+  });
+
+  it("binds scoped reads to the SQLite transcript without exposing the legacy locator", async () => {
     const scope = {
       agentId: "main",
       sessionFile: path.join(tempDir, "active-session.jsonl"),
@@ -192,11 +261,11 @@ describe("session transcript runtime SDK", () => {
       memoryKey: "transcript:main:active-session",
       sessionId: "active-session",
       sessionKey: "agent:main:main",
-      targetKind: "active-session-file",
+      targetKind: "legacy-transcript-locator",
     });
     expect(target).not.toHaveProperty("sessionFile");
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
-    expect(fs.readFileSync(scope.sessionFile, "utf8")).toContain("event-active");
+    expect(fs.existsSync(scope.sessionFile)).toBe(false);
   });
 
   it("appends messages by the same explicit scoped transcript target", async () => {
@@ -221,6 +290,7 @@ describe("session transcript runtime SDK", () => {
     expect(appended).toBeDefined();
     expect(appended?.message).toMatchObject(message);
     await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
+      id: appended?.messageId,
       text: "hello",
       timestamp: 1,
     });
@@ -230,7 +300,7 @@ describe("session transcript runtime SDK", () => {
     ]);
   });
 
-  it("publishes updates with the resolved scoped transcript identity", async () => {
+  it("publishes internal updates for SQLite transcript identity", async () => {
     const scope = {
       agentId: "main",
       sessionFile: path.join(tempDir, "publish-target.jsonl"),
@@ -239,27 +309,38 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
-
-    await publishSessionTranscriptUpdateByIdentity({
-      ...scope,
-      update: {
-        agentId: "stale-agent",
-        messageId: "message-from-direct-publish",
-        sessionKey: "agent:stale:other",
-      },
+    const internalUpdates: unknown[] = [];
+    const offInternal = transcriptEvents.onInternalSessionTranscriptUpdate((update) => {
+      internalUpdates.push(update);
     });
 
-    expect(emitSpy).toHaveBeenCalledWith({
-      agentId: "main",
-      messageId: "message-from-direct-publish",
-      sessionFile: scope.sessionFile,
-      sessionKey: "agent:main:main",
-      target: {
+    try {
+      await publishSessionTranscriptUpdateByIdentity({
+        ...scope,
+        update: {
+          agentId: "stale-agent",
+          messageId: "message-from-direct-publish",
+          sessionKey: "agent:stale:other",
+        },
+      });
+    } finally {
+      offInternal();
+    }
+
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(internalUpdates).toEqual([
+      {
         agentId: "main",
+        messageId: "message-from-direct-publish",
         sessionId: "publish-session",
         sessionKey: "agent:main:main",
+        target: {
+          agentId: "main",
+          sessionId: "publish-session",
+          sessionKey: "agent:main:main",
+        },
       },
-    });
+    ]);
   });
 
   it("locks read and append helpers to one scoped transcript target", async () => {
@@ -285,7 +366,7 @@ describe("session transcript runtime SDK", () => {
 
     expect(target).toMatchObject({
       sessionId: "locked-session",
-      targetKind: "active-session-file",
+      targetKind: "legacy-transcript-locator",
     });
     expect(target).not.toHaveProperty("sessionFile");
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
@@ -294,56 +375,77 @@ describe("session transcript runtime SDK", () => {
     ]);
   });
 
-  it("uses the owned active transcript write context for scoped locked appends", async () => {
+  it("serializes caller-checked idempotency inside scoped locked appends", async () => {
     const scope = {
       agentId: "main",
-      sessionFile: path.join(tempDir, "owned-active-target.jsonl"),
-      sessionId: "owned-active-session",
+      sessionFile: path.join(tempDir, "caller-checked-lock-target.jsonl"),
+      sessionId: "caller-checked-lock-session",
       sessionKey: "agent:main:main",
       storePath,
     };
-    const storeDefaultFile = path.join(tempDir, "store-default-owned.jsonl");
-    const lockEvents: string[] = [];
-
-    await upsertSessionEntry(scope, {
-      sessionFile: storeDefaultFile,
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-
-    const target = await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile: scope.sessionFile,
-        sessionKey: scope.sessionKey,
-        withSessionWriteLock: async (run) => {
-          lockEvents.push("lock");
-          return await run();
-        },
-      },
-      async () =>
-        await withSessionTranscriptWriteLock(scope, async (locked) => {
+    const steps: string[] = [];
+    const appendIfMissing = async (label: string) =>
+      await withSessionTranscriptWriteLock(scope, async (locked) => {
+        steps.push(`${label}:read`);
+        const events = await locked.readEvents();
+        const alreadyAppended = events.some((event) => {
+          const message = (event as { message?: { idempotencyKey?: unknown } }).message;
+          return message?.idempotencyKey === "mirror-once";
+        });
+        if (label === "first") {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!alreadyAppended) {
           await locked.appendMessage({
+            idempotencyLookup: "caller-checked",
             message: {
               role: "assistant",
-              content: [{ type: "text", text: "owned locked" }],
+              content: [{ type: "text", text: label }],
+              idempotencyKey: "mirror-once",
               timestamp: 1,
             },
           });
-          return locked.target;
-        }),
-    );
+        }
+        steps.push(`${label}:done`);
+      });
 
-    expect(lockEvents).toEqual(["lock"]);
-    expect(target).toMatchObject({
-      sessionId: "owned-active-session",
-      targetKind: "active-session-file",
+    const first = appendIfMissing("first");
+    await Promise.resolve();
+    const second = appendIfMissing("second");
+    await Promise.all([first, second]);
+
+    expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
     });
-    expect(fs.readFileSync(scope.sessionFile, "utf8")).toContain("owned locked");
-    expect(fs.existsSync(storeDefaultFile)).toBe(false);
-    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-    ]);
+    expect(assistantMessages).toHaveLength(1);
+  });
+
+  it("preserves explicit transcript-file locking when no session key is available", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: path.join(tempDir, "explicit-file-only.jsonl"),
+      sessionId: "explicit-file-only-session",
+      sessionKey: "",
+      storePath,
+    };
+
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      await locked.appendMessage({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "file-only mirror" }],
+          timestamp: 1,
+        },
+      });
+      expect(await locked.readEvents()).toEqual([
+        expect.objectContaining({ type: "session" }),
+        expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
+      ]);
+    });
+
+    expect(fs.readFileSync(scope.sessionFile, "utf8")).toContain("file-only mirror");
   });
 
   it("publishes queued locked updates after callback appends are visible", async () => {
@@ -354,21 +456,8 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    const observedUpdates: Array<{
-      callbackCompleted: boolean;
-      fileText: string;
-      update: unknown;
-    }> = [];
     let callbackCompleted = false;
-    const emitSpy = vi
-      .spyOn(transcriptEvents, "emitSessionTranscriptUpdate")
-      .mockImplementation((update) => {
-        observedUpdates.push({
-          callbackCompleted,
-          fileText: fs.readFileSync(scope.sessionFile, "utf8"),
-          update,
-        });
-      });
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
     const result = await withSessionTranscriptWriteLock(scope, async (locked) => {
       await locked.appendMessage({
@@ -387,18 +476,13 @@ describe("session transcript runtime SDK", () => {
     });
 
     expect(result).toBe("complete");
-    expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(observedUpdates).toEqual([
-      {
-        callbackCompleted: true,
-        fileText: expect.stringContaining("queued publish"),
-        update: expect.objectContaining({
-          messageId: "message-from-callback",
-          agentId: "main",
-          sessionFile: scope.sessionFile,
-          sessionKey: scope.sessionKey,
-        }),
-      },
+    expect(callbackCompleted).toBe(true);
+    expect(emitSpy).not.toHaveBeenCalled();
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ role: "assistant" }),
+      }),
     ]);
   });
 
@@ -426,7 +510,12 @@ describe("session transcript runtime SDK", () => {
       }),
     ).rejects.toThrow("stop before commit");
     expect(emitSpy).not.toHaveBeenCalled();
-    expect(fs.readFileSync(scope.sessionFile, "utf8")).toContain("durable but failed");
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ role: "assistant" }),
+      }),
+    ]);
   });
 
   it("round-trips encoded memory hit keys with opaque session ids", () => {
@@ -458,7 +547,9 @@ describe("session transcript runtime SDK", () => {
 
     const keys = resolveSessionTranscriptMemoryHitKeyToSessionKeys({
       key: formatSessionTranscriptMemoryHitKey(scope),
-      store: loadSessionStore(storePath),
+      store: Object.fromEntries(
+        listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      ),
     });
 
     expect(keys).toEqual(["agent:main:telegram:direct:123"]);

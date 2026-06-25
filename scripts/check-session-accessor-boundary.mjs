@@ -66,6 +66,7 @@ const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"])
 export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "loadSessionStore",
   "readLatestAssistantTextFromSessionTranscript",
+  "resolveAndPersistSessionFile",
   "resolveSessionFilePath",
   "resolveSessionStoreEntry",
   "saveSessionStore",

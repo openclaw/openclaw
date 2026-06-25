@@ -199,6 +199,7 @@ describe("session accessor boundary guard", () => {
       new Set([
         "loadSessionStore",
         "readLatestAssistantTextFromSessionTranscript",
+        "resolveAndPersistSessionFile",
         "resolveSessionFilePath",
         "resolveSessionStoreEntry",
         "saveSessionStore",

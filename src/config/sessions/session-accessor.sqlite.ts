@@ -14,7 +14,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { emitInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -26,6 +29,7 @@ import {
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type {
   ExactSessionEntry,
+  LatestTranscriptAssistantText,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   DeletedAgentSessionEntryPurgeParams,
@@ -165,6 +169,13 @@ export type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
   transcriptEvents: number;
+};
+
+export type SqliteTranscriptWriteLockContext = {
+  appendMessage: <TMessage>(
+    options: TranscriptMessageAppendOptions<TMessage>,
+  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  readEvents: () => Promise<TranscriptEvent[]>;
 };
 
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -548,16 +559,83 @@ export function loadSqliteTranscriptEventsSync(
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
+}
+
+function loadSqliteTranscriptEventsFromDatabase(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): TranscriptEvent[] {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("transcript_events")
       .select(["event_json"])
-      .where("session_id", "=", resolved.sessionId)
+      .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
+/** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
+export function loadLatestSqliteAssistantText(
+  scope: SessionTranscriptReadScope,
+): LatestTranscriptAssistantText | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const statement = database.db.prepare(`
+    SELECT te.event_json AS event_json
+    FROM transcript_events te
+    INNER JOIN transcript_event_identities ti
+      ON ti.session_id = te.session_id
+      AND ti.seq = te.seq
+    WHERE te.session_id = ?
+      AND ti.event_type = 'message'
+    ORDER BY te.seq DESC
+  `);
+  for (const row of statement.iterate(resolved.sessionId) as Iterable<{ event_json: string }>) {
+    const latest = parseLatestAssistantTextEvent(row.event_json);
+    if (latest) {
+      return latest;
+    }
+  }
+  return undefined;
+}
+
+function parseLatestAssistantTextEvent(raw: string): LatestTranscriptAssistantText | undefined {
+  let parsed: {
+    id?: unknown;
+    message?: {
+      model?: unknown;
+      provider?: unknown;
+      role?: unknown;
+      timestamp?: unknown;
+    };
+  };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    return undefined;
+  }
+  const message = parsed.message;
+  if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  if (isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)) {
+    return undefined;
+  }
+  const text = extractAssistantVisibleText(message)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return {
+    ...(typeof parsed.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
+    text,
+    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? { timestamp: message.timestamp }
+      : {}),
+  };
 }
 
 /** Checks whether the additive SQLite transcript store has rows for a transcript. */
@@ -689,64 +767,90 @@ export async function appendSqliteTranscriptMessage<TMessage>(
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let result: TranscriptMessageAppendResult<TMessage> | undefined;
     runOpenClawAgentWriteTransaction((database) => {
-      const idempotencyKey = readMessageIdempotencyKey(options.message);
-      if (idempotencyKey && options.idempotencyLookup === "scan") {
-        const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
-        if (existing) {
-          result = {
-            appended: false,
-            message: existing.message as TMessage,
-            messageId: existing.messageId,
-          };
-          return;
-        }
-      }
-
-      const prepared = options.prepareMessageAfterIdempotencyCheck
-        ? options.prepareMessageAfterIdempotencyCheck(options.message)
-        : options.message;
-      if (prepared === undefined) {
-        result = undefined;
-        return;
-      }
-
-      const messageId = randomUUID();
-      const now = options.now ?? Date.now();
-      const finalMessage = redactTranscriptMessageForStorage(prepared, options);
-      ensureTranscriptHeader(database, resolved, options.cwd, now);
-      const parentId = readLatestTranscriptMessageId(database, resolved.sessionId);
-      const event = {
-        type: "message",
-        id: messageId,
-        parentId: parentId ?? null,
-        timestamp: resolveTimestampMsToIsoString(now),
-        message: finalMessage,
-      };
-      const appended = appendTranscriptEventInTransaction(database, resolved, event, {
-        dedupeByMessageIdempotency: options.idempotencyLookup === "scan",
-      });
-      if (!appended && idempotencyKey && options.idempotencyLookup === "scan") {
-        const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
-        if (existing) {
-          result = {
-            appended: false,
-            message: existing.message as TMessage,
-            messageId: existing.messageId,
-          };
-          return;
-        }
-      }
-      if (!appended) {
-        throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
-      }
-      result = {
-        appended: true,
-        message: finalMessage,
-        messageId,
-      };
+      result = appendSqliteTranscriptMessageInTransaction(database, resolved, options);
     }, toDatabaseOptions(resolved));
     return result;
   });
+}
+
+/** Runs read/append transcript work under one SQLite writer-queue critical section. */
+export async function withSqliteTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SqliteTranscriptWriteLockContext) => Promise<T> | T,
+): Promise<T> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    return await run({
+      readEvents: async () => loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId),
+      appendMessage: async (options) => {
+        let result: TranscriptMessageAppendResult<unknown> | undefined;
+        runOpenClawAgentWriteTransaction((writeDatabase) => {
+          result = appendSqliteTranscriptMessageInTransaction(writeDatabase, resolved, options);
+        }, toDatabaseOptions(resolved));
+        return result as TranscriptMessageAppendResult<typeof options.message> | undefined;
+      },
+    });
+  });
+}
+
+function appendSqliteTranscriptMessageInTransaction<TMessage>(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): TranscriptMessageAppendResult<TMessage> | undefined {
+  const idempotencyKey = readMessageIdempotencyKey(options.message);
+  if (idempotencyKey && options.idempotencyLookup === "scan") {
+    const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
+    if (existing) {
+      return {
+        appended: false,
+        message: existing.message as TMessage,
+        messageId: existing.messageId,
+      };
+    }
+  }
+
+  const prepared = options.prepareMessageAfterIdempotencyCheck
+    ? options.prepareMessageAfterIdempotencyCheck(options.message)
+    : options.message;
+  if (prepared === undefined) {
+    return undefined;
+  }
+
+  const messageId = randomUUID();
+  const now = options.now ?? Date.now();
+  const finalMessage = redactTranscriptMessageForStorage(prepared, options);
+  ensureTranscriptHeader(database, resolved, options.cwd, now);
+  const parentId = readLatestTranscriptMessageId(database, resolved.sessionId);
+  const event = {
+    type: "message",
+    id: messageId,
+    parentId: parentId ?? null,
+    timestamp: resolveTimestampMsToIsoString(now),
+    message: finalMessage,
+  };
+  const appended = appendTranscriptEventInTransaction(database, resolved, event, {
+    dedupeByMessageIdempotency: options.idempotencyLookup === "scan",
+  });
+  if (!appended && idempotencyKey && options.idempotencyLookup === "scan") {
+    const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
+    if (existing) {
+      return {
+        appended: false,
+        message: existing.message as TMessage,
+        messageId: existing.messageId,
+      };
+    }
+  }
+  if (!appended) {
+    throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
+  }
+  return {
+    appended: true,
+    message: finalMessage,
+    messageId,
+  };
 }
 
 /** Branches a SQLite session from a compaction checkpoint in one queued transaction. */
@@ -807,10 +911,18 @@ export async function publishSqliteTranscriptUpdate(
   scope: SessionTranscriptWriteScope,
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {
-  void scope;
-  void update;
-  // SessionTranscriptUpdate.sessionFile is still a real file-path contract.
-  // SQLite updates stay quiet until listeners support typed SQLite targets.
+  const resolved = resolveSqliteTranscriptScope(scope);
+  emitInternalSessionTranscriptUpdate({
+    ...update,
+    agentId: resolved.agentId,
+    sessionKey: resolved.sessionKey,
+    sessionId: resolved.sessionId,
+    target: {
+      agentId: resolved.agentId,
+      sessionId: resolved.sessionId,
+      sessionKey: resolved.sessionKey,
+    },
+  });
 }
 
 function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
