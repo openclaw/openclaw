@@ -467,7 +467,14 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   if (isDownloadableLineMessageType(message.type)) {
     try {
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
+      const fileName =
+        message.type === "file" ? (message as webhook.FileMessageContent).fileName : undefined;
+      const media = await downloadLineMedia(
+        message.id,
+        account.channelAccessToken,
+        mediaMaxBytes,
+        fileName,
+      );
       allMedia.push({
         path: media.path,
         contentType: media.contentType,
