@@ -1,11 +1,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 /** Preflights local model-provider endpoints before scheduled cron runner startup. */
-import { resolveDefaultAgentDir } from "../../agents/agent-scope-config.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveApiKeyForProvider } from "../../plugin-sdk/provider-auth-runtime.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
@@ -158,49 +159,6 @@ function buildUnavailableResult(params: {
   };
 }
 
-async function resolveProbeApiKey(
-  providerCfg: ModelProviderConfig | undefined,
-  provider: string,
-  cfg: OpenClawConfig,
-): Promise<string | undefined> {
-  // Resolve API key from the same source chain as normal inference calls.
-  // Try multiple sources and return the first one found.
-
-  // 1. Direct config apiKey field
-  const configKey = providerCfg?.apiKey;
-  if (configKey && typeof configKey === "string" && configKey.trim()) {
-    return configKey.trim();
-  }
-
-  // 2. auth-profiles.json
-  try {
-    const agentDir = resolveDefaultAgentDir(cfg);
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    if (fs.existsSync(authPath)) {
-      const data = JSON.parse(fs.readFileSync(authPath, "utf8"));
-      if (data?.profiles) {
-        for (const [key, profile] of Object.entries(data.profiles)) {
-          const p = profile as { provider?: string; key?: string };
-          if ((key.startsWith(provider + ":") || p.provider === provider) && p.key) {
-            return p.key;
-          }
-        }
-      }
-    }
-  } catch {}
-
-  // 3. Env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
-  const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
-  const directKey = process.env[upperName + "_API_KEY"];
-  if (directKey?.trim()) {
-    return directKey.trim();
-  }
-
-  return undefined;
-}
-
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
@@ -262,13 +220,44 @@ export async function preflightCronModelProvider(params: {
     });
   }
 
+  // Auth resolution for preflight probe
+  let resolvedApiKey: string | undefined;
+
+  // 1. Check request.auth config override (user-specified token takes highest precedence)
+  if (providerConfig?.request?.auth?.mode === "authorization-bearer") {
+    const requestToken = providerConfig.request.auth.token;
+    if (typeof requestToken === "string" && requestToken.trim().length > 0) {
+      resolvedApiKey = requestToken.trim();
+    }
+  }
+
+  // 2. Fall through to resolveApiKeyForProvider (full credential chain, handles SecretRef/profile/env/markers)
+  if (!resolvedApiKey) {
+    try {
+      const resolved = await resolveApiKeyForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
+      if (
+        resolved.apiKey &&
+        resolved.mode !== "oauth" &&
+        !isNonSecretApiKeyMarker(resolved.apiKey)
+      ) {
+        resolvedApiKey = resolved.apiKey;
+      }
+    } catch {
+      // Missing credentials is non-fatal for preflight
+      // The model runner will produce a proper auth error
+    }
+  }
   let result: EndpointPreflightResult;
   try {
-    const probeApiKey = await resolveProbeApiKey(providerConfig, params.provider, params.cfg);
     await probeLocalProviderEndpoint({
       api,
       baseUrl,
-      apiKey: probeApiKey,
+      apiKey: resolvedApiKey,
     });
     result = { status: "available" };
   } catch (error) {
