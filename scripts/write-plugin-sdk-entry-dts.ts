@@ -6,6 +6,7 @@ import { build } from "tsdown";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
 
@@ -84,9 +85,12 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
 
 const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const boundaryPrivateEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
+  (entry) => entry === "codex-mcp-projection",
+);
 const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : [...publicPluginSdkEntrypoints, ...boundaryPrivateEntrypoints];
 const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
 if (USE_CANONICAL_DECLARATIONS) {
