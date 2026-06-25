@@ -383,11 +383,16 @@ export function ensureMemoryIndexSchema(params: {
       );
       // The shipped generic-table migration and a later FTS enablement both
       // create an empty derived table beside already-canonical chunk rows.
+      // Prefix the indexed text with `${path}\n`, matching the payload the live
+      // indexer writes (manager-embedding-ops), so a table backfilled here after
+      // hybrid is enabled keeps filename/date tokens in MATCH ranking instead of
+      // serving body-only rows that the `ftsTextFormat` marker already claims are
+      // path-prefixed.
       params.db.exec(`
         INSERT INTO ${ftsTable} (
           text, id, path, source, model, start_line, end_line
         )
-        SELECT text, id, path, source, model, start_line, end_line
+        SELECT path || char(10) || text, id, path, source, model, start_line, end_line
         FROM ${MEMORY_INDEX_CHUNKS_TABLE}
         WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
       `);

@@ -376,4 +376,70 @@ describe("memory manager FTS-only reindex", () => {
       verifyDb.close();
     }
   });
+
+  it("backfills path-prefixed FTS text when an empty table is rebuilt after hybrid enable (#94102)", async () => {
+    // Toggle gap: the meta already says path-prefixed-v1, but the FTS table is
+    // empty because hybrid was disabled, so the live indexer never wrote rows.
+    // Enabling hybrid recreates+backfills the FTS table from canonical chunks via
+    // ensureMemoryIndexSchema, and the meta-based self-heal gate stays quiet
+    // because the marker already looks current — no full reindex runs. The
+    // backfill must therefore write the same `${path}\n${text}` payload, or
+    // filename/date-token search silently misses.
+    const filenameStem = "2026-06-17-1733";
+    const memoryFilePath = path.join(workspaceDir, "memory", `${filenameStem}.md`);
+    await fs.writeFile(memoryFilePath, "Token refresh rotation policy notes\n");
+
+    let memoryManager = await createManager({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: true,
+    });
+    await memoryManager.sync({ force: true });
+    await memoryManager.close();
+    manager = null;
+
+    // Drop the derived FTS table but keep canonical chunks and the current meta
+    // marker — the on-disk state a user reaches by enabling hybrid after indexing
+    // with memorySearch.query.hybrid.enabled=false.
+    const toggleDb = new DatabaseSync(indexPath);
+    try {
+      const metaRow = toggleDb
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { value: string } | undefined;
+      const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
+      expect(meta.ftsTextFormat).toBe("path-prefixed-v1");
+      toggleDb.exec(`DROP TABLE IF EXISTS memory_index_chunks_fts;`);
+    } finally {
+      toggleDb.close();
+    }
+
+    // Reopen with FTS enabled -> ensureMemoryIndexSchema recreates and backfills
+    // the FTS table from chunks. The gate stays valid (no full reindex).
+    memoryManager = await createManager({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: true,
+    });
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    const verifyDb = new DatabaseSync(indexPath);
+    try {
+      // The backfilled row for the dated memory file must carry the path prefix
+      // so its filename/date tokens are indexed for MATCH.
+      const prefix = `memory/${filenameStem}.md\n`;
+      const ftsRow = verifyDb
+        .prepare(`SELECT text FROM memory_index_chunks_fts WHERE path = ? LIMIT 1`)
+        .get(`memory/${filenameStem}.md`) as { text: string } | undefined;
+      expect(ftsRow?.text.startsWith(prefix)).toBe(true);
+      // The date token from the filename now matches via the backfilled FTS rows.
+      const ftsHit = verifyDb
+        .prepare(
+          `SELECT COUNT(*) AS c FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?`,
+        )
+        .get("1733") as { c: number } | undefined;
+      expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
+    } finally {
+      verifyDb.close();
+    }
+  });
 });

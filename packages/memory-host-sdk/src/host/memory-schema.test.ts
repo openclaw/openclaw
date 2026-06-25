@@ -69,8 +69,10 @@ describe("memory index schema", () => {
       expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);
+      // The canonical FTS backfill prefixes the indexed text with `${path}\n` so
+      // filename/date tokens participate in MATCH, matching the live indexer.
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
-        { id: "chunk-1", text: "remember this" },
+        { id: "chunk-1", text: "MEMORY.md\nremember this" },
       ]);
       expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "openai", hash: "chunk-hash" },
