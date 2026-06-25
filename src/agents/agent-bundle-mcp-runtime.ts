@@ -37,6 +37,16 @@ import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
+function stripNullValues(args: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (value !== null) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 type BundleMcpSession = {
   serverName: string;
   client: Client;
@@ -902,7 +912,7 @@ export function createSessionMcpRuntime(params: {
           (await session.client.callTool(
             {
               name: toolName,
-              arguments: isMcpConfigRecord(input) ? input : {},
+              arguments: isMcpConfigRecord(input) ? stripNullValues(input) : {},
             },
             undefined,
             { timeout: session.requestTimeoutMs },
