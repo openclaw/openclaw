@@ -1,7 +1,10 @@
 // Workboard tests cover gateway plugin behavior.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { registerWorkboardGatewayMethods } from "./gateway.js";
+import { discoverCodefarmReposFromRoots, registerWorkboardGatewayMethods } from "./gateway.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -89,6 +92,9 @@ describe("workboard gateway methods", () => {
       "workboard.cards.protocolViolation",
       "workboard.cards.archive",
       "workboard.cards.export",
+      "codefarm.repos",
+      "codefarm.list",
+      "codefarm.observe",
       "workboard.codefarm.list",
       "workboard.codefarm.observe",
     ]);
@@ -98,6 +104,9 @@ describe("workboard gateway methods", () => {
       scope: "operator.write",
     });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.repos")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.list")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.observe")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.codefarm.list")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.codefarm.observe")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
@@ -469,7 +478,7 @@ describe("workboard gateway methods", () => {
     });
 
     const respond = vi.fn();
-    await methods.get("workboard.codefarm.list")?.handler({
+    await methods.get("codefarm.list")?.handler({
       params: { repo: "/Users/me/repo" },
       respond,
     } as never);
@@ -479,6 +488,62 @@ describe("workboard gateway methods", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       jobs: [expect.objectContaining({ id: "cf_20260625_001", status: "running" })],
     });
+
+    const compatibilityRespond = vi.fn();
+    await methods.get("workboard.codefarm.list")?.handler({
+      params: { repo: "/Users/me/repo" },
+      respond: compatibilityRespond,
+    } as never);
+    expect(listCodefarm).toHaveBeenCalledTimes(2);
+    expect(compatibilityRespond.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it("discovers Code Farm repos from bounded local roots", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-"));
+    try {
+      const repo = join(root, "agent-space");
+      mkdirSync(join(repo, ".codefarm", "jobs", "cf_20260625_001"), { recursive: true });
+      mkdirSync(join(repo, ".codefarm", "jobs", "cf_20260625_002"), { recursive: true });
+      writeFileSync(
+        join(repo, ".codefarm", "index.json"),
+        JSON.stringify({
+          jobs: [{ id: "cf_20260625_001" }, { id: "cf_20260625_002" }],
+        }),
+      );
+      writeFileSync(
+        join(repo, ".codefarm", "jobs", "cf_20260625_001", "JOB.json"),
+        JSON.stringify({
+          id: "cf_20260625_001",
+          status: "running",
+          updatedAt: "2026-06-25T12:00:00.000Z",
+        }),
+      );
+      writeFileSync(
+        join(repo, ".codefarm", "jobs", "cf_20260625_002", "JOB.json"),
+        JSON.stringify({
+          id: "cf_20260625_002",
+          status: "ready_for_review",
+          updatedAt: "2026-06-25T13:00:00.000Z",
+        }),
+      );
+
+      const payload = await discoverCodefarmReposFromRoots({ roots: [root], maxDepth: 3 });
+
+      expect(payload.repos).toEqual([
+        expect.objectContaining({
+          repo,
+          name: "agent-space",
+          totalJobs: 2,
+          activeJobs: 1,
+          reviewJobs: 1,
+          blockedJobs: 0,
+          latestUpdatedAt: "2026-06-25T13:00:00.000Z",
+          statuses: { running: 1, ready_for_review: 1 },
+        }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects unsafe Code Farm observe parameters before invoking the CLI", async () => {
@@ -508,7 +573,7 @@ describe("workboard gateway methods", () => {
     });
 
     const respond = vi.fn();
-    await methods.get("workboard.codefarm.observe")?.handler({
+    await methods.get("codefarm.observe")?.handler({
       params: { repo: "/Users/me/repo", jobId: "cf_20260625_001;rm -rf /", lines: 5000 },
       respond,
     } as never);

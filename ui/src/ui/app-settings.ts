@@ -28,6 +28,7 @@ import {
 import { loadAgentSkills, type AgentSkillsState } from "./controllers/agent-skills.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import { loadChannels, type ChannelsState } from "./controllers/channels.ts";
+import { loadCodefarmRepos } from "./controllers/codefarm.ts";
 import { loadConfig, loadConfigSchema, type ConfigState } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -452,6 +453,13 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             requestUpdate: host.requestUpdate,
           }),
         ]);
+        break;
+      case "codefarm":
+        await loadCodefarmRepos({
+          host,
+          client: app.client,
+          requestUpdate: host.requestUpdate,
+        });
         break;
       case "channels":
         await loadChannelsTab(host);

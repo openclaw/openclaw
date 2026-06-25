@@ -21,6 +21,7 @@ describe("TAB_GROUPS", () => {
       "overview",
       "activity",
       "workboard",
+      "codefarm",
       "instances",
       "sessions",
       "usage",

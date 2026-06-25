@@ -663,6 +663,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
 const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
 const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
+const lazyCodefarm = createLazyView(() => import("./views/codefarm.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
@@ -2409,8 +2410,9 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
-          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
-        "skillWorkshop"
+          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab === "codefarm"
+          ? "content--codefarm"
+          : ""} ${state.tab === "skillWorkshop"
           ? `content--skill-workshop ${
               state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""
             }`
@@ -2788,6 +2790,16 @@ export function renderApp(state: AppViewState) {
                 onRequestUpdate: requestHostUpdate,
               });
             })
+          : nothing}
+        ${state.tab === "codefarm"
+          ? renderLazyView(lazyCodefarm, (m) =>
+              m.renderCodefarm({
+                host: state,
+                client: state.client,
+                connected: state.connected,
+                onRequestUpdate: requestHostUpdate,
+              }),
+            )
           : nothing}
         ${renderUsageTab(state, lazyUsage)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}

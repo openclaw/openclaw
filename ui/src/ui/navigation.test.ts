@@ -32,6 +32,7 @@ describe("iconForTab", () => {
       overview: "barChart",
       activity: "activity",
       workboard: "folder",
+      codefarm: "terminal",
       channels: "link",
       instances: "radio",
       sessions: "fileText",
@@ -68,6 +69,7 @@ describe("titleForTab", () => {
       overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
+      codefarm: "Code Farm",
       channels: "Channels",
       instances: "Instances",
       sessions: "Sessions",
@@ -98,6 +100,7 @@ describe("subtitleForTab", () => {
       overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
+      codefarm: "Active and recent coding-agent jobs across repos.",
       channels: "Channels and settings.",
       instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
@@ -176,6 +179,7 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/chat")).toBe("chat");
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/activity")).toBe("activity");
+    expect(tabFromPath("/codefarm")).toBe("codefarm");
     expect(tabFromPath("/sessions")).toBe("sessions");
     expect(tabFromPath("/dreaming")).toBe("dreams");
     expect(tabFromPath("/dreams")).toBe("dreams");

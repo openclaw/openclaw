@@ -1,5 +1,7 @@
 // Workboard plugin module implements gateway behavior.
 import { execFile } from "node:child_process";
+import { readdir, readFile, stat } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -15,6 +17,9 @@ const CODEFARM_OBSERVE_DEFAULT_LINES = 200;
 const CODEFARM_OBSERVE_MAX_LINES = 1000;
 const CODEFARM_OBSERVE_TIMEOUT_MS = 10_000;
 const CODEFARM_OBSERVE_MAX_BUFFER = 1_500_000;
+const CODEFARM_DISCOVER_DEFAULT_MAX_DEPTH = 5;
+const CODEFARM_DISCOVER_MAX_DEPTH = 8;
+const CODEFARM_DISCOVER_MAX_REPOS = 80;
 const execFileAsync = promisify(execFile);
 
 type GatewayMethodContext = Parameters<
@@ -32,8 +37,25 @@ export type CodefarmListParams = {
   repo: string;
 };
 
+export type CodefarmReposParams = {
+  roots?: string[];
+  maxDepth?: number;
+};
+
+export type CodefarmRepoSummary = {
+  repo: string;
+  name: string;
+  totalJobs: number;
+  activeJobs: number;
+  reviewJobs: number;
+  blockedJobs: number;
+  latestUpdatedAt?: string;
+  statuses: Record<string, number>;
+};
+
 export type CodefarmObserveRunner = (params: CodefarmObserveParams) => Promise<unknown>;
 export type CodefarmListRunner = (params: CodefarmListParams) => Promise<unknown>;
+export type CodefarmReposRunner = (params: CodefarmReposParams) => Promise<unknown>;
 
 function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, {
@@ -112,6 +134,31 @@ function readCodefarmListParams(params: Record<string, unknown>): CodefarmListPa
   return { repo };
 }
 
+function readCodefarmReposParams(params: Record<string, unknown>): CodefarmReposParams {
+  const roots =
+    Array.isArray(params.roots) && params.roots.length > 0
+      ? params.roots.map((value) => {
+          const root = typeof value === "string" ? value.trim() : "";
+          if (!root || root.includes("\0") || !isAbsoluteRepoPath(root)) {
+            throw new Error("roots must be absolute local paths.");
+          }
+          return root;
+        })
+      : undefined;
+  const rawDepth = params.maxDepth;
+  if (rawDepth === undefined || rawDepth === null || rawDepth === "") {
+    return roots ? { roots } : {};
+  }
+  if (typeof rawDepth !== "number" || !Number.isFinite(rawDepth)) {
+    throw new Error("maxDepth must be a finite number.");
+  }
+  const maxDepth = Math.trunc(rawDepth);
+  if (maxDepth < 0 || maxDepth > CODEFARM_DISCOVER_MAX_DEPTH) {
+    throw new Error(`maxDepth must be between 0 and ${CODEFARM_DISCOVER_MAX_DEPTH}.`);
+  }
+  return roots ? { roots, maxDepth } : { maxDepth };
+}
+
 function parseCodefarmJsonOutput(stdout: string | Buffer, emptyMessage: string): unknown {
   const output = typeof stdout === "string" ? stdout.trim() : Buffer.from(stdout).toString().trim();
   if (!output) {
@@ -147,6 +194,193 @@ export async function observeCodefarmJobWithCli(params: CodefarmObserveParams): 
   return parseCodefarmJsonOutput(stdout, "codefarm observe returned no JSON output.");
 }
 
+function normalizeDiscoveryRoot(root: string): string | null {
+  const trimmed = root.trim();
+  if (!trimmed || trimmed.includes("\0")) {
+    return null;
+  }
+  const expanded = trimmed.startsWith("~/") ? path.join(os.homedir(), trimmed.slice(2)) : trimmed;
+  if (!isAbsoluteRepoPath(expanded)) {
+    return null;
+  }
+  return path.resolve(expanded);
+}
+
+function defaultCodefarmDiscoveryRoots(): string[] {
+  const envRoots = (process.env.OPENCLAW_CODEFARM_REPO_ROOTS ?? "")
+    .split(path.delimiter)
+    .map(normalizeDiscoveryRoot)
+    .filter((root): root is string => Boolean(root));
+  const home = os.homedir();
+  const defaults = [
+    path.join(home, "Agent-Corporation"),
+    path.join(home, "Github"),
+    path.join(home, ".openclaw", "workspaces"),
+  ];
+  return [...new Set([...envRoots, ...defaults].map((root) => path.resolve(root)))];
+}
+
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function incrementStatus(statuses: Record<string, number>, status: string) {
+  statuses[status] = (statuses[status] ?? 0) + 1;
+}
+
+async function readJsonFile(file: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function jobIdFromIndexEntry(entry: unknown): string | null {
+  if (typeof entry === "string" && entry.trim()) {
+    return entry.trim();
+  }
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const id = (entry as { id?: unknown }).id;
+    return typeof id === "string" && id.trim() ? id.trim() : null;
+  }
+  return null;
+}
+
+async function summarizeCodefarmRepo(repo: string): Promise<CodefarmRepoSummary | null> {
+  const index = await readJsonFile(path.join(repo, ".codefarm", "index.json"));
+  if (!index || typeof index !== "object" || Array.isArray(index)) {
+    return null;
+  }
+  const jobIds = Array.isArray((index as { jobs?: unknown }).jobs)
+    ? ((index as { jobs: unknown[] }).jobs.map(jobIdFromIndexEntry).filter(Boolean) as string[])
+    : [];
+  if (jobIds.length === 0) {
+    return null;
+  }
+  const statuses: Record<string, number> = {};
+  let latestMs: number | null = null;
+  for (const jobId of jobIds) {
+    const job = await readJsonFile(path.join(repo, ".codefarm", "jobs", jobId, "JOB.json"));
+    const record = job && typeof job === "object" && !Array.isArray(job) ? job : {};
+    const status =
+      typeof (record as { status?: unknown }).status === "string" &&
+      (record as { status: string }).status.trim()
+        ? (record as { status: string }).status.trim()
+        : "unknown";
+    incrementStatus(statuses, status);
+    const updatedAt = parseTimestamp((record as { updatedAt?: unknown }).updatedAt);
+    if (updatedAt !== null && (latestMs === null || updatedAt > latestMs)) {
+      latestMs = updatedAt;
+    }
+  }
+  return {
+    repo,
+    name: path.basename(repo) || repo,
+    totalJobs: jobIds.length,
+    activeJobs: (statuses.running ?? 0) + (statuses.preparing ?? 0),
+    reviewJobs: statuses.ready_for_review ?? 0,
+    blockedJobs: (statuses.blocked ?? 0) + (statuses.needs_recovery ?? 0) + (statuses.failed ?? 0),
+    ...(latestMs !== null ? { latestUpdatedAt: new Date(latestMs).toISOString() } : {}),
+    statuses,
+  };
+}
+
+function shouldSkipDiscoveryDir(name: string): boolean {
+  return new Set([
+    ".codefarm",
+    ".git",
+    ".hg",
+    ".svn",
+    ".worktrees",
+    "node_modules",
+    "Library",
+    "Applications",
+    "dist",
+    "build",
+  ]).has(name);
+}
+
+async function pathIsDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function discoverCodefarmReposFromRoots(params: CodefarmReposParams = {}): Promise<{
+  schemaVersion: 1;
+  repos: CodefarmRepoSummary[];
+  scannedRoots: string[];
+}> {
+  const roots = (params.roots?.length ? params.roots : defaultCodefarmDiscoveryRoots())
+    .map(normalizeDiscoveryRoot)
+    .filter((root): root is string => Boolean(root));
+  const scannedRoots = [...new Set(roots)].map((root) => path.resolve(root));
+  const maxDepth = Math.min(
+    CODEFARM_DISCOVER_MAX_DEPTH,
+    Math.max(0, Math.trunc(params.maxDepth ?? CODEFARM_DISCOVER_DEFAULT_MAX_DEPTH)),
+  );
+  const repos = new Map<string, CodefarmRepoSummary>();
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (repos.size >= CODEFARM_DISCOVER_MAX_REPOS || !(await pathIsDirectory(dir))) {
+      return;
+    }
+    const summary = await summarizeCodefarmRepo(dir);
+    if (summary) {
+      repos.set(summary.repo, summary);
+      return;
+    }
+    if (depth <= 0) {
+      return;
+    }
+    let entries: Array<{ name: string; isDirectory: () => boolean }>;
+    try {
+      entries = (await readdir(dir, { withFileTypes: true })) as Array<{
+        name: string;
+        isDirectory: () => boolean;
+      }>;
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || shouldSkipDiscoveryDir(entry.name)) {
+        continue;
+      }
+      await walk(path.join(dir, entry.name), depth - 1);
+      if (repos.size >= CODEFARM_DISCOVER_MAX_REPOS) {
+        return;
+      }
+    }
+  }
+
+  for (const root of scannedRoots) {
+    await walk(root, maxDepth);
+  }
+
+  return {
+    schemaVersion: 1,
+    scannedRoots,
+    repos: [...repos.values()].sort((left, right) => {
+      if (right.activeJobs !== left.activeJobs) {
+        return right.activeJobs - left.activeJobs;
+      }
+      return (
+        (parseTimestamp(right.latestUpdatedAt) ?? 0) - (parseTimestamp(left.latestUpdatedAt) ?? 0)
+      );
+    }),
+  };
+}
+
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
   const claim = card.metadata?.claim;
   if (!claim) {
@@ -174,11 +408,13 @@ function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagno
 export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
+  discoverCodefarm?: CodefarmReposRunner;
   listCodefarm?: CodefarmListRunner;
   observeCodefarm?: CodefarmObserveRunner;
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const discoverCodefarm = params.discoverCodefarm ?? discoverCodefarmReposFromRoots;
   const listCodefarm = params.listCodefarm ?? listCodefarmJobsWithCli;
   const observeCodefarm = params.observeCodefarm ?? observeCodefarmJobWithCli;
 
@@ -800,6 +1036,42 @@ export function registerWorkboardGatewayMethods(params: {
       try {
         const exported = await store.exportCards();
         respond(true, { ...exported, cards: exported.cards.map(redactClaimToken) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.repos",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await discoverCodefarm(readCodefarmReposParams(requestParams)));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await listCodefarm(readCodefarmListParams(requestParams)));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.observe",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await observeCodefarm(readCodefarmObserveParams(requestParams)));
       } catch (error) {
         respondError(respond, error);
       }
