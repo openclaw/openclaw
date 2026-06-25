@@ -641,7 +641,7 @@ async function runEmbeddedAgentInternal(
     ...paramsBase,
     agentId: paramsBase.agentId ?? runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: effectiveSessionKey ?? runSessionTarget.sessionKey,
+    sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
   };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
