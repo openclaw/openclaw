@@ -264,7 +264,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
     expect(ctx?.ctxPayload?.ThreadLabel).toBe("Deployments");
-    expect(ctx?.ctxPayload?.ConversationLabel).toBe("Deployments");
+    expect(ctx?.ctxPayload?.ConversationLabel).toBe("Test Forum id:-1001234567890 topic:99");
   });
 
   it("handles forum messages without session runtime overrides", async () => {

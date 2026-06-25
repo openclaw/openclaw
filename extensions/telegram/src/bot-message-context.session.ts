@@ -366,7 +366,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const senderName = buildSenderName(msg);
   const threadLabel = isForum && topicName ? topicName : undefined;
   const conversationLabel = isGroup
-    ? (threadLabel ?? groupLabel ?? `group:${chatId}`)
+    ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = await resolveTelegramMessageContextStorePath({
