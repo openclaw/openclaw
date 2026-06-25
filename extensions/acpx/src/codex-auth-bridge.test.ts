@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
@@ -88,6 +88,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect(error).toBeInstanceOf(Error);
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
+
+beforeEach(() => {
+  delete process.env.OPENCLAW_ACPX_CODEX_HOME;
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -528,11 +532,14 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
     });
 
+    const childEnv = { ...process.env };
+    delete childEnv.CODEX_HOME;
     const { stdout } = await execFileAsync(
       process.execPath,
       [generated.wrapperPath, "--permission-mode", "bypass"],
       {
         cwd: root,
+        env: childEnv,
       },
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
