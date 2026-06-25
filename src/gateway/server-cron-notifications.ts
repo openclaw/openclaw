@@ -65,10 +65,16 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
   const diagnosticsEntriesChanged = diagnosticsEntries?.some(
     (entry, index) => entry.message !== evt.diagnostics?.entries[index]?.message,
   );
+  const embeddedJobState = evt.job?.state;
+  const stripEmbeddedJobDiagnostics = Boolean(
+    embeddedJobState &&
+    ("lastDiagnostics" in embeddedJobState || "lastDiagnosticSummary" in embeddedJobState),
+  );
   if (
     summary === evt.summary &&
     diagnosticsSummary === evt.diagnostics?.summary &&
-    !diagnosticsEntriesChanged
+    !diagnosticsEntriesChanged &&
+    !stripEmbeddedJobDiagnostics
   ) {
     return evt;
   }
@@ -88,6 +94,15 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
     if (diagnosticsEntries) {
       redacted.diagnostics.entries = diagnosticsEntries;
     }
+  }
+  if (stripEmbeddedJobDiagnostics && evt.job) {
+    const state = { ...evt.job.state };
+    delete state.lastDiagnostics;
+    delete state.lastDiagnosticSummary;
+    redacted.job = {
+      ...evt.job,
+      state,
+    };
   }
   return redacted;
 }
