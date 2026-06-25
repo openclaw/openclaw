@@ -64,13 +64,52 @@ export type CodefarmObservation = {
   };
 };
 
+export type CodefarmSection = "projects" | "jobs";
+
+export type CodefarmProjectFile = {
+  path: string;
+  title: string;
+  kind: string;
+  content: string;
+  truncated: boolean;
+};
+
+export type CodefarmProject = {
+  repo: string;
+  name: string;
+  jobs: {
+    totalJobs: number;
+    activeJobs: number;
+    reviewJobs?: number;
+    blockedJobs?: number;
+    latestUpdatedAt?: string;
+    statuses: Record<string, number>;
+  };
+  contextFiles: CodefarmProjectFile[];
+  gsd: {
+    available: boolean;
+    files: CodefarmProjectFile[];
+  };
+  projectTerminal?: {
+    session?: string;
+    attachCommand?: string;
+    running?: boolean;
+    persistent?: boolean;
+    note?: string;
+  };
+};
+
 export type CodefarmState = {
+  activeSection: CodefarmSection;
   loaded: boolean;
   loading: boolean;
   error: string | null;
   repos: CodefarmRepoSummary[];
   selectedRepo: string | null;
   repoInput: string;
+  projectLoading: boolean;
+  projectError: string | null;
+  project: CodefarmProject | null;
   jobsLoading: boolean;
   jobsError: string | null;
   jobs: CodefarmJobSummary[];
@@ -85,12 +124,16 @@ const states = new WeakMap<object, CodefarmState>();
 
 function createDefaultCodefarmState(): CodefarmState {
   return {
+    activeSection: "projects",
     loaded: false,
     loading: false,
     error: null,
     repos: [],
     selectedRepo: null,
     repoInput: "",
+    projectLoading: false,
+    projectError: null,
+    project: null,
     jobsLoading: false,
     jobsError: null,
     jobs: [],
@@ -122,6 +165,28 @@ function formatError(error: unknown): string {
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function normalizeCodefarmProjectFile(value: unknown): CodefarmProjectFile | null {
+  if (!isRecord(value) || typeof value.path !== "string" || !value.path.trim()) {
+    return null;
+  }
+  const path = value.path.trim();
+  return {
+    path,
+    title: typeof value.title === "string" && value.title.trim() ? value.title.trim() : path,
+    kind: typeof value.kind === "string" && value.kind.trim() ? value.kind.trim() : "project_doc",
+    content: typeof value.content === "string" ? value.content : "",
+    truncated: Boolean(value.truncated),
+  };
+}
+
+function normalizeCodefarmProjectFiles(value: unknown): CodefarmProjectFile[] {
+  return Array.isArray(value)
+    ? value
+        .map(normalizeCodefarmProjectFile)
+        .filter((file): file is CodefarmProjectFile => file !== null)
     : [];
 }
 
@@ -274,6 +339,56 @@ function normalizeObservation(
   };
 }
 
+function normalizeProjectPayload(payload: unknown, fallback: { repo: string }): CodefarmProject {
+  const record = isRecord(payload) ? payload : {};
+  const jobs = isRecord(record.jobs) ? record.jobs : {};
+  const gsd = isRecord(record.gsd) ? record.gsd : {};
+  const projectTerminal = isRecord(record.projectTerminal) ? record.projectTerminal : null;
+  const repo =
+    typeof record.repo === "string" && record.repo.trim() ? record.repo.trim() : fallback.repo;
+  return {
+    repo,
+    name:
+      typeof record.name === "string" && record.name.trim()
+        ? record.name.trim()
+        : repo.split("/").filter(Boolean).at(-1) || repo,
+    jobs: {
+      totalJobs: normalizeNumber(jobs.totalJobs),
+      activeJobs: normalizeNumber(jobs.activeJobs),
+      reviewJobs: normalizeNumber(jobs.reviewJobs),
+      blockedJobs: normalizeNumber(jobs.blockedJobs),
+      ...(typeof jobs.latestUpdatedAt === "string"
+        ? { latestUpdatedAt: jobs.latestUpdatedAt }
+        : {}),
+      statuses: normalizeStatusCounts(jobs.statuses),
+    },
+    contextFiles: normalizeCodefarmProjectFiles(record.contextFiles),
+    gsd: {
+      available: Boolean(gsd.available),
+      files: normalizeCodefarmProjectFiles(gsd.files),
+    },
+    ...(projectTerminal
+      ? {
+          projectTerminal: {
+            ...(typeof projectTerminal.session === "string"
+              ? { session: projectTerminal.session }
+              : {}),
+            ...(typeof projectTerminal.attachCommand === "string"
+              ? { attachCommand: projectTerminal.attachCommand }
+              : {}),
+            ...(typeof projectTerminal.running === "boolean"
+              ? { running: projectTerminal.running }
+              : {}),
+            ...(typeof projectTerminal.persistent === "boolean"
+              ? { persistent: projectTerminal.persistent }
+              : {}),
+            ...(typeof projectTerminal.note === "string" ? { note: projectTerminal.note } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function normalizeLineCount(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return CODEFARM_DEFAULT_LINES;
@@ -310,10 +425,60 @@ export async function loadCodefarmRepos(params: {
     state.loading = false;
     state.error = null;
     state.updatedAt = Date.now();
+    if (selectedRepo) {
+      await Promise.all([
+        loadCodefarmProject({
+          host: params.host,
+          client: params.client,
+          repo: selectedRepo,
+          requestUpdate: params.requestUpdate,
+        }),
+        loadCodefarmJobs({
+          host: params.host,
+          client: params.client,
+          repo: selectedRepo,
+          requestUpdate: params.requestUpdate,
+        }),
+      ]);
+    }
   } catch (error) {
     state.loaded = true;
     state.loading = false;
     state.error = formatError(error);
+    state.updatedAt = Date.now();
+  } finally {
+    params.requestUpdate?.();
+  }
+}
+
+export async function loadCodefarmProject(params: {
+  host: object;
+  client: GatewayBrowserClient | null;
+  repo?: string;
+  requestUpdate?: () => void;
+}) {
+  const state = getCodefarmState(params.host);
+  const repo = (params.repo ?? state.selectedRepo ?? state.repoInput).trim();
+  state.selectedRepo = repo || null;
+  state.repoInput = repo;
+  state.projectLoading = true;
+  state.projectError = null;
+  params.requestUpdate?.();
+  try {
+    if (!repo) {
+      throw new Error("Repo path is required.");
+    }
+    if (!params.client) {
+      throw new Error("Gateway client is not connected.");
+    }
+    const payload = await params.client.request("codefarm.project", { repo });
+    state.project = normalizeProjectPayload(payload, { repo });
+    state.projectLoading = false;
+    state.projectError = null;
+    state.updatedAt = Date.now();
+  } catch (error) {
+    state.projectLoading = false;
+    state.projectError = formatError(error);
     state.updatedAt = Date.now();
   } finally {
     params.requestUpdate?.();
@@ -373,7 +538,15 @@ export async function selectCodefarmRepo(params: {
   state.jobs = [];
   state.observation = null;
   params.requestUpdate?.();
-  await loadCodefarmJobs(params);
+  await Promise.all([
+    loadCodefarmJobs(params),
+    loadCodefarmProject({
+      host: params.host,
+      client: params.client,
+      repo: params.repo,
+      requestUpdate: params.requestUpdate,
+    }),
+  ]);
 }
 
 export async function observeCodefarmJob(params: {

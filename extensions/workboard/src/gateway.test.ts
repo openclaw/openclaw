@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { discoverCodefarmReposFromRoots, registerWorkboardGatewayMethods } from "./gateway.js";
+import {
+  discoverCodefarmReposFromRoots,
+  readCodefarmProject,
+  registerWorkboardGatewayMethods,
+} from "./gateway.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -93,6 +97,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.archive",
       "workboard.cards.export",
       "codefarm.repos",
+      "codefarm.project",
       "codefarm.list",
       "codefarm.observe",
       "workboard.codefarm.list",
@@ -105,6 +110,7 @@ describe("workboard gateway methods", () => {
     });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.repos")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.project")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.list")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.observe")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.codefarm.list")?.opts).toEqual({ scope: "operator.read" });
@@ -541,6 +547,68 @@ describe("workboard gateway methods", () => {
           statuses: { running: 1, ready_for_review: 1 },
         }),
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads project context, GSD state, and project terminal identity for a Code Farm repo", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-project-"));
+    try {
+      const repo = join(root, "agent-space");
+      mkdirSync(join(repo, ".codefarm", "jobs", "cf_20260625_001"), { recursive: true });
+      mkdirSync(join(repo, ".gsd"), { recursive: true });
+      writeFileSync(
+        join(repo, ".codefarm", "index.json"),
+        JSON.stringify({ jobs: [{ id: "cf_20260625_001" }] }),
+      );
+      writeFileSync(
+        join(repo, ".codefarm", "jobs", "cf_20260625_001", "JOB.json"),
+        JSON.stringify({
+          id: "cf_20260625_001",
+          status: "running",
+          updatedAt: "2026-06-25T12:00:00.000Z",
+        }),
+      );
+      writeFileSync(join(repo, "AGENTS.md"), "# Agent Space\n\nKeep pool work bounded.");
+      writeFileSync(join(repo, ".gsd", "PROJECT.md"), "# OTG Prewarm Pool");
+      writeFileSync(join(repo, ".gsd", "STATE.md"), "# State\n\nMilestone: S02 proof.");
+
+      const payload = await readCodefarmProject({ repo });
+
+      expect(payload).toMatchObject({
+        schemaVersion: 1,
+        repo,
+        name: "agent-space",
+        jobs: expect.objectContaining({
+          totalJobs: 1,
+          activeJobs: 1,
+          statuses: { running: 1 },
+        }),
+        projectTerminal: expect.objectContaining({
+          session: expect.stringMatching(/^codefarm_agent-space-[a-f0-9]{8}$/),
+          attachCommand: expect.stringMatching(/^tmux attach -t codefarm_agent-space-[a-f0-9]{8}$/),
+        }),
+      });
+      expect(payload.contextFiles).toEqual([
+        expect.objectContaining({
+          path: "AGENTS.md",
+          kind: "agent_context",
+          content: expect.stringContaining("Keep pool work bounded."),
+        }),
+      ]);
+      expect(payload.gsd).toEqual(
+        expect.objectContaining({
+          available: true,
+          files: expect.arrayContaining([
+            expect.objectContaining({ path: ".gsd/PROJECT.md" }),
+            expect.objectContaining({
+              path: ".gsd/STATE.md",
+              content: expect.stringContaining("Milestone: S02 proof."),
+            }),
+          ]),
+        }),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

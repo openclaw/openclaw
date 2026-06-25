@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getCodefarmState,
   loadCodefarmJobs,
+  loadCodefarmProject,
   loadCodefarmRepos,
   observeCodefarmJob,
   selectCodefarmRepo,
@@ -31,11 +32,26 @@ describe("codefarm controller", () => {
           },
         ],
       },
+      "codefarm.project": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        contextFiles: [],
+        gsd: { available: false, files: [] },
+      },
+      "codefarm.list": {
+        jobs: [{ id: "cf_20260625_001", status: "running" }],
+      },
     });
 
     await loadCodefarmRepos({ host, client: client as never });
 
     expect(client.request).toHaveBeenCalledWith("codefarm.repos", {});
+    expect(client.request).toHaveBeenCalledWith("codefarm.project", {
+      repo: "/Users/me/agent-space",
+    });
+    expect(client.request).toHaveBeenCalledWith("codefarm.list", {
+      repo: "/Users/me/agent-space",
+    });
     expect(getCodefarmState(host).repos).toEqual([
       expect.objectContaining({
         repo: "/Users/me/agent-space",
@@ -44,6 +60,9 @@ describe("codefarm controller", () => {
       }),
     ]);
     expect(getCodefarmState(host).selectedRepo).toBe("/Users/me/agent-space");
+    expect(getCodefarmState(host).jobs).toEqual([
+      expect.objectContaining({ id: "cf_20260625_001" }),
+    ]);
   });
 
   it("selects a repo and loads its jobs without requiring a manual path", async () => {
@@ -72,6 +91,17 @@ describe("codefarm controller", () => {
           },
         ],
       },
+      "codefarm.project": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        contextFiles: [{ path: "AGENTS.md", kind: "agent_context", content: "Stay focused." }],
+        gsd: { available: true, files: [{ path: ".gsd/STATE.md", content: "Milestone S02" }] },
+        projectTerminal: {
+          session: "codefarm_agent-space-12345678",
+          attachCommand: "tmux attach -t codefarm_agent-space-12345678",
+          running: true,
+        },
+      },
     });
 
     await selectCodefarmRepo({ host, client: client as never, repo: "/Users/me/agent-space" });
@@ -79,9 +109,74 @@ describe("codefarm controller", () => {
     expect(client.request).toHaveBeenCalledWith("codefarm.list", {
       repo: "/Users/me/agent-space",
     });
+    expect(client.request).toHaveBeenCalledWith("codefarm.project", {
+      repo: "/Users/me/agent-space",
+    });
     expect(state.selectedRepo).toBe("/Users/me/agent-space");
     expect(state.jobs).toEqual([expect.objectContaining({ id: "cf_20260625_001" })]);
     expect(state.selectedJobId).toBe("cf_20260625_001");
+    expect(state.project).toEqual(
+      expect.objectContaining({
+        repo: "/Users/me/agent-space",
+        contextFiles: [expect.objectContaining({ path: "AGENTS.md" })],
+      }),
+    );
+  });
+
+  it("loads project context and GSD state for the selected repo", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.selectedRepo = "/Users/me/agent-space";
+    const client = createClient({
+      "codefarm.project": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        jobs: { totalJobs: 3, activeJobs: 1, statuses: { running: 1 } },
+        contextFiles: [
+          {
+            path: "AGENTS.md",
+            title: "AGENTS.md",
+            kind: "agent_context",
+            content: "Use GSD and keep proof current.",
+            truncated: false,
+          },
+        ],
+        gsd: {
+          available: true,
+          files: [
+            {
+              path: ".gsd/STATE.md",
+              title: "STATE.md",
+              kind: "gsd_state",
+              content: "Milestone: S02 proof",
+              truncated: false,
+            },
+          ],
+        },
+        projectTerminal: {
+          session: "codefarm_agent-space-12345678",
+          attachCommand: "tmux attach -t codefarm_agent-space-12345678",
+          running: false,
+          note: "No persistent project tmux session is running.",
+        },
+      },
+    });
+
+    await loadCodefarmProject({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project", {
+      repo: "/Users/me/agent-space",
+    });
+    expect(state.project).toEqual(
+      expect.objectContaining({
+        repo: "/Users/me/agent-space",
+        gsd: expect.objectContaining({ available: true }),
+        projectTerminal: expect.objectContaining({
+          session: "codefarm_agent-space-12345678",
+          running: false,
+        }),
+      }),
+    );
   });
 
   it("observes the selected job through the first-class Code Farm observe method", async () => {

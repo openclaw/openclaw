@@ -1,5 +1,6 @@
 // Workboard plugin module implements gateway behavior.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -20,6 +21,8 @@ const CODEFARM_OBSERVE_MAX_BUFFER = 1_500_000;
 const CODEFARM_DISCOVER_DEFAULT_MAX_DEPTH = 5;
 const CODEFARM_DISCOVER_MAX_DEPTH = 8;
 const CODEFARM_DISCOVER_MAX_REPOS = 80;
+const CODEFARM_PROJECT_CONTEXT_MAX_CHARS = 8_000;
+const CODEFARM_PROJECT_TERMINAL_TIMEOUT_MS = 1_000;
 const execFileAsync = promisify(execFile);
 
 type GatewayMethodContext = Parameters<
@@ -34,6 +37,10 @@ export type CodefarmObserveParams = {
 };
 
 export type CodefarmListParams = {
+  repo: string;
+};
+
+export type CodefarmProjectParams = {
   repo: string;
 };
 
@@ -55,6 +62,7 @@ export type CodefarmRepoSummary = {
 
 export type CodefarmObserveRunner = (params: CodefarmObserveParams) => Promise<unknown>;
 export type CodefarmListRunner = (params: CodefarmListParams) => Promise<unknown>;
+export type CodefarmProjectRunner = (params: CodefarmProjectParams) => Promise<unknown>;
 export type CodefarmReposRunner = (params: CodefarmReposParams) => Promise<unknown>;
 
 function respondError(respond: GatewayRespond, error: unknown) {
@@ -132,6 +140,10 @@ function readCodefarmListParams(params: Record<string, unknown>): CodefarmListPa
     throw new Error("repo must be an absolute local path.");
   }
   return { repo };
+}
+
+function readCodefarmProjectParams(params: Record<string, unknown>): CodefarmProjectParams {
+  return readCodefarmListParams(params);
 }
 
 function readCodefarmReposParams(params: Record<string, unknown>): CodefarmReposParams {
@@ -293,6 +305,162 @@ async function summarizeCodefarmRepo(repo: string): Promise<CodefarmRepoSummary 
   };
 }
 
+type CodefarmProjectFileKind = "agent_context" | "project_doc" | "gsd_project" | "gsd_state";
+
+type CodefarmProjectFile = {
+  path: string;
+  title: string;
+  kind: CodefarmProjectFileKind;
+  content: string;
+  truncated: boolean;
+};
+
+const CODEFARM_PROJECT_CONTEXT_FILES: Array<{ path: string; kind: CodefarmProjectFileKind }> = [
+  { path: "AGENTS.md", kind: "agent_context" },
+  { path: "CLAUDE.md", kind: "agent_context" },
+  { path: "GEMINI.md", kind: "agent_context" },
+  { path: "README.md", kind: "project_doc" },
+  { path: "docs/PROJECT.md", kind: "project_doc" },
+  { path: "docs/project.md", kind: "project_doc" },
+  { path: ".codefarm/PROJECT.md", kind: "project_doc" },
+];
+
+const CODEFARM_GSD_FILES: Array<{ path: string; kind: CodefarmProjectFileKind }> = [
+  { path: ".gsd/PROJECT.md", kind: "gsd_project" },
+  { path: ".gsd/REQUIREMENTS.md", kind: "gsd_project" },
+  { path: ".gsd/STATE.md", kind: "gsd_state" },
+  { path: ".gsd/KNOWLEDGE.md", kind: "gsd_project" },
+  { path: ".gsd/DECISIONS.md", kind: "gsd_project" },
+];
+
+async function readProjectFile(
+  repo: string,
+  candidate: { path: string; kind: CodefarmProjectFileKind },
+): Promise<CodefarmProjectFile | null> {
+  const repoRoot = path.resolve(repo);
+  const file = path.resolve(repoRoot, candidate.path);
+  if (file !== repoRoot && !file.startsWith(`${repoRoot}${path.sep}`)) {
+    return null;
+  }
+  let content: string;
+  try {
+    content = await readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+  return {
+    path: candidate.path,
+    title: path.basename(candidate.path),
+    kind: candidate.kind,
+    content: content.slice(0, CODEFARM_PROJECT_CONTEXT_MAX_CHARS),
+    truncated: content.length > CODEFARM_PROJECT_CONTEXT_MAX_CHARS,
+  };
+}
+
+async function readProjectFiles(
+  repo: string,
+  candidates: Array<{ path: string; kind: CodefarmProjectFileKind }>,
+): Promise<CodefarmProjectFile[]> {
+  const files = await Promise.all(candidates.map((candidate) => readProjectFile(repo, candidate)));
+  return files.filter((file): file is CodefarmProjectFile => Boolean(file));
+}
+
+function slugForTmux(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "repo"
+  );
+}
+
+function codefarmProjectSessionName(repo: string): string {
+  const resolved = path.resolve(repo);
+  const basename = slugForTmux(path.basename(resolved));
+  const digest = createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+  return `codefarm_${basename}-${digest}`;
+}
+
+async function readProjectTerminal(repo: string): Promise<{
+  session: string;
+  attachCommand: string;
+  running: boolean;
+  persistent: boolean;
+  note?: string;
+}> {
+  const session = codefarmProjectSessionName(repo);
+  try {
+    await execFileAsync("tmux", ["has-session", "-t", session], {
+      timeout: CODEFARM_PROJECT_TERMINAL_TIMEOUT_MS,
+    });
+    return {
+      session,
+      attachCommand: `tmux attach -t ${session}`,
+      running: true,
+      persistent: true,
+    };
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+    return {
+      session,
+      attachCommand: `tmux attach -t ${session}`,
+      running: false,
+      persistent: true,
+      note:
+        code === "ENOENT"
+          ? "tmux is not installed."
+          : "No persistent project tmux session is running.",
+    };
+  }
+}
+
+export async function readCodefarmProject(params: CodefarmProjectParams): Promise<{
+  schemaVersion: 1;
+  repo: string;
+  name: string;
+  jobs: {
+    totalJobs: number;
+    activeJobs: number;
+    reviewJobs: number;
+    blockedJobs: number;
+    latestUpdatedAt?: string;
+    statuses: Record<string, number>;
+  };
+  contextFiles: CodefarmProjectFile[];
+  gsd: {
+    available: boolean;
+    files: CodefarmProjectFile[];
+  };
+  projectTerminal: Awaited<ReturnType<typeof readProjectTerminal>>;
+}> {
+  const repo = path.resolve(params.repo);
+  const [summary, contextFiles, gsdFiles, projectTerminal] = await Promise.all([
+    summarizeCodefarmRepo(repo),
+    readProjectFiles(repo, CODEFARM_PROJECT_CONTEXT_FILES),
+    readProjectFiles(repo, CODEFARM_GSD_FILES),
+    readProjectTerminal(repo),
+  ]);
+  return {
+    schemaVersion: 1,
+    repo,
+    name: summary?.name ?? path.basename(repo) ?? repo,
+    jobs: {
+      totalJobs: summary?.totalJobs ?? 0,
+      activeJobs: summary?.activeJobs ?? 0,
+      reviewJobs: summary?.reviewJobs ?? 0,
+      blockedJobs: summary?.blockedJobs ?? 0,
+      ...(summary?.latestUpdatedAt ? { latestUpdatedAt: summary.latestUpdatedAt } : {}),
+      statuses: summary?.statuses ?? {},
+    },
+    contextFiles,
+    gsd: {
+      available: gsdFiles.length > 0,
+      files: gsdFiles,
+    },
+    projectTerminal,
+  };
+}
+
 function shouldSkipDiscoveryDir(name: string): boolean {
   return new Set([
     ".codefarm",
@@ -409,12 +577,14 @@ export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
   discoverCodefarm?: CodefarmReposRunner;
+  projectCodefarm?: CodefarmProjectRunner;
   listCodefarm?: CodefarmListRunner;
   observeCodefarm?: CodefarmObserveRunner;
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
   const discoverCodefarm = params.discoverCodefarm ?? discoverCodefarmReposFromRoots;
+  const projectCodefarm = params.projectCodefarm ?? readCodefarmProject;
   const listCodefarm = params.listCodefarm ?? listCodefarmJobsWithCli;
   const observeCodefarm = params.observeCodefarm ?? observeCodefarmJobWithCli;
 
@@ -1048,6 +1218,18 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, await discoverCodefarm(readCodefarmReposParams(requestParams)));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "codefarm.project",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await projectCodefarm(readCodefarmProjectParams(requestParams)));
       } catch (error) {
         respondError(respond, error);
       }

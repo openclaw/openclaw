@@ -16,6 +16,7 @@ describe("renderCodefarm", () => {
     const host = {};
     const state = getCodefarmState(host);
     state.loaded = true;
+    state.activeSection = "jobs";
     state.repos = [
       {
         repo: "/Users/me/agent-space",
@@ -74,6 +75,7 @@ describe("renderCodefarm", () => {
     const host = {};
     const state = getCodefarmState(host);
     state.loaded = true;
+    state.activeSection = "jobs";
     state.selectedRepo = "/Users/me/agent-space";
     state.jobs = [{ id: "cf_20260625_001", status: "running" }];
     state.selectedJobId = "cf_20260625_001";
@@ -103,6 +105,87 @@ describe("renderCodefarm", () => {
     expect(container.querySelector(".codefarm-terminal")?.textContent).toContain("worker booted");
     expect(container.querySelector(".codefarm-detail")?.textContent).toContain(
       "tmux attach -t codefarm_agent-space-12345678",
+    );
+  });
+
+  it("renders a Projects tab with project context, GSD state, and project tmux status", () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.loaded = true;
+    state.activeSection = "projects";
+    state.repos = [
+      {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        totalJobs: 2,
+        activeJobs: 1,
+        reviewJobs: 1,
+        blockedJobs: 0,
+        statuses: { running: 1, ready_for_review: 1 },
+      },
+    ];
+    state.selectedRepo = "/Users/me/agent-space";
+    state.jobs = [
+      {
+        id: "cf_20260625_001",
+        status: "running",
+        runtime: "codex-cli",
+        taskIntent: "Add pool-lazy proof",
+      },
+    ];
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "agent-space",
+      jobs: { totalJobs: 2, activeJobs: 1, statuses: { running: 1, ready_for_review: 1 } },
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          title: "AGENTS.md",
+          kind: "agent_context",
+          content: "Keep pool work bounded and proof-backed.",
+          truncated: false,
+        },
+      ],
+      gsd: {
+        available: true,
+        files: [
+          {
+            path: ".gsd/STATE.md",
+            title: "STATE.md",
+            kind: "gsd_state",
+            content: "Milestone: S02 proof",
+            truncated: false,
+          },
+        ],
+      },
+      projectTerminal: {
+        session: "codefarm_agent-space-12345678",
+        attachCommand: "tmux attach -t codefarm_agent-space-12345678",
+        running: false,
+        note: "No persistent project tmux session is running.",
+      },
+    };
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+    });
+
+    expect(container.querySelector(".codefarm-tabs")?.textContent).toContain("Projects");
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain("AGENTS.md");
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain(
+      "Keep pool work bounded",
+    );
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain(".gsd/STATE.md");
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain("S02 proof");
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain(
+      "codefarm_agent-space-12345678",
+    );
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain("cf_20260625_001");
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain(
+      "Add pool-lazy proof",
     );
   });
 });

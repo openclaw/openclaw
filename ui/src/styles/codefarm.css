@@ -24,6 +24,37 @@
   font-size: 12px;
 }
 
+.codefarm-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.codefarm-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 8px 10px;
+}
+
+.codefarm-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.codefarm-project-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(280px, 0.75fr) minmax(0, 2.25fr);
+  gap: 12px;
+}
+
 .codefarm-layout {
   display: grid;
   min-height: 0;
@@ -34,7 +65,8 @@
 
 .codefarm-sidebar,
 .codefarm-jobs,
-.codefarm-detail {
+.codefarm-detail,
+.codefarm-project {
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--border);
@@ -53,6 +85,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 12px;
+}
+
+.codefarm-project {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
   padding: 12px;
 }
 
@@ -227,6 +266,117 @@
   font-size: 12px;
 }
 
+.codefarm-project__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.codefarm-project__header h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.codefarm-project__header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.codefarm-project-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.codefarm-project-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 12px;
+}
+
+.codefarm-project-card h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.codefarm-project-files {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.codefarm-project-file {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.codefarm-project-file__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 7px 9px;
+}
+
+.codefarm-project-file pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 9px;
+  white-space: pre-wrap;
+}
+
+.codefarm-project-statuses {
+  margin-top: 10px;
+}
+
+.codefarm-project-jobs {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.codefarm-project-jobs > li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.codefarm-project-jobs__id {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .codefarm-detail__facts {
   margin-top: 10px;
 }
@@ -298,13 +448,19 @@
 }
 
 @media (max-width: 1180px) {
+  .codefarm-project-layout,
   .codefarm-layout {
     grid-template-columns: 1fr;
   }
 
   .codefarm-sidebar,
   .codefarm-jobs,
-  .codefarm-detail {
+  .codefarm-detail,
+  .codefarm-project {
     min-height: 280px;
+  }
+
+  .codefarm-project-grid {
+    grid-template-columns: 1fr;
   }
 }
