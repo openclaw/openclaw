@@ -93,26 +93,6 @@ export function findExactModelReferenceMatch(
  * Try to match a pattern to a model from the available models list.
  * Returns the matched model or undefined if no match found.
  */
-function compareModelIds(a: string, b: string): number {
-  // Numeric segment comparison for model IDs like "claude-opus-4-10".
-  // Compare each numeric part numerically so 4-10 > 4-9.
-  const aNums = a
-    .split(/-/)
-    .map(Number)
-    .filter((n) => Number.isFinite(n));
-  const bNums = b
-    .split(/-/)
-    .map(Number)
-    .filter((n) => Number.isFinite(n));
-  const len = Math.min(aNums.length, bNums.length);
-  for (let i = 0; i < len; i++) {
-    if (aNums[i] !== bNums[i]) {
-      return aNums[i] - bNums[i];
-    }
-  }
-  return aNums.length - bNums.length;
-}
-
 function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | undefined {
   const exactMatch = findExactModelReferenceMatch(modelPattern, availableModels);
   if (exactMatch) {
@@ -136,11 +116,11 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
 
   if (aliases.length > 0) {
     // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => compareModelIds(b.id, a.id));
+    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => compareModelIds(b.id, a.id));
+  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
   return datedVersions[0];
 }
 
