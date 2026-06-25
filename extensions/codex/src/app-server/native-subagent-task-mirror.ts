@@ -129,6 +129,7 @@ export class CodexNativeSubagentTaskMirror {
     this.failedMirrorThreadIds.delete(threadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    this.recordProgress(runId, this.now(), "Codex native subagent started.");
     this.applyStatus(threadId, thread.status);
   }
 
@@ -157,20 +158,12 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (statusType === "active") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is active.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is active.");
       return;
     }
     if (statusType === "idle") {
       this.terminalRunIds.add(runId);
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is idle.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is idle.");
       return;
     }
     if (statusType === "systemError") {
@@ -187,11 +180,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "notLoaded") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is not loaded.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is not loaded.");
     }
   }
 
@@ -277,6 +266,7 @@ export class CodexNativeSubagentTaskMirror {
     this.failedMirrorThreadIds.delete(normalizedThreadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    this.recordProgress(runId, createdAt, "Codex native subagent spawned.");
   }
 
   private applyCollabAgentStatus(
@@ -300,26 +290,19 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary:
-          trimOptional(message) ??
-          (normalizedStatus === "pendingInit"
-            ? "Codex native subagent is initializing."
-            : "Codex native subagent is running."),
-      });
+      const summary =
+        trimOptional(message) ??
+        (normalizedStatus === "pendingInit"
+          ? "Codex native subagent is initializing."
+          : "Codex native subagent is running.");
+      this.recordProgress(runId, eventAt, summary);
       return;
     }
     if (normalizedStatus === "completed") {
       this.terminalRunIds.add(runId);
       const summary = trimOptional(message) ?? "Codex native subagent completed.";
       if (this.expectedAuthoritativeRunIds.has(runId)) {
-        this.runtime.recordTaskRunProgressByRunId({
-          runId,
-          lastEventAt: eventAt,
-          progressSummary: summary,
-        });
+        this.recordProgress(runId, eventAt, summary);
       } else {
         // Remote V1 has no trusted completion envelope or local transcript.
         // Its collab-completed state is therefore the terminal fallback.
@@ -359,6 +342,15 @@ export class CodexNativeSubagentTaskMirror {
       error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
       progressSummary: trimOptional(message) ?? `Codex native subagent ${normalizedStatus}.`,
       terminalSummary: trimOptional(message) ?? "Codex native subagent did not complete.",
+    });
+  }
+
+  private recordProgress(runId: string, lastEventAt: number, summary: string): void {
+    this.runtime.recordTaskRunProgressByRunId({
+      runId,
+      lastEventAt,
+      progressSummary: summary,
+      eventSummary: summary,
     });
   }
 }
