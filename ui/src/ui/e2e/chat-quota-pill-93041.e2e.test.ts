@@ -90,15 +90,13 @@ describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", ()
     try {
       const sidebarPill = page.locator('.sidebar-session-select [data-chat-provider-usage="true"]');
       await sidebarPill.waitFor({ state: "visible" });
-      const composerPill = page
-        .locator('.agent-chat__composer-controls [data-chat-provider-usage="true"]')
-        .first();
+      const composerControls = page.locator(".agent-chat__composer-controls").first();
+      const composerPill = composerControls.locator('[data-chat-provider-usage="true"]');
       await composerPill.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-with-pill.png") });
-      await page
-        .locator(".agent-chat__composer-controls")
-        .first()
-        .screenshot({ path: path.join(artifactDir, "02-composer-controls.png") });
+      await composerControls.screenshot({
+        path: path.join(artifactDir, "02-composer-controls.png"),
+      });
       await page
         .locator(".sidebar-session-select")
         .screenshot({ path: path.join(artifactDir, "03-sidebar-session-select.png") });

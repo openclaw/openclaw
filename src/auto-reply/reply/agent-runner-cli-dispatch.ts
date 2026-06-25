@@ -11,6 +11,12 @@ import { extractToolResultText } from "../../agents/embedded-agent-subscribe.too
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  formatFastModeAutoProgressText,
+  resolveFastModeForElapsed,
+  type FastModeAutoProgressState,
+} from "../../agents/fast-mode.js";
+import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
@@ -22,6 +28,7 @@ import {
   onAgentEvent,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
@@ -80,11 +87,6 @@ type AgentEventBridge = {
   drain: () => Promise<void>;
 };
 
-type CommentaryTextPayload = {
-  text: string;
-  itemId?: string;
-};
-
 async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
   for (const bridge of bridges) {
     bridge.unsubscribe();
@@ -118,6 +120,11 @@ function createAssistantTextBridge(params: {
   });
 }
 
+type CommentaryTextPayload = {
+  text: string;
+  itemId?: string;
+};
+
 function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
   if (evt.stream !== "item" || evt.data.kind !== "preamble") {
     return undefined;
@@ -126,7 +133,10 @@ function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayloa
   if (!text) {
     return undefined;
   }
-  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
+  return {
+    text,
+    ...(typeof evt.data.itemId === "string" ? { itemId: evt.data.itemId } : {}),
+  };
 }
 
 export type CliToolEventPayload = {
@@ -302,6 +312,25 @@ function createCommentaryEventBridge(params: {
   });
 }
 
+function createToolBoundaryBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: () => Promise<void>;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: (evt) => {
+      if (evt.stream !== "tool") {
+        return undefined;
+      }
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+      return ["completed", "end", "error", "result"].includes(phase) ? true : undefined;
+    },
+  });
+}
+
 type RunCliAgentWithLifecycleParams = {
   runId: string;
   lifecycleGeneration?: string;
@@ -315,7 +344,8 @@ type RunCliAgentWithLifecycleParams = {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
-  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
+  onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
+  onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 };
@@ -335,6 +365,70 @@ async function runCliAgentWithLifecycleInternal(
   params: RunCliAgentWithLifecycleParams,
 ): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
+  const fastModeStartedAtMs = params.runParams.fastModeStartedAtMs ?? startedAt;
+  const fastModeAutoOnSeconds =
+    params.runParams.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+  const fastModeAutoProgressState: FastModeAutoProgressState = params.runParams
+    .fastModeAutoProgressState ?? {
+    offAnnounced: false,
+    resetAnnounced: false,
+  };
+  const emitFastModeAutoProgress = async (payload: {
+    enabled: boolean;
+    elapsedSeconds: number;
+    fastAutoOnSeconds?: number;
+  }) => {
+    const summary = formatFastModeAutoProgressText(payload);
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "item",
+      data: {
+        kind: "status",
+        title: "Fast",
+        phase: "update",
+        summary,
+      },
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+    });
+    try {
+      await params.onFastModeAutoProgress?.({
+        text: summary,
+        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+      });
+    } catch {
+      // Progress hints are best-effort; a channel failure must not fail the agent turn.
+    }
+  };
+  const maybeAnnounceFastModeAutoOff = async () => {
+    if (params.runParams.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
+      return;
+    }
+    const next = resolveFastModeForElapsed({
+      mode: "auto",
+      startedAtMs: fastModeStartedAtMs,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
+    if (next.enabled) {
+      return;
+    }
+    fastModeAutoProgressState.offAnnounced = true;
+    await emitFastModeAutoProgress(next);
+  };
+  const maybeEmitFastModeAutoReset = async () => {
+    if (
+      params.runParams.fastMode !== "auto" ||
+      !fastModeAutoProgressState.offAnnounced ||
+      fastModeAutoProgressState.resetAnnounced
+    ) {
+      return;
+    }
+    fastModeAutoProgressState.resetAnnounced = true;
+    await emitFastModeAutoProgress({
+      enabled: true,
+      elapsedSeconds: 0,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
+  };
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
   params.onAgentRunStart?.();
@@ -373,14 +467,23 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     deliver: params.onCommentaryText,
   });
-  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge].filter(
-    (bridge): bridge is AgentEventBridge => bridge !== undefined,
-  );
+  const toolBoundaryBridge = createToolBoundaryBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: maybeAnnounceFastModeAutoOff,
+  });
+  const bridges = [
+    assistantBridge,
+    reasoningBridge,
+    toolBridge,
+    commentaryBridge,
+    toolBoundaryBridge,
+  ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   let lifecycleTerminalEmitted = false;
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
-      emitCommentaryText: Boolean(params.onCommentaryText),
+      emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;
     if (isAgentRunRestartAbortReason(restartAbortReason)) {
@@ -440,6 +543,9 @@ async function runCliAgentWithLifecycleInternal(
   } finally {
     for (const bridge of bridges) {
       bridge.unsubscribe();
+    }
+    if (params.runParams.isFinalFallbackAttempt !== false) {
+      await maybeEmitFastModeAutoReset();
     }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({

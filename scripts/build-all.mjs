@@ -341,7 +341,7 @@ export function resolveBuildAllStep(step, params = {}) {
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
       npmExecPath: params.npmExecPath ?? env.npm_execpath,
-      comSpec: params.comSpec ?? env.ComSpec,
+      comSpec: params.comSpec,
       platform,
     });
     return {

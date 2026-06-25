@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { normalizePath } from "./path-utils.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -521,20 +522,8 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
-function normalizeWebhookLikePath(pathname: string): string {
-  const trimmed = pathname.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (prefixed === "/") {
-    return prefixed;
-  }
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-}
-
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizeWebhookLikePath(servePath);
+  const normalized = normalizePath(servePath);
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }

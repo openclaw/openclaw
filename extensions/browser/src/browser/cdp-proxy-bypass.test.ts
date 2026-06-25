@@ -9,6 +9,23 @@ const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   ),
 }));
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
@@ -28,19 +45,6 @@ beforeEach(() => {
   registerManagedProxyBrowserCdpBypassMock.mockReset();
   registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   const origNoProxy = process.env.NO_PROXY;

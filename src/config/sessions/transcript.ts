@@ -4,10 +4,18 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  extractAssistantVisibleText,
+  extractFirstTextBlock,
+} from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveDefaultSessionStorePath } from "./paths.js";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "./paths.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
@@ -68,6 +76,26 @@ type AssistantTranscriptText = {
   timestamp?: number;
 };
 
+export type SessionRecentConversationText = {
+  id?: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp?: number;
+  sourceChannel?: string;
+};
+
+export type ReadRecentSessionConversationTextOptions = {
+  beforeTimestampMs?: number;
+  limit?: number;
+  minTimestampMs?: number;
+};
+
+export type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
+  agentId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 export type TailAssistantTranscriptText = AssistantTranscriptText;
 
@@ -111,6 +139,135 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   model?: unknown;
 }): boolean {
   return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
+}
+
+function normalizeTranscriptTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isBeforeTranscriptTimestamp(
+  timestamp: number | undefined,
+  beforeTimestampMs: number | undefined,
+): boolean {
+  return (
+    beforeTimestampMs === undefined || timestamp === undefined || timestamp < beforeTimestampMs
+  );
+}
+
+function isAtOrAfterTranscriptTimestamp(
+  timestamp: number | undefined,
+  minTimestampMs: number | undefined,
+): boolean {
+  return minTimestampMs === undefined || timestamp === undefined || timestamp >= minTimestampMs;
+}
+
+function normalizeRecentTranscriptLimit(limit: number | undefined): number {
+  return Math.max(1, Math.floor(limit ?? 10));
+}
+
+function parseRecentConversationText(line: string): SessionRecentConversationText | undefined {
+  const parsed = JSON.parse(line) as {
+    id?: unknown;
+    message?: unknown;
+  };
+  const message = parsed.message as
+    | {
+        role?: unknown;
+        timestamp?: unknown;
+        provenance?: unknown;
+        provider?: unknown;
+        model?: unknown;
+      }
+    | undefined;
+  if (!message || (message.role !== "user" && message.role !== "assistant")) {
+    return undefined;
+  }
+  if (message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return undefined;
+  }
+  const text =
+    message.role === "assistant"
+      ? extractAssistantVisibleText(message)
+      : extractFirstTextBlock(message)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  const provenance =
+    message.provenance && typeof message.provenance === "object"
+      ? (message.provenance as { sourceChannel?: unknown })
+      : undefined;
+  return {
+    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
+    role: message.role,
+    text,
+    ...(normalizeTranscriptTimestamp(message.timestamp) !== undefined
+      ? { timestamp: normalizeTranscriptTimestamp(message.timestamp) }
+      : {}),
+    ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
+      ? { sourceChannel: provenance.sourceChannel.trim() }
+      : {}),
+  };
+}
+
+function resolveSessionConversationTranscriptPath(params: {
+  agentId?: string;
+  sessionKey: string;
+  storePath?: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const entry = resolved.existing;
+  if (!entry?.sessionId) {
+    return undefined;
+  }
+  return resolveSessionFilePath(entry.sessionId, entry, {
+    sessionsDir: path.dirname(storePath),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+}
+
+export async function readRecentUserAssistantTextFromSessionTranscript(
+  sessionFile: string | undefined,
+  options: ReadRecentSessionConversationTextOptions = {},
+): Promise<SessionRecentConversationText[]> {
+  if (!sessionFile?.trim()) {
+    return [];
+  }
+  const limit = normalizeRecentTranscriptLimit(options.limit);
+  const recent: SessionRecentConversationText[] = [];
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
+    try {
+      const entry = parseRecentConversationText(line);
+      if (!entry) {
+        continue;
+      }
+      if (!isBeforeTranscriptTimestamp(entry.timestamp, options.beforeTimestampMs)) {
+        continue;
+      }
+      if (!isAtOrAfterTranscriptTimestamp(entry.timestamp, options.minTimestampMs)) {
+        continue;
+      }
+      recent.push(entry);
+      if (recent.length >= limit) {
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return recent.toReversed();
+}
+
+export async function readRecentUserAssistantTextForSession(
+  params: ReadRecentSessionConversationTextParams,
+): Promise<SessionRecentConversationText[]> {
+  const sessionFile = resolveSessionConversationTranscriptPath(params);
+  return await readRecentUserAssistantTextFromSessionTranscript(sessionFile, params);
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -244,7 +401,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "message role must be assistant" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const explicitAgentId = params.agentId?.trim() || undefined;
+  const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const transcriptAgentId = explicitAgentId ?? sessionAgentId;
+  const storeAgentId = transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath, { skipCache: true });
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;
@@ -275,7 +437,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ? applyBeforeMessageWriteToAssistant({
             message,
             beforeMessageWrite: params.beforeMessageWrite,
-            agentId: params.agentId,
+            agentId: transcriptAgentId,
             sessionKey: resolved.normalizedKey,
           })
         : message;
@@ -297,7 +459,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         sessionKey: resolved.normalizedKey,
         storePath,
         ...(sessionFile ? { sessionFile } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
       },
       {
         cwd: currentEntry.spawnedCwd,
@@ -316,7 +478,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                       message: candidate as Parameters<SessionManager["appendMessage"]>[0],
                       beforeMessageWrite: params.beforeMessageWrite,
                       explicitIdempotencyKey,
-                      agentId: params.agentId,
+                      agentId: transcriptAgentId,
                       sessionKey: resolved.normalizedKey,
                     }),
                 }
@@ -370,7 +532,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         sessionStore: store,
         storePath,
         sessionEntry: entry,
-        agentId: params.agentId,
+        agentId: transcriptAgentId,
         sessionsDir: path.dirname(storePath),
       });
       sessionFile = resolvedSessionFile.sessionFile;

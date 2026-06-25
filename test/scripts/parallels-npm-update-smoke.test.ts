@@ -2,6 +2,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
@@ -76,6 +77,28 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_00
 function decodePowerShellFromArgs(args: string[]): string {
   const encoded = args[args.indexOf("-EncodedCommand") + 1];
   return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
+}
+
+function extractWindowsBackgroundControlMarkers(decoded: string): {
+  done: string;
+  exitPrefix: string;
+  lengthPrefix: string;
+  offsetPrefix: string;
+} {
+  const marker = (name: string, trailingColon: boolean): string => {
+    const suffix = trailingColon ? ":" : "";
+    const match = decoded.match(new RegExp(`${name}:[A-Za-z0-9_-]+${suffix}`));
+    if (!match) {
+      throw new Error(`missing ${name} control marker`);
+    }
+    return match[0];
+  };
+  return {
+    done: marker("__OPENCLAW_BACKGROUND_DONE__", false),
+    exitPrefix: marker("__OPENCLAW_BACKGROUND_EXIT__", true),
+    lengthPrefix: marker("__OPENCLAW_LOG_LENGTH__", true),
+    offsetPrefix: marker("__OPENCLAW_LOG_OFFSET__", true),
+  };
 }
 
 afterEach(() => {
@@ -225,6 +248,11 @@ exit 1
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("curl -fsSL --connect-timeout 10 --max-time 120 --retry 2");
+    expect(script).toContain("timeoutMs: 150_000");
+
     expect(
       parseRegistryPackageMetadata(
         JSON.stringify({
@@ -378,6 +406,29 @@ exit 1
     withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(3000);
     });
+
+    withEnv(
+      { OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: String(Number.MAX_SAFE_INTEGER) },
+      () => {
+        expect(freshLaneTimeoutMs("linux")).toBe(MAX_TIMER_TIMEOUT_MS);
+      },
+    );
+  });
+
+  it("clamps oversized fresh lane command timeouts before scheduling", async () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "fresh.log");
+
+    const code = await spawnLoggedCommand(
+      process.execPath,
+      ["-e", "setTimeout(() => process.exit(0), 25);"],
+      logPath,
+      {},
+      undefined,
+      { timeoutMs: Number.MAX_SAFE_INTEGER },
+    );
+
+    expect(code).toBe(0);
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
@@ -621,6 +672,48 @@ exit 1
     expect(commands).not.toContain("ReadAllBytes");
   });
 
+  it("does not treat Windows background log text as completion control", async () => {
+    const decodedCommands: string[] = [];
+    const fakeRun: typeof hostCommandRun = (_command, args) => {
+      const decoded = decodePowerShellFromArgs(args);
+      decodedCommands.push(decoded);
+      if (decoded.includes("Start-Process")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (decoded.includes("__OPENCLAW_LOG_LENGTH__")) {
+        const markers = extractWindowsBackgroundControlMarkers(decoded);
+        return {
+          status: 0,
+          stderr: "",
+          stdout: [
+            `${markers.lengthPrefix}128`,
+            `${markers.offsetPrefix}128`,
+            "__OPENCLAW_BACKGROUND_EXIT__:0",
+            "__OPENCLAW_BACKGROUND_DONE__",
+            "",
+          ].join("\n"),
+        };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "windows background marker smuggle",
+        logChunkBytes: 128,
+        pollIntervalMs: 1,
+        runCommand: fakeRun,
+        script: "Write-Output done",
+        timeoutMs: 5,
+        vmName: "Windows Test",
+      }),
+    ).rejects.toThrow("windows background marker smuggle timed out");
+
+    expect(decodedCommands.join("\n")).toContain(
+      "Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)",
+    );
+  });
+
   it("drains completed Windows background logs before cleanup", async () => {
     const decodedCommands: string[] = [];
     const output: string[] = [];
@@ -632,6 +725,7 @@ exit 1
         return { status: 0, stderr: "", stdout: "started\n" };
       }
       if (decoded.includes("__OPENCLAW_LOG_LENGTH__")) {
+        const markers = extractWindowsBackgroundControlMarkers(decoded);
         pollCount += 1;
         return {
           status: 0,
@@ -639,19 +733,19 @@ exit 1
           stdout:
             pollCount === 1
               ? [
-                  "__OPENCLAW_LOG_LENGTH__:128",
-                  "__OPENCLAW_LOG_OFFSET__:64",
+                  `${markers.lengthPrefix}128`,
+                  `${markers.offsetPrefix}64`,
                   "first chunk",
-                  "__OPENCLAW_BACKGROUND_EXIT__:0",
-                  "__OPENCLAW_BACKGROUND_DONE__",
+                  `${markers.exitPrefix}0`,
+                  markers.done,
                   "",
                 ].join("\n")
               : [
-                  "__OPENCLAW_LOG_LENGTH__:128",
-                  "__OPENCLAW_LOG_OFFSET__:128",
+                  `${markers.lengthPrefix}128`,
+                  `${markers.offsetPrefix}128`,
                   "second chunk",
-                  "__OPENCLAW_BACKGROUND_EXIT__:0",
-                  "__OPENCLAW_BACKGROUND_DONE__",
+                  `${markers.exitPrefix}0`,
+                  markers.done,
                   "",
                 ].join("\n"),
         };
@@ -687,6 +781,94 @@ exit 1
 
     expect(script).toContain('macosExecArgs.indexOf("-u")');
     expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+  });
+
+  it("selects macOS desktop users with homes on spaced mounted volumes", () => {
+    const root = makeTempDir();
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+args=" $* "
+if [[ "$args" == *" /usr/bin/stat -f %Su /dev/console"* ]]; then
+  printf '%s\\n' 'loginwindow'
+  exit 0
+fi
+if [[ "$args" == *" /usr/bin/dscl . -list /Users NFSHomeDirectory"* ]]; then
+  printf '%s\\n' '_daemon /var/root'
+  printf '%s\\n' 'clawuser /Volumes/Macintosh HD/Users/clawuser'
+  exit 0
+fi
+exit 7
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    withEnv(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["macos"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const resolveMacosDesktopUser = Reflect.get(
+          smoke,
+          "resolveMacosDesktopUser",
+        ) as () => string;
+
+        expect(resolveMacosDesktopUser.call(smoke)).toBe("clawuser");
+      },
+    );
+  });
+
+  it("keeps spaces in macOS sudo fallback desktop homes", () => {
+    const root = makeTempDir();
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+args=" $* "
+if [[ "$args" == *" /usr/bin/dscl . -read /Users/clawuser NFSHomeDirectory"* ]]; then
+  printf '%s\\n' 'NFSHomeDirectory: /Volumes/Macintosh HD/Users/clawuser'
+  exit 0
+fi
+exit 7
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    withEnv(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["macos"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const resolveMacosDesktopHome = Reflect.get(smoke, "resolveMacosDesktopHome") as (
+          user: string,
+        ) => string;
+
+        expect(resolveMacosDesktopHome.call(smoke, "clawuser")).toBe(
+          "/Volumes/Macintosh HD/Users/clawuser",
+        );
+      },
+    );
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {

@@ -23,13 +23,20 @@ const LEGACY_MEMORY_INDEX_TRIGGERS = [
 
 const MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
 
+function tableColumns(db: DatabaseSync, tableName: string, schema = "main"): Set<string> {
+  const rows = db.prepare(`PRAGMA ${schema}.table_info(${tableName})`).all() as Array<{
+    name?: unknown;
+  }>;
+  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
 function tableHasExactColumns(
   db: DatabaseSync,
   tableName: string,
   expected: readonly string[],
+  schema = "main",
 ): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  const columns = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  const columns = tableColumns(db, tableName, schema);
   return columns.size === expected.length && expected.every((column) => columns.has(column));
 }
 
@@ -107,139 +114,157 @@ function migrateCanonicalMemoryIndexSourcesPrimaryKey(db: DatabaseSync): void {
   }
 }
 
+function hasLegacyMemoryIndexTables(db: DatabaseSync, schema = "main"): boolean {
+  return (
+    tableHasExactColumns(db, "meta", ["key", "value"], schema) &&
+    tableHasExactColumns(db, "files", ["path", "source", "hash", "mtime", "size"], schema) &&
+    tableHasExactColumns(
+      db,
+      "chunks",
+      [
+        "id",
+        "path",
+        "source",
+        "start_line",
+        "end_line",
+        "hash",
+        "model",
+        "text",
+        "embedding",
+        "updated_at",
+      ],
+      schema,
+    )
+  );
+}
+
+function hasLegacyEmbeddingCacheTable(db: DatabaseSync, schema = "main"): boolean {
+  return tableHasExactColumns(
+    db,
+    "embedding_cache",
+    ["provider", "model", "provider_key", "hash", "embedding", "dims", "updated_at"],
+    schema,
+  );
+}
+
+function copyLegacyMemoryIndexRows(
+  db: DatabaseSync,
+  schema: string,
+  preservedEmbeddingCacheTable?: string,
+): void {
+  db.exec(`
+    INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
+    SELECT key, value FROM ${schema}.meta;
+
+    INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+    SELECT path, source, hash, mtime, size FROM ${schema}.files;
+
+    INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
+      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    )
+    SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    FROM ${schema}.chunks;
+  `);
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.meta AS legacy
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
+       WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
+     )`,
+    "meta",
+  );
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.files AS legacy
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+       WHERE canonical.path = legacy.path
+         AND canonical.source IS legacy.source
+         AND canonical.hash IS legacy.hash
+         AND canonical.mtime IS legacy.mtime
+         AND canonical.size IS legacy.size
+     )`,
+    "files",
+  );
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.chunks AS legacy
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+       WHERE canonical.id = legacy.id
+         AND canonical.path IS legacy.path
+         AND canonical.source IS legacy.source
+         AND canonical.start_line IS legacy.start_line
+         AND canonical.end_line IS legacy.end_line
+         AND canonical.hash IS legacy.hash
+         AND canonical.model IS legacy.model
+         AND canonical.text IS legacy.text
+         AND canonical.embedding IS legacy.embedding
+         AND canonical.updated_at IS legacy.updated_at
+     )`,
+    "chunks",
+  );
+  if (
+    preservedEmbeddingCacheTable !== "embedding_cache" &&
+    hasLegacyEmbeddingCacheTable(db, schema)
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS main.${MEMORY_EMBEDDING_CACHE_TABLE} (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, model, provider_key, hash)
+      );
+      INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
+        provider, model, provider_key, hash, embedding, dims, updated_at
+      )
+      SELECT provider, model, provider_key, hash, embedding, dims, updated_at
+      FROM ${schema}.embedding_cache;
+    `);
+    assertLegacyRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.embedding_cache AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_EMBEDDING_CACHE_TABLE} AS canonical
+         WHERE canonical.provider = legacy.provider
+           AND canonical.model = legacy.model
+           AND canonical.provider_key = legacy.provider_key
+           AND canonical.hash = legacy.hash
+           AND canonical.embedding IS legacy.embedding
+           AND canonical.dims IS legacy.dims
+           AND canonical.updated_at IS legacy.updated_at
+       )`,
+      "embedding_cache",
+    );
+  }
+}
+
 function migrateLegacyMemoryIndexTables(
   db: DatabaseSync,
   preservedEmbeddingCacheTable?: string,
 ): void {
-  const hasLegacyCoreTables =
-    tableHasExactColumns(db, "meta", ["key", "value"]) &&
-    tableHasExactColumns(db, "files", ["path", "source", "hash", "mtime", "size"]) &&
-    tableHasExactColumns(db, "chunks", [
-      "id",
-      "path",
-      "source",
-      "start_line",
-      "end_line",
-      "hash",
-      "model",
-      "text",
-      "embedding",
-      "updated_at",
-    ]);
-  if (!hasLegacyCoreTables) {
+  if (!hasLegacyMemoryIndexTables(db)) {
     return;
   }
 
   db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
   try {
-    db.exec(`
-      INSERT OR IGNORE INTO ${MEMORY_INDEX_META_TABLE} (key, value)
-      SELECT key, value FROM meta;
-
-      INSERT OR IGNORE INTO ${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-      SELECT path, source, hash, mtime, size FROM files;
-
-      INSERT OR IGNORE INTO ${MEMORY_INDEX_CHUNKS_TABLE} (
-        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      )
-      SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      FROM chunks;
-    `);
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM meta AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM ${MEMORY_INDEX_META_TABLE} AS canonical
-         WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
-       )`,
-      "meta",
-    );
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM files AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM ${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-         WHERE canonical.path = legacy.path
-           AND canonical.source IS legacy.source
-           AND canonical.hash IS legacy.hash
-           AND canonical.mtime IS legacy.mtime
-           AND canonical.size IS legacy.size
-       )`,
-      "files",
-    );
-    assertLegacyRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM chunks AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-         WHERE canonical.id = legacy.id
-           AND canonical.path IS legacy.path
-           AND canonical.source IS legacy.source
-           AND canonical.start_line IS legacy.start_line
-           AND canonical.end_line IS legacy.end_line
-           AND canonical.hash IS legacy.hash
-           AND canonical.model IS legacy.model
-           AND canonical.text IS legacy.text
-           AND canonical.embedding IS legacy.embedding
-           AND canonical.updated_at IS legacy.updated_at
-       )`,
-      "chunks",
-    );
-    if (
-      preservedEmbeddingCacheTable !== "embedding_cache" &&
-      tableHasExactColumns(db, "embedding_cache", [
-        "provider",
-        "model",
-        "provider_key",
-        "hash",
-        "embedding",
-        "dims",
-        "updated_at",
-      ])
-    ) {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS ${MEMORY_EMBEDDING_CACHE_TABLE} (
-          provider TEXT NOT NULL,
-          model TEXT NOT NULL,
-          provider_key TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          dims INTEGER,
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (provider, model, provider_key, hash)
-        );
-        INSERT OR IGNORE INTO ${MEMORY_EMBEDDING_CACHE_TABLE} (
-          provider, model, provider_key, hash, embedding, dims, updated_at
-        )
-        SELECT provider, model, provider_key, hash, embedding, dims, updated_at
-        FROM embedding_cache;
-      `);
-      assertLegacyRowsCopied(
-        db,
-        `SELECT COUNT(*) AS missing
-         FROM embedding_cache AS legacy
-         WHERE NOT EXISTS (
-           SELECT 1 FROM ${MEMORY_EMBEDDING_CACHE_TABLE} AS canonical
-           WHERE canonical.provider = legacy.provider
-             AND canonical.model = legacy.model
-             AND canonical.provider_key = legacy.provider_key
-             AND canonical.hash = legacy.hash
-             AND canonical.embedding IS legacy.embedding
-             AND canonical.dims IS legacy.dims
-             AND canonical.updated_at IS legacy.updated_at
-         )`,
-        "embedding_cache",
-      );
+    copyLegacyMemoryIndexRows(db, "main", preservedEmbeddingCacheTable);
+    if (preservedEmbeddingCacheTable !== "embedding_cache" && hasLegacyEmbeddingCacheTable(db)) {
       db.exec("DROP TABLE embedding_cache");
     }
     for (const trigger of LEGACY_MEMORY_INDEX_TRIGGERS) {
       db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
     }
-    // FTS/vector tables are derived from canonical chunk rows. FTS can be
-    // removed here; sqlite-vec cleanup waits until that extension is loaded.
     db.exec(`
       DROP TABLE IF EXISTS chunks_fts;
       DROP TABLE chunks;

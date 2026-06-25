@@ -466,6 +466,7 @@ function capCronAgentTurnToolsAllow(params: {
     : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
+    params.payload.toolsAllowIsDefault = true;
     return;
   }
   const requestedToolsAllow = normalizeCronToolsAllow(
@@ -473,10 +474,12 @@ function capCronAgentTurnToolsAllow(params: {
   );
   if (requestedToolsAllow.length === 0) {
     params.payload.toolsAllow = [];
+    delete params.payload.toolsAllowIsDefault;
     return;
   }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
+    params.payload.toolsAllowIsDefault = true;
     return;
   }
   const pluginGroups = buildPluginToolGroups({
@@ -490,6 +493,7 @@ function capCronAgentTurnToolsAllow(params: {
   params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
     isToolAllowedByPolicyName(toolName, requestedPolicy),
   );
+  delete params.payload.toolsAllowIsDefault;
 }
 
 function capCronAgentTurnJobToolsAllow(
@@ -549,8 +553,12 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   capCronAgentTurnToolsAllow({
     payload: nextPayload,
     creatorToolAllowlist: params.creatorToolAllowlist,
+    // Flagged defaults are re-derived so normal updates do not turn them into
+    // explicit restrictions or lose the marker needed after restart.
     defaultToolsAllow:
-      existingPayloadKind === "agentTurn" && isRecord(existingPayload)
+      existingPayloadKind === "agentTurn" &&
+      isRecord(existingPayload) &&
+      existingPayload.toolsAllowIsDefault !== true
         ? existingPayload.toolsAllow
         : undefined,
   });

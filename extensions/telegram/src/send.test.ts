@@ -953,7 +953,32 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
-    expect(richMessage?.html).toContain("<table>");
+    expect(richMessage?.html).toContain("<table bordered striped>");
+  });
+
+  it("skips rich entity detection for provider-prefixed email text", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await sendMessageTelegram("123", oauthProfileText, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      html: oauthProfileText,
+      skip_entity_detection: true,
+    });
+    expect(richMessage?.html).not.toContain("mailto:");
   });
 
   it.each([
@@ -1029,6 +1054,37 @@ describe("sendMessageTelegram", () => {
     const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
     expect(richHtml.match(/<b>/g)?.length ?? 0).toBe(16);
     expect(richHtml).toContain("nested<br>line");
+  });
+
+  it("materializes bullet and paragraph line breaks in rich Markdown sends", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
+
+    await sendMessageTelegram(
+      "123",
+      "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
+      { cfg: { channels: { telegram: { richMessages: true } } }, token: "tok" },
+    );
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(
+      "Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen",
+    );
+  });
+
+  it("materializes line breaks on the explicit rich HTML text path", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 61, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "<b>one</b>\ntwo\n<pre><code>a\nb</code></pre>", {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
+    // Inline text breaks materialize; <pre> keeps its newline literal.
+    expect(richHtml).toContain("<b>one</b><br>two");
+    expect(richHtml).toContain("<pre><code>a\nb</code></pre>");
   });
 
   it("preserves nonempty Markdown when rich rendering is empty", async () => {

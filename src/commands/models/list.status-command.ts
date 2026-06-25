@@ -1,5 +1,6 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -572,21 +573,6 @@ export async function modelsStatusCommand(
     };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
-    const resolveStatusAuthOrder = (
-      order: Record<string, string[]> | undefined,
-      provider: string,
-    ): string[] | undefined => {
-      if (!order) {
-        return undefined;
-      }
-      const providerKey = normalizeProviderId(provider);
-      for (const [key, value] of Object.entries(order)) {
-        if (normalizeProviderId(key) === providerKey) {
-          return value;
-        }
-      }
-      return undefined;
-    };
     const listRuntimeAuthProviderCandidates = (
       provider: string,
       options?: { includeLegacyOpenAICodex?: boolean },
@@ -613,10 +599,10 @@ export async function modelsStatusCommand(
       const providerKey = normalizeProviderId(provider);
       const providerAuthKey = resolveProviderAuthHealthId(providerKey);
       const explicitOrder =
-        resolveStatusAuthOrder(store.order, providerAuthKey) ??
-        resolveStatusAuthOrder(store.order, providerKey) ??
-        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
-        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+        findNormalizedProviderValue(store.order, providerAuthKey) ??
+        findNormalizedProviderValue(store.order, providerKey) ??
+        findNormalizedProviderValue(cfg.auth?.order, providerAuthKey) ??
+        findNormalizedProviderValue(cfg.auth?.order, providerKey);
       const isEligibleOrHealthRescued = (profileId: string): boolean => {
         const credential = store.profiles[profileId];
         if (!credential) {

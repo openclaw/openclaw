@@ -4,9 +4,13 @@ import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import {
+  addTimerTimeoutGraceMs,
+  clampTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveNpmRunner } from "../../npm-runner.mjs";
 import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "../../windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -338,9 +342,12 @@ function isBareCommand(command: string, name: "npm" | "pnpm"): boolean {
   return portableBasename(command) === command && command.toLowerCase() === name;
 }
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
+function resolveHostCommandTimeoutMs(timeoutMs: number): number {
+  return clampTimerTimeoutMs(timeoutMs) ?? 1;
+}
+
+function resolveOptionalHostCommandTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return timeoutMs === undefined ? undefined : resolveHostCommandTimeoutMs(timeoutMs);
 }
 
 export function resolveHostCommandInvocation(
@@ -350,7 +357,7 @@ export function resolveHostCommandInvocation(
 ): HostCommandInvocation {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const comSpec = options.comSpec ?? resolveEnvValue(env, "ComSpec") ?? "cmd.exe";
+  const comSpec = options.comSpec ?? resolveWindowsCmdExePath(env);
 
   if (isBareCommand(command, "pnpm")) {
     const runner = resolvePnpmRunner({
@@ -392,9 +399,10 @@ export function resolveHostCommandInvocation(
 export function run(command: string, args: string[], options: RunOptions = {}): CommandResult {
   const env = { ...process.env, ...options.env };
   const invocation = resolveHostCommandInvocation(command, args, { env });
-  const usesPosixTimedWrapper = process.platform !== "win32" && options.timeoutMs !== undefined;
+  const timeoutMs = resolveOptionalHostCommandTimeoutMs(options.timeoutMs);
+  const usesPosixTimedWrapper = process.platform !== "win32" && timeoutMs !== undefined;
   const result = usesPosixTimedWrapper
-    ? runPosixTimedCommandSync(invocation, env, options)
+    ? runPosixTimedCommandSync(invocation, env, options, timeoutMs)
     : spawnSync(invocation.command, invocation.args, {
         cwd: options.cwd ?? repoRoot,
         encoding: "utf8",
@@ -404,7 +412,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
         maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
         stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
         shell: invocation.shell,
-        timeout: options.timeoutMs,
+        timeout: timeoutMs,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       });
 
@@ -426,7 +434,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     wrapperTimedOut || (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
   if (wrapperTimedOut && options.check !== false) {
     const error = new Error(
-      `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
+      `${command} ${args.join(" ")} timed out after ${timeoutMs}ms`,
     ) as NodeJS.ErrnoException;
     error.code = "ETIMEDOUT";
     throw error;
@@ -500,7 +508,9 @@ function runPosixTimedCommandSync(
   invocation: HostCommandInvocation,
   env: NodeJS.ProcessEnv,
   options: RunOptions,
+  timeoutMs: number,
 ): SpawnSyncReturns<string> {
+  const wrapperTimeoutMs = addTimerTimeoutGraceMs(timeoutMs, HOST_COMMAND_WRAPPER_BACKSTOP_MS) ?? 1;
   const payload = JSON.stringify({
     args: invocation.args,
     command: invocation.command,
@@ -510,7 +520,7 @@ function runPosixTimedCommandSync(
     maxBufferBytes: HOST_COMMAND_MAX_BUFFER_BYTES,
     shell: invocation.shell,
     timeoutKillGraceMs: HOST_COMMAND_TIMEOUT_KILL_GRACE_MS,
-    timeoutMs: options.timeoutMs,
+    timeoutMs,
   });
   return spawnSync(process.execPath, ["-e", POSIX_TIMEOUT_WRAPPER], {
     cwd: options.cwd ?? repoRoot,
@@ -520,7 +530,7 @@ function runPosixTimedCommandSync(
     killSignal: "SIGKILL",
     maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES * 2 + HOST_COMMAND_WRAPPER_EXTRA_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe", "pipe"],
-    timeout: (options.timeoutMs ?? 0) + HOST_COMMAND_WRAPPER_BACKSTOP_MS,
+    timeout: wrapperTimeoutMs,
   });
 }
 
@@ -536,11 +546,12 @@ export async function runStreaming(
   return await new Promise((resolve, reject) => {
     const env = { ...process.env, ...options.env };
     const invocation = resolveHostCommandInvocation(command, args, { env });
+    const timeoutMs = resolveOptionalHostCommandTimeoutMs(options.timeoutMs);
     const logStream = options.logPath
       ? createWriteStream(options.logPath, { encoding: "utf8", flags: "w" })
       : undefined;
     let logStreamError: Error | undefined;
-    const detached = process.platform !== "win32" && options.timeoutMs != null;
+    const detached = process.platform !== "win32" && timeoutMs !== undefined;
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd ?? repoRoot,
       detached,
@@ -575,8 +586,8 @@ export async function runStreaming(
         return (error as NodeJS.ErrnoException).code === "EPERM";
       }
     };
-    const waitForStreamingProcessGroupExit = async (timeoutMs: number): Promise<boolean> => {
-      const deadlineAt = Date.now() + timeoutMs;
+    const waitForStreamingProcessGroupExit = async (timeoutBudgetMs: number): Promise<boolean> => {
+      const deadlineAt = Date.now() + timeoutBudgetMs;
       while (Date.now() < deadlineAt) {
         if (!streamingProcessGroupAlive()) {
           return true;
@@ -642,7 +653,7 @@ export async function runStreaming(
         }
       }, HOST_COMMAND_TIMEOUT_KILL_GRACE_MS);
     };
-    if (process.platform !== "win32" && options.timeoutMs != null) {
+    if (process.platform !== "win32" && timeoutMs !== undefined) {
       for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const) {
         const handler = (): void => {
           forwardedParentSignal ??= signal;
@@ -707,7 +718,7 @@ export async function runStreaming(
       }
     };
     const timer =
-      options.timeoutMs == null
+      timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
@@ -718,7 +729,7 @@ export async function runStreaming(
               HOST_COMMAND_STREAMING_TIMEOUT_KILL_GRACE_MS,
             );
             killTimer.unref();
-          }, options.timeoutMs);
+          }, timeoutMs);
 
     child.on("error", (error) => {
       if (timer) {

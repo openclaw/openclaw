@@ -13,6 +13,7 @@ import {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
+  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -586,6 +587,26 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+function isAcpModelCapabilityMissingError(error: unknown): boolean {
+  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
+}
+
+// ACPX owns the distinction between missing model capability and an invalid model id.
+// Retry only the former so explicit model mistakes remain visible to the caller.
+async function ensureDelegateSessionWithModelFallback(
+  delegate: BaseAcpxRuntime,
+  input: OpenClawRuntimeEnsureInput,
+): Promise<AcpRuntimeHandle> {
+  try {
+    return await delegate.ensureSession(withAcpxSessionOptions(input));
+  } catch (error) {
+    if (!input.model || !isAcpModelCapabilityMissingError(error)) {
+      throw error;
+    }
+    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
+  }
+}
+
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -989,7 +1010,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+            run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
     }

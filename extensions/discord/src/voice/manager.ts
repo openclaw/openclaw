@@ -35,6 +35,7 @@ import {
   resolveDiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
+import { formatVoiceLogPreview } from "./log-preview.js";
 import {
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
@@ -67,7 +68,6 @@ import {
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
-const VOICE_LOG_PREVIEW_CHARS = 500;
 const FOLLOW_USERS_RECONCILE_INTERVAL_MS = 10_000;
 const FOLLOW_USERS_RECONCILE_MAX_GUILDS_PER_RUN = 4;
 const FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN = 32;
@@ -95,14 +95,6 @@ type VoiceChannelResidency = {
   guildId: string;
   channelId: string;
 };
-
-function formatVoiceLogPreview(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= VOICE_LOG_PREVIEW_CHARS) {
-    return oneLine;
-  }
-  return `${oneLine.slice(0, VOICE_LOG_PREVIEW_CHARS)}...`;
-}
 
 function isVoiceConnectionDestroyed(
   connection: DiscordVoiceConnection,

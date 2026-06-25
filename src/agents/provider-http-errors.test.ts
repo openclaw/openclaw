@@ -9,6 +9,7 @@ import {
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
+  readProviderTextResponse,
   readResponseTextLimited,
 } from "./provider-http-errors.js";
 
@@ -33,6 +34,57 @@ function createStreamingBinaryResponse(params: {
     response: new Response(stream, {
       status: 200,
       headers: { "Content-Type": "audio/mpeg" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
+function createStreamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  // Streaming fixture proves oversized JSON reads stop before buffering everything.
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
+function createStreamingTextResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("x".repeat(params.chunkSize)));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
     }),
     getReadCount: () => reads,
   };
@@ -209,6 +261,47 @@ describe("provider error utils", () => {
     await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
       "Provider catalog failed: malformed JSON response",
     );
+  });
+
+  it("parses well-formed JSON responses under the byte cap", async () => {
+    const response = new Response(JSON.stringify({ models: ["a", "b"] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      readProviderJsonResponse<{ models: string[] }>(response, "Provider catalog failed"),
+    ).resolves.toEqual({ models: ["a", "b"] });
+  });
+
+  it("caps successful JSON responses instead of buffering oversized bodies", async () => {
+    const streamed = createStreamingJsonResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+    });
+
+    await expect(
+      readProviderJsonResponse(streamed.response, "Provider catalog failed", {
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("caps successful text responses instead of buffering oversized bodies", async () => {
+    const streamed = createStreamingTextResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+    });
+
+    await expect(
+      readProviderTextResponse(streamed.response, "Provider text failed", {
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Provider text failed: text response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   it("caps successful binary responses instead of buffering oversized bodies", async () => {

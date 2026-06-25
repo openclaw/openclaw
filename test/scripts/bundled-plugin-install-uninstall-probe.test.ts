@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -14,6 +16,10 @@ const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
 );
 const sweepPath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 type PluginListEntry = {
   id: string;
@@ -97,28 +103,11 @@ function runRuntimeSmoke(root: string, args: string[]) {
 }
 
 async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
+  return await withEnvAsync(env, async () => {
     return await import(
       `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
     );
-  } finally {
-    for (const [key, value] of previous.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  });
 }
 
 async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
@@ -468,17 +457,62 @@ describe("bundled plugin install/uninstall probe", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
 
     runtimeSmoke.signalChildProcessTree(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows runtime child process trees when graceful taskkill fails", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
     });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -1038,6 +1072,33 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(rpcStateDir)).toBe(false);
   });
 
+  it("ignores structured logs after gateway RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
+    fs.writeFileSync(
+      entrypoint,
+      [
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: {},
+          port: 19001,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   it("accepts successful runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const server = createHttpServer((_request, response) => {
@@ -1287,6 +1348,38 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stdout.trim()).toBe(
       `admin-http-rpc\tadmin-http-rpc\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
     );
+  });
+
+  it("selects packaged plugins when list output includes structured diagnostics", () => {
+    const root = makePackageRoot();
+    const pluginRoot = path.join(root, "dist-runtime", "extensions", "admin-http-rpc");
+    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
+      id: "admin-http-rpc",
+      configSchema: { required: ["port"] },
+    });
+    fs.writeFileSync(
+      path.join(root, "dist", "index.js"),
+      [
+        "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
+        "  process.exit(1);",
+        "}",
+        `console.log(${JSON.stringify(
+          JSON.stringify({
+            plugins: [{ id: "admin-http-rpc", origin: "bundled", rootDir: pluginRoot }],
+          }),
+        )});`,
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-list diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`admin-http-rpc\tadmin-http-rpc\t1\t${pluginRoot}`);
   });
 
   it("does not select source-only bundled plugins for package-backed sweeps", () => {
