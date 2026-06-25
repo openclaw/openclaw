@@ -13,6 +13,10 @@ const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`${label}: HTTP ${response.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+  }
   try {
     return (await response.json()) as T;
   } catch (cause) {
