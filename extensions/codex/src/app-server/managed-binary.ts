@@ -40,16 +40,19 @@ export async function resolveManagedCodexAppServerStartOptions(
     pluginRoot: options.pluginRoot,
   });
   const pathExists = options.pathExists ?? commandPathExists;
-  const commandPath = await findManagedCodexAppServerCommandPath({
+  const commandPaths = await findManagedCodexAppServerCommandPaths({
     candidateCommandPaths: paths.candidateCommandPaths,
     pathExists,
     platform,
   });
+  const commandPath = commandPaths[0];
+  const managedFallbackCommandPaths = commandPaths.slice(1);
 
   return {
     ...startOptions,
     command: commandPath,
     commandSource: "resolved-managed",
+    ...(managedFallbackCommandPaths.length > 0 ? { managedFallbackCommandPaths } : {}),
   };
 }
 
@@ -201,15 +204,19 @@ function pathForPlatform(platform: NodeJS.Platform): typeof path {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-async function findManagedCodexAppServerCommandPath(params: {
+async function findManagedCodexAppServerCommandPaths(params: {
   candidateCommandPaths: readonly string[];
   pathExists: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   platform: NodeJS.Platform;
-}): Promise<string> {
+}): Promise<string[]> {
+  const commandPaths: string[] = [];
   for (const commandPath of params.candidateCommandPaths) {
     if (await params.pathExists(commandPath, params.platform)) {
-      return commandPath;
+      commandPaths.push(commandPath);
     }
+  }
+  if (commandPaths.length > 0) {
+    return commandPaths;
   }
 
   throw new Error(

@@ -62,6 +62,7 @@ describe("managed Codex app-server binary", () => {
       ...startOptions("managed"),
       command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [pluginLocalCommand],
     });
     expect(paths.commandPath).toBe(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND);
     expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);

@@ -119,9 +119,12 @@ On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
 bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
 That keeps Computer Use under the app bundle that owns the local desktop-control
 permissions. If the desktop app is not installed, OpenClaw falls back to the
-managed Codex binary installed beside the plugin. Explicit
-`appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides
-this managed selection.
+managed Codex binary installed beside the plugin. If an installed desktop app
+initializes with an unsupported app-server version, OpenClaw closes that child
+and retries the next managed binary candidate instead of letting a stale
+desktop app shadow the plugin-local fallback. Explicit `appServer.command`
+config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides this managed
+selection.
 
 ## Commands
 
