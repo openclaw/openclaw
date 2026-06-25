@@ -146,23 +146,17 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
-  if (
-    !params.wantsDelivery ||
-    !plan.resolvedTo ||
-    !isDeliverableMessageChannel(plan.resolvedChannel) ||
-    !resolveOutboundChannelPlugin({
-      channel: plan.resolvedChannel,
-      cfg: params.cfg,
-      allowBootstrap: true,
-    })?.messaging?.resolveOutboundSessionRoute
-  ) {
+  const plugin =
+    params.wantsDelivery && plan.resolvedTo && isDeliverableMessageChannel(plan.resolvedChannel)
+      ? resolveOutboundChannelPlugin({
+          channel: plan.resolvedChannel,
+          cfg: params.cfg,
+          allowBootstrap: true,
+        })
+      : undefined;
+  if (!plugin?.messaging?.resolveOutboundSessionRoute) {
     return plan;
   }
-  const plugin = resolveOutboundChannelPlugin({
-    channel: plan.resolvedChannel,
-    cfg: params.cfg,
-    allowBootstrap: true,
-  });
   const normalizedTarget = resolveOutboundTarget({
     channel: plan.resolvedChannel,
     to: plan.resolvedTo,

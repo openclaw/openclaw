@@ -512,9 +512,7 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
-  // Directory miss: reject reserved literals before falling back to plugin
-  // resolution, so a bare reserved word without a matching directory entry
-  // does not accidentally resolve to a public channel or incorrect target.
+  // Directory misses are the fail-closed boundary for reserved literals.
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
