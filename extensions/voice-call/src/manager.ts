@@ -17,6 +17,8 @@ import {
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
 import {
+  getCallByProviderCallIdFromStore,
+  getCallFromStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -424,21 +426,27 @@ export class CallManager {
   }
 
   /**
-   * Get an active call by ID.
+   * Get a call by ID, checking the in-memory active calls first and
+   * falling back to the persisted store when the call has been evicted
+   * after completion (#96586).
    */
   getCall(callId: CallId): CallRecord | undefined {
-    return this.activeCalls.get(callId);
+    return this.activeCalls.get(callId) ?? getCallFromStore(this.storePath, callId);
   }
 
   /**
-   * Get an active call by provider call ID (e.g., Twilio CallSid).
+   * Get a call by provider call ID (e.g., Twilio CallSid), checking the
+   * in-memory active calls first and falling back to the persisted store
+   * when the call has been evicted after completion (#96586).
    */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
-    return getCallByProviderCallIdFromMaps({
-      activeCalls: this.activeCalls,
-      providerCallIdMap: this.providerCallIdMap,
-      providerCallId,
-    });
+    return (
+      getCallByProviderCallIdFromMaps({
+        activeCalls: this.activeCalls,
+        providerCallIdMap: this.providerCallIdMap,
+        providerCallId,
+      }) ?? getCallByProviderCallIdFromStore(this.storePath, providerCallId)
+    );
   }
 
   /**

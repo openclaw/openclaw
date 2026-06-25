@@ -394,3 +394,30 @@ export async function getCallHistoryFromStore(
   }
   return [];
 }
+
+/** Look up a single call record by callId from the persisted store. */
+export function getCallFromStore(storePath: string, callId: CallId): CallRecord | undefined {
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) return undefined;
+  try {
+    return readCallRecordEvents(stores).find((call) => call.callId === callId);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Look up a single call record by provider call ID from the persisted store. */
+export function getCallByProviderCallIdFromStore(
+  storePath: string,
+  providerCallId: string,
+): CallRecord | undefined {
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) return undefined;
+  try {
+    return readCallRecordEvents(stores).find(
+      (call) => call.providerCallId === providerCallId,
+    );
+  } catch {
+    return undefined;
+  }
+}
