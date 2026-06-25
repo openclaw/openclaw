@@ -3,7 +3,7 @@ summary: "Export OpenClaw diagnostics to OpenTelemetry collectors or stdout JSON
 title: "OpenTelemetry export"
 read_when:
   - You want to send OpenClaw model usage, message flow, or session metrics to an OpenTelemetry collector
-  - You are wiring traces, metrics, or logs into Grafana, Datadog, Honeycomb, New Relic, Tempo, or another OTLP backend
+  - You are wiring traces, metrics, or logs into Grafana, Datadog, Honeycomb, New Relic, Tempo, Latitude, or another OTLP backend
   - You need the exact metric names, span names, or attribute shapes to build dashboards or alerts
 ---
 
@@ -69,6 +69,48 @@ openclaw plugins enable diagnostics-otel
 <Note>
 `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
 </Note>
+
+### Example: export to Latitude
+
+[Latitude](https://latitude.so) is an open-source LLM observability and
+evaluation platform that ingests OTLP traces. Because OpenClaw already exports
+OTLP/HTTP protobuf, you point `diagnostics.otel` at Latitude's ingestion
+endpoint and authenticate with two headers:
+
+```json5
+{
+  plugins: {
+    allow: ["diagnostics-otel"],
+    entries: {
+      "diagnostics-otel": { enabled: true },
+    },
+  },
+  diagnostics: {
+    enabled: true,
+    otel: {
+      enabled: true,
+      endpoint: "https://ingest.latitude.so",
+      protocol: "http/protobuf",
+      serviceName: "openclaw-gateway",
+      headers: {
+        Authorization: "Bearer ${LATITUDE_API_KEY}",
+        "X-Latitude-Project": "${LATITUDE_PROJECT}",
+      },
+      traces: true,
+      metrics: false,
+      logs: false,
+    },
+  },
+}
+```
+
+`LATITUDE_API_KEY` and `LATITUDE_PROJECT` come from your Latitude project
+settings. Sign up at [console.latitude.so](https://console.latitude.so/login),
+or self-host and point `endpoint` at your own ingestion host. OpenClaw appends
+`/v1/traces` to the base `endpoint`, so model-call, run, tool, and message spans
+arrive in Latitude with token usage, cost, and latency aggregated per trace.
+Latitude ingests OTLP traces, so this example leaves `metrics` and `logs` off.
+Route those signals to a metrics or logs backend if you need them.
 
 ## Signals exported
 
