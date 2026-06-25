@@ -773,6 +773,27 @@ export function createOpenClawCodingTools(options?: {
       if (tool.name === "bash" || tool.name === execToolName) {
         continue;
       }
+      if (tool.name === "grep" || tool.name === "find" || tool.name === "ls") {
+        base.push(
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                tool,
+                sandboxRoot ? sandboxRoot : codingRoot,
+                sandboxRoot
+                  ? {
+                      additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                      containerWorkdir: sandbox.containerWorkdir,
+                      pathParamKeys: ["path"],
+                    }
+                  : {
+                      additionalRoots: skillReadRoots,
+                      pathParamKeys: ["path"],
+                    },
+              )
+            : tool,
+        );
+        continue;
+      }
       if (tool.name === "write") {
         if (sandboxRoot) {
           continue;

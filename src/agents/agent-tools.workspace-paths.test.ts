@@ -11,7 +11,11 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import {
+  expectReadWriteEditTools,
+  expectTool,
+  getTextContent,
+} from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -204,6 +208,27 @@ describe("workspace path resolution", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
+
+  it.each([
+    ["grep", { pattern: "secret" }],
+    ["find", { pattern: "*.txt" }],
+    ["ls", {}],
+  ] as const)(
+    "rejects %s absolute paths outside workspace when workspaceOnly is enabled",
+    async (toolName, params) => {
+      await withTempDir("openclaw-ws-", async (workspaceDir) => {
+        await withTempDir("openclaw-outside-", async (outsideDir) => {
+          const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+          const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+          const tool = expectTool(tools, toolName);
+
+          await expect(
+            tool.execute(`ws-${toolName}-outside`, { ...params, path: outsideDir }),
+          ).rejects.toThrow(/Path escapes sandbox root/i);
+        });
+      });
+    },
+  );
 
   it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
     if (process.platform === "win32") {
