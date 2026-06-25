@@ -1,4 +1,18 @@
 <!--
+Template options:
+
+Use this default template if you are unsure which template fits your change.
+
+For a small fix, typo, docs update, or low-risk maintenance change, use the quick-fix template:
+https://github.com/openclaw/openclaw/compare/main...YOUR_USERNAME:YOUR_BRANCH?quick_pull=1&template=quick_fix.md
+
+For a feature, behavior change, refactor, compatibility change, or higher-risk change, use the full-change template:
+https://github.com/openclaw/openclaw/compare/main...YOUR_USERNAME:YOUR_BRANCH?quick_pull=1&template=full_change.md
+
+Replace YOUR_USERNAME and YOUR_BRANCH with your fork owner and branch name.
+-->
+
+<!--
 Optional linked context:
 Add a visible `Closes #<issue-number>` or `Related: #<issue-number>` line
 below this comment.
