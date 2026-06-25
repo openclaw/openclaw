@@ -726,6 +726,37 @@ describe("discordOutbound", () => {
     expect(options.replyTo).toBe("reply-1");
   });
 
+  it("sends plain mediaUrls as one Discord multi-attachment message", async () => {
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "gallery",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+      },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/media"],
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("gallery");
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.mediaUrls).toEqual(["https://example.com/1.png", "https://example.com/2.png"]);
+    expect(options.mediaUrl).toBeUndefined();
+    expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(options.accountId).toBe("default");
+    expect(options.replyTo).toBe("reply-1");
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
   it("preserves explicit component payload replies when replyToMode is off", async () => {
     const payload = await discordOutbound.renderPresentation?.({
       payload: {

@@ -9,6 +9,7 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   resolveDiscordComponentSpec,
@@ -69,6 +70,60 @@ function resolveDiscordMediaDeliveryOptions(
     mediaReadFile: ctx.mediaReadFile,
     ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
   };
+}
+
+function resolveDiscordMultiMediaDeliveryOptions(
+  ctx: DiscordOutboundPayloadContext,
+  sendContext: DiscordPayloadSendContext,
+  mediaUrls: readonly string[],
+) {
+  return {
+    mediaUrls,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+  };
+}
+
+async function sendDiscordPlainMultiMediaPayload(params: {
+  ctx: DiscordOutboundPayloadContext;
+  sendContext: DiscordPayloadSendContext;
+  text: string;
+  mediaUrls: readonly string[];
+}) {
+  const text = params.text;
+  if (text.trim() && params.mediaUrls.some(isLikelyDiscordVideoMedia)) {
+    await params.sendContext.withRetry(
+      async () =>
+        await params.sendContext.send(params.sendContext.target, text, {
+          verbose: false,
+          ...resolveDiscordFormattedDeliveryOptions(params.ctx, params.sendContext),
+        }),
+    );
+    return await params.sendContext.withRetry(
+      async () =>
+        await params.sendContext.send(params.sendContext.target, "", {
+          verbose: false,
+          ...resolveDiscordMultiMediaDeliveryOptions(
+            params.ctx,
+            params.sendContext,
+            params.mediaUrls,
+          ),
+        }),
+    );
+  }
+  return await params.sendContext.withRetry(
+    async () =>
+      await params.sendContext.send(params.sendContext.target, text, {
+        verbose: false,
+        ...resolveDiscordMultiMediaDeliveryOptions(
+          params.ctx,
+          params.sendContext,
+          params.mediaUrls,
+        ),
+      }),
+  );
 }
 
 export async function sendDiscordOutboundPayload(params: {
@@ -133,6 +188,19 @@ export async function sendDiscordOutboundPayload(params: {
       : undefined;
     const filename = normalizeOptionalString(discordData.filename);
     if (nativeComponents || embeds?.length || filename) {
+      if (mediaUrls.length > 1) {
+        const result = await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, payload.text ?? "", {
+              verbose: false,
+              ...resolveDiscordMultiMediaDeliveryOptions(ctx, sendContext, mediaUrls),
+              components: nativeComponents,
+              embeds,
+              filename,
+            }),
+        );
+        return attachChannelToResult("discord", result);
+      }
       const result = await sendPayloadMediaSequenceOrFallback({
         text: payload.text ?? "",
         mediaUrls,
@@ -159,6 +227,15 @@ export async function sendDiscordOutboundPayload(params: {
                 filename: isFirst ? filename : undefined,
               }),
           ),
+      });
+      return attachChannelToResult("discord", result);
+    }
+    if (mediaUrls.length > 1) {
+      const result = await sendDiscordPlainMultiMediaPayload({
+        ctx,
+        sendContext,
+        text: payload.text ?? "",
+        mediaUrls,
       });
       return attachChannelToResult("discord", result);
     }
