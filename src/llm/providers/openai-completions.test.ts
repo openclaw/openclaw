@@ -381,7 +381,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
-  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+  it("relocates dynamic cache-boundary suffix to trailing message for implicit prefix-cache providers", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       createModel(32_000),
@@ -402,9 +402,15 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // Stable prefix stays as the leading system message (byte-identical across turns).
     expect(messages[0]).toEqual({
       role: "system",
-      content: "Stable prefix\nDynamic suffix",
+      content: "Stable prefix",
+    });
+    // Dynamic suffix is relocated to a trailing system message after user turns.
+    expect(messages[2]).toEqual({
+      role: "system",
+      content: "Dynamic suffix",
     });
   });
 
