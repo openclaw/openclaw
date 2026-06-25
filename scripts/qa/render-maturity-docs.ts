@@ -299,6 +299,7 @@ function scoreSummary(
   title: string,
   value: QaMaturityScoreObject | undefined,
   description: string,
+  details: readonly string[] = [],
 ): string[] {
   const score = scorePercent(value);
   const displayScore = score === undefined ? "-" : `${score}%`;
@@ -313,6 +314,7 @@ function scoreSummary(
     '  <div className="maturity-summary-meta">',
     `    ${maturityLabelPill(value?.label ?? "Unscored")}`,
     `    <span>${markdownEscape(description)}</span>`,
+    ...details.map((detail) => `    <span>${markdownEscape(detail)}</span>`),
     "  </div>",
     "</div>",
   ];
@@ -964,6 +966,7 @@ function renderMaturityScorecard({
   const surfaceAverage = coverage.rollups.surface_average;
   const qualityAverage = scores.rollups.surface_average.quality;
   const completenessAverage = scores.rollups.surface_average.completeness;
+  const maturityAverage = averageScores([qualityAverage, completenessAverage]);
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
@@ -985,18 +988,17 @@ function renderMaturityScorecard({
     "## At a glance",
     "",
     '<div className="maturity-summary-grid">',
-    ...indentMarkdown(scoreSummary("Coverage", surfaceAverage, "QA profile evidence"), 2),
     ...indentMarkdown(
-      scoreSummary("Quality", qualityAverage, "Reliability and operator confidence"),
-      2,
-    ),
-    ...indentMarkdown(
-      scoreSummary("Completeness", completenessAverage, "Expected workflow coverage"),
+      scoreSummary("Maturity score", maturityAverage, "Quality + completeness", [
+        `Coverage ${scoreLabel(surfaceAverage)}`,
+        `Quality ${scoreLabel(qualityAverage)}`,
+        `Completeness ${scoreLabel(completenessAverage)}`,
+      ]),
       2,
     ),
     "</div>",
     "",
-    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.',
+    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.',
     "",
     ...renderScoreBands(),
   ];
@@ -1212,9 +1214,7 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  if (args.strictInputs) {
-    rejectBlockingEvidence(evidenceSummaries);
-  }
+  rejectBlockingEvidence(evidenceSummaries);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
