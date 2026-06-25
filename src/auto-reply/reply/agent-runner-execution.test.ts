@@ -28,6 +28,7 @@ import {
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
+  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
@@ -6438,6 +6439,38 @@ describe("runAgentTurnWithFallback", () => {
       if (result.kind === "final") {
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
         expect(result.payload.text).toContain('Missing API key for provider "openai"');
+      }
+    },
+  );
+
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces provider authentication failures in $label chats",
+    async (testCase) => {
+      const rawError =
+        "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError("LLM request unauthorized.", {
+          reason: "auth",
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 401,
+          rawError,
+        }),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).toBe(PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).not.toContain(rawError);
       }
     },
   );
