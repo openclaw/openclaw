@@ -1,6 +1,5 @@
 // Crestodian audit tests cover filesystem-backed rescue audit scenarios.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
