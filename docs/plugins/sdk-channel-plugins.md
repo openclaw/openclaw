@@ -367,6 +367,19 @@ runtime helpers.
 
 Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
 
+## Inbound source actor attribution
+
+When a channel can distinguish the conversation from the human or system that
+sent a turn, pass a stable `sender.sourceActor` into
+`buildChannelInboundEventContext`. The context builder exposes it as
+`SourceActor` plus flattened `SourceActorId`, `SourceActorPeerId`,
+`SourceActorDisplayName`, `SourceActorRole`, and `SourceActorContext` fields for
+hooks, diagnostics, prompt templates, and memory integrations.
+
+Use channel-native stable identifiers for `id`/`peerId` and keep private display
+names in `displayName`. Do not hardcode product- or deployment-specific people
+in a channel plugin; map those identities in the owning integration if needed.
+
 ## Walkthrough
 
 <Steps>

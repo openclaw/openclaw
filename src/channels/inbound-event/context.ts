@@ -473,6 +473,7 @@ export function buildChannelInboundEventContext(
     message: params.message,
     access: params.access,
   });
+  const sourceActor = params.sender.sourceActor;
 
   const context = {
     Body: body,
@@ -504,6 +505,12 @@ export function buildChannelInboundEventContext(
     SenderUsername: params.sender.username,
     SenderTag: params.sender.tag,
     MemberRoleIds: params.sender.roles,
+    SourceActor: sourceActor,
+    SourceActorId: sourceActor?.id,
+    SourceActorPeerId: sourceActor?.peerId,
+    SourceActorDisplayName: sourceActor?.displayName,
+    SourceActorRole: sourceActor?.role,
+    SourceActorContext: sourceActor?.context,
     Timestamp: params.timestamp,
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,

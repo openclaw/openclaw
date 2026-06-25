@@ -231,6 +231,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       sender: {
         id: entry.senderDisplay,
         name: entry.senderName,
+        sourceActor: {
+          id: entry.senderPeerId,
+          peerId: entry.senderPeerId,
+          displayName: entry.senderName,
+          role: entry.isGroup ? "participant" : "user",
+          context: "signal",
+        },
       },
       conversation: {
         kind: entry.isGroup ? "group" : "direct",

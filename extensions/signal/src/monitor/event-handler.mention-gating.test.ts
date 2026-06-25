@@ -14,6 +14,12 @@ type SignalMsgContext = Pick<
   | "EffectiveWasMentioned"
   | "MentionShouldSkip"
   | "MentionSource"
+  | "SourceActor"
+  | "SourceActorId"
+  | "SourceActorPeerId"
+  | "SourceActorDisplayName"
+  | "SourceActorRole"
+  | "SourceActorContext"
 > & {
   Body?: string;
   CanDetectMention?: boolean;
@@ -23,6 +29,18 @@ type SignalMsgContext = Pick<
   EffectiveWasMentioned?: boolean;
   MentionShouldSkip?: boolean;
   MentionSource?: string;
+  SourceActor?: {
+    id?: string;
+    peerId?: string;
+    displayName?: string;
+    role?: string;
+    context?: string;
+  };
+  SourceActorId?: string;
+  SourceActorPeerId?: string;
+  SourceActorDisplayName?: string;
+  SourceActorRole?: string;
+  SourceActorContext?: string;
 };
 
 let capturedCtx: SignalMsgContext | undefined;
@@ -340,6 +358,15 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
     expect(getCapturedCtx().MentionShouldSkip).toBe(false);
     expect(getCapturedCtx().MentionSource).toBe("native");
+    expect(getCapturedCtx().SourceActor).toEqual({
+      id: "+15550001111",
+      peerId: "+15550001111",
+      displayName: "Alice",
+      role: "participant",
+      context: "signal",
+    });
+    expect(getCapturedCtx().SourceActorPeerId).toBe("+15550001111");
+    expect(getCapturedCtx().SourceActorDisplayName).toBe("Alice");
   });
 
   it("allows native bot phone mentions after E.164 normalization", async () => {

@@ -23,6 +23,14 @@ export type MentionSource =
   | "command_bypass"
   | "none";
 
+export type SourceActorContext = {
+  id: string;
+  peerId?: string;
+  displayName?: string;
+  role?: string;
+  context?: string;
+};
+
 export type InboundSourceModality = "text" | "voice" | "audio" | "image" | "video" | "document";
 
 type StickerContextMetadata = {
@@ -252,6 +260,13 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  /** Stable participant/source actor attribution for hooks, memory, and diagnostics. */
+  SourceActor?: SourceActorContext;
+  SourceActorId?: string;
+  SourceActorPeerId?: string;
+  SourceActorDisplayName?: string;
+  SourceActorRole?: string;
+  SourceActorContext?: string;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
