@@ -17,7 +17,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -85,7 +85,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   const { cfg, rawSessionKey } = params;
 
   const agentWorkspaceDir = resolveUserPath(
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+    params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.config ?? {}, params.agentId),
   );
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);

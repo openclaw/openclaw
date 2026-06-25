@@ -519,4 +519,99 @@ describe("resolveSandboxContext", () => {
       fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
     ).resolves.toBe("# User owned\n");
   }, 15_000);
+
+  it("uses config-resolved workspace for skill sync when workspaceDir is not provided", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const configuredWorkspace = await createSandboxFixtureDir("configured-workspace");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: configuredWorkspace,
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+    });
+
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
+    expect(typeof result.workspaceDir).toBe("string");
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(configuredWorkspace);
+    expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+  }, 15_000);
+
+  it("uses config-resolved workspace for skill sync when workspaceDir is empty string", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const configuredWorkspace = await createSandboxFixtureDir("configured-workspace-empty");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: configuredWorkspace,
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "",
+    });
+
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
+    expect(typeof result.workspaceDir).toBe("string");
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(configuredWorkspace);
+    expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+  }, 15_000);
 });
