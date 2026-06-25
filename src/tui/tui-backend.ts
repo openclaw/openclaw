@@ -23,6 +23,11 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+export type TuiChatSendResult = {
+  runId: string;
+  status?: string;
+};
+
 /** Options for forwarding a goal command to a backend session. */
 export type TuiGoalCommandOptions = {
   sessionKey: string;
@@ -144,7 +149,7 @@ export type TuiBackend = {
   start: () => void;
   stop: () => void | Promise<void>;
   subscribeSessionEvents?: () => Promise<unknown>;
-  sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
+  sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   abortChat: (opts: {
     sessionKey: string;
     agentId?: string;

@@ -787,7 +787,13 @@ export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   {
     runId: NonEmptyString,
-    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+    status: Type.Union([
+      Type.Literal("started"),
+      Type.Literal("in_flight"),
+      Type.Literal("ok"),
+      Type.Literal("timeout"),
+      Type.Literal("error"),
+    ]),
   },
   { additionalProperties: true },
 );

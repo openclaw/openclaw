@@ -6,7 +6,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -92,7 +92,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   let broadcastQueue = Promise.resolve();
-  return (update: SessionTranscriptUpdate): void => {
+  return (update: InternalSessionTranscriptUpdate): void => {
     // Preserve transcript update order even when counting messages requires an
     // async read from the session file.
     broadcastQueue = broadcastQueue
@@ -108,19 +108,22 @@ async function handleTranscriptUpdateBroadcast(
     sessionMessageSubscribers: SessionMessageSubscribers;
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   },
-  update: SessionTranscriptUpdate,
+  update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
-  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  const sessionKey =
+    update.target?.sessionKey ??
+    update.sessionKey ??
+    (update.sessionFile ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
   if (!sessionKey || update.message === undefined) {
     return;
   }
-  const effectiveAgentId = update.agentId;
+  const effectiveAgentId = update.target?.agentId ?? update.agentId;
   const defaultGlobalAgentId =
     sessionKey === "global"
       ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))
       : undefined;
   const visibleAgentId =
-    update.agentId ??
+    effectiveAgentId ??
     (effectiveAgentId && effectiveAgentId !== defaultGlobalAgentId ? effectiveAgentId : undefined);
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {

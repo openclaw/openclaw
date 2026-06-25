@@ -4389,7 +4389,7 @@ describe("active-memory plugin", () => {
       sessionId: "s-empty-search-completed-output",
       updatedAt: 0,
     };
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+    runEmbeddedAgent.mockImplementation(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         {
           message: {

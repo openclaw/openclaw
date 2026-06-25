@@ -1,13 +1,12 @@
 // Doctor warnings for plugin allowlists that make configured tool policies ineffective.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
+import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -152,51 +151,8 @@ function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function normalizeProviderKey(value: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalProviderKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
-}
-
 function asToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
   return hasRecord(value) ? (value as ToolPolicyConfig) : undefined;
-}
-
-function resolveProviderToolPolicy(params: {
-  byProvider: unknown;
-  modelProvider: string;
-  modelId: string;
-}): ToolPolicyConfig | undefined {
-  if (!hasRecord(params.byProvider)) {
-    return undefined;
-  }
-  const provider = normalizeProviderId(params.modelProvider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const providerModel = modelId ? `${provider}/${modelId}` : undefined;
-  const lookup = new Map<string, { canonical: boolean; policy: ToolPolicyConfig }>();
-  for (const [key, value] of Object.entries(params.byProvider)) {
-    const normalizedKey = normalizeProviderKey(key);
-    const policy = asToolPolicyConfig(value);
-    if (normalizedKey && policy) {
-      const canonical = isCanonicalProviderKey(key);
-      const existing = lookup.get(normalizedKey);
-      if (!existing || (canonical && !existing.canonical)) {
-        lookup.set(normalizedKey, { canonical, policy });
-      }
-    }
-  }
-  return (
-    (providerModel ? lookup.get(providerModel)?.policy : undefined) ?? lookup.get(provider)?.policy
-  );
 }
 
 function isSandboxModeActive(mode: unknown): boolean {
@@ -484,7 +440,7 @@ function nonSandboxToolPoliciesBlockMcp(params: {
     modelId: modelRef.model,
   });
   const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: agentTools?.byProvider,
+    byProvider: hasRecord(agentTools?.byProvider) ? agentTools.byProvider : undefined,
     modelProvider: modelRef.provider,
     modelId: modelRef.model,
   });

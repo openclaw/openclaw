@@ -105,7 +105,7 @@ struct AgentProTab: View {
         var color: Color {
             switch self {
             case .online: OpenClawBrand.ok
-            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            case .ready: OpenClawBrand.info
             }
         }
     }

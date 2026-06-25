@@ -187,6 +187,41 @@ describe("shared Codex app-server client", () => {
     startSpy.mockRestore();
   });
 
+  it("falls back to the next managed app-server when desktop initialize is unsupported", async () => {
+    const desktop = createClientHarness();
+    const pluginLocal = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(desktop.client)
+      .mockReturnValueOnce(pluginLocal.client);
+    mocks.resolveManagedCodexAppServerStartOptions.mockImplementationOnce(async (startOptions) => ({
+      ...startOptions,
+      command: "/Applications/Codex.app/Contents/Resources/codex",
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+    }));
+
+    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
+    await sendInitializeResult(pluginLocal, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(pluginLocal);
+
+    await expect(listPromise).resolves.toEqual({ models: [] });
+    expect(desktop.process.stdin.destroyed).toBe(true);
+    expect(pluginLocal.process.stdin.destroyed).toBe(false);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(startSpy.mock.calls[0]?.[0]).toMatchObject({
+      command: "/Applications/Codex.app/Contents/Resources/codex",
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+    });
+    expect(startSpy.mock.calls[1]?.[0]).toMatchObject({
+      command: "/cache/openclaw/codex",
+      commandSource: "resolved-managed",
+    });
+    expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
+  });
+
   it("closes and clears a shared app-server when initialize times out", async () => {
     const first = createClientHarness();
     const second = createClientHarness();

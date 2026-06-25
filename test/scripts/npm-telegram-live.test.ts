@@ -148,6 +148,22 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("uses unique direct-run output dirs by default", () => {
+    const repoRoot = mkTempRoot();
+    const firstDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
+    const secondDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
+
+    expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(firstDir)).toMatch(/^npm-telegram-live-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondDir).not.toBe(firstDir);
+    expect(
+      testing.resolvePackageTelegramOutputDir(
+        { OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: ".artifacts/custom" },
+        repoRoot,
+      ),
+    ).toBe(".artifacts/custom");
+  });
+
   it("mounts configured output paths before entering the container", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const dockerEnvStart = script.indexOf("docker_env=(");

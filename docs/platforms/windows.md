@@ -124,8 +124,11 @@ openclaw gateway status --json
 ```
 
 Native Windows CLI and Gateway flows are supported and continue to improve.
-Managed startup uses Windows Scheduled Tasks when available and falls back to a
-per-user Startup-folder login item if task creation is denied.
+Managed startup uses Windows Scheduled Tasks when available. The task keeps the
+readable `gateway.cmd` script in the OpenClaw state dir, but launches it through
+a generated `gateway.vbs` WScript wrapper so the background Gateway does not open
+a visible console window. If task creation is denied, OpenClaw falls back to a
+per-user Startup-folder login item.
 
 To install the Gateway service:
 

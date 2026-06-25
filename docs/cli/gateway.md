@@ -181,11 +181,19 @@ Fetch usage-cost summaries from session logs.
 ```bash
 openclaw gateway usage-cost
 openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --agent work --json
+openclaw gateway usage-cost --all-agents
 openclaw gateway usage-cost --json
 ```
 
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
+</ParamField>
+<ParamField path="--agent <id>" type="string">
+  Scope the cost summary to one configured agent id.
+</ParamField>
+<ParamField path="--all-agents" type="boolean">
+  Aggregate the cost summary across all configured agents. Cannot be combined with `--agent`.
 </ParamField>
 
 ### `gateway stability`

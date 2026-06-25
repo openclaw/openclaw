@@ -4,7 +4,20 @@
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
+  modelProvider?: {
+    api?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
+    request?: {
+      auth?: { mode?: unknown };
+      proxy?: unknown;
+      tls?: unknown;
+      allowPrivateNetwork?: unknown;
+    };
+  };
   requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
+  providerOwnerStatus?: "unowned" | "owned" | "ambiguous";
+  providerOwnerPluginIds?: readonly string[];
 };
 
 export type AgentHarnessSupport =

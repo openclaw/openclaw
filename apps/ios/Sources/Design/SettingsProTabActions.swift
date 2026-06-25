@@ -152,6 +152,7 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
+        self.registerForRemoteNotificationsIfEnrollmentReady()
 
         let issueCount = SettingsDiagnostics.issueCount(
             gatewayConnected: self.gatewayDiagnosticConnected,
@@ -325,6 +326,7 @@ extension SettingsProTab {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         self.setupStatusText = "Checking gateway reachability..."
         let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
         if !ok {
@@ -417,6 +419,7 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
@@ -437,6 +440,7 @@ extension SettingsProTab {
 
     func requestNotificationAuthorizationFromSettings() {
         guard !self.isRequestingNotificationAuthorization else { return }
+        PushEnrollmentConsent.markDisclosureAccepted()
         self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
@@ -448,10 +452,17 @@ extension SettingsProTab {
             await MainActor.run {
                 self.isRequestingNotificationAuthorization = false
                 self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                guard granted, self.notificationStatus.allowsNotifications else { return }
-                UIApplication.shared.registerForRemoteNotifications()
+                guard granted else { return }
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
+    }
+
+    @MainActor
+    func registerForRemoteNotificationsIfEnrollmentReady() {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationStatus.allowsNotifications else { return }
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     @MainActor
@@ -819,8 +830,11 @@ extension SettingsProTab {
 
     var notificationRelayDetail: String {
         if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
             return """
-            This build uses OpenClaw's hosted push relay at ios-push-relay.openclaw.ai for notification \
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
             delivery data.
             """
         }
