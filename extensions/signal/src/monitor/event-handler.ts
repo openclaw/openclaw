@@ -740,6 +740,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       account: deps.account,
       accountUuid: deps.accountUuid,
     });
+    const hasAnyMention = textWasMentioned ? true : nativeMentionFacts.hasAnyMention;
     const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
@@ -755,7 +756,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: nativeMentionFacts.hasAnyMention,
+        hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {
@@ -776,9 +777,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ? {
           canDetectMention,
           wasMentioned,
-          ...(nativeMentionFacts.hasAnyMention !== undefined
-            ? { hasAnyMention: nativeMentionFacts.hasAnyMention }
-            : {}),
+          ...(hasAnyMention !== undefined ? { hasAnyMention } : {}),
           ...(mentionSource ? { mentionSource } : {}),
           requireMention,
           effectiveWasMentioned,
