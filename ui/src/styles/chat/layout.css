@@ -2596,11 +2596,11 @@
 }
 
 .chat-loading-skeleton .chat-msg {
-  width: min(560px, 82%);
+  width: min(560px, 92%);
 }
 
 .chat-loading-skeleton .chat-line.user .chat-msg {
-  width: min(360px, 70%);
+  width: min(420px, 85%);
 }
 
 .chat-loading-skeleton .chat-bubble {
