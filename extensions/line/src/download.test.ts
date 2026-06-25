@@ -61,10 +61,18 @@ function detectMockContentType(
   }
   if (originalFilename) {
     const lower = originalFilename.toLowerCase();
-    if (lower.endsWith(".mp3")) return "audio/mpeg";
-    if (lower.endsWith(".m4a")) return "audio/x-m4a";
-    if (lower.endsWith(".wav")) return "audio/wav";
-    if (lower.endsWith(".ogg")) return "audio/ogg";
+    if (lower.endsWith(".mp3")) {
+      return "audio/mpeg";
+    }
+    if (lower.endsWith(".m4a")) {
+      return "audio/x-m4a";
+    }
+    if (lower.endsWith(".wav")) {
+      return "audio/wav";
+    }
+    if (lower.endsWith(".ogg")) {
+      return "audio/ogg";
+    }
   }
   return contentType;
 }
