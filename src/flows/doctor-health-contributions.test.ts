@@ -954,6 +954,42 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("routes default-account-routing check through gateway-services repair", async () => {
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: { gateway: { mode: "local" } },
+      findings: [],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 0,
+      checksValidated: 1,
+    });
+
+    const contribution = requireDoctorContribution("doctor:gateway-services");
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "fix" }),
+      expect.objectContaining({
+        checks: expect.arrayContaining([
+          expect.objectContaining({ id: "core/doctor/default-account-routing" }),
+        ]),
+      }),
+    );
+  });
+
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-health");
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
