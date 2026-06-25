@@ -161,8 +161,12 @@ Example:
 
 ## Sessions and memory
 
-- Session files: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
-- Session metadata (token usage, last route, etc): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy: `~/.openclaw/sessions/sessions.json`)
+- Session rows, token usage, and last route metadata:
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Session transcript files:
+  `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
+- Legacy row migration source:
+  `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, OpenClaw acknowledges the reset without invoking the model.
 - `/compact [instructions]` compacts the session context and reports the remaining context budget.
 

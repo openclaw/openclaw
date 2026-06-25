@@ -92,20 +92,26 @@ sessions should expire on a timer.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- **Runtime session rows:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- **Transcript files:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
-`sessions.json` keeps separate lifecycle timestamps:
+The session rows in the per-agent SQLite database keep separate lifecycle
+timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 
-Older rows without `sessionStartedAt` are resolved from the transcript JSONL
-session header when available. If an older row also lacks `lastInteractionAt`,
-idle freshness falls back to that session start time, not to later bookkeeping
-writes.
+During migration from older installs, rows without `sessionStartedAt` are
+resolved from the legacy transcript JSONL session header when available. If an
+older row also lacks `lastInteractionAt`, idle freshness falls back to that
+session start time, not to later bookkeeping writes. Use
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents` to
+inspect legacy `sessions.json` and JSONL state, then follow the
+[Doctor migration sequence](/cli/doctor#session-sqlite-migration) before
+relying on the SQLite session row store.
 
 ## Session maintenance
 

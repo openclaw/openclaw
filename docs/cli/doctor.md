@@ -22,13 +22,14 @@ channels, plugins, skills, model routing, local state, or config migrations are
 not behaving as expected and you want one command that can explain what is
 wrong.
 
-Doctor has three postures:
+Doctor has four postures:
 
-| Posture | Command                  | Behavior                                                                        |
-| ------- | ------------------------ | ------------------------------------------------------------------------------- |
-| Inspect | `openclaw doctor`        | Human-oriented checks and guided prompts.                                       |
-| Repair  | `openclaw doctor --fix`  | Applies supported repairs, using prompts unless non-interactive repair is safe. |
-| Lint    | `openclaw doctor --lint` | Read-only structured findings for CI, preflight, and review gates.              |
+| Posture                  | Command                                   | Behavior                                                                        |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------- |
+| Inspect                  | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
+| Repair                   | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+| Lint                     | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
+| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, or validates legacy session JSON/JSONL state into SQLite.    |
 
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a
 human operator intentionally wants doctor to edit config or state.
@@ -48,6 +49,10 @@ openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 openclaw doctor --post-upgrade
 openclaw doctor --post-upgrade --json
+openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
+openclaw doctor --session-sqlite dry-run --session-sqlite-agent main --json
+openclaw doctor --session-sqlite import --session-sqlite-all-agents
+openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
 ```
 
 For channel-specific permissions, use the channel probes instead of `doctor`:
@@ -72,7 +77,11 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
-- `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
+- `--session-sqlite <mode>`: run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, or `validate`
+- `--session-sqlite-store <path>`: with `--session-sqlite`, select one legacy `sessions.json` store path
+- `--session-sqlite-agent <id>`: with `--session-sqlite`, select one configured agent
+- `--session-sqlite-all-agents`: with `--session-sqlite`, select configured and discovered agent stores
+- `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`); with `--session-sqlite`, emit the migration report as JSON
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
 - `--all`: with `--lint`, run all registered checks, including opt-in checks excluded from the default automation set
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
@@ -213,6 +222,47 @@ machine-readable envelope (`{ probesRun, findings }`) suitable for CI, the
 community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the
 installed plugin index is missing or malformed, JSON mode still emits that
 envelope with a `plugin.index_unavailable` error finding.
+
+## Session SQLite migration
+
+`openclaw doctor --session-sqlite <mode>` is the targeted upgrade tool for
+moving legacy session rows and transcript history into each agent's SQLite
+database. Current runtime session rows live in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Legacy
+`sessions.json` files are migration sources; transcript JSONL files may still be
+active agent history as well as migration inputs, so do not delete them just
+because an import succeeded.
+
+Modes:
+
+| Mode       | Behavior                                                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `inspect`  | Read legacy and SQLite counts, plus unreferenced JSONL files, without importing.                                       |
+| `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
+| `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
+| `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
+
+Selectors:
+
+- Default: the configured default agent store, when that legacy store file exists.
+- `--session-sqlite-agent <id>`: one configured agent.
+- `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
+- `--session-sqlite-store <path>`: one explicit legacy `sessions.json` path.
+
+Recommended upgrade sequence:
+
+```bash
+openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
+openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite import --session-sqlite-all-agents
+openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+```
+
+Back up the OpenClaw state directory before running `import` on an install with
+important history. `validate` exits non-zero when a selected legacy entry is
+missing from SQLite, a session id differs, or a transcript event count differs.
+When using `--session-sqlite-store <path>`, check that the report contains the
+expected target count; a nonexistent explicit store path selects no targets.
 
 Notes:
 

@@ -128,16 +128,24 @@ Example:
 
 ## Session storage
 
-Session stores live under the state directory (default `~/.openclaw`):
+Runtime session rows live in each agent's SQLite database under the state
+directory (default `~/.openclaw`):
 
-- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- JSONL transcripts live alongside the store
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-You can override the store path via `session.store` and `{agentId}` templating.
+Transcript JSONL files can still live under
+`~/.openclaw/agents/<agentId>/sessions/` for active agent history and legacy
+migration. Older installs may also have a legacy `sessions.json` row store in
+that directory. Start with
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`, then
+follow the [Doctor](/cli/doctor#session-sqlite-migration) import and validation
+sequence.
+You can still select a legacy store path via `session.store` and `{agentId}`
+templating for migration and offline-maintenance workflows.
 
 Gateway and ACP session discovery also scans disk-backed agent stores under the
 default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular
+stores must stay inside that resolved agent root and use a regular legacy
 `sessions.json` file. Symlinks and out-of-root paths are ignored.
 
 ## WebChat behavior
