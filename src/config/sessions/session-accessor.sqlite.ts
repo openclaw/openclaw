@@ -57,6 +57,7 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -115,10 +116,6 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
-type ResolvedSqliteStoreTarget = {
-  agentId?: string;
-  path?: string;
-};
 type SqliteCheckpointTranscriptForkSource = {
   sessionId: string;
   leafId?: string;
@@ -1219,36 +1216,6 @@ function resolveSqliteStoreScope(storePath: string): ResolvedSqliteScope {
   return resolveSqliteScope({ sessionKey: "", storePath });
 }
 
-function resolveSqliteTargetFromSessionStorePath(storePath: string): ResolvedSqliteStoreTarget {
-  const resolved = path.resolve(storePath);
-  if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
-    const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
-    return {
-      path: resolved,
-      ...(agentId ? { agentId } : {}),
-    };
-  }
-  if (path.basename(resolved) !== "sessions.json") {
-    return {};
-  }
-  const sessionsDir = path.dirname(resolved);
-  if (path.basename(sessionsDir) !== "sessions") {
-    return {
-      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
-    };
-  }
-  const agentDir = path.dirname(sessionsDir);
-  if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return {
-      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
-    };
-  }
-  return {
-    agentId: normalizeAgentId(path.basename(agentDir)),
-    path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
-  };
-}
-
 function resolveSqliteAgentId(params: {
   scopedAgentId?: string;
   sessionKey?: string;
@@ -1265,21 +1232,6 @@ function resolveSqliteAgentId(params: {
     params.storeAgentId ??
     (params.sessionKey !== undefined ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined)
   );
-}
-
-function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | undefined {
-  if (path.basename(databasePath) !== "openclaw-agent.sqlite") {
-    return undefined;
-  }
-  const agentDbDir = path.dirname(databasePath);
-  if (path.basename(agentDbDir) !== "agent") {
-    return undefined;
-  }
-  const agentDir = path.dirname(agentDbDir);
-  if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return undefined;
-  }
-  return normalizeAgentId(path.basename(agentDir));
 }
 
 function resolveSqliteTranscriptArchiveDirectory(
