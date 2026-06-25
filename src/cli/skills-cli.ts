@@ -532,6 +532,14 @@ export function registerSkillsCli(program: Command) {
               });
               return;
             }
+            defaultRuntime.log(
+              `The following will be removed:
+` +
+                `  - workspace directory:  ${plan.skillDir}
+` +
+                `  - lockfile entry:       .clawhub/lock.json#${plan.slug}
+`,
+            );
             const { promptYesNo } = await import("./prompt.js");
             const confirmed = await promptYesNo(`Proceed with uninstall?`, undefined);
             if (!confirmed) {

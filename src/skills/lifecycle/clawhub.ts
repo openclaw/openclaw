@@ -1733,16 +1733,16 @@ export async function planSkillUninstall(
   const lockfileEntryExists = Boolean(resolvedLockEntry);
   const skillDirExists = await pathExists(resolvedSkillDir);
 
-  // Only normalized ClawHub origin metadata authorizes recursive directory removal.
-  // readClawHubSkillOrigin() returns null on missing, malformed, or invalid-marker
-  // origin.json files; we must NOT fall back to mere file existence, otherwise a
-  // stray or attacker-written .clawhub/origin.json could authorize deleting a
-  // non-ClawHub or corrupt skill directory.
+  // Only normalized ClawHub origin metadata matching the resolved slug authorizes
+  // recursive directory removal. readClawHubSkillOrigin() returns null on missing,
+  // malformed, or invalid-marker origin.json files; even a valid origin object must
+  // also have its slug match the resolved skill slug so that a stray origin.json
+  // from another skill cannot authorize deleting this directory.
   // Origin-only installs (origin.json valid but no lockfile entry) are still
   // recognized as ClawHub installs and can be uninstalled.
   // Stale lock-only entries (lock exists, no valid origin) have isClawHubInstall=false
   // and executeSkillUninstall will remove only the lockfile entry.
-  const isClawHubInstall = Boolean(trackedOrigin);
+  const isClawHubInstall = Boolean(trackedOrigin && trackedOrigin.slug === resolvedSlug);
 
   // Derive owner from origin metadata first, fall back to lockfile
   // (matches resolveRequestedUpdateSlug owner comparison).
