@@ -28,10 +28,10 @@ import {
 
 type StateDbTestDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events" | "schema_meta">;
 
-const _stateDbTempDirs: string[] = [];
+const stateDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
-  return makeTempDir(_stateDbTempDirs, "openclaw-state-db-");
+  return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
 }
 
 function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
@@ -47,7 +47,7 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
 }
 
 afterAll(() => {
-  cleanupTempDirs(_stateDbTempDirs);
+  cleanupTempDirs(stateDbTempDirs);
 });
 
 afterEach(() => {

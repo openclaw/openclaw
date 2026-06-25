@@ -164,10 +164,10 @@ function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry
   sessionEntryState.loadCalls = [];
 }
 
-const _abortTempDirs: string[] = [];
+const abortTempDirs: string[] = [];
 
 async function createTranscriptFixture(prefix: string) {
-  const dir = makeTempDir(_abortTempDirs, prefix);
+  const dir = makeTempDir(abortTempDirs, prefix);
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
@@ -176,7 +176,7 @@ async function createTranscriptFixture(prefix: string) {
 }
 
 async function createMissingEntryFixture(prefix: string) {
-  const dir = makeTempDir(_abortTempDirs, prefix);
+  const dir = makeTempDir(abortTempDirs, prefix);
   const transcriptPath = path.join(dir, "missing.jsonl");
   const sessionId = "client-supplied-session";
   setMockSessionEntry(transcriptPath, sessionId, false);
@@ -184,7 +184,7 @@ async function createMissingEntryFixture(prefix: string) {
 }
 
 afterAll(() => {
-  cleanupTempDirs(_abortTempDirs);
+  cleanupTempDirs(abortTempDirs);
 });
 
 afterEach(() => {

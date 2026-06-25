@@ -33,10 +33,10 @@ type RegisteredAgentDatabaseRow = {
   size_bytes: number | null;
 };
 
-const _agentDbTempDirs: string[] = [];
+const agentDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
-  return makeTempDir(_agentDbTempDirs, "openclaw-agent-db-");
+  return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
 }
 
 function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv } = {}) {
@@ -54,7 +54,7 @@ function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv 
 }
 
 afterAll(() => {
-  cleanupTempDirs(_agentDbTempDirs);
+  cleanupTempDirs(agentDbTempDirs);
 });
 
 afterEach(() => {

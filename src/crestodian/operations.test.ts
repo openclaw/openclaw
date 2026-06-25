@@ -192,10 +192,10 @@ vi.mock("../config/model-input.js", () => ({
     typeof model === "string" ? model : model?.primary,
 }));
 
-const _opTempDirs: string[] = [];
+const opTempDirs: string[] = [];
 
 afterAll(() => {
-  cleanupTempDirs(_opTempDirs);
+  cleanupTempDirs(opTempDirs);
 });
 
 describe("parseCrestodianOperation", () => {
@@ -331,7 +331,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("applies config set through typed deps and writes an audit entry", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-config-set-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-config-set-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
@@ -367,7 +367,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-config-ref-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-config-ref-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
@@ -445,7 +445,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("installs plugins only after approval and audits the write", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-plugin-install-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-plugin-install-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
@@ -491,7 +491,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("uninstalls plugins only after approval and audits the write", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-plugin-uninstall-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-plugin-uninstall-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runPluginUninstall = vi.fn(async (pluginId: string, pluginRuntime: RuntimeEnv) => {
@@ -537,7 +537,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("runs setup bootstrap only after approval and audits it", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-setup-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const { runtime, lines } = createCrestodianTestRuntime();
@@ -586,7 +586,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("runs doctor repairs only after approval and audits them", async () => {
-    const tempDir = makeTempDir(_opTempDirs, "crestodian-doctor-fix-");
+    const tempDir = makeTempDir(opTempDirs, "crestodian-doctor-fix-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runDoctor = vi.fn(async () => {});

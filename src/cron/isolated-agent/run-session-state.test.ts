@@ -217,15 +217,15 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-const _cronSessionTempDirs: string[] = [];
+const cronSessionTempDirs: string[] = [];
 
 async function createTranscriptFile(): Promise<string> {
-  const dir = makeTempDir(_cronSessionTempDirs, "openclaw-cron-session-");
+  const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
   const file = path.join(dir, "session.jsonl");
   await fs.writeFile(file, `${JSON.stringify({ type: "session", sessionId: "run-session-id" })}\n`);
   return file;
 }
 
 afterAll(() => {
-  cleanupTempDirs(_cronSessionTempDirs);
+  cleanupTempDirs(cronSessionTempDirs);
 });
