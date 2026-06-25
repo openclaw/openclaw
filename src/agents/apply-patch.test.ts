@@ -70,6 +70,7 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
         : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
     },
     mkdirp: async () => {},
+    readdir: async () => [],
   };
   return {
     files,
