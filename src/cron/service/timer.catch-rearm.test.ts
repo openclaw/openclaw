@@ -26,7 +26,7 @@ function makeMinimalState(overrides?: {
     cronEnabled: overrides?.cronEnabled ?? true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });
@@ -64,7 +64,7 @@ describe("cron timer .catch() re-arm", () => {
     expect(state.timer).not.toBeNull();
 
     // Clean up
-    if (state.timer) clearTimeout(state.timer);
+    if (state.timer) { clearTimeout(state.timer); }
   });
 
   it("does not re-arm when scheduler is stopped", () => {
