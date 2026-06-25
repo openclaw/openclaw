@@ -196,6 +196,7 @@ type ShortTermAuditIssue = {
     | "recall-store-empty"
     | "recall-store-invalid"
     | "recall-store-over-limit"
+    | "recall-store-dangling-ref"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
     | "qmd-index-missing"
@@ -216,6 +217,7 @@ export type ShortTermAuditSummary = {
   conceptTaggedEntryCount: number;
   conceptTagScripts?: ConceptTagScriptCoverage;
   invalidEntryCount: number;
+  danglingRefCount: number;
   issues: ShortTermAuditIssue[];
   qmd?:
     | {
@@ -230,6 +232,8 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedOverflowEntries: number;
+  /** Entries whose referenced daily memory file no longer exists on disk. */
+  removedDanglingRefs: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
@@ -2551,6 +2555,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   let conceptTaggedEntryCount = 0;
   let conceptTagScripts: ConceptTagScriptCoverage | undefined;
   let invalidEntryCount = 0;
+  let danglingRefCount = 0;
   let updatedAt: string | undefined;
 
   const nowIso = new Date().toISOString();
@@ -2597,6 +2602,30 @@ export async function auditShortTermPromotionArtifacts(params: {
         severity: "warn",
         code: "recall-store-over-limit",
         message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        fixable: true,
+      });
+    }
+
+    // Check for dangling references — entries whose source file no longer exists.
+    const danglingEntryKeys = Object.keys(store.entries).filter(
+      (key) => store.entries[key]?.source === "memory",
+    );
+    danglingRefCount = 0;
+    for (const key of danglingEntryKeys) {
+      const entry = store.entries[key];
+      const sourceExists = await shortTermRecallSourceExists({
+        workspaceDir: params.workspaceDir,
+        entry: { path: entry.path },
+      });
+      if (!sourceExists) {
+        danglingRefCount++;
+      }
+    }
+    if (danglingRefCount > 0) {
+      issues.push({
+        severity: "warn",
+        code: "recall-store-dangling-ref",
+        message: `${danglingRefCount} recall entr${danglingRefCount === 1 ? "y" : "ies"} reference${danglingRefCount === 1 ? "s" : ""} a daily memory file that no longer exists on disk.`,
         fixable: true,
       });
     }
@@ -2678,6 +2707,7 @@ export async function auditShortTermPromotionArtifacts(params: {
     conceptTaggedEntryCount,
     ...(conceptTagScripts ? { conceptTagScripts } : {}),
     invalidEntryCount,
+    danglingRefCount,
     issues,
     ...(qmd ? { qmd } : {}),
   };
@@ -2691,6 +2721,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let rewroteStore = false;
   let removedInvalidEntries = 0;
   let removedOverflowEntries = 0;
+  let removedDanglingRefs = 0;
   let removedStaleLock = false;
 
   const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
@@ -2753,9 +2784,44 @@ export async function repairShortTermPromotionArtifacts(params: {
         entries: nextEntries,
       };
       removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
+      // Remove entries whose referenced daily memory file no longer exists on
+      // disk. Dangling references can accumulate when files are deleted outside
+      // the dreaming pipeline (e.g. the #84882 silent-deletion scenario) and
+      // cause the promotion step to waste cycles trying to rehydrate entries
+      // that can never succeed.
+      removedDanglingRefs = 0;
+      const danglingKeys: string[] = [];
+      for (const [key, entry] of Object.entries(comparableStore.entries)) {
+        if (entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+          continue;
+        }
+        const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, entry.path);
+        let sourceExists = false;
+        for (const sourcePath of sourcePaths) {
+          try {
+            await fs.access(sourcePath);
+            sourceExists = true;
+            break;
+          } catch (err) {
+            // Only treat ENOENT (file genuinely doesn't exist) as missing.
+            // EACCES, EPERM, and other errors should not trigger pruning.
+            if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+              throw err;
+            }
+          }
+        }
+        if (!sourceExists) {
+          danglingKeys.push(key);
+        }
+      }
+      for (const key of danglingKeys) {
+        delete comparableStore.entries[key];
+        removedDanglingRefs += 1;
+      }
       const needsRewrite =
         removedInvalidEntries > 0 ||
         removedOverflowEntries > 0 ||
+        removedDanglingRefs > 0 ||
         JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
       if (needsRewrite) {
         await writeStore(workspaceDir, {
@@ -2768,9 +2834,10 @@ export async function repairShortTermPromotionArtifacts(params: {
   });
 
   return {
-    changed: rewroteStore || removedStaleLock,
+    changed: rewroteStore || removedStaleLock || removedDanglingRefs > 0,
     removedInvalidEntries,
     removedOverflowEntries,
+    removedDanglingRefs,
     rewroteStore,
     removedStaleLock,
   };

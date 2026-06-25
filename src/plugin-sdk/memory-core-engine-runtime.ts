@@ -84,6 +84,7 @@ export type ShortTermAuditSummary = {
   conceptTaggedEntryCount: number;
   conceptTagScripts?: Record<string, unknown>;
   invalidEntryCount: number;
+  danglingRefCount: number;
   issues: ShortTermAuditIssue[];
   qmd?:
     | {
@@ -98,7 +99,9 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
-  removedOverflowEntries?: number;
+  removedOverflowEntries: number;
+  /** Entries whose referenced daily memory file no longer exists on disk. */
+  removedDanglingRefs: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };

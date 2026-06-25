@@ -136,14 +136,17 @@ function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
   removedOverflowEntries?: number;
+  removedDanglingRefs?: number;
   removedStaleLock: boolean;
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
     const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+    const removedDanglingRefs = repair.removedDanglingRefs ?? 0;
     const details = [
       repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
       removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+      removedDanglingRefs > 0 ? `-${removedDanglingRefs} dangling` : null,
     ]
       .filter(Boolean)
       .join(", ");

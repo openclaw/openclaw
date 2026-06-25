@@ -11,6 +11,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
@@ -88,7 +89,16 @@ export async function writeDailyDreamingPhaseBlock(params: {
       endMarker: markers.end,
       body,
     });
-    await fs.writeFile(inlinePath, withTrailingNewline(updated), "utf-8");
+    // Write atomically via temp file so a crash mid-write cannot truncate the
+    // daily memory file (read-modify-write on a non-atomic filesystem).
+    await replaceFileAtomic({
+      filePath: inlinePath,
+      content: withTrailingNewline(updated),
+      mode: 0o600,
+      preserveExistingMode: true,
+      tempPrefix: "dreaming-inline",
+      throwOnCleanupError: true,
+    });
   }
 
   if (shouldWriteSeparate(params.storage)) {
@@ -105,7 +115,13 @@ export async function writeDailyDreamingPhaseBlock(params: {
       body,
       "",
     ].join("\n");
-    await fs.writeFile(reportPath, report, "utf-8");
+    await replaceFileAtomic({
+      filePath: reportPath,
+      content: report,
+      mode: 0o600,
+      tempPrefix: "dreaming-report",
+      throwOnCleanupError: true,
+    });
   }
 
   await appendMemoryHostEvent(params.workspaceDir, {
@@ -141,7 +157,13 @@ export async function writeDeepDreamingReport(params: {
   if (shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
     await fs.mkdir(path.dirname(reportPath), { recursive: true });
-    await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+    await replaceFileAtomic({
+      filePath: reportPath,
+      content: `# Deep Sleep\n\n${body}\n`,
+      mode: 0o600,
+      tempPrefix: "dreaming-deep",
+      throwOnCleanupError: true,
+    });
   }
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",

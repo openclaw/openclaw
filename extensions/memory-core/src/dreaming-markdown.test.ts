@@ -273,4 +273,69 @@ describe("dreaming markdown storage", () => {
     ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
     await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
   });
+
+  it("preserves existing user content outside managed dreaming blocks when writing inline", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    const userContent = [
+      "# Daily Notes",
+      "",
+      "User wrote this important note.",
+      "",
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Old light candidate.",
+      "<!-- openclaw:dreaming:light:end -->",
+      "",
+      "More user notes after the block.",
+      "",
+    ].join("\n");
+    await fs.writeFile(inlinePath, userContent, "utf-8");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- New light candidate."],
+      nowMs,
+      timezone,
+      storage: { mode: "inline", separateReports: false },
+    });
+
+    const inlinePathResult = requireInlinePath(result);
+    const content = await fs.readFile(inlinePathResult, "utf-8");
+    // User content outside managed blocks must survive.
+    expect(content).toContain("User wrote this important note.");
+    expect(content).toContain("More user notes after the block.");
+    // Old managed content is replaced.
+    expect(content).not.toContain("- Old light candidate.");
+    expect(content).toContain("- New light candidate.");
+  });
+
+  it("uses atomic rename so no stray tmp files remain after inline write", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(inlinePath, "Existing content.\n", "utf-8");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Atomic candidate."],
+      nowMs,
+      timezone,
+      storage: { mode: "inline", separateReports: false },
+    });
+
+    const inlinePathResult = requireInlinePath(result);
+    const content = await fs.readFile(inlinePathResult, "utf-8");
+    expect(content).toContain("Existing content.");
+    expect(content).toContain("- Atomic candidate.");
+
+    // No .tmp-* files should be left in the memory directory.
+    const memoryDir = path.dirname(inlinePathResult);
+    const dirents = await fs.readdir(memoryDir, { withFileTypes: true });
+    const tmpFiles = dirents.filter((entry) => entry.isFile() && entry.name.includes(".tmp-"));
+    expect(tmpFiles).toHaveLength(0);
+  });
 });

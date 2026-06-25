@@ -2814,6 +2814,9 @@ describe("short-term promotion", () => {
 
   it("audits and repairs invalid store metadata plus stale locks", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-04-01.md"), "Existing content.\n", "utf-8");
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
@@ -2866,6 +2869,9 @@ describe("short-term promotion", () => {
 
   it("audits and repairs oversized recall stores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-04-01.md"), "Existing content.\n", "utf-8");
       const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await testing.writeRawRecallStore(workspaceDir, {
@@ -2921,6 +2927,9 @@ describe("short-term promotion", () => {
 
   it("uses score tie-breakers when capping stores with invalid timestamps", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-04-01.md"), "Existing content.\n", "utf-8");
       const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
@@ -3010,6 +3019,9 @@ describe("short-term promotion", () => {
 
   it("does not rewrite an already normalized healthy recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-04-01.md"), "Existing content.\n", "utf-8");
       const snippet = "Gateway host uses qmd vector search for router notes.";
       const raw = {
         version: 1,
@@ -3045,6 +3057,127 @@ describe("short-term promotion", () => {
       expect(repair.changed).toBe(false);
       expect(repair.rewroteStore).toBe(false);
       expect(await testing.readRecallStore(workspaceDir, new Date().toISOString())).toEqual(raw);
+    });
+  });
+
+  it("removes recall entries whose referenced daily memory file no longer exists on disk", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      // Create a real daily memory file that will survive.
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(
+        path.join(memoryDir, "2026-05-01.md"),
+        "Real file content\nfor dreaming ingestion.\n",
+        "utf-8",
+      );
+
+      // Seed the recall store with:
+      // - one entry referencing the real file (should survive)
+      // - one entry referencing a missing file (should be removed)
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-05-02T00:00:00.000Z",
+        entries: {
+          healthy: {
+            key: "healthy",
+            path: "memory/2026-05-01.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Real file content",
+            recallCount: 3,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 2.1,
+            maxScore: 0.85,
+            firstRecalledAt: "2026-05-02T00:00:00.000Z",
+            lastRecalledAt: "2026-05-02T00:00:00.000Z",
+            queryHashes: ["h1"],
+            recallDays: ["2026-05-02"],
+            conceptTags: [],
+          },
+          dangling: {
+            key: "dangling",
+            path: "memory/2026-04-15.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "This file was silently deleted.",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 0.9,
+            maxScore: 0.5,
+            firstRecalledAt: "2026-04-15T00:00:00.000Z",
+            lastRecalledAt: "2026-04-15T00:00:00.000Z",
+            queryHashes: ["d1"],
+            recallDays: ["2026-04-15"],
+            conceptTags: [],
+          },
+        },
+      });
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedDanglingRefs).toBe(1);
+      expect(repair.rewroteStore).toBe(true);
+
+      const entries = await readRecallStoreEntries(workspaceDir);
+      expect(Object.keys(entries)).toHaveLength(1);
+      expect(entries.healthy).toBeDefined();
+      expect(entries.dangling).toBeUndefined();
+    });
+  });
+
+  it("reports dangling recall references as a repairable audit issue", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-04-01.md"), "Existing content.\n", "utf-8");
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          healthy: {
+            key: "healthy",
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Gateway host uses qmd vector search.",
+            recallCount: 2,
+            totalScore: 1.8,
+            maxScore: 0.95,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["a"],
+            recallDays: ["2026-04-04"],
+            conceptTags: [],
+          },
+          dangling: {
+            key: "dangling",
+            path: "memory/2026-04-15.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "This file was deleted.",
+            recallCount: 1,
+            totalScore: 0.9,
+            maxScore: 0.5,
+            firstRecalledAt: "2026-04-15T00:00:00.000Z",
+            lastRecalledAt: "2026-04-15T00:00:00.000Z",
+            queryHashes: ["d1"],
+            recallDays: ["2026-04-15"],
+            conceptTags: [],
+          },
+        },
+      });
+
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(audit.danglingRefCount).toBe(1);
+      expect(audit.issues.some((issue) => issue.code === "recall-store-dangling-ref")).toBe(true);
     });
   });
 
