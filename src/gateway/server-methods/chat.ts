@@ -1673,11 +1673,11 @@ export function replaceOversizedChatHistoryMessages(params: {
 }
 
 // Enforces the final byte budget for chat.history. Returns only the surviving
-// messages; how many original messages were omitted is measured end-to-end by
-// reportOmittedChatHistory, which alone sees the full replace/cap/final pipeline
-// and so can count unique omitted originals without double-counting.
+// messages. When the final-byte cap keeps only the last message, report the
+// dropped prefix count so callers can include that loss in end-to-end metrics.
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
+  placeholderCount?: number;
 } {
   const { messages, maxBytes } = params;
   if (messages.length === 0) {
@@ -1688,7 +1688,9 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   }
   const last = messages.at(-1);
   if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    return { messages: [last] };
+    // messages.length - 1 earlier messages were dropped; report them so the
+    // caller's truncation log and metrics stay accurate (#96783).
+    return { messages: [last], placeholderCount: messages.length - 1 };
   }
   const placeholder = buildOversizedHistoryPlaceholder(last);
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {

@@ -36,6 +36,19 @@ describe("enforceChatHistoryFinalBudget", () => {
     // originals were omitted by identity.
     expect(result.messages).toEqual([last]);
     expect(result.messages[0]).toBe(last);
+    // 1 earlier message was dropped; placeholderCount must reflect that (#96783).
+    expect(result.placeholderCount).toBe(1);
+  });
+
+  it("reports the correct dropped-message count when multiple messages are truncated", () => {
+    const m1 = { role: "user", content: [{ type: "text", text: "a".repeat(2000) }] };
+    const m2 = { role: "assistant", content: [{ type: "text", text: "b".repeat(2000) }] };
+    const m3 = { role: "user", content: [{ type: "text", text: "c".repeat(2000) }] };
+    const last = { role: "assistant", content: [{ type: "text", text: "ok" }] };
+    const result = enforceChatHistoryFinalBudget({ messages: [m1, m2, m3, last], maxBytes: 3_000 });
+    expect(result.messages).toEqual([last]);
+    // 3 earlier messages were silently dropped; placeholderCount must reflect that.
+    expect(result.placeholderCount).toBe(3);
   });
 
   it("falls back to a small placeholder when even the last message is too large", () => {
