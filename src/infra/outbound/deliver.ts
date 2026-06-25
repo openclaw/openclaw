@@ -1390,15 +1390,6 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        // If the platform send already started and the error carries partial
-        // send evidence (OutboundDeliveryError with sentBeforeError), the
-        // message may already have reached the channel. Calling failDelivery
-        // here leaves the entry in `send_attempt_started`, which reconnect
-        // drain later replays as "not yet sent" — producing duplicate
-        // messages when the adapter's unknown-send reconciliation misreports
-        // `not_sent`. Advance to `unknown_after_send` instead so drain routes
-        // the entry through reconcileUnknownQueuedDelivery (query the adapter
-        // for actual send state) rather than blind replay.
         const sendEvidence =
           platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
         if (sendEvidence) {
@@ -1406,13 +1397,6 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             queueId,
             queuePolicy,
           }).catch((markErr: unknown) => {
-            // markQueuedPlatformOutcomeUnknown failed (e.g. DB write error).
-            // Fall back to failDelivery so the entry is not silently abandoned.
-            // This is a last-resort path: the entry will re-enter
-            // send_attempt_started and be subject to the same drain/reconcile
-            // semantics as before the patch. It does NOT mean failDelivery is
-            // correct when send evidence exists — only that we cannot safely
-            // advance the state without a successful DB write.
             log.warn(
               `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
             );
