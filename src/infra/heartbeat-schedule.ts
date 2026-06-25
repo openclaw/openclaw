@@ -80,11 +80,10 @@ export function resolveNextHeartbeatDueMs(params: {
  * `startMs` is already phase-aligned and `intervalMs` addition maintains it.
  */
 const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000;
-// Active-hours windows are minute-granular, so sub-minute intervals can
-// produce unbounded iteration across the 7-day horizon.  Batch steps in
-// whole-interval multiples that are ≥ 60s so the seek stays bounded and
-// every candidate remains reachable by whole intervalMs steps from startMs.
-const MIN_SEEK_STEP_MS = 60_000;
+// Upper bound to prevent event-loop stalls from sub-ms intervals while
+// still covering the full 7-day horizon for any intervalMs >= 605ms.
+// 1M iterations takes < 2 ms in V8 for this loop body.
+const MAX_SEEK_ITERATIONS = 1_000_000;
 
 export function seekNextActivePhaseDueMs(params: {
   startMs: number;
@@ -97,18 +96,15 @@ export function seekNextActivePhaseDueMs(params: {
     return params.startMs;
   }
   const intervalMs = resolvePositiveIntervalMs(params.intervalMs);
-  // Use the smallest multiple of intervalMs that is ≥ 60s so every
-  // candidate is phase-aligned while the total iteration count is
-  // bounded by MAX_SEEK_HORIZON_MS / 60_000 ≈ 10,080.
-  const multiplier = Math.max(1, Math.ceil(MIN_SEEK_STEP_MS / intervalMs));
-  const seekStepMs = intervalMs * multiplier;
   const horizonMs = params.startMs + MAX_SEEK_HORIZON_MS;
   let candidateMs = params.startMs;
-  while (candidateMs <= horizonMs) {
+  let iterations = 0;
+  while (candidateMs <= horizonMs && iterations < MAX_SEEK_ITERATIONS) {
     if (isActive(candidateMs)) {
       return candidateMs;
     }
-    candidateMs += seekStepMs;
+    candidateMs += intervalMs;
+    iterations++;
   }
   // No in-window slot found; fall back so the runtime guard can gate it.
   return params.startMs;

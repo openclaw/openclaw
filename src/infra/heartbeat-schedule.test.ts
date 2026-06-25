@@ -212,8 +212,7 @@ describe("seekNextActivePhaseDueMs", () => {
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
   });
 
-  it("finds the next active slot for sub-minute intervals without unbounded iteration", () => {
-    // 30s interval, 09:00–17:00. Start at 17:00 (quiet) → 09:00 next day.
+  it("finds the next active slot for 30s intervals", () => {
     const startMs = Date.parse("2026-01-01T17:00:00.000Z");
     const intervalMs = 30_000;
     const isActive = (ms: number) => {
@@ -230,45 +229,40 @@ describe("seekNextActivePhaseDueMs", () => {
     });
     const elapsedMs = performance.now() - t0;
 
-    // Finds the first active slot at 09:00 the next day
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
-    // Must be near-instant — not stall on unbounded iteration
     expect(elapsedMs).toBeLessThan(100);
-    // Returned candidate must be reachable from startMs by whole intervalMs steps
+    // Phase-aligned: reachable by whole 30s steps
     const steps = (result - startMs) / intervalMs;
     expect(Number.isInteger(steps)).toBe(true);
   });
 
-  it("preserves phase alignment for non-divisor sub-minute intervals (45s)", () => {
-    // 45s interval — MIN_SEEK_STEP_MS (60s) is NOT a multiple of 45s.
-    // The seek must batch in multiples of 45s (90s = 2×45s) so every
-    // candidate remains on the phase-aligned sequence.
+  it("does not skip phase slots inside narrow active windows (59s / 1min window)", () => {
+    // With 59s interval and a 1-minute active window at 09:00-09:01,
+    // the first phase-aligned slot inside the window is 09:00:43.
+    // Batched stepping (≥118s) would skip from 08:59:44 to 09:01:42,
+    // missing 09:00:43 entirely.
     const startMs = Date.parse("2026-01-01T17:00:00.000Z");
-    const intervalMs = 45_000;
+    const intervalMs = 59_000;
     const isActive = (ms: number) => {
-      const hour = new Date(ms).getUTCHours();
-      return hour >= 9 && hour < 17;
+      const d = new Date(ms);
+      return d.getUTCHours() === 9 && d.getUTCMinutes() === 0;
     };
 
-    const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
       startMs,
       intervalMs,
       phaseMs: 0,
       isActive,
     });
-    const elapsedMs = performance.now() - t0;
 
-    // First active slot at 09:00 next day
-    expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
-    // Must be bounded despite non-divisor step floor
-    expect(elapsedMs).toBeLessThan(100);
-    // Must be reachable by whole 45s steps from startMs (09:00 - 17:00 = 16h = 960min = 57,600s)
+    expect(result).toBe(Date.parse("2026-01-02T09:00:43.000Z"));
+    // Phase-aligned
     const steps = (result - startMs) / intervalMs;
     expect(Number.isInteger(steps)).toBe(true);
+    expect(steps).toBe(977);
   });
 
-  it("returns a phase-aligned candidate for 1ms interval with never-active window", () => {
+  it("event-loop-safe for 1ms interval with never-active window", () => {
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
@@ -280,7 +274,7 @@ describe("seekNextActivePhaseDueMs", () => {
     const elapsedMs = performance.now() - t0;
 
     expect(result).toBe(startMs);
-    // With batched 60s steps, max ~10,080 iterations — sub-millisecond
+    // 1M iterations in V8 should complete well within 50ms
     expect(elapsedMs).toBeLessThan(50);
   });
 
