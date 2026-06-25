@@ -956,16 +956,48 @@ export function convertMessages(
     normalizeToolCallId(id),
   );
 
+  // Set when the system prompt's dynamic below-boundary suffix is relocated to a
+  // trailing message (implicit prefix-cache path); appended after the loop.
+  let trailingSystemSuffixMessage:
+    | OpenAI.Chat.Completions.ChatCompletionMessageParam
+    | undefined;
+
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
-    params.push({
-      role,
-      content: sanitizeSurrogates(systemPrompt),
-    });
+    if (options.preserveSystemPromptCacheBoundary) {
+      // Explicit cache_control path keeps the boundary marker; a later pass splits
+      // it into cached prefix + uncached suffix content parts on the same message.
+      params.push({
+        role,
+        content: sanitizeSurrogates(context.systemPrompt),
+      });
+    } else {
+      // Implicit prefix-cache providers (e.g. DeepSeek) cache the literal request
+      // prefix from token 0, so per-turn-volatile content placed in the leading
+      // system message invalidates the cache for the whole conversation that
+      // follows it. Keep the stable prefix as a byte-identical leading message and
+      // relocate the dynamic below-boundary suffix to a trailing message so the
+      // cached prefix + history stay stable while the runtime context still
+      // reaches the model. (#94518)
+      const split = splitSystemPromptCacheBoundary(context.systemPrompt);
+      if (split) {
+        if (split.stablePrefix) {
+          params.push({ role, content: sanitizeSurrogates(split.stablePrefix) });
+        }
+        if (split.dynamicSuffix) {
+          trailingSystemSuffixMessage = {
+            role,
+            content: sanitizeSurrogates(split.dynamicSuffix),
+          };
+        }
+      } else {
+        params.push({
+          role,
+          content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        });
+      }
+    }
   }
 
   let lastRole: string | null = null;
@@ -1189,6 +1221,10 @@ export function convertMessages(
     }
 
     lastRole = msg.role;
+  }
+
+  if (trailingSystemSuffixMessage) {
+    params.push(trailingSystemSuffixMessage);
   }
 
   return params;
