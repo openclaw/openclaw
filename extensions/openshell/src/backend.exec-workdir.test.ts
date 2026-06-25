@@ -1,5 +1,6 @@
 // Openshell tests cover backend-owned exec workdir validation behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -8,7 +9,6 @@ import {
   createSandboxSshConfig,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeTempDir as makeTrackedTempDir } from "../../../test/helpers/temp-dir.js";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
@@ -68,7 +68,9 @@ function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"
 }
 
 async function makeTempDir(prefix: string) {
-  return makeTrackedTempDir(tempDirs, prefix);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
 }
 
 describe("openshell backend exec workdir validation", () => {
