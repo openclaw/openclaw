@@ -249,7 +249,9 @@ function isGeneratedPluginSdkDeclaration(declaration) {
   const relativePath = relative.split(path.sep).join(path.posix.sep);
   return (
     relativePath.startsWith("dist/plugin-sdk/") ||
-    relativePath.startsWith("packages/plugin-sdk/dist/")
+    relativePath.startsWith("packages/plugin-sdk/dist/") ||
+    relativePath.includes("/dist/plugin-sdk/") ||
+    relativePath.includes("/packages/plugin-sdk/dist/")
   );
 }
 

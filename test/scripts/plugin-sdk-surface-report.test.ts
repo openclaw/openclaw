@@ -53,7 +53,7 @@ function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
 
 function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
   const result = runSurfaceReport({});
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr || result.stdout).toBe(0);
   expect(result.stderr).toBe("");
 
   const totalsMatch =
@@ -141,7 +141,7 @@ describe("plugin SDK surface report", () => {
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(result.stderr).toBe("");
   });
 
