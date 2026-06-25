@@ -807,19 +807,7 @@ describe("createTelegramDraftStream", () => {
     expectNthPreviewSend(api, 2, "foo bar baz qux");
   });
 
-  it("clamps a first oversized non-final preview", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { maxChars: 10 });
-
-    stream.update("1234567890ABCDEFGHIJ");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expectNthPreviewSend(api, 1, "1234567890");
-    expect(stream.lastDeliveredText?.()).toBe("1234567890");
-  });
-
-  it("does not split surrogate pairs when clamping a first oversized non-final preview", async () => {
+  it("clamps a first oversized non-final preview on a UTF-16 boundary", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { maxChars: 10 });
 
@@ -827,9 +815,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    const sentText = requireSendMessageCallText(api, 0);
-    expect(sentText).toBe("123456789");
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(sentText)).toBe(false);
+    expectNthPreviewSend(api, 1, "123456789");
     expect(stream.lastDeliveredText?.()).toBe("123456789");
   });
 
