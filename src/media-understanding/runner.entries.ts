@@ -5,8 +5,15 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
 import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -19,6 +26,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -29,14 +37,13 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalProviderCatalogEntries,
+} from "../plugins/official-external-plugin-catalog.js";
+import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
-import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
-import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
-import {
-  estimateBase64Size,
-  resolveVideoMaxBase64Bytes,
-} from "../../packages/media-understanding-common/src/video.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -666,6 +673,54 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+/**
+ * Build an actionable hint suffix for "provider not available" errors.
+ *
+ * Restricts the hint to ids that are owned by the official external
+ * provider catalog — NOT the combined channel/plugin catalog — so a media
+ * provider id like `feishu` (an official channel, not a media provider)
+ * never emits a misleading install hint from a media-provider error.
+ *
+ * Tier 1: provider id is owned by an official external provider entry
+ *   (the catalog has a `providers[]` block listing it) — emit the
+ *   catalog-backed install + registry refresh + doctor fix commands.
+ * Tier 2: empty string — keeps the legacy message verbatim for ids that
+ *   are not in the provider catalog (channel ids, plugin ids, unknown
+ *   ids, internal ids, etc.). Newly externalized media providers must
+ *   register with the official external provider catalog to receive the
+ *   actionable hint.
+ */
+export function formatMissingProviderHint(providerId: string): string {
+  const trimmed = providerId.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // Look up the id only in the provider catalog (entries with a non-empty
+  // `providers[]` block). This deliberately skips the channel catalog so an
+  // id like `feishu` — which is an official channel, not a media provider —
+  // never returns a hint from a media-provider error.
+  const providerEntry = listOfficialExternalProviderCatalogEntries().find((entry) => {
+    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers ?? [];
+    return providers.some((provider) => {
+      if (normalizeOptionalString(provider.id) === trimmed) {
+        return true;
+      }
+      return (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === trimmed);
+    });
+  });
+  if (!providerEntry) {
+    return "";
+  }
+  // `resolveOfficialExternalPluginRepairHint` is contract-agnostic but we
+  // already validated ownership via the provider-only catalog, so the
+  // returned hint is for the correct provider entry.
+  const catalogHint = resolveOfficialExternalPluginRepairHint(trimmed);
+  if (!catalogHint) {
+    return "";
+  }
+  return ` Install the official external plugin with: ${formatCliCommand(catalogHint.installCommand)}, then run ${formatCliCommand("openclaw plugins registry --refresh")} and restart the gateway, or run ${formatCliCommand(catalogHint.doctorFixCommand)} to repair automatically.`;
+}
+
 /** Executes one provider-backed media-understanding entry for one attachment. */
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
@@ -741,7 +796,9 @@ export async function runProviderEntry(params: {
 
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!provider) {
-    throw new Error(`Media provider not available: ${providerId}`);
+    throw new Error(
+      `Media provider not available: ${providerId}${formatMissingProviderHint(providerId)}`,
+    );
   }
 
   // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
@@ -750,7 +807,9 @@ export async function runProviderEntry(params: {
 
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
-      throw new Error(`Audio transcription provider "${providerId}" not available.`);
+      throw new Error(
+        `Audio transcription provider "${providerId}" not available.${formatMissingProviderHint(providerId)}`,
+      );
     }
     const transcribeAudio = provider.transcribeAudio;
     const requestOverrides = resolveMediaRequestOverrides(params.config);
@@ -827,7 +886,9 @@ export async function runProviderEntry(params: {
   }
 
   if (!provider.describeVideo) {
-    throw new Error(`Video understanding provider "${providerId}" not available.`);
+    throw new Error(
+      `Video understanding provider "${providerId}" not available.${formatMissingProviderHint(providerId)}`,
+    );
   }
   const describeVideo = provider.describeVideo;
   const media = await params.cache.getBuffer({

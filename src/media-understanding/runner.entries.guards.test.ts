@@ -1,7 +1,7 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
 import { describe, expect, it } from "vitest";
-import { formatDecisionSummary } from "./runner.entries.js";
+import { formatDecisionSummary, formatMissingProviderHint } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
@@ -43,5 +43,53 @@ describe("media-understanding formatDecisionSummary guards", () => {
         ],
       } as unknown as MediaUnderstandingDecision),
     ).toBe("audio: failed (0/1)");
+  });
+});
+
+describe("media-understanding formatMissingProviderHint", () => {
+  it("returns the catalog hint for a known externalized provider (amazon-bedrock)", () => {
+    const hint = formatMissingProviderHint("amazon-bedrock");
+    expect(hint).toContain("openclaw plugins install @openclaw/amazon-bedrock-provider");
+    expect(hint).toContain("openclaw plugins registry --refresh");
+    expect(hint).toContain("restart the gateway");
+    expect(hint).toContain("openclaw doctor --fix");
+    expect(hint).toContain("official external plugin");
+  });
+
+  it("returns empty string for a non-cataloged id (no convention fallback)", () => {
+    const hint = formatMissingProviderHint("mystery-provider");
+    expect(hint).toBe("");
+  });
+
+  it("returns empty string for an empty/whitespace id", () => {
+    expect(formatMissingProviderHint("")).toBe("");
+    expect(formatMissingProviderHint("   ")).toBe("");
+  });
+
+  it("returns empty string for an id that does not look like a plugin id", () => {
+    expect(formatMissingProviderHint("bad/id")).toBe("");
+    expect(formatMissingProviderHint("a")).toBe("");
+    expect(formatMissingProviderHint("some/long/path")).toBe("");
+  });
+
+  it("preserves the legacy prefix when hint is appended (catalog-known id)", () => {
+    const hint = formatMissingProviderHint("amazon-bedrock");
+    const composed = `Media provider not available: amazon-bedrock${hint}`;
+    expect(composed).toMatch(
+      /^Media provider not available: amazon-bedrock .*openclaw plugins install/,
+    );
+    expect(composed).toMatch(/official external plugin/);
+    expect(composed).toMatch(/restart the gateway/);
+  });
+
+  it("preserves the legacy message verbatim when the id is not cataloged", () => {
+    const hint = formatMissingProviderHint("mystery-provider");
+    expect(`Media provider not available: mystery-provider${hint}`).toBe(
+      "Media provider not available: mystery-provider",
+    );
+  });
+
+  it("returns empty string for a channel-only id (feishu)", () => {
+    expect(formatMissingProviderHint("feishu")).toBe("");
   });
 });
