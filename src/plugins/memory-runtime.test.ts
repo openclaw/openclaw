@@ -349,12 +349,33 @@ describe("memory runtime auto-enable loading", () => {
     await expectCloseMemoryRuntimeCase({ config, setup });
   });
 
-  it("delegates scoped cleanup to the loaded memory runtime without reloading plugins", async () => {
+  it("retires the shared manager by default so the close facade contract is preserved", async () => {
     const runtime = createMemoryRuntimeFixture();
     const cfg = { plugins: {} };
     getMemoryRuntimeMock.mockReturnValue(runtime);
 
+    // No scope: existing callers keep the full manager-retire behavior even
+    // though memory-core now exposes the narrow resource-release hook (#96455).
     await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });
+
+    expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
+    expect(runtime.releaseMemorySearchResourcesForAgent).not.toHaveBeenCalled();
+    expectNoMemoryRuntimeBootstrap();
+  });
+
+  it("releases only scoped recall resources when the caller opts into scope resources", async () => {
+    const runtime = createMemoryRuntimeFixture();
+    const cfg = { plugins: {} };
+    getMemoryRuntimeMock.mockReturnValue(runtime);
+
+    await closeActiveMemorySearchManager({
+      cfg: cfg as never,
+      agentId: "main",
+      scope: "resources",
+    });
 
     expect(runtime.releaseMemorySearchResourcesForAgent).toHaveBeenCalledWith({
       cfg,
@@ -381,20 +402,30 @@ describe("memory runtime auto-enable loading", () => {
     };
     getMemoryRuntimeMock.mockReturnValue(runtime);
 
-    await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });
+    await closeActiveMemorySearchManager({
+      cfg: cfg as never,
+      agentId: "main",
+      scope: "resources",
+    });
 
     expect(runtime.releasedAgentId).toBe("main");
     expect(runtime.closeMemorySearchManager).not.toHaveBeenCalled();
     expectNoMemoryRuntimeBootstrap();
   });
 
-  it("falls back to scoped close when the memory runtime has no resource-release hook", async () => {
+  it("falls back to full close for scope resources when the runtime lacks the release hook", async () => {
     const runtime = createMemoryRuntimeFixture();
     const cfg = { plugins: {} };
+    // A legacy/external memory runtime without releaseMemorySearchResourcesForAgent
+    // must keep its prior post-timeout cleanup (#84048) instead of becoming a no-op.
     delete (runtime as Partial<typeof runtime>).releaseMemorySearchResourcesForAgent;
     getMemoryRuntimeMock.mockReturnValue(runtime);
 
-    await closeActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" });
+    await closeActiveMemorySearchManager({
+      cfg: cfg as never,
+      agentId: "main",
+      scope: "resources",
+    });
 
     expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith({
       cfg,

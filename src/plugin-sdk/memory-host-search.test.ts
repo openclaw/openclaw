@@ -56,4 +56,16 @@ describe("memory-host-search facade", () => {
 
     expect(closeActiveMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
   });
+
+  it("passes the resources scope through to the lazy runtime module", async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+
+    await closeActiveMemorySearchManager({ cfg, agentId: "main", scope: "resources" });
+
+    expect(closeActiveMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      scope: "resources",
+    });
+  });
 });

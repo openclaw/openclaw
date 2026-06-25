@@ -959,16 +959,21 @@ function scheduleMemorySearchCleanupAfterTimeout(
 ): void {
   const cfg = resolveActiveMemoryCleanupConfig(api);
   setTimeout(() => {
-    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+    // Release only the disposable per-agent recall resources a hung recall can
+    // leave open (#84048). Keep the shared QMD manager alive so concurrent and
+    // later chat memory_search calls do not surface "memory search manager is
+    // closed" (#96455); the recall's in-flight query is already cancelled via
+    // the embedded run abort signal.
+    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId, scope: "resources" })
       .then(() => {
-        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+        api.logger.debug?.(`${logPrefix} released memory recall resources after timeout`);
       })
       .catch((error: unknown) => {
         const message = toSingleLineLogValue(
           error instanceof Error ? error.message : String(error),
         );
         api.logger.warn?.(
-          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+          `${logPrefix} failed to release memory recall resources after timeout: ${message}`,
         );
       });
   }, 0);
