@@ -172,7 +172,6 @@ describe("applyEditsToNormalizedContent", () => {
     // ClawSweeper regression: ﬁ (U+FB01) expands to "fi" (+1 char),
     // e+U+0301 composes to é (-1 char). Total length stays 6 but X
     // shifts from original offset 2 to normalized offset 3.
-    const content = "\uFB01 X e\u0301";
     //                           ^ ﬁ(1) (2) (3) e+acute(5) = 5 code units
     // NFKC:                   "fi X é"  = 5 code units
     // But wait — both are length 5 actually. The critical case is when
