@@ -46,15 +46,13 @@ function buildEmbeddedMemoryFlushFollowupRun(params: {
 }): FollowupRun {
   const runParams = params.runParams;
   return {
-    prompt: runParams.prompt,
-    transcriptPrompt: runParams.transcriptPrompt,
-    currentInboundEventKind: runParams.currentInboundEventKind,
-    currentInboundAudio: runParams.currentInboundAudio,
-    currentInboundContext: runParams.currentInboundContext,
+    // Keep the synthetic flush route free of pending-turn user content/media. The
+    // live prompt is passed separately as promptForEstimate for threshold math;
+    // the actual model call is driven by the memory flush plan prompt.
+    prompt: "",
+    transcriptPrompt: "",
     abortSignal: runParams.abortSignal,
     enqueuedAt: Date.now(),
-    images: runParams.images,
-    imageOrder: runParams.imageOrder,
     originatingChannel: runParams.messageProvider,
     originatingTo: runParams.messageTo,
     originatingAccountId: runParams.agentAccountId,

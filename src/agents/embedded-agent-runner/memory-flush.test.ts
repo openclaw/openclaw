@@ -157,7 +157,18 @@ describe("embedded pre-attempt memory flush adapter", () => {
       compactionCount: 1,
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
-    const runParams = createRunParams({ rootDir, storePath, replyOperation });
+    const runParams = {
+      ...createRunParams({ rootDir, storePath, replyOperation }),
+      prompt:
+        "SECRET pending user prompt that should not enter the synthetic flush route " +
+        "x".repeat(1_000),
+      transcriptPrompt: "SECRET transcript prompt that should not enter the flush route",
+      currentInboundEventKind: "message",
+      currentInboundAudio: true,
+      currentInboundContext: { text: "SECRET room context" },
+      images: [{ type: "image", data: "SECRET_IMAGE_BYTES", mimeType: "image/png" }],
+      imageOrder: ["inline"],
+    } as RunEmbeddedAgentParams;
 
     const result = await runEmbeddedPreAttemptMemoryFlushIfNeeded({
       runParams,
@@ -178,6 +189,13 @@ describe("embedded pre-attempt memory flush adapter", () => {
     const flushCall = runEmbeddedAgentMock.mock.calls[0]?.[0] as RunEmbeddedAgentParams;
     expect(flushCall.trigger).toBe("memory");
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
+    expect(flushCall.prompt).not.toContain("SECRET pending user prompt");
+    expect(flushCall.transcriptPrompt).toBe("");
+    expect(flushCall.currentInboundContext).toBeUndefined();
+    expect(flushCall.currentInboundEventKind).toBeUndefined();
+    expect(flushCall.currentInboundAudio).toBe(false);
+    expect(flushCall.images).toBeUndefined();
+    expect(flushCall.imageOrder).toBeUndefined();
     expect(flushCall.memoryFlushWritePath).toBe("memory/2023-11-14.md");
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.sessionKey).toBe("main");

@@ -459,6 +459,8 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Where to place the runtime system prompt. Default: `message` (developer/system message). */
+  systemPromptMode?: "message" | "instructions" | "user";
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

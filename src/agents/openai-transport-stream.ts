@@ -2347,6 +2347,8 @@ export function buildOpenAIResponsesParams(
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const systemPromptMode = model.compat?.systemPromptMode ?? "message";
+  const includeSystemPrompt = systemPromptMode !== "instructions" && systemPromptMode !== "user";
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
@@ -2359,7 +2361,7 @@ export function buildOpenAIResponsesParams(
     context,
     new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
-      includeSystemPrompt: !isCodexResponses,
+      includeSystemPrompt: includeSystemPrompt && !isCodexResponses,
       supportsDeveloperRole,
       replayReasoningItems: true,
       replayResponsesItemIds,
@@ -2372,15 +2374,37 @@ export function buildOpenAIResponsesParams(
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const instructions =
+    systemPromptMode === "instructions" && context.systemPrompt
+      ? sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt))
+      : undefined;
+  const input =
+    systemPromptMode === "user" && context.systemPrompt
+      ? [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `System instructions for this run:\n\n${sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt))}`,
+              },
+            ],
+          } satisfies ResponseInputItem,
+          ...(messages as ResponseInputItem[]),
+        ]
+      : messages;
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
-    input: messages,
+    input,
     stream: true,
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses
       ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
-      : {}),
+      : instructions
+        ? { instructions }
+        : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;

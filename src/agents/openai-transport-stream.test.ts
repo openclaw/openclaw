@@ -3198,6 +3198,54 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]?.role).toBe("system");
   });
 
+  it("moves Responses system prompts into a first user message when compat requires user mode", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "newapi",
+        baseUrl: "https://api.clawplan.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 131072,
+        compat: { systemPromptMode: "user" },
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ type?: string; role?: string; content?: unknown }>;
+      instructions?: string;
+    };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.map((item) => item.role)).toEqual(["user", "user"]);
+    expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
+      false,
+    );
+    expect(params.input?.[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "System instructions for this run:\n\nStable\nDynamic",
+        },
+      ],
+    });
+    expect(params.input?.[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello" }],
+    });
+  });
+
   it("adds explicit message item types for Responses system and user input items", () => {
     const params = buildOpenAIResponsesParams(
       createAzureResponsesModel(),

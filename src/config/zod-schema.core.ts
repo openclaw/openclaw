@@ -231,6 +231,9 @@ const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
+    systemPromptMode: z
+      .union([z.literal("message"), z.literal("instructions"), z.literal("user")])
+      .optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
