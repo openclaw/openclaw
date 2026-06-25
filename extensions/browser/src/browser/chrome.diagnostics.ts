@@ -5,6 +5,7 @@
  * and formats status output for browser doctor/status flows.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -110,7 +111,12 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      const data = JSON.parse(
+        (await readResponseWithLimit(response, CHROME_DIAG_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Chrome diagnostics JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }

@@ -54,7 +54,7 @@ export async function uploadToOneDrive(params: {
     throw await createMSTeamsHttpError(res, "OneDrive upload failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     id?: string;
     webUrl?: string;
     name?: string;
@@ -106,7 +106,7 @@ async function createSharingLink(params: {
     throw await createMSTeamsHttpError(res, "Create sharing link failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     link?: { webUrl?: string };
   };
 
@@ -200,7 +200,7 @@ export async function uploadToSharePoint(params: {
     throw await createMSTeamsHttpError(res, "SharePoint upload failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     id?: string;
     webUrl?: string;
     name?: string;
@@ -260,7 +260,7 @@ export async function getDriveItemProperties(params: {
     throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     eTag?: string;
     webDavUrl?: string;
     name?: string;
@@ -331,7 +331,7 @@ export async function resolveGraphChatId(params: {
     return null;
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     value?: Array<{ id?: string }>;
   };
 
@@ -371,7 +371,7 @@ async function getChatMembers(params: {
     throw await createMSTeamsHttpError(res, "Get chat members failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     value?: Array<{
       userId?: string;
       displayName?: string;
@@ -435,7 +435,7 @@ async function createSharePointSharingLink(params: {
     throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
   }
 
-  const data = (await res.json()) as {
+  const data = await readResponseWithLimit(res, MSTEAMS_UPLOAD_JSON_MAX, { onOverflow: ({ maxBytes }) => new Error(`MS Teams Graph upload JSON response exceeds ${maxBytes} bytes`) }).then(b => JSON.parse(b.toString("utf8"))) as {
     link?: { webUrl?: string };
   };
 

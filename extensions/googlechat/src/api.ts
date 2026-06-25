@@ -14,7 +14,12 @@ const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
   try {
-    return (await response.json()) as T;
+    return JSON.parse(
+        (await readResponseWithLimit(response, GOOGLECHAT_API_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google Chat API JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }

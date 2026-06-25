@@ -5,6 +5,7 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -306,7 +307,12 @@ export async function fetchJson<T>(
 ): Promise<T> {
   const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
   try {
-    return (await response.json()) as T;
+    return JSON.parse(
+        (await readResponseWithLimit(response, BROWSER_CDP_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Browser CDP JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as T;
   } finally {
     await release();
   }

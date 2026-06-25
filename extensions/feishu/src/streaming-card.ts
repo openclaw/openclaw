@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -116,7 +117,12 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
+  const data = JSON.parse(
+        (await readResponseWithLimit(response, FEISHU_CARD_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Feishu card JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
     code: number;
     msg: string;
     tenant_access_token?: string;
@@ -276,7 +282,12 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
+    const createData = JSON.parse(
+        (await readResponseWithLimit(createRes, FEISHU_CARD_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Feishu card create JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
       code: number;
       msg: string;
       data?: { card_id: string };

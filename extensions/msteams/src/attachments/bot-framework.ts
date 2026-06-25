@@ -1,5 +1,6 @@
 // Msteams plugin module implements bot framework behavior.
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
@@ -112,7 +113,12 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   try {
-    return (await response.json()) as BotFrameworkAttachmentInfo;
+    return JSON.parse(
+        (await readResponseWithLimit(response, MSTEAMS_BF_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`MS Teams Bot Framework JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as BotFrameworkAttachmentInfo;
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
       error: err instanceof Error ? err.message : String(err),

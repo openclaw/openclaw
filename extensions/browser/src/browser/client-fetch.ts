@@ -5,6 +5,7 @@
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -270,7 +271,12 @@ async function fetchHttpJson<T>(
       const text = await res.text().catch(() => "");
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    return JSON.parse(
+        (await readResponseWithLimit(res, BROWSER_CLIENT_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Browser client JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as T;
   } finally {
     clearTimeout(t);
     await release?.();

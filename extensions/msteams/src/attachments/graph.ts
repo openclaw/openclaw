@@ -1,5 +1,6 @@
 // Msteams plugin module implements graph behavior.
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -143,7 +144,12 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
     try {
-      const data = (await response.json()) as { value?: unknown[] };
+      const data = JSON.parse(
+        (await readResponseWithLimit(response, MSTEAMS_GRAPH_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`MS Teams Graph JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as { value?: unknown[] };
       return { status, items: Array.isArray(data.value) ? data.value : [] };
     } catch {
       return { status, items: [] };
@@ -345,7 +351,12 @@ export async function downloadMSTeamsGraphMedia(params: {
           attachments?: GraphAttachment[];
         };
         try {
-          msgData = (await msgRes.json()) as typeof msgData;
+          msgData = JSON.parse(
+        (await readResponseWithLimit(msgRes, MSTEAMS_GRAPH_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`MS Teams Graph msg JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as typeof msgData;
         } catch (err) {
           debugLog?.debug?.("graph media message parse failed", {
             messageUrl,

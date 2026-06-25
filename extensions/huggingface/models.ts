@@ -1,5 +1,6 @@
 // Huggingface plugin module implements models behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -165,7 +166,12 @@ export async function discoverHuggingfaceModels(
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = JSON.parse(
+        (await readResponseWithLimit(response, HF_MODELS_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`HuggingFace models JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as OpenAIListModelsResponse;
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

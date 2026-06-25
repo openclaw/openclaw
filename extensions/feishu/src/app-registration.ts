@@ -1,5 +1,6 @@
 // Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 /**
  * Feishu app registration via OAuth device-code flow.
  *
@@ -109,7 +110,12 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return (await response.json()) as T;
+    return JSON.parse(
+        (await readResponseWithLimit(response, FEISHU_REG_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Feishu app reg JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as T;
   } finally {
     await release();
   }

@@ -3,6 +3,7 @@
  * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isFutureDateTimestampMs,
@@ -302,7 +303,12 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = JSON.parse(
+        (await readResponseWithLimit(response, BEDROCK_MANTLE_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Bedrock Mantle JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as OpenAIModelsResponse;
     const rawModels = body.data ?? [];
 
     const models = rawModels

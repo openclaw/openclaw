@@ -130,7 +130,12 @@ async function callUserTokenService(
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    parsed = JSON.parse(
+        (await readResponseWithLimit(response, MSTEAMS_SSO_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`MS Teams SSO JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as unknown;
   } catch {
     return { error: "invalid JSON from User Token service", status: response.status };
   }

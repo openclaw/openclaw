@@ -25,6 +25,7 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   DEFAULT_PERPLEXITY_BASE_URL,
   inferPerplexityBaseUrlFromApiKey,
@@ -143,7 +144,12 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
 
 async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
   try {
-    return (await response.json()) as T;
+    return JSON.parse(
+        (await readResponseWithLimit(response, PERPLEXITY_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Perplexity search JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }

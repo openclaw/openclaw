@@ -160,7 +160,12 @@ export async function listAzureSpeechVoices(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech voices API error");
-    const voices = (await response.json()) as AzureSpeechVoiceEntry[];
+    const voices = JSON.parse(
+        (await readResponseWithLimit(response, AZURE_SPEECH_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Azure Speech JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as AzureSpeechVoiceEntry[];
     return Array.isArray(voices)
       ? voices
           .filter((voice) => !isDeprecatedVoice(voice))

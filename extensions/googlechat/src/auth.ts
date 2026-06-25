@@ -1,5 +1,6 @@
 // Googlechat plugin module implements auth behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -18,7 +19,12 @@ const CHAT_CERTS_URL =
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
   try {
-    return (await response.json()) as Record<string, string>;
+    return JSON.parse(
+        (await readResponseWithLimit(response, GOOGLECHAT_AUTH_JSON_MAX, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google Chat auth JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as Record<string, string>;
   } catch (cause) {
     throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
   }
