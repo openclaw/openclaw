@@ -1,9 +1,11 @@
 // Slack plugin module implements threaded delivery confirmation.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SlackSendResult } from "./send.js";
 
 export function assertSlackThreadDeliveryResult(params: {
-  result: Pick<SlackSendResult, "confirmedThreadTs" | "messageId">;
+  result: {
+    confirmedThreadTs?: string;
+    messageId?: string;
+  };
   to: string;
   threadTs?: string;
 }) {
