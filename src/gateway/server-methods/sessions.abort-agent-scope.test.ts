@@ -359,6 +359,68 @@ describe("sessions.abort agent scope", () => {
     );
   });
 
+  it("preserves terminal timeout and killed state when abort finds no active run", async () => {
+    const timeoutKey = "agent:main:timeout";
+    const killedKey = "agent:main:killed";
+    const originalUpdatedAt = Date.now() - 60_000;
+    await withSessionStore(
+      {
+        [timeoutKey]: {
+          sessionId: "session-timeout",
+          updatedAt: originalUpdatedAt,
+          status: "timeout",
+          endedAt: originalUpdatedAt,
+        },
+        [killedKey]: {
+          sessionId: "session-killed",
+          updatedAt: originalUpdatedAt,
+          status: "killed",
+          endedAt: originalUpdatedAt,
+        },
+      },
+      async (storePath) => {
+        const broadcastToConnIds = vi.fn();
+        loadSessionEntryMock.mockReturnValueOnce({
+          canonicalKey: timeoutKey,
+          storePath,
+        });
+        chatAbortMock.mockImplementationOnce(
+          async ({ respond: abortRespond }: { respond: RespondFn }) => {
+            abortRespond(true, { ok: true, aborted: false, runIds: [] });
+          },
+        );
+        const context = createContext({
+          extra: {
+            getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+            broadcastToConnIds,
+            dedupe: new Map(),
+          },
+        });
+
+        const respond = await callSessions(
+          "sessions.abort",
+          { key: timeoutKey },
+          { context, reqId: "req-terminal-no-active-run" },
+        );
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { ok: true, abortedRunId: null, status: "no-active-run" },
+          undefined,
+          undefined,
+        );
+        const store = loadSessionStore(storePath, { skipCache: true });
+        expect(store[timeoutKey]?.status).toBe("timeout");
+        expect(store[timeoutKey]?.updatedAt).toBe(originalUpdatedAt);
+        expect(store[timeoutKey]?.recoveredFromStaleRunning).toBeUndefined();
+        expect(store[killedKey]?.status).toBe("killed");
+        expect(store[killedKey]?.updatedAt).toBe(originalUpdatedAt);
+        expect(store[killedKey]?.recoveredFromStaleRunning).toBeUndefined();
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("does not clear persisted session state when abort stops an active run", async () => {
     const sessionKey = "agent:main:main";
     const originalEntry: SessionEntry = {
@@ -425,7 +487,10 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global aborts from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: "global",
+      storePath: undefined,
+    }));
     const context = createContext({ globalScope: true });
 
     await callSessions(
@@ -500,7 +565,10 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global subscriptions from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: "global",
+      storePath: undefined,
+    }));
     const subscribeSessionMessageEvents = vi.fn();
     const context = createContext({
       globalScope: true,

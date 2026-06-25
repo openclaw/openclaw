@@ -1287,6 +1287,9 @@ describe("main-session-restart-recovery", () => {
   it("reconciles startup stale running rows that are not resumable recovery targets", async () => {
     const sessionsDir = await makeSessionsDir("openclaw");
     const sessionKey = "agent:openclaw:telegram:group:-1003789377335:topic:25537";
+    const timeoutKey = "agent:openclaw:telegram:group:-1003789377335:topic:2";
+    const killedKey = "agent:openclaw:telegram:group:-1003789377335:topic:3";
+    const terminalUpdatedAt = Date.now() - 10_000;
     await writeStore(sessionsDir, {
       [sessionKey]: {
         sessionId: "telegram-topic-stale-running",
@@ -1294,6 +1297,20 @@ describe("main-session-restart-recovery", () => {
         status: "running",
         abortedLastRun: true,
         subagentRole: "leaf",
+      },
+      [timeoutKey]: {
+        sessionId: "telegram-topic-timeout",
+        updatedAt: terminalUpdatedAt,
+        endedAt: terminalUpdatedAt,
+        status: "timeout",
+        abortedLastRun: true,
+      },
+      [killedKey]: {
+        sessionId: "telegram-topic-killed",
+        updatedAt: terminalUpdatedAt,
+        endedAt: terminalUpdatedAt,
+        status: "killed",
+        abortedLastRun: true,
       },
     });
 
@@ -1315,6 +1332,12 @@ describe("main-session-restart-recovery", () => {
     expect(store[sessionKey]?.status).toBe("failed");
     expect(store[sessionKey]?.recoveredFromStaleRunning).toBe(true);
     expect(store[sessionKey]?.staleRunningRecoveryReason).toBe("startup_stale_running_session");
+    expect(store[timeoutKey]?.status).toBe("timeout");
+    expect(store[timeoutKey]?.updatedAt).toBe(terminalUpdatedAt);
+    expect(store[timeoutKey]?.recoveredFromStaleRunning).toBeUndefined();
+    expect(store[killedKey]?.status).toBe("killed");
+    expect(store[killedKey]?.updatedAt).toBe(terminalUpdatedAt);
+    expect(store[killedKey]?.recoveredFromStaleRunning).toBeUndefined();
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {

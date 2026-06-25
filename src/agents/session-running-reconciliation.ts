@@ -11,7 +11,7 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 const log = createSubsystemLogger("session-running-reconciliation");
 
-const STALE_RUNNING_STATUSES = new Set(["running", "processing", "timeout", "killed"]);
+const STALE_RUNNING_STATUSES = new Set(["running", "processing"]);
 
 export type SessionRunningReconciliationResult = {
   changed: boolean;
