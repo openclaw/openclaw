@@ -420,7 +420,7 @@ async function writeLegacySessionStoreUnlocked(
         },
         cleanupArchivedSessionTranscripts: async (params) => {
           const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
-          await cleanupArchivedSessionTranscripts(params);
+          return await cleanupArchivedSessionTranscripts(params);
         },
       },
     });
