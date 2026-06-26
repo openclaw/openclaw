@@ -53,7 +53,7 @@ A progress draft has two parts:
 
 | Part           | Purpose                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
-| Label          | A short starter/status line such as `Working` or `Shelling`.                          |
+| Label          | A short starter/status line such as `Working` or `Thinking`.                          |
 | Progress lines | Compact run updates using the same tool icons and detail formatter as verbose output. |
 
 The label appears after the agent starts meaningful work and either remains busy
