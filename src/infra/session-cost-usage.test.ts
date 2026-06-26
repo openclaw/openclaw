@@ -2777,4 +2777,34 @@ example
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
+
+  it("treats cost.total=0 as missing for known-pricing models (#97047)", async () => {
+    const root = await makeSessionCostRoot("cost-zero-known-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: { input: 1000, output: 500, totalTokens: 1500, cost: { total: 0 } },
+      },
+    };
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-zero.jsonl"),
+      transcriptText("sess-zero", entry),
+      "utf-8",
+    );
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      // When pricing is unknown and cost.total=0, the entry should be marked as missing
+      expect(summary.totals.totalTokens).toBe(1500);
+      // missingCostEntries should be 1 (the zero-cost entry with no pricing found)
+      expect(summary.totals.missingCostEntries).toBe(1);
+      expect(summary.totals.totalCost).toBe(0);
+    });
+  });
 });
