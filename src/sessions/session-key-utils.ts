@@ -251,8 +251,8 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
-  const parts = raw.split(":").filter(Boolean);
-  if (parts.length < 3) {
+  const parts = raw.split(":");
+  if (parts.length < 3 || parts.some((part) => !part)) {
     return null;
   }
   if (parts[0] !== "agent") {

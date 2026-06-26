@@ -135,4 +135,26 @@ describe("resolveSendPolicy", () => {
       }),
     ).toBe("deny");
   });
+
+  it.each([
+    "agent:main:direct",
+    "agent:main:demo:acct:channel",
+    "agent:main:demo::channel:room",
+    "agent::demo:direct:user",
+  ])("does not apply peer allow rules to malformed key %s", (sessionKey) => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "deny",
+          rules: [
+            { action: "allow", match: { channel: "demo" } },
+            { action: "allow", match: { chatType: "direct" } },
+            { action: "allow", match: { chatType: "channel" } },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSendPolicy({ cfg, sessionKey })).toBe("deny");
+  });
 });

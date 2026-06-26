@@ -105,6 +105,7 @@ export type LegacyStateDetection = {
     targetStorePath: string;
     hasLegacy: boolean;
     legacyKeys: string[];
+    preserveAmbiguousKeys: boolean;
     preserveForeignMainAliases: boolean;
     targetStoreHasDistinctAlias: boolean;
   };
@@ -3583,6 +3584,7 @@ function listLegacySessionKeys(params: {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
+  preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
 }): string[] {
   const legacy: string[] = [];
@@ -3592,6 +3594,7 @@ function listLegacySessionKeys(params: {
       agentId: params.agentId,
       mainKey: params.mainKey,
       scope: params.scope,
+      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
     });
     if (canonical !== key) {
@@ -4051,6 +4054,9 @@ export async function detectLegacyStateMigrations(params: {
     pluginSessionStoreAgentIds,
   });
   const sessionStoreOwnership: SessionStoreOwnership = {
+    preserveAmbiguousKeys:
+      params.sessionStoreOwnership?.preserveAmbiguousKeys === true ||
+      currentSessionStoreOwnership.preserveAmbiguousKeys,
     preserveForeignMainAliases:
       params.sessionStoreOwnership?.preserveForeignMainAliases === true ||
       currentSessionStoreOwnership.preserveForeignMainAliases,
@@ -4073,6 +4079,7 @@ export async function detectLegacyStateMigrations(params: {
         agentId: targetAgentId,
         mainKey: targetMainKey,
         scope: targetScope,
+        preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
         preserveForeignMainAliases,
       })
     : [];
@@ -4250,6 +4257,7 @@ export async function detectLegacyStateMigrations(params: {
       targetStorePath: sessionsTargetStorePath,
       hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
       legacyKeys,
+      preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
       preserveForeignMainAliases,
       targetStoreHasDistinctAlias: sessionStoreOwnership.targetStoreHasDistinctAlias,
     },
@@ -4361,6 +4369,7 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
+    preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const canonicalizedLegacy = canonicalizeSessionStore({
@@ -5229,6 +5238,15 @@ async function migrateLegacyAcpSessionMetadata(params: {
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const storeConfig = params.cfg.session?.store;
+  const fixedCustomStorePath =
+    typeof storeConfig === "string" && storeConfig.length > 0 && !storeConfig.includes("{agentId}")
+      ? resolveStorePathFromTemplate(
+          storeConfig,
+          normalizeAgentId(resolveDefaultAgentId(params.cfg)),
+          env,
+        )
+      : undefined;
   const storeGroups: Array<{
     target: (typeof targets)[number];
     hasDistinctAliases: boolean;
@@ -5281,12 +5299,23 @@ async function migrateLegacyAcpSessionMetadata(params: {
 
     const normalized: Record<string, SessionEntry> = {};
     let migrated = 0;
+    let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {
       const normalizedEntry = normalizeSessionEntry(entry);
       if (!normalizedEntry) {
         continue;
       }
       if (normalizedEntry.acp) {
+        const ambiguousFixedStoreKey =
+          fixedCustomStorePath !== undefined &&
+          sessionStorePathsMatch(storePath, fixedCustomStorePath) &&
+          (isAmbiguousSharedStoreKey(sessionKey, mainKey, scope) ||
+            isLegacyDefaultMainAliasKey(sessionKey, mainKey));
+        if (ambiguousFixedStoreKey) {
+          preserved++;
+          normalized[sessionKey] = normalizedEntry;
+          continue;
+        }
         const canonicalSessionKey = canonicalizeSessionKeyForAgent({
           key: sessionKey,
           agentId: target.agentId,
@@ -5305,6 +5334,11 @@ async function migrateLegacyAcpSessionMetadata(params: {
         migrated++;
       }
       normalized[sessionKey] = normalizedEntry;
+    }
+    if (preserved > 0) {
+      warnings.push(
+        `Preserved ACP metadata for ${preserved} ambiguous session key(s) in potentially shared store ${storePath}`,
+      );
     }
     if (migrated === 0) {
       continue;
@@ -5347,6 +5381,7 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
 }
 
 type SessionStoreOwnership = {
+  preserveAmbiguousKeys: boolean;
   preserveForeignMainAliases: boolean;
   targetStoreHasDistinctAlias: boolean;
 };
@@ -5377,6 +5412,15 @@ function resolveSessionStoreOwnership(params: {
     }
     return sessionStorePathsMatch(resolveAgentStorePath(id), targetStorePath);
   });
+  const fixedCustomStorePath =
+    typeof configuredStore === "string" &&
+    configuredStore.length > 0 &&
+    !configuredStore.includes("{agentId}")
+      ? resolveStorePathFromTemplate(configuredStore, params.targetAgentId, params.env)
+      : undefined;
+  const preserveAmbiguousKeys =
+    fixedCustomStorePath !== undefined &&
+    sessionStorePathsMatch(fixedCustomStorePath, targetStorePath);
   const candidateAgentIds = new Set([
     params.targetAgentId,
     ...(Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : []).flatMap((entry) =>
@@ -5396,7 +5440,7 @@ function resolveSessionStoreOwnership(params: {
       candidatePath !== targetStorePath && sessionStorePathsMatch(candidatePath, targetStorePath)
     );
   });
-  return { preserveForeignMainAliases, targetStoreHasDistinctAlias };
+  return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreHasDistinctAlias };
 }
 
 export async function autoMigrateLegacyState(params: {

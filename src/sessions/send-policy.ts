@@ -6,6 +6,7 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseCanonicalSessionPeerShape } from "./session-chat-type-shared.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
 /** Session send-policy decision after config and per-session overrides are evaluated. */
@@ -32,36 +33,23 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   if (!key) {
     return undefined;
   }
-  const parts = key.split(":").filter(Boolean);
+  const parts = key.split(":");
   // Canonical agent session keys: agent:<agentId>:<sessionKey...>
-  if (parts.length >= 3 && parts[0] === "agent") {
+  if (parts[0] === "agent") {
+    if (parts.length < 3 || !parts[1] || !parts[2]) {
+      return undefined;
+    }
     return parts.slice(2).join(":");
   }
   return key;
 }
-
-const CHANNEL_SESSION_KEY_PEER_KINDS = new Set(["group", "channel", "direct", "dm"]);
 
 function deriveChannelFromKey(key?: string) {
   const normalizedKey = stripAgentSessionKeyPrefix(key);
   if (!normalizedKey) {
     return undefined;
   }
-  const parts = normalizedKey.split(":").filter(Boolean);
-  if (parts[0] === "agent") {
-    return undefined;
-  }
-  // Key layout is <channel>:[<accountId>:]<peerKind>:<peerId>; parts[0] is the
-  // channel for account-scoped DM keys too, so channel-scoped rules also fire
-  // for per-account-channel-peer sessions, not just 3-part direct/group keys.
-  const hasChannelPeerShape =
-    parts.length >= 3 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[1] ?? "");
-  const hasAccountScopedPeerShape =
-    parts.length >= 4 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[2] ?? "");
-  if (hasChannelPeerShape || hasAccountScopedPeerShape) {
-    return normalizeMatchValue(parts[0]);
-  }
-  return undefined;
+  return normalizeMatchValue(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {

@@ -4,29 +4,53 @@ import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
 
-const CANONICAL_PEER_KINDS = new Set(["direct", "dm", "group", "channel"]);
+type CanonicalPeerKind = "direct" | "dm" | "group" | "channel";
 
-function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyChatType | undefined {
-  const parts = scopedSessionKey.split(":").filter(Boolean);
+const CANONICAL_PEER_KINDS: ReadonlySet<string> = new Set(["direct", "dm", "group", "channel"]);
+
+function isCanonicalPeerKind(value: string | undefined): value is CanonicalPeerKind {
+  return CANONICAL_PEER_KINDS.has(value ?? "");
+}
+
+export type CanonicalSessionPeerShape = {
+  channel?: string;
+  chatType: Exclude<SessionKeyChatType, "unknown">;
+};
+
+export function parseCanonicalSessionPeerShape(
+  scopedSessionKey: string,
+): CanonicalSessionPeerShape | undefined {
+  const parts = scopedSessionKey.split(":");
   // A second agent wrapper is opaque plugin identity, never a channel route.
   if (parts[0] === "agent") {
     return undefined;
   }
-  const peerKind =
-    parts[0] === "direct" || parts[0] === "dm"
-      ? parts[0]
-      : CANONICAL_PEER_KINDS.has(parts[1] ?? "")
-        ? parts[1]
-        : CANONICAL_PEER_KINDS.has(parts[2] ?? "")
-          ? parts[2]
-          : undefined;
-  if (peerKind === "group" || peerKind === "channel") {
-    return peerKind;
+  let channel: string | undefined;
+  let peerKind: CanonicalPeerKind | undefined;
+  let peerIdStart = 0;
+  if (parts[0] === "direct" || parts[0] === "dm") {
+    peerKind = parts[0];
+    peerIdStart = 1;
+  } else if (parts[0] && isCanonicalPeerKind(parts[1])) {
+    channel = parts[0];
+    peerKind = parts[1];
+    peerIdStart = 2;
+  } else if (parts[0] && parts[1] && isCanonicalPeerKind(parts[2])) {
+    channel = parts[0];
+    peerKind = parts[2];
+    peerIdStart = 3;
   }
-  if (peerKind === "direct" || peerKind === "dm") {
-    return "direct";
+  // Peer ids may contain colons, but every tail segment must be present. This
+  // rejects incomplete or empty structural keys before policy classification.
+  if (!peerKind || !parts[peerIdStart] || parts.slice(peerIdStart).some((part) => !part)) {
+    return undefined;
   }
-  return undefined;
+  const chatType = peerKind === "direct" || peerKind === "dm" ? "direct" : peerKind;
+  return { ...(channel ? { channel } : {}), chatType };
+}
+
+function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyChatType | undefined {
+  return parseCanonicalSessionPeerShape(scopedSessionKey)?.chatType;
 }
 
 function deriveBuiltInLegacySessionChatType(

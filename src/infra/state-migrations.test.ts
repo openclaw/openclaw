@@ -452,6 +452,18 @@ describe("state migrations", () => {
       unknown
     >;
     targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
+    targetStore["voice:15550001111"] = {
+      sessionId: "shared-voice",
+      updatedAt: 20,
+      acp: {
+        backend: "test",
+        agent: "worker-1",
+        runtimeSessionName: "shared-runtime",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 20,
+      },
+    };
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
     cfg.session = { ...cfg.session, store: targetStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
@@ -468,20 +480,23 @@ describe("state migrations", () => {
       homedir: () => root,
       pluginSessionStoreAgentIds: ["worker-1"],
     });
+    expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
     expect(detected.sessions.preserveForeignMainAliases).toBe(true);
     expect(detected.sessions.targetStoreHasDistinctAlias).toBe(false);
     const result = await runLegacyStateMigrations({
       detected,
+      config: cfg,
       now: () => 1234,
     });
+    const realTargetStorePath = await fs.realpath(targetStorePath);
 
     expect(result.warnings).toStrictEqual([
       `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
+      `Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ${realTargetStorePath}`,
     ]);
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
-      "Canonicalized 2 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
@@ -494,16 +509,17 @@ describe("state migrations", () => {
         path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
         "utf8",
       ),
-    ) as Record<string, { sessionId: string }>;
+    ) as Record<string, { sessionId: string; acp?: unknown }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
-    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
-      "group-session",
-    );
-    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
-      "generic-group-session",
-    );
+    expect(mergedStore["group:mobile-room"]?.sessionId).toBe("group-session");
+    expect(mergedStore["group:legacy-room"]?.sessionId).toBe("generic-group-session");
+    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]).toBeUndefined();
+    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]).toBeUndefined();
     expect(mergedStore["agent:main:desk"]?.sessionId).toBe("explicit-foreign");
     expect(mergedStore["Agent:main:desk"]?.sessionId).toBe("mixed-case-foreign");
+    expect(mergedStore["voice:15550001111"]?.sessionId).toBe("shared-voice");
+    expect(mergedStore["voice:15550001111"]?.acp).toBeDefined();
+    expect(mergedStore["agent:worker-1:voice:15550001111"]).toBeUndefined();
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
