@@ -216,4 +216,33 @@ describe("streamProxy", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("exceeded max buffer size");
   });
+
+  it("handles a large transport chunk containing many valid newline-delimited proxy SSE lines", async () => {
+    // Regression: one TCP read can deliver >64 KiB of already-delimited lines;
+    // the cap must apply only to the unterminated tail, not the full chunk.
+    const encoder = new TextEncoder();
+    const line = `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n`;
+    const manyLines = line.repeat(2000);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(manyLines));
+            controller.close();
+          },
+        }),
+      })),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+  });
 });

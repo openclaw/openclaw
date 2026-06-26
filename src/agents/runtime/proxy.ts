@@ -229,13 +229,13 @@ export function streamProxy(
         }
 
         buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
         if (buffer.length > PROXY_SSE_BUFFER_MAX_BYTES) {
           throw new Error(
             `Proxy SSE response exceeded max buffer size (${PROXY_SSE_BUFFER_MAX_BYTES} bytes) without line boundary`,
           );
         }
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
 
         for (const line of lines) {
           processSseLine(line);
