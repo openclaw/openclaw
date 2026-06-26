@@ -163,6 +163,7 @@ import {
   resetOpenClawCodingToolsFactoryForTests,
   setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
+  isCodexWorkspaceOnlyFsPolicyActive,
   shouldForceMessageTool,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
@@ -637,6 +638,14 @@ export async function runCodexAppServerAttempt(
     env: process.env,
     agentDir,
   });
+  if (
+    isCodexWorkspaceOnlyFsPolicyActive(params, {
+      agentId: sessionAgentId,
+      runtimeSessionKey: sandboxSessionKey,
+    })
+  ) {
+    appServer = constrainCodexAppServerToWorkspaceWrite(appServer);
+  }
   pluginAppServer = appServer;
   nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -3464,6 +3473,18 @@ function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): s
     return [];
   }
   return ["message"];
+}
+
+function constrainCodexAppServerToWorkspaceWrite(
+  appServer: CodexAppServerRuntimeOptions,
+): CodexAppServerRuntimeOptions {
+  if (appServer.sandbox !== "danger-full-access") {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    sandbox: "workspace-write",
+  };
 }
 
 export const testing = {

@@ -15,6 +15,7 @@ import {
   filterCodexDynamicToolsForAllowlist,
   hasWildcardCodexToolsAllow,
   includeForcedCodexDynamicToolAllow,
+  isCodexWorkspaceOnlyFsPolicyActive,
   mapCodexAppServerRemoteWorkspacePath,
   resetOpenClawCodingToolsFactoryForTests,
   resolveCodexAppServerExecutionCwd,
@@ -1293,7 +1294,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(true);
   });
 
-  it("disables Codex native tool surfaces when workspace-only fs policy is active", () => {
+  it("keeps Codex native tool surfaces when workspace-only fs policy is active", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -1321,16 +1322,26 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         agentId: "poly",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        agentId: "poly",
+      }),
+    ).toBe(true);
 
     expect(
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         agentId: "coder",
       }),
     ).toBe(true);
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        agentId: "coder",
+      }),
+    ).toBe(false);
   });
 
-  it("disables Codex native tool surfaces for global workspace-only fs policy", () => {
+  it("keeps Codex native tool surfaces for global workspace-only fs policy", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -1340,7 +1351,8 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
   });
 
   it("uses default agent workspace-only fs policy when no agent id matches", () => {
@@ -1365,7 +1377,12 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         agentId: "missing",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        agentId: "missing",
+      }),
+    ).toBe(true);
   });
 
   it("resolves workspace-only fs policy from the runtime session key", () => {
@@ -1389,7 +1406,12 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         runtimeSessionKey: "agent:runtime:session-1",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        runtimeSessionKey: "agent:runtime:session-1",
+      }),
+    ).toBe(true);
   });
 
   it("lets explicit agent workspace-only false override global workspace-only true", () => {
@@ -1417,6 +1439,11 @@ describe("Codex app-server dynamic tool build", () => {
         agentId: "poly",
       }),
     ).toBe(true);
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        agentId: "poly",
+      }),
+    ).toBe(false);
   });
 
   it("handles malformed workspace-only policy config defensively", () => {
@@ -1440,7 +1467,8 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
 
     params.config = {
       agents: {
@@ -1449,6 +1477,7 @@ describe("Codex app-server dynamic tool build", () => {
     } as never;
 
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(false);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {

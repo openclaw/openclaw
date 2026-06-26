@@ -477,18 +477,10 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
-  // Policy priority: memory flush and workspace-only fs hard blocks come before
-  // sandbox/native allowlist checks because native Codex tools cannot enforce
-  // OpenClaw's workspace-only filesystem wrapper.
+  // Policy priority: memory flush comes before sandbox/native allowlist checks.
+  // Workspace-only fs is enforced by constraining the Codex app-server sandbox
+  // at thread/turn start, leaving non-filesystem native features available.
   if (isCodexMemoryFlushRun(params)) {
-    return false;
-  }
-  if (
-    isCodexNativeExecutionBlockedByWorkspaceOnlyFs(params, {
-      agentId: options.agentId,
-      runtimeSessionKey: options.runtimeSessionKey,
-    })
-  ) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
@@ -509,14 +501,15 @@ type WorkspaceOnlyPolicyAgent = NonNullable<
   NonNullable<WorkspaceOnlyPolicyConfig["agents"]>["list"]
 >[number];
 
-/** Returns true when workspace-only filesystem policy must disable native Codex tools.
+/** Returns true when workspace-only filesystem policy constrains native Codex filesystem access.
  *
- * Per-agent `workspaceOnly` is authoritative: `true` blocks native tools and
- * `false` explicitly opts that agent out even when global config is true.
+ * Per-agent `workspaceOnly` is authoritative: `true` enables the workspace
+ * sandbox and `false` explicitly opts that agent out even when global config is
+ * true.
  * When no matching agent policy exists, the default agent policy is consulted
  * before falling back to global `tools.fs.workspaceOnly`.
  */
-function isCodexNativeExecutionBlockedByWorkspaceOnlyFs(
+export function isCodexWorkspaceOnlyFsPolicyActive(
   params: EmbeddedRunAttemptParams,
   options: {
     agentId?: string;
