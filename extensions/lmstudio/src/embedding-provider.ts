@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -120,6 +121,16 @@ export async function createLmstudioEmbeddingProvider(
     ssrfPolicy,
   };
 
+  // Resolve configured context window from model or provider config to
+  // prevent LM Studio from loading with the maximum supported context length
+  // which can cause CUDA OOM on GPUs with limited VRAM (#97016).
+  const modelConfig = providerConfig?.models?.find((m) => m.id === model);
+  const requestedContextLength =
+    asPositiveSafeInteger(modelConfig?.contextTokens) ??
+    asPositiveSafeInteger(modelConfig?.contextWindow) ??
+    asPositiveSafeInteger(providerConfig?.contextTokens) ??
+    asPositiveSafeInteger(providerConfig?.contextWindow);
+
   try {
     await ensureLmstudioModelLoaded({
       baseUrl,
@@ -128,6 +139,7 @@ export async function createLmstudioEmbeddingProvider(
       ssrfPolicy,
       modelKey: model,
       timeoutMs: 120_000,
+      requestedContextLength,
     });
   } catch (error) {
     log.warn("lmstudio embeddings warmup failed; continuing without preload", {
