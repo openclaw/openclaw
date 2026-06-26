@@ -1,7 +1,7 @@
 // Tests migration cleanup for orphaned state keys.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -391,6 +391,47 @@ describe("migrateOrphanedSessionKeys", () => {
         readStore(standardStorePath)["agent:ops:agent:voice::matrix:channel:!room:example.org"],
       ).toBeUndefined();
       expect(fs.statSync(configuredStorePath).ino).toBe(fs.statSync(standardStorePath).ino);
+    });
+  });
+
+  it("warns from a readable alias when the configured path identity is inaccessible", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      writeStore(configuredStorePath, {});
+      const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+      writeStore(standardStorePath, {
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 1000 },
+      });
+      const cfg = {
+        session: { store: configuredStorePath },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as OpenClawConfig;
+      const realStatSync = fs.statSync.bind(fs);
+      const statSpy = vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+        if (path.resolve(candidate.toString()) === configuredStorePath) {
+          throw Object.assign(new Error("inaccessible store"), { code: "EACCES" });
+        }
+        return realStatSync(candidate);
+      });
+
+      let result: Awaited<ReturnType<typeof migrateOrphanedSessionKeys>>;
+      try {
+        result = await migrateOrphanedSessionKeys({
+          cfg,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          additionalAgentIds: ["voice"],
+        });
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Deferred session key migration for ${standardStorePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      ]);
+      expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
     });
   });
 

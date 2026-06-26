@@ -5188,8 +5188,13 @@ export async function migrateOrphanedSessionKeys(params: {
     }
   }
 
-  for (const [storePath, storeAgentIds] of storeMap) {
-    if (!fileExists(storePath)) {
+  for (const [mappedStorePath, storeAgentIds] of storeMap) {
+    const storePaths = storeAliasCandidates.get(mappedStorePath) ?? new Set([mappedStorePath]);
+    // An unknown relationship may have grouped a readable store behind an
+    // inaccessible pathname. Read from a usable alias so the group still gets
+    // the unresolved-identity warning before any rewrite is attempted.
+    const storePath = [...storePaths].find((candidate) => fileExists(candidate));
+    if (!storePath) {
       continue;
     }
     const pluginForeignMainAliasRisk = [...storeAgentIds].some(
@@ -5229,10 +5234,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // one agent's history into another namespace.
     let working = parsed.store;
     let totalLegacy = 0;
-    const storeAliases = resolveSessionStoreAliasPlan(
-      storePath,
-      storeAliasCandidates.get(storePath) ?? [storePath],
-    );
+    const storeAliases = resolveSessionStoreAliasPlan(storePath, storePaths);
     const hasDistinctAliases = storeAliases.hasDistinctAliases;
     const preserveAmbiguousKeys = storeAgentIds.size > 1;
     const preservedAmbiguousKeyCount = Object.keys(working).filter(
@@ -5240,6 +5242,10 @@ export async function migrateOrphanedSessionKeys(params: {
         (preserveAmbiguousKeys && isAmbiguousSharedStoreKey(key, mainKey, scope)) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
+    if (storeAliases.hasUnresolvedIdentity) {
+      warnings.push(unresolvedSessionStoreIdentityWarning("session key migration", storePath));
+      continue;
+    }
     if (hasDistinctAliases && preservedAmbiguousKeyCount > 0) {
       warnings.push(
         aliasedSessionStoreMigrationWarning({
@@ -5248,10 +5254,6 @@ export async function migrateOrphanedSessionKeys(params: {
           storePath,
         }),
       );
-      continue;
-    }
-    if (storeAliases.hasUnresolvedIdentity) {
-      warnings.push(unresolvedSessionStoreIdentityWarning("session key migration", storePath));
       continue;
     }
     if (storeAliases.hasFinalSymlink) {
