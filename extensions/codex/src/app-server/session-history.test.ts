@@ -110,6 +110,21 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("resolves SQLite marker history when the caller has no session key", async () => {
+    const { marker } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
