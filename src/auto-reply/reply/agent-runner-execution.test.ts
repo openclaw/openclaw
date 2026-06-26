@@ -6203,7 +6203,7 @@ describe("runAgentTurnWithFallback", () => {
       throw new Error("expected final reply");
     }
     expect(result.payload.text).toBe(
-      "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.",
+      "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.",
     );
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("run_failed");
@@ -6240,7 +6240,7 @@ describe("runAgentTurnWithFallback", () => {
       throw new Error("expected final reply");
     }
     expect(result.payload.text).toBe(
-      "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.",
+      "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.",
     );
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("run_failed");
