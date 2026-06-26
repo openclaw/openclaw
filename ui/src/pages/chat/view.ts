@@ -578,41 +578,16 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
 };
 
-type ComposerDraftMirror = {
-  hostDraft: string;
-  value: string;
-};
-
 const chatItemsBySession = new Map<string, CachedChatItems>();
-const composerDraftMirrors = new Map<string, ComposerDraftMirror>();
 
-function composerDraftMirrorKey(props: Pick<ChatProps, "currentAgentId" | "sessionKey">): string {
+function composerDraftKey(props: Pick<ChatProps, "currentAgentId" | "sessionKey">): string {
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
 
-function getComposerDraftMirror(props: ChatProps): ComposerDraftMirror {
-  const mirror = getOrCreateSessionCacheValue(
-    composerDraftMirrors,
-    composerDraftMirrorKey(props),
-    () => ({
-      hostDraft: props.draft,
-      value: props.draft,
-    }),
-  );
-  if (mirror.hostDraft !== props.draft) {
-    mirror.hostDraft = props.draft;
-    mirror.value = props.draft;
-  }
-  return mirror;
-}
-
 function commitComposerDraft(props: ChatProps, value: string): void {
-  const mirror = getComposerDraftMirror(props);
-  mirror.value = value;
-  if (mirror.hostDraft === value) {
+  if (props.getDraft?.() === value || props.draft === value) {
     return;
   }
-  mirror.hostDraft = value;
   props.onDraftChange(value);
 }
 
@@ -641,7 +616,7 @@ function isExplicitComposerInsertion(event: InputEvent): boolean {
 function suppressStaleSubmittedDraftReplay(
   target: HTMLTextAreaElement,
   event: InputEvent,
-  draftMirror: ComposerDraftMirror,
+  currentDraft: string,
   hasInputIntent: boolean,
 ): boolean {
   const pending = vs.pendingClearedSubmittedDraft;
@@ -652,7 +627,7 @@ function suppressStaleSubmittedDraftReplay(
     return false;
   }
 
-  target.value = draftMirror.value;
+  target.value = currentDraft;
   adjustTextareaHeight(target);
   return true;
 }
@@ -752,7 +727,6 @@ export function resetChatViewState() {
   }
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
-  composerDraftMirrors.clear();
 }
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
@@ -2193,8 +2167,7 @@ export function renderChat(props: ChatProps) {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
-  const draftMirror = getComposerDraftMirror(props);
-  const visibleDraft = draftMirror.value;
+  const visibleDraft = props.draft;
   let composerTextarea: HTMLTextAreaElement | null = null;
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
@@ -2522,25 +2495,18 @@ export function renderChat(props: ChatProps) {
   `;
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
-    const hostDraft = props.getDraft?.();
-    if (typeof hostDraft !== "string") {
-      return;
-    }
-    const mirrorKey = composerDraftMirrorKey(props);
-    const submittedDraft = draftMirror.value;
+    const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
+    const hostDraft = props.getDraft?.() ?? props.draft;
+    const draftKey = composerDraftKey(props);
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
-    // Sends can clear the host draft synchronously before Lit rerenders; keep
-    // the local mirror aligned so the submitted text does not stay editable.
-    draftMirror.hostDraft = hostDraft;
-    draftMirror.value = hostDraft;
     if (clearedSubmittedDraft) {
       vs.pendingClearedSubmittedDraft = {
-        key: mirrorKey,
+        key: draftKey,
         value: submittedDraft,
       };
     } else {
-      clearPendingClearedSubmittedDraft(mirrorKey);
+      clearPendingClearedSubmittedDraft(draftKey);
     }
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;
@@ -2679,28 +2645,33 @@ export function renderChat(props: ChatProps) {
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
-    draftMirror.value = target.value;
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
   const handleBeforeInput = (e: InputEvent) => {
     if (!vs.composerComposing && !e.isComposing) {
-      markComposerInputIntent(composerDraftMirrorKey(props));
+      markComposerInputIntent(composerDraftKey(props));
     }
   };
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
-    const mirrorKey = composerDraftMirrorKey(props);
-    const hasInputIntent = consumeComposerInputIntent(mirrorKey);
+    const draftKey = composerDraftKey(props);
+    const hasInputIntent = consumeComposerInputIntent(draftKey);
     if (vs.composerComposing || e.isComposing) {
       // Skip adjustTextareaHeight during IME composition — each pinyin
       // keystroke fires `input` and the height read/write forces a
       // synchronous reflow that blocks the composition thread.
       // Resize runs once in handleCompositionEnd → syncComposerValue.
-      draftMirror.value = target.value;
       return;
     }
-    if (suppressStaleSubmittedDraftReplay(target, e, draftMirror, hasInputIntent)) {
+    if (
+      suppressStaleSubmittedDraftReplay(
+        target,
+        e,
+        props.getDraft?.() ?? props.draft,
+        hasInputIntent,
+      )
+    ) {
       return;
     }
     syncComposerValue(target);
@@ -2717,7 +2688,7 @@ export function renderChat(props: ChatProps) {
     if (!canCompose) {
       return;
     }
-    commitComposerDraft(props, draftMirror.value);
+    commitComposerDraft(props, composerTextarea?.value ?? props.draft);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };

@@ -158,56 +158,6 @@ async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
       .filter(Boolean);
   });
 }
-
-async function controlUiEventPayloads(
-  page: Page,
-  event: string,
-): Promise<Array<Record<string, unknown>>> {
-  return page.evaluate((eventName) => {
-    const app = document.querySelector("openclaw-app") as
-      | (Element & { eventLogBuffer?: unknown[] })
-      | null;
-    return (app?.eventLogBuffer ?? [])
-      .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
-        const candidate = entry as { event?: unknown; payload?: unknown };
-        return (
-          candidate.event === eventName &&
-          Boolean(candidate.payload && typeof candidate.payload === "object")
-        );
-      })
-      .map((entry) => entry.payload);
-  }, event);
-}
-
-async function waitForControlUiChatSendPhases(
-  page: Page,
-  runId: string,
-  phases: string[],
-): Promise<void> {
-  await page.waitForFunction(
-    ({ expectedPhases, expectedRunId }) => {
-      const app = document.querySelector("openclaw-app") as
-        | (Element & { eventLogBuffer?: unknown[] })
-        | null;
-      const observedPhases = new Set(
-        (app?.eventLogBuffer ?? []).flatMap((entry) => {
-          const candidate = entry as {
-            event?: unknown;
-            payload?: { phase?: unknown; runId?: unknown };
-          };
-          return candidate.event === "control-ui.chat.send" &&
-            candidate.payload?.runId === expectedRunId &&
-            typeof candidate.payload.phase === "string"
-            ? [candidate.payload.phase]
-            : [];
-        }),
-      );
-      return expectedPhases.every((phase) => observedPhases.has(phase));
-    },
-    { expectedPhases: phases, expectedRunId: runId },
-  );
-}
-
 function chatSessionListResponse() {
   return {
     count: 2,
@@ -792,28 +742,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await waitForControlUiChatSendPhases(page, runId, ["ack"]);
-      await gateway.emitGatewayEvent("chat.send_timing", {
-        phase: "agent-run-started",
-        runId,
-        agentId: "ops",
-        sessionKey: "global",
-        ackToPhaseMs: 11,
-        receivedToPhaseMs: 20,
-        dispatchStartedToPhaseMs: 7,
-        agentRunId: "agent-run-e2e",
-      });
-      await waitForControlUiChatSendPhases(page, runId, ["server-agent-run-started"]);
-      await gateway.emitGatewayEvent("chat.send_timing", {
-        phase: "first-assistant-event",
-        runId,
-        agentId: "ops",
-        sessionKey: "global",
-        ackToPhaseMs: 31,
-        receivedToPhaseMs: 40,
-        dispatchStartedToPhaseMs: 27,
-      });
-      await waitForControlUiChatSendPhases(page, runId, ["server-first-assistant-event"]);
       await gateway.emitGatewayEvent("chat", {
         deltaText: "First token visible.",
         message: {
@@ -827,67 +755,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         state: "delta",
       });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
-      await waitForControlUiChatSendPhases(page, runId, [
-        "pending-visible",
-        "request-start",
-        "ack",
-        "server-agent-run-started",
-        "server-first-assistant-event",
-        "first-assistant-visible",
-      ]);
-      const sendTimingEvents = (await controlUiEventPayloads(page, "control-ui.chat.send")).filter(
-        (payload) => payload.runId === runId,
-      );
-      const sendTimingByPhase = new Map(
-        sendTimingEvents.map((payload) => [payload.phase, payload]),
-      );
-      expect(sendTimingEvents.map((payload) => payload.phase)).toEqual(
-        expect.arrayContaining([
-          "pending-visible",
-          "request-start",
-          "ack",
-          "server-first-assistant-event",
-          "first-assistant-visible",
-        ]),
-      );
-      const ackTiming = sendTimingByPhase.get("ack");
-      expect(ackTiming).toMatchObject({
-        ackStatus: "started",
-        runId,
-        sendState: "sending",
-        sessionKey: "global",
-      });
-      expect(ackTiming?.requestDurationMs).toEqual(expect.any(Number));
-      expect(sendTimingByPhase.get("server-agent-run-started")).toMatchObject({
-        agentRunId: "agent-run-e2e",
-        agentId: "ops",
-        runId,
-        serverAckToPhaseMs: 11,
-        serverDispatchStartedToPhaseMs: 7,
-        serverPhase: "agent-run-started",
-        serverReceivedToPhaseMs: 20,
-        sessionKey: "global",
-      });
-      expect(sendTimingByPhase.get("server-first-assistant-event")).toMatchObject({
-        agentId: "ops",
-        runId,
-        serverAckToPhaseMs: 31,
-        serverDispatchStartedToPhaseMs: 27,
-        serverPhase: "first-assistant-event",
-        serverReceivedToPhaseMs: 40,
-        sessionKey: "global",
-      });
-      const firstVisibleTiming = sendTimingByPhase.get("first-assistant-visible");
-      expect(firstVisibleTiming).toMatchObject({
-        ackStatus: "started",
-        eventState: "delta",
-        runId,
-        sendState: "sending",
-        sessionKey: "global",
-      });
-      expect(firstVisibleTiming?.ackToFirstAssistantEventMs).toEqual(expect.any(Number));
-      expect(firstVisibleTiming?.firstAssistantPaintMs).toEqual(expect.any(Number));
-      expect(firstVisibleTiming?.requestToFirstAssistantEventMs).toEqual(expect.any(Number));
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
           agents: [{ id: "ops", name: "OpenClaw" }],

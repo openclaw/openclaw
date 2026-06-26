@@ -2067,23 +2067,6 @@ describe("chat slash menu accessibility", () => {
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
-  it("keeps plain draft input local until send while suggestions are closed", () => {
-    const onDraftChange = vi.fn();
-    const onRequestUpdate = vi.fn();
-    const onSend = vi.fn();
-    const container = renderChatView({ onDraftChange, onRequestUpdate, onSend });
-
-    inputDraft(container, "plain first message");
-
-    expect(onDraftChange).not.toHaveBeenCalled();
-    expect(onRequestUpdate).not.toHaveBeenCalled();
-
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-
-    expect(onDraftChange).toHaveBeenCalledWith("plain first message");
-    expect(onSend).toHaveBeenCalledTimes(1);
-  });
-
   it("requests slash command hydration only after slash intent", () => {
     const onSlashIntent = vi.fn(async () => undefined);
     const container = renderChatView({ onSlashIntent });
@@ -2244,7 +2227,6 @@ describe("chat slash menu accessibility", () => {
     );
 
     expect(textarea?.value).toBe("new draft");
-    expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
   it("does not apply a stale submitted draft replay to another session", () => {
@@ -2297,7 +2279,7 @@ describe("chat slash menu accessibility", () => {
     expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an intervening session draft when a delayed stale replay arrives", () => {
+  it("does not overwrite an intervening session draft with a delayed stale replay", () => {
     const drafts: Record<string, string> = {
       "delayed-replay-a": "",
       "delayed-replay-b": "",
@@ -2360,8 +2342,7 @@ describe("chat slash menu accessibility", () => {
     );
 
     expect(textarea?.value).toBe("session b draft");
-    expect(drafts["delayed-replay-b"]).toBe("");
-    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(drafts["delayed-replay-b"]).toBe("session b draft");
   });
 
   it("commits local draft input before Enter sends", () => {
@@ -2408,7 +2389,6 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
       "still typing locally",
     );
-    expect(onDraftChange).not.toHaveBeenCalled();
   });
 
   it("replaces local draft input when the host draft changes", () => {
