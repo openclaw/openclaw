@@ -9,6 +9,8 @@ import {
   redactSensitiveUrlLikeString,
 } from "./redact-sensitive-url.js";
 
+const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+
 describe("redactSensitiveUrl", () => {
   it("redacts userinfo and sensitive query params from valid URLs", () => {
     expect(redactSensitiveUrl("https://user:pass@example.com/mcp?token=secret&safe=value")).toBe(
@@ -45,6 +47,27 @@ describe("redactSensitiveUrl", () => {
       "https://example.com/mcp?safe=value",
     );
   });
+
+  it("redacts Telegram Bot API path tokens from valid URLs", () => {
+    expect(
+      redactSensitiveUrl(
+        `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+      ),
+    ).toBe("https://api.telegram.org/bot***/sendMessage?chat_id=1");
+    expect(
+      redactSensitiveUrl(
+        `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN.replace(":", "%3A")}/getMe`,
+      ),
+    ).toBe("https://telegram.internal/bot***/getMe");
+  });
+
+  it.each(["/bot/settings", "/bots/chat", "/robot/test", "/bot123:status", "/bot123456:short"])(
+    "keeps ordinary bot-like URL path %s unchanged",
+    (path) => {
+      const url = `https://example.com${path}`;
+      expect(redactSensitiveUrl(url)).toBe(url);
+    },
+  );
 });
 
 describe("redactSensitiveUrlLikeString", () => {
@@ -88,6 +111,14 @@ describe("redactSensitiveUrlLikeString", () => {
         "wss://fallback-user:fallback-pass@[bad-host/socket?token=fallback-secret&keep=visible)",
       ),
     ).toBe("wss://***:***@[bad-host/socket?token=***&keep=visible)");
+  });
+
+  it("redacts Telegram Bot API path tokens in fallback strings", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        `timeout /bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage and /bot/settings`,
+      ),
+    ).toBe("timeout /bot***/sendMessage and /bot/settings");
   });
 });
 

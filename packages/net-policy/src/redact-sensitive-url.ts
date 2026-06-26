@@ -40,6 +40,14 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 // Keep in sync with FORM_BODY_KEY_SEPARATOR_RE in src/logging/redact.ts: Hangul fillers are
 // category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
+// Bot API credentials are path segments on both Telegram's hosted API and custom API roots.
+// Keep the real token shape strict so ordinary `/bot` application paths remain visible.
+const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3A)[A-Za-z0-9_-]{20,}(?=\/|[?#\s]|$)/giu;
+const REDACTED_TELEGRAM_BOT_TOKEN_PATH = "/bot***";
+
+function redactTelegramBotTokenPaths(value: string): string {
+  return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, REDACTED_TELEGRAM_BOT_TOKEN_PATH);
+}
 
 function normalizeUrlQueryParamName(name: string): string {
   const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
@@ -82,6 +90,11 @@ export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
     let mutated = false;
+    const pathname = redactTelegramBotTokenPaths(parsed.pathname);
+    if (pathname !== parsed.pathname) {
+      parsed.pathname = pathname;
+      mutated = true;
+    }
     if (parsed.username || parsed.password) {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
@@ -105,7 +118,7 @@ export function redactSensitiveUrlLikeString(value: string): string {
   if (redactedUrl !== value) {
     return redactedUrl;
   }
-  return value
+  return redactTelegramBotTokenPaths(value)
     .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,

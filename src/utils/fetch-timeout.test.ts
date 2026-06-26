@@ -35,6 +35,16 @@ function requireWarnRecord(callIndex: number): Record<string, unknown> {
   return record;
 }
 
+async function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
+  const { cleanup } = buildTimeoutAbortSignal({ timeoutMs: 25, operation: "unit-test", url });
+  await vi.advanceTimersByTimeAsync(25);
+  const record = requireWarnRecord(0);
+  cleanup();
+  return record;
+}
+
+const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+
 describe("buildTimeoutAbortSignal", () => {
   beforeEach(() => {
     warn.mockClear();
@@ -142,6 +152,38 @@ describe("buildTimeoutAbortSignal", () => {
     expect(requireWarnRecord(0).url).toBe("/api/responses");
 
     cleanup();
+  });
+
+  it("redacts Telegram bot tokens from timeout URL logs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+    );
+
+    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
+    expect(record.url).toBe("https://api.telegram.org/bot***/sendMessage");
+    expect(record.consoleMessage).toBe(
+      "fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=https://api.telegram.org/bot***/sendMessage",
+    );
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("redacts Telegram bot tokens from fallback timeout URL strings", async () => {
+    const record = await captureTimeoutLogUrl(
+      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+    );
+
+    expect(record.url).toBe("/bot***/sendMessage");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it.each([
+    ["https://example.com/bot/settings?safe=1", "https://example.com/bot/settings"],
+    ["https://example.com/bots/chat?safe=1", "https://example.com/bots/chat"],
+    ["https://example.com/robot/test?safe=1", "https://example.com/robot/test"],
+    ["/bot123:status?safe=1", "/bot123:status"],
+    ["/bot123456:short/status?safe=1", "/bot123456:short/status"],
+  ])("keeps ordinary bot-like timeout path %s visible", async (url, expected) => {
+    expect((await captureTimeoutLogUrl(url)).url).toBe(expected);
   });
 
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
