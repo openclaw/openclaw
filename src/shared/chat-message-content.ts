@@ -43,7 +43,11 @@ export function parseAssistantTextSignature(
     return { id: value };
   }
   try {
-    const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+    const parsed = JSON.parse(value) as {
+      id?: unknown;
+      phase?: unknown;
+      v?: unknown;
+    };
     if (parsed.v !== 1) {
       return null;
     }
@@ -120,7 +124,11 @@ export function extractAssistantTextForPhase(
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
+  const entry = message as {
+    text?: unknown;
+    content?: unknown;
+    phase?: unknown;
+  };
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
@@ -171,12 +179,53 @@ export function extractAssistantTextForPhase(
     return undefined;
   }
 
+  // When a message has interleaved `thinking` content blocks AND multiple
+  // unphased `text` blocks, providers like MiniMax-M3 via openai-completions
+  // emit internal monologue as plain `text` blocks before the final answer.
+  // The native-reasoning seal in the streaming partitioner closes a thought
+  // before each visible-text region, but it does not retroactively mark the
+  // earlier text region as commentary, so unphased extraction joined every
+  // text block and leaked monologue to channels (#96849).
+  //
+  // Heuristic: an unphased text block T at index i is intermediate monologue
+  // when there is a thinking block at j > i AND another text block at k > j.
+  // That pattern is the smoking gun: the model emitted text, then thought
+  // again, then emitted more text -- the earlier text was internal reasoning
+  // that the provider routed through `text` rather than `thinking`. Models
+  // that emit a trailing reflective `thinking` block after their final answer
+  // do not match this pattern and keep their final text.
+  const isIntermediateMonologueTextIndex = (index: number): boolean => {
+    if (hasExplicitPhasedTextBlocks || !Array.isArray(entry.content)) {
+      return false;
+    }
+    let sawThinkingAfter = false;
+    for (let j = index + 1; j < entry.content.length; j += 1) {
+      const candidate = entry.content[j];
+      if (!candidate || typeof candidate !== "object") {
+        continue;
+      }
+      const candidateType = (candidate as { type?: unknown }).type;
+      if (candidateType === "thinking" || candidateType === "redacted_thinking") {
+        sawThinkingAfter = true;
+        continue;
+      }
+      if (sawThinkingAfter && isAssistantTextContentBlockType(candidateType)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const parts = entry.content
-    .map((block) => {
+    .map((block, index) => {
       if (!block || typeof block !== "object") {
         return null;
       }
-      const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+      const record = block as {
+        type?: unknown;
+        text?: unknown;
+        textSignature?: unknown;
+      };
       if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
         return null;
       }
@@ -184,6 +233,10 @@ export function extractAssistantTextForPhase(
       const resolvedPhase =
         signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
       if (!shouldIncludeContent(resolvedPhase)) {
+        return null;
+      }
+      // Drop unphased text blocks identified as intermediate monologue.
+      if (!signature?.phase && isIntermediateMonologueTextIndex(index)) {
         return null;
       }
       const sanitized = sanitizeBlockText(record.text);
@@ -199,7 +252,9 @@ export function extractAssistantTextForPhase(
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
 export function extractAssistantVisibleText(message: unknown): string | undefined {
-  const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
+  const finalAnswerText = extractAssistantTextForPhase(message, {
+    phase: "final_answer",
+  });
   if (finalAnswerText) {
     return finalAnswerText;
   }
