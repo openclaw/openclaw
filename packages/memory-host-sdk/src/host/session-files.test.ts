@@ -158,6 +158,91 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
   });
 
+  it("classifies active entries through cron parentage chains", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronPath = path.join(sessionsDir, "cron-run.jsonl");
+    const spawnedChildPath = path.join(sessionsDir, "spawned-child.jsonl");
+    const keyedChildPath = path.join(sessionsDir, "keyed-child.jsonl");
+    const orphanChildPath = path.join(sessionsDir, "orphan-child.jsonl");
+    const normalPath = path.join(sessionsDir, "normal-child.jsonl");
+    for (const filePath of [
+      cronPath,
+      spawnedChildPath,
+      keyedChildPath,
+      orphanChildPath,
+      normalPath,
+    ]) {
+      fsSync.writeFileSync(filePath, "");
+    }
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+        "agent:main:subagent:spawned-child": {
+          sessionFile: "spawned-child.jsonl",
+          sessionId: "spawned-child",
+          spawnedBy: "agent:main:cron:job-1:run:run-1",
+        },
+        "agent:main:subagent:keyed-child": {
+          parentSessionKey: "agent:main:subagent:spawned-child",
+          sessionFile: "keyed-child.jsonl",
+          sessionId: "keyed-child",
+        },
+        "agent:main:subagent:orphan-child": {
+          sessionFile: "orphan-child.jsonl",
+          sessionId: "orphan-child",
+          spawnedBy: "agent:main:cron:job-1:run:missing",
+        },
+        "agent:main:subagent:normal-child": {
+          sessionFile: "normal-child.jsonl",
+          sessionId: "normal-child",
+          spawnedBy: "agent:main:chat:manual",
+        },
+      }),
+    );
+
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set(
+        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map((filePath) =>
+          path.resolve(filePath),
+        ),
+      ),
+    );
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: spawnedChildPath,
+          sessionKey: "agent:main:subagent:spawned-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: keyedChildPath,
+          sessionKey: "agent:main:subagent:keyed-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: orphanChildPath,
+          sessionKey: "agent:main:subagent:orphan-child",
+        }),
+        expect.objectContaining({
+          sessionFile: normalPath,
+          sessionKey: "agent:main:subagent:normal-child",
+        }),
+      ]),
+    );
+    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(entries.find((entry) => entry.sessionFile === normalPath)?.generatedByCronRun).toBe(
+      undefined,
+    );
+  });
+
   it("keeps archive classification when the active transcript is missing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });

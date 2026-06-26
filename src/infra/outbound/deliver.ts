@@ -1326,9 +1326,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   };
   const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
+  let platformSendStarted = false;
 
   try {
-    let platformSendStarted = false;
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
       ...(queueId
@@ -1390,11 +1390,29 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-          log.warn(
-            `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-          );
-        });
+        const sendEvidence =
+          platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
+        if (sendEvidence) {
+          await markQueuedPlatformOutcomeUnknown({
+            queueId,
+            queuePolicy,
+          }).catch((markErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
+            );
+            return failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
+          });
+        } else {
+          await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+            );
+          });
+        }
       }
     }
     throw err;

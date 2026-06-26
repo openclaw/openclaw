@@ -251,6 +251,14 @@ async function processDiscordMessageInner(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  const configuredTypingInterval =
+    cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const shouldDisableCoreTypingKeepalive =
+    Boolean(replyTypingFeedback) ||
+    (sourceRepliesAreToolOnly &&
+      configuredTypingMode === undefined &&
+      configuredTypingInterval === undefined);
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -460,6 +468,7 @@ async function processDiscordMessageInner(
       channelId: typingChannelId,
       rest: feedbackRest,
       log: logVerbose,
+      keepaliveIntervalMs: shouldDisableCoreTypingKeepalive ? undefined : 0,
     });
   if (replyTypingFeedback) {
     // A carried prestart only covers queue wait time; dispatch needs a fresh
@@ -955,6 +964,7 @@ async function processDiscordMessageInner(
         abortSignal,
         skillFilter: channelConfig?.skills,
         sourceReplyDeliveryMode,
+        typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:

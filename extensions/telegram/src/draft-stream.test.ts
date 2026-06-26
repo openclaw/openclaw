@@ -690,6 +690,24 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    stream.update(oauthProfileText);
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: oauthProfileText,
+        skip_entity_detection: true,
+      },
+    });
+  });
+
   it("keeps rich preview html out of plain preview gating", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
@@ -789,16 +807,16 @@ describe("createTelegramDraftStream", () => {
     expectNthPreviewSend(api, 2, "foo bar baz qux");
   });
 
-  it("clamps a first oversized non-final preview", async () => {
+  it("clamps a first oversized non-final preview on a UTF-16 boundary", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { maxChars: 10 });
 
-    stream.update("1234567890ABCDEFGHIJ");
+    stream.update("123456789😀tail");
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expectNthPreviewSend(api, 1, "1234567890");
-    expect(stream.lastDeliveredText?.()).toBe("1234567890");
+    expectNthPreviewSend(api, 1, "123456789");
+    expect(stream.lastDeliveredText?.()).toBe("123456789");
   });
 
   it("finalizes overflow that was hidden by a clamped non-final preview", async () => {

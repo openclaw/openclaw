@@ -12,6 +12,7 @@ import { extractShippedPluginInstallConfigRecords } from "../config/plugin-insta
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { normalizeUpdateChannel } from "../infra/update-channels.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -260,6 +261,10 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+          officialPluginUpdateChannel: params.opts.all
+            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+            : undefined,
+          syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
           logger,
           onIntegrityDrift: async (drift) => {

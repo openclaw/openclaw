@@ -28,6 +28,10 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function setEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
+}
+
 async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
@@ -235,9 +239,10 @@ async function verifyDoctorRepair(root: string) {
 
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-runtime-context-"));
-  process.env.HOME = root;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
-  process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
+  const stateDir = path.join(root, ".openclaw");
+  setEnvValue("HOME", root);
+  setEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
     await verifyRuntimeContextTranscriptShape(root);
     await verifyDoctorRepair(root);
