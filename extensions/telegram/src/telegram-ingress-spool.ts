@@ -17,6 +17,7 @@ import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
 export const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
+export const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
@@ -154,8 +155,13 @@ function processExists(pid: number): boolean {
   }
 }
 
-function isFreshClaimOwner(claim: TelegramSpooledUpdateClaimOwner): boolean {
-  return Date.now() - claim.claimedAt < TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS;
+function isFreshClaimOwner(
+  claim: TelegramSpooledUpdateClaimOwner,
+  options?: { maxAgeMs?: number; now?: number },
+): boolean {
+  const now = options?.now ?? Date.now();
+  const maxAgeMs = options?.maxAgeMs ?? TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS;
+  return now - claim.claimedAt < maxAgeMs;
 }
 
 function parseQueueRecord(
@@ -216,14 +222,21 @@ function queueMutationTarget(update: TelegramSpooledUpdate): string | ChannelIng
 
 export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
   claim: ClaimedTelegramSpooledUpdate,
+  options?: { maxAgeMs?: number; now?: number },
 ): boolean {
   return Boolean(
     claim.claim &&
     claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
     claim.claim.processPid !== process.pid &&
-    isFreshClaimOwner(claim.claim) &&
+    isFreshClaimOwner(claim.claim, options) &&
     processExists(claim.claim.processPid),
   );
+}
+
+export function isTelegramSpooledUpdateClaimOwnedByCurrentProcess(
+  claim: ClaimedTelegramSpooledUpdate,
+): boolean {
+  return claim.claim?.processId === TELEGRAM_SPOOLED_UPDATE_PROCESS_ID;
 }
 
 export async function writeTelegramSpooledUpdate(params: {

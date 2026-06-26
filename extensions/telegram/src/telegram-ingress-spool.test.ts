@@ -418,7 +418,7 @@ describe("Telegram ingress spool", () => {
     ).toBe(false);
   });
 
-  it("does not treat fresh claims with reused current pids as live-owned", () => {
+  it("does not treat fresh claims with the current pid and a different owner id as foreign", () => {
     const now = Date.now();
     expect(
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({

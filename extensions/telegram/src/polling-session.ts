@@ -44,6 +44,7 @@ import {
   refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
+  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
@@ -133,6 +134,7 @@ const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS = 2 * TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS;
 const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS = 5_000;
 const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS = 60_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
@@ -324,6 +326,21 @@ type SpooledUpdateDrainResult = {
 // Account health restarts create a new session in the same process while an old
 // spooled handler may still be running after shutdown grace.
 const activeSpooledUpdateHandlersByLane = new Map<string, SpooledUpdateHandlerState>();
+type SpooledUpdateDrainHealth = {
+  lastCompletedAt: number;
+};
+
+const spooledUpdateDrainHealthBySpool = new Map<string, SpooledUpdateDrainHealth>();
+
+function getSpooledUpdateDrainHealth(spoolDir: string): SpooledUpdateDrainHealth {
+  const existing = spooledUpdateDrainHealthBySpool.get(spoolDir);
+  if (existing) {
+    return existing;
+  }
+  const created = { lastCompletedAt: Date.now() };
+  spooledUpdateDrainHealthBySpool.set(spoolDir, created);
+  return created;
+}
 
 function resolveSpooledUpdateHandlerTimeoutMs(params: {
   configured?: number;
@@ -585,19 +602,30 @@ export class TelegramPollingSession {
     }
   }
 
-  #startSpooledUpdateClaimRefresh(update: ClaimedTelegramSpooledUpdate): () => void {
-    // Refresh only while this process still owns useful work for this claim token.
-    // Stopping before release/fail/delete lets stale recovery take over if work stalls.
+  #startSpooledUpdateClaimRefresh(
+    update: ClaimedTelegramSpooledUpdate,
+    isDrainHealthy: () => boolean,
+    onDrainUnhealthy: () => void,
+  ): () => void {
+    // Refresh only while this process owns useful work and its drain loop is making progress.
+    // Stopping the lease on a stalled drain lets another process recover the lane.
     let stopped = false;
     let refreshing = false;
     const refresh = async (): Promise<void> => {
       if (stopped || refreshing) {
         return;
       }
+      if (!isDrainHealthy()) {
+        onDrainUnhealthy();
+        stopped = true;
+        clearInterval(timer);
+        return;
+      }
       refreshing = true;
       try {
         const refreshed = await refreshTelegramSpooledUpdateClaim(update);
         if (!refreshed && !stopped) {
+          onDrainUnhealthy();
           stopped = true;
           clearInterval(timer);
         }
@@ -605,6 +633,11 @@ export class TelegramPollingSession {
         this.opts.log(
           `[telegram][diag] spooled update ${update.updateId} claim refresh failed: ${formatErrorMessage(err)}`,
         );
+        if (!stopped) {
+          onDrainUnhealthy();
+          stopped = true;
+          clearInterval(timer);
+        }
       } finally {
         refreshing = false;
       }
@@ -864,6 +897,7 @@ export class TelegramPollingSession {
 
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
+    isDrainHealthy: () => boolean;
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
@@ -873,7 +907,9 @@ export class TelegramPollingSession {
       shouldRecover: (claim) =>
         !this.#isDeferredSpooledUpdateClaim(claim) &&
         !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
-        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
+          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
+        }),
     });
     const claimedLaneKeys = new Set(
       (
@@ -929,7 +965,22 @@ export class TelegramPollingSession {
         blockedLaneKeys.add(laneKey);
         continue;
       }
-      const stopClaimRefresh = this.#startSpooledUpdateClaimRefresh(claimedUpdate);
+      const stopClaimRefresh = this.#startSpooledUpdateClaimRefresh(
+        claimedUpdate,
+        params.isDrainHealthy,
+        () => {
+          const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+            accountId: this.opts.accountId,
+            sequentialKey: laneKey,
+          });
+          const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+          if (!abortedReplyWork) {
+            this.opts.log(
+              `[telegram][diag] spooled update ${claimedUpdate.updateId} drain heartbeat expired without an active reply fence on lane ${laneKey}; stopping claim refresh.`,
+            );
+          }
+        },
+      );
       const handler = this.#handleClaimedSpooledUpdate({
         bot: params.bot,
         stopClaimRefresh,
@@ -1212,6 +1263,11 @@ export class TelegramPollingSession {
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     let drainActive = false;
+    const drainHealth = getSpooledUpdateDrainHealth(spoolDir);
+    // Fail closed when the spool stops making progress: keeping any claim live would
+    // prevent a healthy process from recovering a wedged drain.
+    const isDrainHealthy = () =>
+      Date.now() - drainHealth.lastCompletedAt <= TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS;
     const stopBot = () => {
       return Promise.resolve(bot.stop())
         .then(() => undefined)
@@ -1253,8 +1309,13 @@ export class TelegramPollingSession {
       }
       drainActive = true;
       drainRequested = false;
+      let drainCompleted = false;
       try {
-        const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
+        const drain = await this.#drainSpooledUpdates({
+          bot,
+          isDrainHealthy,
+          spoolDir,
+        });
         consecutiveDrainFailures = 0;
         for (const handlerKey of stalledBacklogKeys) {
           if (
@@ -1291,12 +1352,16 @@ export class TelegramPollingSession {
         } else if (timedOutRecovery) {
           stalledBacklogKeys.add(timedOutRecovery.handlerKey);
         }
+        drainCompleted = true;
       } catch (err) {
         consecutiveDrainFailures += 1;
         this.opts.log(
           `[telegram][diag] isolated polling spool drain failed (${consecutiveDrainFailures}): ${formatErrorMessage(err)}`,
         );
       } finally {
+        if (drainCompleted) {
+          drainHealth.lastCompletedAt = Date.now();
+        }
         drainActive = false;
         if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
           drainRequested = false;
@@ -1611,6 +1676,7 @@ const isGetUpdatesConflict = (err: unknown) => {
 export const testing = {
   resetActiveSpooledUpdateHandlersForTests: (): void => {
     activeSpooledUpdateHandlersByLane.clear();
+    spooledUpdateDrainHealthBySpool.clear();
   },
   createTelegramRestartBackoffState,
   resetTelegramRestartBackoffState,
