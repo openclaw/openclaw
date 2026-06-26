@@ -270,7 +270,10 @@ async function downloadVideoFromFileId(params: {
     provider: "minimax",
     requestFailedMessage: "MiniMax generated video metadata request failed",
   });
-  const metadata = (await metadataResponse.json()) as MinimaxFileRetrieveResponse;
+  const metadata = await readProviderJsonResponse<MinimaxFileRetrieveResponse>(
+    metadataResponse,
+    "MiniMax generated video metadata",
+  );
   assertMinimaxBaseResp(metadata.base_resp, "MiniMax generated video metadata request failed");
   const downloadUrl = normalizeOptionalString(metadata.file?.download_url);
   if (!downloadUrl) {
