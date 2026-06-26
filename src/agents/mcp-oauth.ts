@@ -465,8 +465,10 @@ export async function runMcpOAuthLogin(params: {
           redirectUrl: LOCALHOST_REDIRECT_URL,
         },
       });
-      const retryStore = await readStore(filePath);
-      await writeStore(filePath, { ...retryStore, redirectUrl: LOCALHOST_REDIRECT_URL });
+      await updateStore(filePath, (latestStore) => ({
+        ...latestStore,
+        redirectUrl: LOCALHOST_REDIRECT_URL,
+      }));
       return result;
     }
     throw error;

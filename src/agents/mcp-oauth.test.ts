@@ -578,6 +578,73 @@ describe("MCP OAuth provider", () => {
     );
   });
 
+  it("preserves concurrent token writes while persisting localhost redirect fallback", async () => {
+    await withTempHome(
+      async () => {
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockResolvedValueOnce("AUTHORIZED");
+
+        let releaseRedirectWrite: (() => void) | undefined;
+        const redirectWritePaused = new Promise<void>((resolve) => {
+          const originalWriteFile = fs.writeFile.bind(fs);
+          vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+            if (
+              typeof data === "string" &&
+              data.includes('"redirectUrl": "http://localhost:8989/oauth/callback"') &&
+              !data.includes('"access_token": "rotated-access"')
+            ) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseRedirectWrite = release;
+              });
+            }
+            return await originalWriteFile(file, data, options);
+          });
+        });
+
+        try {
+          const login = runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+          });
+          await redirectWritePaused;
+
+          const provider = createMcpOAuthClientProvider({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+          });
+          const saveTokens = provider.saveTokens({
+            access_token: "rotated-access",
+            refresh_token: "rotated-refresh",
+            token_type: "Bearer",
+          });
+
+          releaseRedirectWrite?.();
+          await Promise.all([login, saveTokens]);
+
+          await expect(provider.tokens()).resolves.toMatchObject({
+            access_token: "rotated-access",
+            refresh_token: "rotated-refresh",
+          });
+          expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+        } finally {
+          vi.restoreAllMocks();
+          releaseRedirectWrite?.();
+        }
+      },
+      {
+        prefix: "openclaw-mcp-oauth-localhost-token-race-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
   it("does not start hidden authorization flows without an authorization callback", async () => {
     // Normal agent/tool execution must not open browser auth flows implicitly;
     // operators use the explicit mcp login command instead.
