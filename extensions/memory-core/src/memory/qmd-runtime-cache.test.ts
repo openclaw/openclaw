@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -26,19 +25,14 @@ import {
   writeQmdMultiCollectionProbeCache,
 } from "./qmd-runtime-cache.js";
 
-const tempRoots: string[] = [];
+const tempRoots = createTempDirTracker();
 
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
 });
 
 afterAll(async () => {
-  while (tempRoots.length > 0) {
-    const root = tempRoots.pop();
-    if (root) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  }
+  tempRoots.cleanup();
   resetMemoryCoreDreamingStateForTests();
 });
 
@@ -58,12 +52,8 @@ afterEach(async () => {
   await clearStore(QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE);
 });
 
-function makeWorkspace(): Promise<string> {
-  const prefix = path.join(os.tmpdir(), `qmd-runtime-cache-${Date.now()}-`);
-  return fs.mkdtemp(prefix).then((workspaceDir) => {
-    tempRoots.push(workspaceDir);
-    return workspaceDir;
-  });
+async function makeWorkspace(): Promise<string> {
+  return tempRoots.make("qmd-runtime-cache-");
 }
 
 function managedCollections(): QmdRuntimeManagedCollection[] {
