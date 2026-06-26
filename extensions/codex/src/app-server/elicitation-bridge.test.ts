@@ -357,6 +357,35 @@ describe("Codex app-server elicitation bridge", () => {
     expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
   });
 
+  it("returns a fresh Computer Use empty-schema content object for each accept", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty-1", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty-1", decision: "allow-once" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty-2", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty-2", decision: "allow-once" });
+
+    const requestParams = buildComputerUseApprovalElicitation({
+      requestedSchema: { type: "object", properties: {} },
+    });
+    const runParams = {
+      requestParams,
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    };
+
+    const first = await handleCodexAppServerElicitationRequest(runParams);
+    expect(first).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+    (first as { content: Record<string, unknown> }).content.approve = false;
+    (first as { content: Record<string, unknown> }).content.extra = true;
+
+    const second = await handleCodexAppServerElicitationRequest(runParams);
+
+    expect(second).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+  });
+
   it("maps Computer Use allow-always decisions onto persistent metadata", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-computer-use-always", status: "accepted" })
