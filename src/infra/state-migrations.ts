@@ -4528,7 +4528,7 @@ async function migrateLegacySessions(
       rewroteSessionFiles = true;
     }
     if (rewroteSessionFiles) {
-      const normalized: Record<string, SessionEntry> = {};
+      const normalized = Object.create(null) as Record<string, SessionEntry>;
       for (const [key, entry] of Object.entries(merged)) {
         const normalizedEntry = normalizeSessionEntry(entry);
         if (normalizedEntry) {

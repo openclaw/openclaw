@@ -477,7 +477,7 @@ describe("state migrations", () => {
       },
     };
     Object.defineProperty(targetStore, "__proto__", {
-      value: { sessionId: "prototype-row", updatedAt: 10 },
+      value: { sessionId: "prototype-row", updatedAt: 10, sessionFile: "trace.jsonl" },
       enumerable: true,
     });
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
@@ -514,6 +514,7 @@ describe("state migrations", () => {
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Moved trace.jsonl → agents/worker-1/sessions",
+      "Rewrote migrated session transcript paths",
       "Migrated 1 ACP session metadata row → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
@@ -526,7 +527,7 @@ describe("state migrations", () => {
         path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
         "utf8",
       ),
-    ) as Record<string, { sessionId: string; acp?: unknown }>;
+    ) as Record<string, { sessionId: string; sessionFile?: string; acp?: unknown }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["group:mobile-room"]?.sessionId).toBe("group-session");
     expect(mergedStore["group:legacy-room"]?.sessionId).toBe("generic-group-session");
@@ -540,6 +541,9 @@ describe("state migrations", () => {
     expect(Object.hasOwn(mergedStore, "__proto__")).toBe(true);
     expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
       "prototype-row",
+    );
+    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionFile).toBe(
+      path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"),
     );
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
