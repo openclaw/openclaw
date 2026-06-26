@@ -196,6 +196,12 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
       return null;
     }
   }
+  if ("unless" in seg) {
+    const v = getPath(ctx, String(seg.unless));
+    if (v !== null && v !== undefined && v !== false && v !== "") {
+      return null;
+    }
+  }
   if ("map" in seg) {
     const v = getPath(ctx, String(seg.map));
     const key = typeof v === "boolean" ? String(v) : String(v);

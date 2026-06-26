@@ -582,6 +582,8 @@ export type PluginHookReplyUsageState = {
     cacheWrite?: number;
     total?: number;
   };
+  /** True when the turn was delivered by a CLI backend that owns its own context window. */
+  isCliBackend?: boolean;
 };
 
 export type PluginHookReplyPayloadSendingEvent = {

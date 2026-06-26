@@ -80,6 +80,14 @@ describe("usage-bar segment forms", () => {
     expect(render(seg, { u: { cache_hit_pct: 0 } })).toBe("🗄 0%");
   });
 
+  it("unless drops when the field is truthy, keeps when falsy or missing", () => {
+    const seg = [{ unless: "ctx.managed_by_backend", text: "📚 context bar content" }];
+    expect(render(seg, { ctx: { managed_by_backend: true } })).toBe("");
+    expect(render(seg, { ctx: { managed_by_backend: false } })).toBe("📚 context bar content");
+    expect(render(seg, { ctx: {} })).toBe("📚 context bar content");
+    expect(render(seg, {})).toBe("📚 context bar content");
+  });
+
   it("map resolves enum/bool, drops on no match", () => {
     const seg = [{ map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } }];
     expect(render(seg, { state: { fast_mode: true } })).toBe("⚡");
@@ -111,6 +119,66 @@ describe("usage-bar segment forms", () => {
 });
 
 describe("usage-bar end-to-end with buildUsageContract", () => {
+  it("hides the context bar when managed_by_backend is true", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "anthropic",
+        model: "claude-cli",
+        fastMode: false,
+        contextTokenBudget: 272000,
+        contextUsedTokens: 250000,
+        usage: { input: 250000, output: 100, cacheRead: 0, cacheWrite: 0, total: 250100 },
+        isCliBackend: true,
+      },
+      "discord",
+    );
+    expect(contract).toMatchObject({
+      context: { managed_by_backend: true, max_tokens: 272000, pct_used: 92 },
+    });
+
+    const pieces = [
+      { text: "{model.display_name|alias:models}" },
+      {
+        when: "context.max_tokens",
+        unless: "context.managed_by_backend",
+        text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+      },
+      { text: " | {usage.input_tokens|num}" },
+    ];
+    expect(renderUsageBar(tpl(pieces), contract)).toBe("claude-cli | 250k");
+  });
+
+  it("renders the context bar when managed_by_backend is false", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        fastMode: false,
+        contextTokenBudget: 272000,
+        contextUsedTokens: 250000,
+        usage: { input: 250000, output: 100, cacheRead: 0, cacheWrite: 0, total: 250100 },
+        isCliBackend: false,
+      },
+      "discord",
+    );
+    expect(contract).toMatchObject({
+      context: { managed_by_backend: false },
+    });
+
+    const pieces = [
+      { text: "{model.display_name|alias:models}" },
+      {
+        when: "context.max_tokens",
+        unless: "context.managed_by_backend",
+        text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+      },
+      { text: " | {usage.input_tokens|num}" },
+    ];
+    const rendered = renderUsageBar(tpl(pieces), contract);
+    expect(rendered).toContain("📚");
+    expect(rendered).not.toBe("claude-opus-4-6 | 250k");
+  });
+
   it("renders a full footer from a reply usage snapshot", () => {
     const contract = buildUsageContract(
       {

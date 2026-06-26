@@ -314,6 +314,52 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
+  it("runs memory flush for CLI backends (regression: #96858)", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const followupRun = createTestFollowupRun({ provider: "cli-test" });
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { memoryFlush: {} },
+            cliBackends: { "cli-test": { id: "cli-test" } as never },
+          },
+        },
+      },
+      followupRun,
+      sessionCtx: { Provider: "cli" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-cli",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // Memory flush must run even for CLI backend sessions
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const flushCall = requireEmbeddedAgentCall();
+    expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
+  });
+
   it("reports memory-flush error payloads for visible delivery", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -890,7 +936,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ).toBeUndefined();
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("runs memory flush for CLI providers (regression: #96858)", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -898,7 +944,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
 
-    const entry = await runMemoryFlushIfNeeded({
+    await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { cliBackends: { "codex-cli": { command: "codex" } } } } },
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
@@ -912,11 +958,12 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(entry).toBe(sessionEntry);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const flushCall = requireEmbeddedAgentCall();
+    expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
   });
 
-  it("skips memory flush for compatible CLI session runtime pins", async () => {
+  it("runs memory flush for compatible CLI session runtime pins (regression: #96858)", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
         {
@@ -952,8 +999,9 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(entry).toBe(sessionEntry);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const flushCall = requireEmbeddedAgentCall();
+    expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
   });
 
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {

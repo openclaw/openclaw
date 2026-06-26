@@ -32,6 +32,7 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
       { map: "state.fast_mode", cases: { true: " ⚡", false: " 🐌" } },
       {
         when: "context.max_tokens",
+        unless: "context.managed_by_backend",
         text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
       },
       {

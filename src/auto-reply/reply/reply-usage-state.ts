@@ -32,6 +32,7 @@ export function buildReplyUsageState(params: {
   usage?: NormalizedUsage;
   lastCallUsage?: NormalizedUsage;
   durationMs?: number;
+  isCliBackend?: boolean;
 }): PluginHookReplyUsageState {
   const resolvedProvider = params.fallbackExhausted ? undefined : params.winnerProvider;
   const resolvedModel = params.fallbackExhausted ? undefined : params.winnerModel;
@@ -101,6 +102,7 @@ export function buildReplyUsageState(params: {
           total: params.lastCallUsage.total,
         }
       : undefined,
+    isCliBackend: params.isCliBackend,
   };
 }
 

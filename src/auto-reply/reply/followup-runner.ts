@@ -1443,6 +1443,7 @@ export function createFollowupRunner(params: {
         promptTokens,
         usage,
         lastCallUsage,
+        isCliBackend: usedCliProvider,
       });
       const responseUsageLine = resolveResponseUsageLine({
         config: runtimeConfig,

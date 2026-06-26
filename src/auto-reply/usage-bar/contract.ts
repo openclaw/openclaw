@@ -92,6 +92,7 @@ export function buildUsageContract(
       used_tokens: usedTokens,
       max_tokens: maxTokens,
       pct_used: pctUsed,
+      managed_by_backend: state.isCliBackend === true,
     },
     cost: {
       turn_usd: typeof state.turnUsd === "number" ? state.turnUsd : null,

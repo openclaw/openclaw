@@ -1867,6 +1867,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       usage,
       lastCallUsage,
+      isCliBackend: isCliProvider(providerUsed, cfg),
     });
     recordReplyUsageState(runId, replyUsageState);
     const verboseEnabled = resolvedVerboseLevel !== "off";
