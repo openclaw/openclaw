@@ -1171,7 +1171,6 @@ function createReplySessionInitializationRevision(params: {
 function resolveInitializedReplySessionEntry(params: {
   agentId: string;
   currentEntry?: SessionEntry;
-  fallbackSessionFile?: string;
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
@@ -1746,7 +1745,6 @@ export async function commitReplySessionInitialization(params: {
   activeSessionKey: string;
   agentId: string;
   expectedRevision: string;
-  fallbackSessionFile?: string;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   onArchiveError?: (error: unknown, sourcePath: string) => void;
   onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
@@ -1794,7 +1792,6 @@ export async function commitReplySessionInitialization(params: {
   const sessionEntry = resolveInitializedReplySessionEntry({
     agentId: params.agentId,
     ...(currentEntry ? { currentEntry } : {}),
-    fallbackSessionFile: params.fallbackSessionFile,
     sessionEntry: preparedSessionEntry,
     storePath: params.storePath,
   });
