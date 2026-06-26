@@ -829,6 +829,17 @@ export class AcpxRuntime implements AcpRuntime {
     return delegate;
   }
 
+  private releaseOpenClawToolsDelegateForSession(sessionKey: string): void {
+    if (!this.openclawToolsMcpBridgeEnabled) {
+      return;
+    }
+    const normalizedSessionKey = sessionKey.trim();
+    if (!normalizedSessionKey) {
+      return;
+    }
+    this.openclawToolsSessionDelegates.delete(normalizedSessionKey);
+  }
+
   private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
     const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
     return this.resolveDelegateForLoadedRecord(handle, record);
@@ -1350,6 +1361,9 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
+    // Fresh reset has no ACP handle to close the delegate's upstream client.
+    // Keep the scoped delegate reachable so the next ensure can replace it;
+    // close() owns cache release when the session lifecycle ends.
     this.sessionStore.markFresh(input.sessionKey);
   }
 
@@ -1358,8 +1372,9 @@ export class AcpxRuntime implements AcpRuntime {
       input.handle.acpxRecordId ?? input.handle.sessionKey,
     );
     let closeSucceeded;
+    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
     try {
-      await this.resolveDelegateForLoadedRecord(input.handle, record).close({
+      await delegate.close({
         handle: input.handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
@@ -1367,6 +1382,9 @@ export class AcpxRuntime implements AcpRuntime {
       closeSucceeded = true;
     } finally {
       await this.cleanupProcessTreeForRecord(input.handle, record);
+    }
+    if (closeSucceeded) {
+      this.releaseOpenClawToolsDelegateForSession(input.handle.sessionKey);
     }
     if (closeSucceeded && input.discardPersistentState) {
       this.sessionStore.markFresh(input.handle.sessionKey);
