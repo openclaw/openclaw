@@ -1088,7 +1088,7 @@ export class ChatPage extends LitElement {
     }
     if (clientChanged) {
       this.connectedClient = snapshot.client;
-      void refreshPageChat(state).finally(() => state.requestUpdate?.());
+      void refreshPageChat(state, { startup: true }).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
     }
     state.requestUpdate?.();

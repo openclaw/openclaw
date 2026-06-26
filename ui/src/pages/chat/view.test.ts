@@ -4,6 +4,7 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
@@ -436,7 +437,34 @@ function createChatHeaderState(
   } as unknown as AppViewState & {
     client: GatewayBrowserClient;
     settings: AppViewState["settings"];
+    sessions: SessionCapability;
   };
+  const sessionState = {
+    result: state.sessionsResult,
+    agentId: null,
+    loading: false,
+    error: null,
+    deletedKeys: [],
+  };
+  state.sessions = {
+    state: sessionState,
+    list: async (options = {}) => {
+      const result = (await request("sessions.list", options)) as SessionsListResult;
+      sessionState.result = result;
+      return result;
+    },
+    refresh: async (options = {}) => {
+      const result = (await request("sessions.list", options)) as SessionsListResult;
+      state.sessionsResult = result;
+      sessionState.result = result;
+    },
+    patch: async (key, patch, options = {}) =>
+      (await request("sessions.patch", { key, ...options, ...patch })) as Awaited<
+        ReturnType<SessionCapability["patch"]>
+      >,
+    subscribe: () => () => undefined,
+    dispose: () => undefined,
+  } as SessionCapability;
   return { state, request };
 }
 

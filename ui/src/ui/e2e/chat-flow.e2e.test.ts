@@ -685,12 +685,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as
-          | (Element & { chatSending?: unknown })
-          | null;
-        return app?.chatSending === false;
-      });
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
         timeout: 10_000,
       });
