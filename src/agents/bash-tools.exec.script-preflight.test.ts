@@ -556,6 +556,23 @@ describeNonWin("exec script preflight", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  // When security is "full" the operator trusts the agent completely. The
+  // fail-closed interpreter heuristic should not fire — file content checks
+  // still run when a target path can be extracted, but the heuristic only
+  // applies to lower-trust configurations.
+  it.each(failClosedCases)(
+    "does not fail closed for %s when security is full",
+    async (_name, command) => {
+      await expect(
+        validateExecScriptPreflight({
+          command,
+          workdir: process.cwd(),
+          security: "full",
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
 });
 
 describeWin("exec script preflight on windows path syntax", () => {

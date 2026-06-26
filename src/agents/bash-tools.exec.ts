@@ -1157,30 +1157,38 @@ function shouldFailClosedInterpreterPreflight(command: string): {
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
+  security?: ExecSecurity;
 }): Promise<void> {
   const target = extractScriptTargetFromCommand(params.command);
   if (!target) {
-    const {
-      hasInterpreterInvocation,
-      hasComplexSyntax,
-      hasProcessSubstitution,
-      hasInterpreterSegmentScriptHint,
-      hasInterpreterPipelineScriptHint,
-      isDirectInterpreterCommand,
-    } = shouldFailClosedInterpreterPreflight(params.command);
-    if (
-      hasInterpreterInvocation &&
-      hasComplexSyntax &&
-      (hasInterpreterSegmentScriptHint ||
-        hasInterpreterPipelineScriptHint ||
-        (hasProcessSubstitution && isDirectInterpreterCommand))
-    ) {
-      // Fail closed when interpreter-driven script execution is ambiguous; otherwise
-      // attackers can route script content through forms our fast parser cannot validate.
-      throw new Error(
-        "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
-          "Use a direct `python <file>.py` or `node <file>.js` command.",
-      );
+    // When security is "full" the operator has explicitly declared that the agent
+    // is trusted to run arbitrary commands. Skip the fail-closed interpreter
+    // heuristic — it fires false positives for legitimate patterns like
+    // `python3 script.py | head -30` where a pipeline prevents target extraction.
+    // File content validation (below) still runs whenever a target can be found.
+    if (params.security !== "full") {
+      const {
+        hasInterpreterInvocation,
+        hasComplexSyntax,
+        hasProcessSubstitution,
+        hasInterpreterSegmentScriptHint,
+        hasInterpreterPipelineScriptHint,
+        isDirectInterpreterCommand,
+      } = shouldFailClosedInterpreterPreflight(params.command);
+      if (
+        hasInterpreterInvocation &&
+        hasComplexSyntax &&
+        (hasInterpreterSegmentScriptHint ||
+          hasInterpreterPipelineScriptHint ||
+          (hasProcessSubstitution && isDirectInterpreterCommand))
+      ) {
+        // Fail closed when interpreter-driven script execution is ambiguous; otherwise
+        // attackers can route script content through forms our fast parser cannot validate.
+        throw new Error(
+          "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
+            "Use a direct `python <file>.py` or `node <file>.js` command.",
+        );
+      }
     }
     return;
   }
@@ -1950,6 +1958,7 @@ export function createExecTool(
           await validateScriptFileForShellBleed({
             command: params.command,
             workdir: scriptPreflightCwd,
+            security,
           });
         }
 
