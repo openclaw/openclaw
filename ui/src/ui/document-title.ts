@@ -51,6 +51,10 @@ function isGeneratedConversationDisplayNameRow(
   row: SessionsListResult["sessions"][number],
 ): boolean {
   return (
+    row.origin != null ||
+    row.chatType === "direct" ||
+    row.chatType === "group" ||
+    row.chatType === "channel" ||
     row.key.includes(":direct:") ||
     row.key.includes(":group:") ||
     row.key.includes(":channel:") ||

@@ -43,6 +43,7 @@ export type SessionsState = SessionsChatRunState & {
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  activeSessionTitleRow?: SessionsListResult["sessions"][number] | null;
   sessionsResultAgentId?: string | null;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   sessionsError: string | null;
@@ -1304,6 +1305,13 @@ export async function deleteSessionsAndRefresh(
       state,
       selectedGlobalDeleted ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
+  }
+  if (
+    deleted.some(
+      (key) => key === state.sessionKey || areUiSessionKeysEquivalent(key, state.sessionKey ?? ""),
+    )
+  ) {
+    state.activeSessionTitleRow = null;
   }
   if (deleteErrors.length > 0) {
     state.sessionsError = deleteErrors.join("; ");

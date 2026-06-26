@@ -472,6 +472,8 @@ export type GatewaySessionRow = {
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  chatType?: string;
+  origin?: ({ label?: string | null } & Record<string, unknown>) | null;
   surface?: string;
   subject?: string;
   room?: string;

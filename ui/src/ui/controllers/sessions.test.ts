@@ -405,6 +405,39 @@ describe("deleteSessionsAndRefresh", () => {
     expect(state.sessionsLoading).toBe(false);
   });
 
+  it("clears the active title row when deleting the selected session", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 2,
+          path: "/api/sessions",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionKey: "agent:main:project",
+      activeSessionTitleRow: {
+        key: "agent:main:project",
+        kind: "direct",
+        label: "Project planning",
+        updatedAt: 1,
+      },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const deleted = await deleteSessionsAndRefresh(state, ["agent:main:project"]);
+
+    expect(deleted).toEqual(["agent:main:project"]);
+    expect(state.activeSessionTitleRow).toBeNull();
+  });
+
   it("passes selected agent scope for global deletes", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.delete") {

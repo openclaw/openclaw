@@ -195,6 +195,23 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe(CONTROL_UI_DOCUMENT_TITLE);
   });
 
+  it("does not use origin-derived display names for bound channel sessions with arbitrary keys", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:codex:acp:binding:line:default:test123",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:codex:acp:binding:line:default:test123",
+            kind: "direct",
+            chatType: "direct",
+            origin: { label: "LINE Contact" },
+            displayName: "LINE Contact",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
   it("does not use generated group session display names as titles", () => {
     expect(
       resolveControlUiDocumentTitle({
@@ -218,6 +235,8 @@ describe("resolveControlUiDocumentTitle", () => {
           sessionRow({
             key: "agent:main:telegram:direct:42",
             kind: "direct",
+            chatType: "direct",
+            origin: { label: "openclaw-tui" },
             label: "Support thread",
             displayName: "openclaw-tui",
           }),
