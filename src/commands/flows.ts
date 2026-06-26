@@ -107,11 +107,20 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
 }
 
 function formatFlowListSummary(flows: TaskFlowRecord[]) {
-  const active = flows.filter(
-    (flow) => flow.status === "queued" || flow.status === "running",
-  ).length;
-  const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  const cancelRequested = flows.filter((flow) => flow.cancelRequestedAt != null).length;
+  let active = 0;
+  let blocked = 0;
+  let cancelRequested = 0;
+  for (const flow of flows) {
+    if (flow.status === "queued" || flow.status === "running") {
+      active += 1;
+    }
+    if (flow.status === "blocked") {
+      blocked += 1;
+    }
+    if (flow.cancelRequestedAt != null) {
+      cancelRequested += 1;
+    }
+  }
   return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
 }
 

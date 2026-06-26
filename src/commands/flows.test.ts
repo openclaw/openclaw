@@ -162,6 +162,43 @@ describe("flows commands", () => {
     });
   });
 
+  it("lists TaskFlow pressure counts in text mode", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Run active work",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Queue follow-up work",
+        status: "queued",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Wait on a child",
+        status: "blocked",
+        cancelRequestedAt: 150,
+        createdAt: 100,
+        updatedAt: 150,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({ json: false }, runtime);
+
+      expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
+        "TaskFlow pressure: 2 active · 1 blocked · 1 cancel-requested · 3 total",
+      );
+    });
+  });
+
   it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
