@@ -10,10 +10,9 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     expect(report.ok).toBe(true);
     expect(report.checkpoints.map((checkpoint) => checkpoint.label)).toEqual([
       "seeded-legacy-store",
-      "after-doctor-fix",
+      "after-startup-import",
       "after-doctor-inspect",
       "after-doctor-validate",
-      "gateway-started",
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
@@ -42,11 +41,14 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
         .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
     ).toBe(true);
+    expect(report.checkpoints.some((checkpoint) => checkpoint.doctor?.mode === "fix")).toBe(false);
     expect(
       report.checkpoints.some(
         (checkpoint) =>
-          checkpoint.label === "after-doctor-fix" &&
-          checkpoint.doctor?.mode === "fix" &&
+          checkpoint.label === "after-startup-import" &&
+          checkpoint.gatewayLogTail?.includes(
+            "session: imported legacy session metadata/transcripts into SQLite",
+          ) === true &&
           report.oldStateSessionKeys.every((key) =>
             checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
           ) &&
@@ -54,18 +56,18 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.sqlite.transcriptEvents >= 13,
       ),
     ).toBe(true);
-    const doctorFixCheckpoint = report.checkpoints.find(
-      (checkpoint) => checkpoint.label === "after-doctor-fix",
+    const startupImportCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-startup-import",
     );
     expect(
-      doctorFixCheckpoint?.archiveArtifacts.some(
+      startupImportCheckpoint?.archiveArtifacts.some(
         (artifact) =>
           artifact.path.includes(`${report.legacySessionId}.trajectory.jsonl`) &&
           artifact.textTail?.includes("trajectory") === true,
       ),
     ).toBe(true);
     expect(
-      doctorFixCheckpoint?.archiveArtifacts.some(
+      startupImportCheckpoint?.archiveArtifacts.some(
         (artifact) =>
           artifact.path.includes("old-orphan.deleted.jsonl") &&
           artifact.textTail?.includes("old-orphan") === true,
