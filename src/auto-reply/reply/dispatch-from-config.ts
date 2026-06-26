@@ -132,9 +132,7 @@ import {
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
-  loadSessionStore,
-  readSessionEntry,
-  resolveSessionStoreEntry,
+  loadSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
   updateSessionStoreEntry,
@@ -403,12 +401,18 @@ const resolveSessionStoreLookup = (
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath);
+    const entry = loadSessionStoreEntry({
+      agentId,
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
+      clone: false,
+    });
     return {
       sessionKey,
       storePath,
-      store,
-      entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
+      entry,
+      store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
     return {
@@ -450,6 +454,7 @@ const resolveBoundAcpDispatchSessionKey = (params: {
 };
 
 const createShouldEmitVerboseProgress = (params: {
+  agentId?: string;
   sessionKey?: string;
   storePath?: string;
   initialExplicitLevel?: string;
@@ -458,7 +463,13 @@ const createShouldEmitVerboseProgress = (params: {
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
-        const entry = readSessionEntry(params.storePath, params.sessionKey);
+        const entry = loadSessionStoreEntry({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+          clone: false,
+        });
         return normalizeVerboseLevel(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
@@ -584,13 +595,30 @@ function resolveChannelModelCandidate(params: {
 }
 
 function resolveStoredModelCandidate(params: {
+  cfg: OpenClawConfig;
   defaultProvider: string;
   entry?: SessionEntry;
   parentSessionKey?: string;
+  sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
 }): HarnessDefaultCandidate | undefined {
   const storedModelRef = resolveStoredModelOverride({
+    loadSessionEntry: (sessionKey) => {
+      const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: params.cfg,
+        fallbackAgentId: params.sessionAgentId,
+      });
+      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      return loadSessionStoreEntry({
+        agentId,
+        storePath,
+        sessionKey,
+        readConsistency: "latest",
+        clone: false,
+      });
+    },
     sessionEntry: params.entry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -652,9 +680,11 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
       parentSessionKey,
     });
     const storedModelCandidate = resolveStoredModelCandidate({
+      cfg: params.cfg,
       defaultProvider: defaultModelRef.provider,
       entry: params.entry,
       parentSessionKey,
+      sessionAgentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
     });
@@ -1286,6 +1316,7 @@ export async function dispatchReplyFromConfig(
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({
+    agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
