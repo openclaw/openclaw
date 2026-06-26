@@ -2170,7 +2170,7 @@ export abstract class MemoryManagerSyncOps {
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
       files,
-      targetArchiveFiles,
+      targetSessionFiles: targetArchiveFiles,
       sessionsDirtyFiles: this.sessionsDirtyFiles,
       existingRows: targetArchiveFiles
         ? null
