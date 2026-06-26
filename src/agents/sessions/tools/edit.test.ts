@@ -197,6 +197,28 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
+  it("preserves valid sibling edits when batch contains a no-op entry", async () => {
+    const filePath = await createTempFile("alpha beta gamma\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "alpha" }, // no-op
+          { oldText: "gamma", newText: "GAMMA" }, // real change
+        ],
+      },
+      undefined,
+    );
+
+    const tcText = result.content[0];
+    expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
+    expect((result as any).terminate).toBeFalsy();
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
+  });
+
   it("applies real changes normally (no false positive for no-op)", async () => {
     const filePath = await createTempFile("old content\n");
     const tool = createEditTool(tmpDir);

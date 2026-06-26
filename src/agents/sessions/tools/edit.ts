@@ -392,7 +392,7 @@ export function createEditToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const { path, edits } = validateEditInput(input);
+      const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {
@@ -400,8 +400,10 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
-        // Pre-execution no-op: oldText === newText means no change.
-        if (edits.some((e) => e.oldText === e.newText)) {
+        // Filter out no-op entries (oldText === newText) before execution.
+        // If all entries are no-op, return a terminal result.
+        const realEdits = originalEdits.filter((e) => e.oldText !== e.newText);
+        if (realEdits.length === 0) {
           return {
             ...textResult(
               `No changes made to ${path}. The replacement text is identical to the original.`,
@@ -435,7 +437,7 @@ export function createEditToolDefinition(
           const normalizedContent = normalizeToLF(content);
           const { baseContent, newContent } = applyEditsToNormalizedContent(
             normalizedContent,
-            edits,
+            realEdits,
             path,
           );
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
@@ -450,7 +452,7 @@ export function createEditToolDefinition(
             content: [
               {
                 type: "text",
-                text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
               },
             ],
             details: {
@@ -469,14 +471,14 @@ export function createEditToolDefinition(
             didEditLikelyApply({
               originalContent: rawContent,
               currentContent,
-              edits,
+              edits: realEdits,
             })
           ) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                  text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
                 },
               ],
               details: { diff: "", patch: "" },
