@@ -18,6 +18,7 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
 import {
   clearSessionStoreCacheForTest,
@@ -1083,7 +1084,7 @@ describe("session store writer queue", () => {
 describe("resolveAndPersistSessionFile", () => {
   const fixture = useTempSessionsFixture("session-file-test-");
 
-  it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
+  it("persists SQLite transcript markers for sessions without sessionFile", async () => {
     const sessionId = "topic-session-id";
     const sessionKey = "agent:main:telegram:group:123:topic:456";
     const store = {
@@ -1094,11 +1095,11 @@ describe("resolveAndPersistSessionFile", () => {
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+    const expectedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
       sessionId,
-      fixture.sessionsDir(),
-      456,
-    );
+      storePath: fixture.storePath(),
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
@@ -1106,13 +1107,13 @@ describe("resolveAndPersistSessionFile", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      fallbackSessionFile,
+      agentId: "main",
     });
 
-    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionFile).toBe(expectedSessionFile);
 
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
   });
 
   it("creates and persists entry when session is not yet present", async () => {
@@ -1120,23 +1121,27 @@ describe("resolveAndPersistSessionFile", () => {
     const sessionKey = "agent:main:telegram:group:123";
     fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const expectedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath: fixture.storePath(),
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
       sessionStore,
       storePath: fixture.storePath(),
-      fallbackSessionFile,
+      agentId: "main",
     });
 
-    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionId).toBe(sessionId);
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
   });
 
-  it("rotates to a new transcript path when sessionId changes on the same session key", async () => {
+  it("rotates to a new SQLite transcript marker when sessionId changes on the same session key", async () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
@@ -1144,10 +1149,11 @@ describe("resolveAndPersistSessionFile", () => {
       previousSessionId,
       fixture.sessionsDir(),
     );
-    const expectedNextSessionFile = resolveSessionTranscriptPathInDir(
-      nextSessionId,
-      fixture.sessionsDir(),
-    );
+    const expectedNextSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: nextSessionId,
+      storePath: fixture.storePath(),
+    });
     const store = {
       [sessionKey]: {
         sessionId: previousSessionId,
@@ -1164,7 +1170,7 @@ describe("resolveAndPersistSessionFile", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      sessionsDir: fixture.sessionsDir(),
+      agentId: "main",
     });
 
     expect(result.sessionFile).toBe(expectedNextSessionFile);

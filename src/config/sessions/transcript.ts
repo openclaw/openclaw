@@ -657,7 +657,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             storePath,
             sessionEntry: currentEntry,
             agentId: transcriptAgentId,
-            sessionsDir: path.dirname(storePath),
           });
         }
       } catch (err) {

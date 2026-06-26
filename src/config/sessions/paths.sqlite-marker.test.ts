@@ -39,7 +39,6 @@ describe("SQLite sessionFile markers", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      sessionsDir: path.dirname(fixture.storePath()),
     });
 
     expect(result.sessionFile).toBe(marker);
@@ -69,14 +68,10 @@ describe("SQLite sessionFile markers", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      sessionsDir: path.dirname(fixture.storePath()),
     });
 
-    const expectedSessionFile = path.join(path.dirname(fixture.storePath()), `${sessionId}.jsonl`);
-    expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
-      fs.realpathSync.native(path.dirname(expectedSessionFile)),
-    );
-    expect(path.basename(result.sessionFile)).toBe(path.basename(expectedSessionFile));
+    const expectedSessionFile = `sqlite:main:${sessionId}:${fixture.storePath()}`;
+    expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionFile).toBe(result.sessionFile);
   });
 });
