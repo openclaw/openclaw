@@ -189,21 +189,44 @@ function readLiveModelCatalogCursor(
   return nextPageToken ? { name: "pageToken", value: nextPageToken } : undefined;
 }
 
-function buildLiveModelCatalogNextPageUrl(currentUrl: string, body: unknown): string | undefined {
+type LiveModelCatalogNextPageResolution =
+  | { status: "complete" }
+  | { status: "incomplete" }
+  | { status: "next"; url: string };
+
+function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
+  const record = readLiveModelCatalogRecord(body);
+  if (!record || record.has_more === false) {
+    return false;
+  }
+  return Boolean(
+    record.has_more === true ||
+    readLiveModelCatalogNextUrl(body) ||
+    readLiveModelCatalogString(record.next_cursor) ||
+    readLiveModelCatalogString(record.nextPageToken),
+  );
+}
+
+function resolveLiveModelCatalogNextPage(
+  currentUrl: string,
+  body: unknown,
+): LiveModelCatalogNextPageResolution {
   const rawNextUrl = readLiveModelCatalogNextUrl(body);
   if (rawNextUrl) {
     const nextUrl = new URL(rawNextUrl, currentUrl);
     if (nextUrl.origin === new URL(currentUrl).origin) {
-      return nextUrl.toString();
+      return { status: "next", url: nextUrl.toString() };
     }
   }
   const cursor = readLiveModelCatalogCursor(body);
-  if (!cursor) {
-    return undefined;
+  if (cursor) {
+    const nextUrl = new URL(currentUrl);
+    nextUrl.searchParams.set(cursor.name, cursor.value);
+    return { status: "next", url: nextUrl.toString() };
   }
-  const nextUrl = new URL(currentUrl);
-  nextUrl.searchParams.set(cursor.name, cursor.value);
-  return nextUrl.toString();
+  return bodyAdvertisesMoreLiveModelCatalogPages(body)
+    ? { status: "incomplete" }
+    : { status: "complete" };
 }
 
 async function fetchLiveProviderModelCatalogPage(
@@ -264,7 +287,13 @@ export async function fetchLiveProviderModelRows(
       timeoutMs: remainingTimeoutMs,
     });
     rows.push(...result.rows);
-    pageUrl = buildLiveModelCatalogNextPageUrl(pageUrl, result.body);
+    const nextPage = resolveLiveModelCatalogNextPage(pageUrl, result.body);
+    if (nextPage.status === "incomplete") {
+      throw new Error(
+        `${params.providerId} model discovery did not include a supported next page before the catalog completed`,
+      );
+    }
+    pageUrl = nextPage.status === "next" ? nextPage.url : undefined;
   }
   if (pageUrl) {
     throw new Error(

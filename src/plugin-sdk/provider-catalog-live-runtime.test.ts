@@ -310,6 +310,33 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(50);
   });
 
+  it("fails explicit incomplete live catalog pagination without a supported next page", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+          has_more: true,
+        }),
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow(
+      "provider model discovery did not include a supported next page before the catalog completed",
+    );
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("uses one timeout budget across paginated live catalog discovery", async () => {
     vi.useFakeTimers();
     try {
