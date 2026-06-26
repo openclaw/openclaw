@@ -93,7 +93,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): string[] {
   const agentIds = new Set<string>();
   for (const pluginId of ["voice-call", "@openclaw/voice-call"]) {
-    const config = asRecord(params.cfg.plugins?.entries?.[pluginId]?.config);
+    const entry = params.cfg.plugins?.entries?.[pluginId];
+    if (!entry) {
+      continue;
+    }
+    const config = entry.config === undefined ? {} : asRecord(entry.config);
     if (!config) {
       continue;
     }

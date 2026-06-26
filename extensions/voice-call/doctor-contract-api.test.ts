@@ -95,6 +95,13 @@ describe("voice-call doctor state migration", () => {
         },
       }),
     ).toEqual(["main"]);
+    expect(
+      resolveSessionStoreAgentIds({
+        cfg: {
+          plugins: { entries: { "voice-call": { enabled: true } } },
+        },
+      }),
+    ).toEqual(["main"]);
   });
 
   it("imports legacy calls.jsonl into plugin state", async () => {

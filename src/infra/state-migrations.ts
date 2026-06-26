@@ -4334,6 +4334,11 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
+  const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
+    ? Object.keys(legacyStore).filter((key) =>
+        isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
+      ).length
+    : 0;
 
   let repairedStaleSessionFiles = false;
   for (const entry of Object.values(canonicalizedTarget.store)) {
@@ -4417,6 +4422,11 @@ async function migrateLegacySessions(
       changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
     }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
+    if (preservedLegacyForeignMainAliasCount > 0) {
+      warnings.push(
+        `Preserved ${preservedLegacyForeignMainAliasCount} ambiguous session key(s) while importing legacy sessions into ${detected.sessions.targetStorePath}`,
+      );
+    }
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }

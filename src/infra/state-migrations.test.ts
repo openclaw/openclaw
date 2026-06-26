@@ -473,7 +473,9 @@ describe("state migrations", () => {
       now: () => 1234,
     });
 
-    expect(result.warnings).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
+    ]);
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
