@@ -183,4 +183,28 @@ describe("persistSessionEntry", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("allows an explicit create-on-missing persistence predicate", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
+
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: {
+          sessionId: "created-session",
+          updatedAt: 1,
+        },
+        shouldPersist: (entry) => entry === undefined,
+      });
+
+      expect(persisted?.sessionId).toBe("created-session");
+      expect(sessionStore.main?.sessionId).toBe("created-session");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
