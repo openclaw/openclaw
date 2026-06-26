@@ -1338,6 +1338,98 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("errors on oversized SSE body without event boundary in sanitizer", async () => {
+    const oversized = "x".repeat(65 * 1024);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(oversized));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) break;
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded max buffer size/i);
+  });
+
+  it("errors on oversized streaming JSON body without content-length in SSE synthesis", async () => {
+    const CHUNK = 1024 * 1024;
+    let sends = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (sends < 17) {
+              sends++;
+              controller.enqueue(new Uint8Array(CHUNK));
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) break;
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
+  });
+
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",
