@@ -298,11 +298,11 @@ function hashConfigRaw(raw: string | null): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-function assertBaseSnapshotStillCurrent(
+async function assertBaseSnapshotStillCurrent(
   snapshot: ConfigFileSnapshot,
   configPath: string,
   ioFs: typeof fs,
-): void {
+): Promise<void> {
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       currentHash: null,
@@ -313,7 +313,7 @@ function assertBaseSnapshotStillCurrent(
   let currentRaw: string | null = null;
   let currentExists = true;
   try {
-    currentRaw = ioFs.readFileSync(configPath, "utf-8");
+    currentRaw = await ioFs.promises.readFile(configPath, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -2283,7 +2283,7 @@ export function createConfigIO(
       : await readConfigFileSnapshotInternal();
     const snapshot = snapshotRead.snapshot;
     if (options.baseSnapshot) {
-      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+      await assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
     }
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
@@ -2595,13 +2595,10 @@ export function createConfigIO(
         beforeRename: async () => {
           options.assertConfigPathForWrite?.();
           if (options.baseSnapshot) {
-            assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+            await assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
           }
           if (deps.fs.existsSync(configPath)) {
             await maintainConfigBackups(configPath, deps.fs.promises);
-          }
-          if (options.baseSnapshot) {
-            assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
           }
           options.assertConfigPathForWrite?.();
         },
