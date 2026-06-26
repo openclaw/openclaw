@@ -243,8 +243,12 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
       const description = normalizeOptionalString(snapshot.custom.description) ?? undefined;
       let parameters: unknown = { type: "object", properties: {} };
       if (isRecord(snapshot.custom.input_schema)) {
-        const projected = projectJsonObjectSchema(snapshot.custom.input_schema, `${name}.input_schema`);
-        if (projected) parameters = projected;
+        const projected = projectJsonObjectSchema(
+          snapshot.custom.input_schema,
+          `${name}.input_schema`,
+        );
+        if (!projected) return undefined;
+        parameters = projected;
       }
       return {
         kind: "function",
@@ -366,20 +370,22 @@ function normalizeAllowedToolChoice(
       return [];
     }
     const isCustom = snapshot.type === "custom";
-    const kind =
-      isCustom || snapshot.type === "function" ? "function" : undefined;
+    const kind = isCustom || snapshot.type === "function" ? "function" : undefined;
     // Custom tools store their definition under "custom", not "function" (#97020).
     const definitionKey = isCustom ? "custom" : kind;
-    const definition = definitionKey && isRecord(snapshot[definitionKey]) ? snapshot[definitionKey] : undefined;
+    const definition =
+      definitionKey && isRecord(snapshot[definitionKey]) ? snapshot[definitionKey] : undefined;
     const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
     if (!kind || !name || !isProjectedToolAvailable(toolProjection, kind, name)) return [];
     // Project custom allowed_tools entries to function format (#97020).
     if (isCustom) {
-      const desc = normalizeOptionalString(snapshot.custom.description) ?? undefined;
-      return [{
-        type: "function",
-        function: { name, ...(desc ? { description: desc } : {}) },
-      }];
+      const desc = normalizeOptionalString(definition?.description) ?? undefined;
+      return [
+        {
+          type: "function",
+          function: { name, ...(desc ? { description: desc } : {}) },
+        },
+      ];
     }
     return [snapshot];
   });
