@@ -1199,13 +1199,10 @@ function sessionFileMatchesCwd(
   if (!cwd) {
     return true;
   }
-  // Older sessions may not record a cwd; preserve backward compatibility by
-  // treating a missing/empty cwd as a match rather than orphaning them.
-  const headerCwd = header?.cwd;
-  if (!headerCwd) {
-    return true;
-  }
-  return headerCwd === cwd;
+  // Shipped session headers (e.g. v2026.5.28, v2026.6.10) always record cwd,
+  // so project-scoped resume/list requires an exact cwd match. cwd-less files
+  // are not silently adopted as belonging to an arbitrary project.
+  return header?.cwd === cwd;
 }
 
 /** Exported for testing */
@@ -3035,7 +3032,7 @@ export class SessionManager {
     sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
     // When the cwd encoder maps multiple cwds to the same directory, only
     // return sessions that actually belong to the requested cwd.
-    return sessions.filter((session) => !session.cwd || session.cwd === cwd);
+    return sessions.filter((session) => session.cwd === cwd);
   }
 
   /**

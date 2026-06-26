@@ -2625,4 +2625,48 @@ describe("SessionManager cwd collision guard", () => {
     expect(listA.map((s) => s.path)).toEqual([sessionFileA]);
     expect(listB.map((s) => s.path)).toEqual([sessionFileB]);
   });
+
+  it("ignores cwd-less sessions when resuming or listing for a specific cwd", async () => {
+    const agentDir = await makeTempDir();
+    const cwd = "/home/alice/dev/client/app";
+    const sessionDir = getDefaultSessionDir(cwd, agentDir);
+
+    const matchingFile = path.join(sessionDir, "matching.jsonl");
+    const cwdlessFile = path.join(sessionDir, "cwdless.jsonl");
+
+    await fs.writeFile(
+      matchingFile,
+      `${JSON.stringify(buildSessionHeader(cwd, "matching"))}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      cwdlessFile,
+      `${JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "cwdless",
+        timestamp: "2026-06-18T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+
+    // Make the cwd-less file strictly newer; without the cwd requirement it
+    // would be picked for the requested cwd.
+    await fs.utimes(
+      matchingFile,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      cwdlessFile,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(findMostRecentSession(sessionDir, { cwd })).toBe(matchingFile);
+    expect(SessionManager.continueRecent(cwd, sessionDir).getSessionFile()).toBe(matchingFile);
+
+    const list = await SessionManager.list(cwd, sessionDir);
+    expect(list.map((s) => s.path)).toEqual([matchingFile]);
+  });
 });
