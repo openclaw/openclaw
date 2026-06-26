@@ -11,10 +11,14 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-/** Resolved session entry and transcript file targeted by an export command. */
+/** Resolved session entry and scoped transcript identity targeted by an export command. */
 interface ExportCommandSessionTarget {
+  agentId: string;
   entry: SessionEntry;
+  sessionId: string;
   sessionFile: string;
+  sessionKey: string;
+  storePath: string;
 }
 
 const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
@@ -61,7 +65,14 @@ export function resolveExportCommandSessionTarget(
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
     );
-    return { entry, sessionFile };
+    return {
+      agentId: targetAgentId,
+      entry,
+      sessionFile,
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    };
   } catch (err) {
     return {
       text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,

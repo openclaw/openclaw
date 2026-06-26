@@ -2,15 +2,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
-import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -32,13 +31,8 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-type SessionExportJsonlWarning = {
-  code: "invalid-session-json" | "invalid-session-row";
-  row: number;
-};
-
 type SessionExportWarningSummary = {
-  code: SessionExportJsonlWarning["code"];
+  code: "invalid-session-json" | "invalid-session-row";
   count: number;
   rows: number[];
 };
@@ -160,65 +154,6 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
 
-function isSessionFileEntry(value: unknown): value is SessionFileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
-}
-
-function parseSessionEntriesWithWarnings(content: string): {
-  entries: SessionFileEntry[];
-  warnings: SessionExportJsonlWarning[];
-} {
-  const entries: SessionFileEntry[] = [];
-  const warnings: SessionExportJsonlWarning[] = [];
-  const rows = content.split(/\r?\n/u);
-  for (const [index, rawLine] of rows.entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isSessionFileEntry(parsed)) {
-        warnings.push({ code: "invalid-session-row", row: index + 1 });
-        continue;
-      }
-      entries.push(parsed);
-    } catch {
-      warnings.push({ code: "invalid-session-json", row: index + 1 });
-    }
-  }
-  return { entries, warnings };
-}
-
-function summarizeSessionExportWarnings(
-  warnings: SessionExportJsonlWarning[],
-): SessionExportWarningSummary[] {
-  const summaries = new Map<SessionExportJsonlWarning["code"], SessionExportWarningSummary>();
-  for (const warning of warnings) {
-    const summary = summaries.get(warning.code);
-    if (summary) {
-      summary.count += 1;
-      if (summary.rows.length < 20) {
-        summary.rows.push(warning.row);
-      }
-      continue;
-    }
-    summaries.set(warning.code, {
-      code: warning.code,
-      count: 1,
-      rows: [warning.row],
-    });
-  }
-  return [...summaries.values()];
-}
-
 function formatSkippedRows(count: number): string {
   return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
 }
@@ -238,15 +173,32 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
   return unreachable;
 }
 
-async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+async function readSessionDataFromIdentity(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<{
   header: SessionHeader | null;
   entries: AgentSessionEntry[];
   leafId: string | null;
   hasLeafControl: boolean;
   warnings: SessionExportWarningSummary[];
 }> {
-  const raw = await fsp.readFile(sessionFile, "utf-8");
-  const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
+  const events = await loadTranscriptEvents(params);
+  return readSessionDataFromEntries(events as SessionFileEntry[], []);
+}
+
+function readSessionDataFromEntries(
+  fileEntries: SessionFileEntry[],
+  warnings: SessionExportWarningSummary[],
+): {
+  header: SessionHeader | null;
+  entries: AgentSessionEntry[];
+  leafId: string | null;
+  hasLeafControl: boolean;
+  warnings: SessionExportWarningSummary[];
+} {
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -268,7 +220,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
     entries,
     leafId: tree.leafId,
     hasLeafControl,
-    warnings: summarizeSessionExportWarnings(warnings),
+    warnings,
   };
 }
 
@@ -286,13 +238,13 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!(await pathExists(sessionFile))) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
-  }
-
   // 2. Load session entries
-  const { entries, header, leafId, hasLeafControl, warnings } =
-    await readSessionDataFromTranscript(sessionFile);
+  const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
+    agentId: sessionTarget.agentId,
+    sessionId: sessionTarget.sessionId,
+    sessionKey: sessionTarget.sessionKey,
+    storePath: sessionTarget.storePath,
+  });
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({

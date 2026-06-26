@@ -20,10 +20,10 @@ const hoisted = await vi.hoisted(async () => {
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
-    pathExistsMock: vi.fn(async (_filePath: string) => true),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
+    loadTranscriptEventsMock: vi.fn(async () => []),
     exportHtmlTemplateContents: new Map<string, string>(),
-    sessionTranscriptContent: "",
+    sessionTranscriptEvents: [] as unknown[],
   };
 });
 
@@ -37,12 +37,12 @@ vi.mock("../../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
-vi.mock("./commands-system-prompt.js", () => ({
-  resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadTranscriptEvents: hoisted.loadTranscriptEventsMock,
 }));
 
-vi.mock("../../infra/fs-safe.js", () => ({
-  pathExists: hoisted.pathExistsMock,
+vi.mock("./commands-system-prompt.js", () => ({
+  resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
 }));
 
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
@@ -83,9 +83,6 @@ vi.mock("node:fs/promises", async () => {
     mkdir: hoisted.mkdirMock,
     writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
-      if (filePath === "/tmp/target-store/session.jsonl") {
-        return hoisted.sessionTranscriptContent;
-      }
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
           return contents;
@@ -191,9 +188,11 @@ describe("buildExportSessionReply", () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
     hoisted.accessMock.mockResolvedValue(undefined);
-    hoisted.pathExistsMock.mockResolvedValue(true);
+    hoisted.loadTranscriptEventsMock.mockImplementation(
+      async () => hoisted.sessionTranscriptEvents,
+    );
     hoisted.exportHtmlTemplateContents.clear();
-    hoisted.sessionTranscriptContent = "";
+    hoisted.sessionTranscriptEvents = [];
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
@@ -298,7 +297,7 @@ describe("buildExportSessionReply", () => {
         targetId: "active-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = entries;
 
     await buildExportSessionReply(makeParams());
 
@@ -347,7 +346,7 @@ describe("buildExportSessionReply", () => {
         message: { role: "assistant", content: "replacement" },
       },
     ];
-    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = rawEntries;
 
     await buildExportSessionReply(makeParams());
 
@@ -399,7 +398,7 @@ describe("buildExportSessionReply", () => {
         targetId: "active-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = rawEntries;
 
     await buildExportSessionReply(makeParams());
 
@@ -444,7 +443,7 @@ describe("buildExportSessionReply", () => {
         parentId: "inactive-tail",
       },
     ];
-    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    hoisted.sessionTranscriptEvents = entries;
 
     await buildExportSessionReply(makeParams());
 
@@ -515,39 +514,40 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain("const highlightMarker = '$&$1';");
   });
 
-  it("reports malformed transcript rows without leaking parser details", async () => {
-    hoisted.sessionTranscriptContent = [
-      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
-      '{"type":"message",',
-      JSON.stringify({
+  it("exports marker-backed sessions by identity without requiring the marker as a file", async () => {
+    hoisted.resolveSessionFilePathMock.mockReturnValue(
+      "sqlite:target:session-1:/tmp/target-store/openclaw-agent.sqlite",
+    );
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionFile: "sqlite:target:session-1:/tmp/target-store/openclaw-agent.sqlite",
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    });
+    hoisted.sessionTranscriptEvents = [
+      {
         type: "message",
         id: "entry-1",
         timestamp: "2026-05-16T00:00:00.000Z",
         message: { role: "user", content: "valid user" },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "entry-2",
-        timestamp: "2026-05-16T00:00:01.000Z",
-        message: { content: "missing role" },
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         id: "entry-3",
         timestamp: "2026-05-16T00:00:02.000Z",
         message: { role: "assistant", content: "valid assistant" },
-      }),
-    ].join("\n");
+      },
+    ];
 
     const reply = await buildExportSessionReply(makeParams());
 
     expect(reply.text).toContain("📊 Entries: 2");
-    expect(reply.text).toContain(
-      "⚠️ Skipped 1 malformed transcript row that was not valid JSON. rows 2",
-    );
-    expect(reply.text).toContain(
-      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
-    );
-    expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
+    expect(hoisted.loadTranscriptEventsMock).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "session-1",
+      sessionKey: "agent:target:session",
+      storePath: "/tmp/target-store/sessions.json",
+    });
   });
 });
