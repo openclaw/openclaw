@@ -1018,7 +1018,10 @@ describe("xai web search response parsing", () => {
 
 describe("xai provider models", () => {
   it("publishes only current selectable chat models newest first", () => {
-    expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+    const models = buildXaiCatalogModels();
+
+    expect(models).toHaveLength(4);
+    expect(models.map((model) => model.id)).toEqual([
       "grok-build-0.1",
       "grok-4.3",
       "grok-4.20-beta-latest-reasoning",

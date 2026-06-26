@@ -258,9 +258,13 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
 }
 
 export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
-  return XAI_MODEL_CATALOG.filter((entry) => XAI_SELECTABLE_MODEL_IDS.has(entry.id)).map((entry) =>
-    toModelDefinition(entry),
-  );
+  const models: ModelDefinitionConfig[] = [];
+  for (const entry of XAI_MODEL_CATALOG) {
+    if (XAI_SELECTABLE_MODEL_IDS.has(entry.id)) {
+      models.push(toModelDefinition(entry));
+    }
+  }
+  return models;
 }
 
 export function resolveXaiCatalogEntry(modelId: string) {
