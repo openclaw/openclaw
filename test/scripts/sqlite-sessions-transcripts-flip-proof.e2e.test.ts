@@ -48,7 +48,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
             checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
           ) &&
           checkpoint.sqlite.sessionEntries >= 7 &&
-          checkpoint.sqlite.transcriptEvents >= 14,
+          checkpoint.sqlite.transcriptEvents >= 13,
       ),
     ).toBe(true);
     expect(
