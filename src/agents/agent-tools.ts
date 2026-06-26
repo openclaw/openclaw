@@ -837,6 +837,7 @@ export function createOpenClawCodingTools(options?: {
           accountId: options?.agentAccountId,
         }),
         messageProvider: options?.messageProvider,
+        messageChannel: options?.messageChannel,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
         channelContext: options?.channelContext,

@@ -1021,6 +1021,50 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("routes the approval turn source to messageChannel when it differs from messageProvider", async () => {
+    // Regression: exec approval used only messageProvider for turnSourceChannel, so a
+    // session whose delivery channel (messageChannel) differs from the tool-policy
+    // provider (messageProvider) lost the canonical channel — mirroring the
+    // `messageChannel ?? messageProvider` resolution used by agent-command/agent-tools.
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:feishu:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "internal",
+      messageChannel: "feishu",
+      currentChannelId: "123",
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute("call-gw-channel-vs-provider", {
+      command: "echo ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
+    // The followup delivery channel is the turn-source channel: it must be the
+    // canonical messageChannel ("feishu"), not the tool-policy messageProvider.
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:feishu:channel:123",
+      channel: "feishu",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
+  });
+
   it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
     let resolveDecision: ((value: { decision: string }) => void) | undefined;

@@ -70,6 +70,9 @@ export type ExecToolDefaults = {
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
+  /** Canonical transport channel when the tool-policy provider differs from the delivery
+   * channel. Used for approval turn-source routing; falls back to messageProvider. */
+  messageChannel?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
