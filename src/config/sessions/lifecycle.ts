@@ -1,7 +1,7 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs, parseStrictTimestampStringMs } from "../../shared/number-coercion.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import {
   resolveSessionFilePath,
@@ -45,11 +45,8 @@ function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value === "number") {
     return resolveTimestamp(value);
   }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return resolveTimestamp(parsed);
+  const timestampMs = parseStrictTimestampStringMs(value);
+  return timestampMs !== undefined ? resolveTimestamp(timestampMs) : undefined;
 }
 
 function readFirstLine(filePath: string): string | undefined {
