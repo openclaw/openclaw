@@ -92,12 +92,16 @@ export function resolveProviderAuthOverview(params: {
     const remaining = formatRemainingShort(unusableUntil - now);
     return `${base} [${kind} ${remaining}]`;
   };
+  let oauthCount = 0;
+  let tokenCount = 0;
+  let apiKeyCount = 0;
   const labels = profiles.map((profileId) => {
     const profile = store.profiles[profileId];
     if (!profile) {
       return `${profileId}=missing`;
     }
     if (profile.type === "api_key") {
+      apiKeyCount += 1;
       return withUnusableSuffix(
         `${profileId}=${formatProfileSecretLabel({
           value: profile.key,
@@ -108,6 +112,7 @@ export function resolveProviderAuthOverview(params: {
       );
     }
     if (profile.type === "token") {
+      tokenCount += 1;
       return withUnusableSuffix(
         `${profileId}=${formatProfileSecretLabel({
           value: profile.token,
@@ -117,6 +122,7 @@ export function resolveProviderAuthOverview(params: {
         profileId,
       );
     }
+    oauthCount += 1;
     const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
     const suffix =
       display === profileId
@@ -127,9 +133,6 @@ export function resolveProviderAuthOverview(params: {
     const base = `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
     return withUnusableSuffix(base, profileId);
   });
-  const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
-  const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
-  const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
   const normalizedProvider = normalizeProviderIdForAuth(provider);
   const authLookupProvider = params.aliasMap?.[normalizedProvider] ?? normalizedProvider;
   const hasPrecomputedCandidates =

@@ -119,6 +119,42 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
   });
 
+  it("counts auth profile types in the provider overview", () => {
+    const overview = resolveProviderAuthOverview({
+      provider: "openai",
+      cfg: {},
+      store: {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            access: "access-token",
+            refresh: "refresh-token",
+          },
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token-secret",
+          },
+          "openai:key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-openai-test-key",
+          },
+        },
+      } as never,
+      modelsPath: "/tmp/models.json",
+    });
+
+    expect(overview.profiles).toMatchObject({
+      count: 3,
+      oauth: 1,
+      token: 1,
+      apiKey: 1,
+    });
+  });
+
   it("reports the selected agent auth store when profiles are effective", () => {
     persistedStores.set("/tmp/openclaw-agent-custom", {
       profiles: {
