@@ -95,7 +95,7 @@ const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const OPENAI_REALTIME_ALLOW_UNVALIDATED_KEY_ENV = "OPENCLAW_OPENAI_REALTIME_ALLOW_UNVALIDATED_KEY";
 const OPENAI_REALTIME_DIRECT_AUTH_MESSAGE =
-  "Talk Realtime provider 'openai' requires a direct OpenAI API key. Azure AI Foundry / Azure OpenAI model credentials and OpenAI-compatible proxy keys are not valid for OpenAI Realtime sessions against api.openai.com. Configure talk.realtime.providers.openai.apiKey or OPENAI_API_KEY with a direct OpenAI Platform key, or use Talk gateway relay with an Azure Realtime deployment (azureEndpoint + azureDeployment).";
+  "OpenAI Realtime voice provider 'openai' requires a direct OpenAI Platform API key for sessions against api.openai.com. Azure AI Foundry / Azure OpenAI model credentials and OpenAI-compatible proxy keys are not valid for direct OpenAI Realtime sessions. Configure the surface-specific provider apiKey (for example talk.realtime.providers.openai.apiKey, plugins.entries.voice-call.config.realtime.providers.openai.apiKey, or the channel voice.realtime provider config) or OPENAI_API_KEY with a direct OpenAI Platform key. For Azure Realtime, use an Azure deployment with azureEndpoint + azureDeployment where supported.";
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -440,10 +440,8 @@ function isObviouslyNotDirectOpenAIRealtimeApiKey(value: string): boolean {
   );
 }
 
-function openAIRealtimeDirectAuthError(cause?: unknown): Error {
-  return cause instanceof Error
-    ? new Error(OPENAI_REALTIME_DIRECT_AUTH_MESSAGE, { cause })
-    : new Error(OPENAI_REALTIME_DIRECT_AUTH_MESSAGE);
+function openAIRealtimeDirectAuthError(): Error {
+  return new Error(OPENAI_REALTIME_DIRECT_AUTH_MESSAGE);
 }
 
 function isOpenAIRealtimeAuthFailure(error: unknown): boolean {
@@ -484,7 +482,7 @@ async function createOpenAIRealtimeClientSecretWithAuthHint(params: {
     return await createOpenAIRealtimeClientSecret(params);
   } catch (error) {
     if (isOpenAIRealtimeAuthFailure(error)) {
-      throw openAIRealtimeDirectAuthError(error);
+      throw openAIRealtimeDirectAuthError();
     }
     throw error;
   }
@@ -709,7 +707,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
               const startupError = new Error(readRealtimeErrorDetail(event.error));
               rejectStartup(
                 isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
-                  ? openAIRealtimeDirectAuthError(startupError)
+                  ? openAIRealtimeDirectAuthError()
                   : startupError,
               );
               return;
@@ -739,7 +737,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             const startupError = error instanceof Error ? error : new Error(String(error));
             rejectStartup(
               isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
-                ? openAIRealtimeDirectAuthError(startupError)
+                ? openAIRealtimeDirectAuthError()
                 : startupError,
             );
             return;

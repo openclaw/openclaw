@@ -217,11 +217,17 @@ function requireFetchJsonBody(callIndex = 0): Record<string, unknown> {
 
 function expectDirectOpenAIRealtimeAuthMessage(error: unknown, unexpectedSecret?: string): void {
   const message = error instanceof Error ? error.message : String(error);
-  expect(message).toContain("Talk Realtime provider 'openai' requires a direct OpenAI API key");
+  expect(message).toContain(
+    "OpenAI Realtime voice provider 'openai' requires a direct OpenAI Platform API key",
+  );
   expect(message).toContain("Azure AI Foundry / Azure OpenAI model credentials");
   expect(message).toContain("OpenAI-compatible proxy keys");
+  expect(message).toContain("surface-specific provider apiKey");
   if (unexpectedSecret) {
     expect(message).not.toContain(unexpectedSecret);
+  }
+  if (error instanceof Error) {
+    expect(error.cause).toBeUndefined();
   }
 }
 
@@ -1140,7 +1146,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).toContain("Unexpected server response: 401");
       expect(message).not.toContain(
-        "Talk Realtime provider 'openai' requires a direct OpenAI API key",
+        "OpenAI Realtime voice provider 'openai' requires a direct OpenAI Platform API key",
       );
       return;
     }
@@ -1214,9 +1220,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ),
     );
 
-    await expect(connecting).rejects.toThrow(
-      "Talk Realtime provider 'openai' requires a direct OpenAI API key",
-    );
+    await expectRejectsDirectOpenAIRealtimeAuth(connecting);
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(socket.closed).toBe(true);
@@ -1251,7 +1255,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ),
     );
 
-    await expect(failedConnect).rejects.toThrow("Incorrect API key provided");
+    await expectRejectsDirectOpenAIRealtimeAuth(failedConnect);
     expect(failedSocket.deferredClose).toBeDefined();
 
     const retryConnect = bridge.connect();
