@@ -221,7 +221,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
         hasDistinctAliases: false,
         hasFinalSymlink: false,
         hasUnresolvedIdentity: false,
-        writePaths: ["/tmp/state/agents/main/sessions/sessions.json"],
       },
     },
     agentDir: {

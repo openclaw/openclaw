@@ -435,7 +435,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred migration of 1 ambiguous session key(s) in aliased store ${storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
       ]);
       expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
       expect(requireStoreEntry(readStore(outsideStorePath), "voice:15550001111").sessionId).toBe(
@@ -468,7 +468,7 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("canonicalizes global main aliases at every hard-linked store path", async () => {
+  it("defers global main aliases across hard-linked store paths", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const standardStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       writeStore(standardStorePath, {
@@ -484,9 +484,34 @@ describe("migrateOrphanedSessionKeys", () => {
       const result = await migrateFixtureState(stateDir, cfg);
 
       for (const storePath of [configuredStorePath, standardStorePath]) {
-        expect(requireStoreEntry(readStore(storePath), "global").sessionId).toBe("legacy-global");
-        expect(readStore(storePath)["agent:main:main"]).toBeUndefined();
+        expect(requireStoreEntry(readStore(storePath), "agent:main:main").sessionId).toBe(
+          "legacy-global",
+        );
+        expect(readStore(storePath).global).toBeUndefined();
       }
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Deferred session key migration in aliased store ${configuredStorePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      ]);
+    });
+  });
+
+  it("normalizes main aliases in a fixed single-owner store", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const storePath = path.join(tmpDir, "sessions.json");
+      writeStore(storePath, {
+        "agent:main:main": { sessionId: "legacy-main", updatedAt: 1000 },
+      });
+      const cfg = {
+        session: { mainKey: "work", store: storePath },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(storePath);
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("legacy-main");
+      expect(store["agent:main:main"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
     });
@@ -815,7 +840,7 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("preserves raw keys in fixed custom stores with one configured agent", async () => {
+  it("canonicalizes raw keys in fixed custom stores with one configured agent", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const fixedStorePath = path.join(tmpDir, "custom-sessions.json");
       const discoveredOpsStorePath = opsSessionStorePath(stateDir);
@@ -834,16 +859,18 @@ describe("migrateOrphanedSessionKeys", () => {
       const second = await migrateFixtureState(stateDir, cfg);
 
       const store = readStore(fixedStorePath);
-      expect(requireStoreEntry(store, "voice:15550001111").sessionId).toBe("legacy-voice");
-      expect(store["agent:main:voice:15550001111"]).toBeUndefined();
+      expect(requireStoreEntry(store, "agent:main:voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
+      expect(store["voice:15550001111"]).toBeUndefined();
       const opsStore = readStore(discoveredOpsStorePath);
       expect(requireStoreEntry(opsStore, "agent:ops:voice:15550002222").sessionId).toBe(
         "ops-voice",
       );
       expect(opsStore["voice:15550002222"]).toBeUndefined();
-      expect(first.changes).toHaveLength(1);
-      expect(first.warnings).toHaveLength(1);
-      expect(second).toEqual({ changes: [], warnings: first.warnings });
+      expect(first.changes).toHaveLength(2);
+      expect(first.warnings).toHaveLength(0);
+      expect(second).toEqual({ changes: [], warnings: [] });
     });
   });
 

@@ -503,7 +503,7 @@ describe("state migrations", () => {
       homedir: () => root,
       pluginSessionStoreAgentIds: ["worker-1"],
     });
-    expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
+    expect(detected.sessions.preserveAmbiguousKeys).toBe(false);
     expect(detected.sessions.preserveForeignMainAliases).toBe(true);
     expect(detected.sessions.targetStoreAliases.hasDistinctAliases).toBe(false);
     const result = await runLegacyStateMigrations({
@@ -511,18 +511,16 @@ describe("state migrations", () => {
       config: cfg,
       now: () => 1234,
     });
-    const realTargetStorePath = await fs.realpath(targetStorePath);
-
     expect(result.warnings).toStrictEqual([
       `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
-      `Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ${realTargetStorePath}`,
     ]);
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
+      "Canonicalized 3 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Rewrote migrated session transcript paths",
-      "Migrated 1 ACP session metadata row → shared SQLite state",
+      "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
@@ -536,15 +534,19 @@ describe("state migrations", () => {
       ),
     ) as Record<string, { sessionId: string; sessionFile?: string; acp?: unknown }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
-    expect(mergedStore["group:mobile-room"]?.sessionId).toBe("group-session");
-    expect(mergedStore["group:legacy-room"]?.sessionId).toBe("generic-group-session");
-    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]).toBeUndefined();
-    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]).toBeUndefined();
+    expect(mergedStore["group:mobile-room"]).toBeUndefined();
+    expect(mergedStore["group:legacy-room"]).toBeUndefined();
+    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
+      "group-session",
+    );
+    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
+      "generic-group-session",
+    );
     expect(mergedStore["agent:main:desk"]?.sessionId).toBe("explicit-foreign");
     expect(mergedStore["Agent:main:desk"]?.sessionId).toBe("mixed-case-foreign");
-    expect(mergedStore["voice:15550001111"]?.sessionId).toBe("shared-voice");
-    expect(mergedStore["voice:15550001111"]?.acp).toBeDefined();
-    expect(mergedStore["agent:worker-1:voice:15550001111"]).toBeUndefined();
+    expect(mergedStore["voice:15550001111"]).toBeUndefined();
+    expect(mergedStore["agent:worker-1:voice:15550001111"]?.sessionId).toBe("shared-voice");
+    expect(mergedStore["agent:worker-1:voice:15550001111"]?.acp).toBeUndefined();
     expect(Object.hasOwn(mergedStore, "__proto__")).toBe(true);
     expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
       "prototype-row",
@@ -585,7 +587,7 @@ describe("state migrations", () => {
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
 
-  it("preserves non-main owners while merging into a shared store", async () => {
+  it("defers non-main owner merges across hard-linked stores", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -616,18 +618,21 @@ describe("state migrations", () => {
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
 
-    await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
 
     for (const storePath of [targetStorePath, configuredStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
         string,
         { sessionId: string }
       >;
-      expect(store["agent:ops:work"]?.sessionId).toBe("ops-session");
-      expect(store["agent:research:work"]?.sessionId).toBe("research-session");
-      expect(store["agent:ops:main"]).toBeUndefined();
+      expect(store["agent:ops:main"]?.sessionId).toBe("ops-session");
+      expect(store["agent:ops:work"]).toBeUndefined();
       expect(store["agent:research:main"]).toBeUndefined();
     }
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toContain("research-session");
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("atomic replacement cannot update distinct filesystem aliases"),
+    );
   });
 
   it("defers an unambiguous legacy merge through a final store symlink", async () => {
@@ -705,15 +710,13 @@ describe("state migrations", () => {
     await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe("{}\n");
   });
 
-  it("keeps the legacy source when an aliased store write fails", async () => {
+  it("keeps the legacy source when its store write fails", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(targetStorePath, "{}\n", "utf8");
-    const configuredStorePath = path.join(root, "configured-sessions.json");
-    await fs.link(targetStorePath, configuredStorePath);
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
@@ -722,7 +725,6 @@ describe("state migrations", () => {
       "utf8",
     );
     const cfg = {
-      session: { store: configuredStorePath },
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
@@ -732,7 +734,7 @@ describe("state migrations", () => {
       .spyOn(sessionStore, "saveSessionStore")
       .mockImplementation(async (storePath, store, options) => {
         sawRequiredWrite ||= options?.requireWriteSuccess === true;
-        if (storePath === configuredStorePath) {
+        if (storePath === targetStorePath) {
           if (options?.requireWriteSuccess) {
             throw new Error("simulated alias write failure");
           }
@@ -846,14 +848,12 @@ describe("state migrations", () => {
     expect(targetStore["agent:worker-1:desk"]).toBeUndefined();
     expect(targetStore["agent:worker-1:main"]).toHaveProperty("acp");
     expect(fsSync.statSync(configuredStorePath).ino).toBe(fsSync.statSync(targetStorePath).ino);
-    expect(result.warnings).toContain(
-      `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    );
-    expect(result.warnings).toContain(
-      `Deferred migration of 2 ambiguous session key(s) in aliased store ${targetStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
-    );
-    expect(result.warnings).toContain(
-      `Deferred ACP metadata migration for 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`aliased store ${configuredStorePath}`),
+        expect.stringContaining(`aliased store ${targetStorePath}`),
+        expect.stringContaining("Deferred ACP metadata migration"),
+      ]),
     );
   });
 
@@ -883,7 +883,7 @@ describe("state migrations", () => {
     >;
     expect(outsideStore["voice:15550001111"]?.sessionId).toBe("outside-voice");
     expect(result.warnings).toEqual([
-      `Deferred migration of 1 ambiguous session key(s) in aliased store ${storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
       `Deferred legacy session migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
     ]);
   });
@@ -934,7 +934,7 @@ describe("state migrations", () => {
     );
   });
 
-  it("removes ACP metadata from every hard-linked store path", async () => {
+  it("defers ACP metadata migration across hard-linked store paths", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -972,13 +972,17 @@ describe("state migrations", () => {
         string,
         { acp?: unknown }
       >;
-      expect(store["agent:main:task"]?.acp).toBeUndefined();
+      expect(store["agent:main:task"]?.acp).toBeDefined();
     }
-    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
-    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("atomic replacement cannot update distinct filesystem aliases"),
+    );
   });
 
-  it("migrates global main aliases through aliased store rewrites", async () => {
+  it("defers global main aliases across hard-linked store paths", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -1016,12 +1020,16 @@ describe("state migrations", () => {
         string,
         { sessionId: string; acp?: unknown }
       >;
-      expect(store.global?.sessionId).toBe("legacy-global");
-      expect(store.global?.acp).toBeUndefined();
-      expect(store["agent:main:main"]).toBeUndefined();
+      expect(store["agent:main:main"]?.sessionId).toBe("legacy-global");
+      expect(store["agent:main:main"]?.acp).toBeDefined();
+      expect(store.global).toBeUndefined();
     }
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("atomic replacement cannot update distinct filesystem aliases"),
+    );
+    expect(result.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
   });
 
   it.each([
