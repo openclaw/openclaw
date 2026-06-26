@@ -41,7 +41,7 @@ export function scanFenceSpans(
   while (offset <= buffer.length) {
     const nextNewline = buffer.indexOf("\n", offset);
     const lineEnd = nextNewline === -1 ? buffer.length : nextNewline;
-    const line = buffer.slice(offset, lineEnd);
+    const line = buffer.slice(offset, lineEnd).replace(/\r$/, "");
 
     const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
     if (match && (offset > 0 || startsAtLineStart)) {
@@ -61,11 +61,10 @@ export function scanFenceSpans(
       } else if (
         open.markerChar === markerChar &&
         markerLen >= open.markerLen &&
-        match[3].trim() === ""
+        /^[ \t]*$/.test(match[3])
       ) {
-        // CommonMark: a closing fence uses the same marker character, may be longer than the
-        // opener, and may be followed only by whitespace. A marker line carrying trailing text
-        // (e.g. "``` note") is code content, not a close, so it must not end the block.
+        // CommonMark permits only spaces or tabs after a closing fence. A marker line carrying
+        // other trailing text is code content, not a close, so it must not end the block.
         const end = lineEnd;
         spans.push({
           start: open.start,
