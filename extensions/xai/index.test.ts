@@ -82,13 +82,13 @@ describe("xai provider plugin", () => {
     vi.unstubAllGlobals();
   });
 
-  it("exposes OAuth and device-code auth choices", async () => {
+  it("exposes xAI OAuth as the browser auth choice", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth", "device-code"]);
-    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
-    expect(deviceCode?.kind).toBe("device_code");
-    expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth"]);
+    const oauth = provider.auth?.find((method) => method.id === "oauth");
+    expect(oauth?.kind).toBe("oauth");
+    expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
   });
 
   it("filters the xAI API-key catalog against live model ids", async () => {
