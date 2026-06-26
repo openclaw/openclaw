@@ -13,6 +13,19 @@ import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
 type SyncSessionParams = { needsFullReindex: boolean; targetSessionFiles?: string[] };
+const originalReindexStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setReindexStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreReindexStateDir(): void {
+  if (originalReindexStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalReindexStateDir);
+  }
+}
 
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
@@ -42,11 +55,11 @@ describe("memory manager reindex recovery", () => {
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
+    setReindexStateDir(path.join(fixtureRoot, "state"));
   });
 
   afterEach(async () => {
-    vi.unstubAllEnvs();
+    restoreReindexStateDir();
     vi.restoreAllMocks();
     if (manager) {
       await manager.close();
