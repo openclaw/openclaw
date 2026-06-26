@@ -107,6 +107,18 @@ function futureFixtureUpdatedAt(): number {
   return Date.now() + 60_000;
 }
 
+function readOpenClawSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const seq = (metadata as Record<string, unknown>).seq;
+  return typeof seq === "number" ? seq : undefined;
+}
+
 async function writeGatewayConfig(config: Record<string, unknown>) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -3209,9 +3221,7 @@ describe("gateway server chat", () => {
         maxChars: 100,
       });
       expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages?.map((message) => message.__openclaw?.seq)).toEqual([
-        3, 5,
-      ]);
+      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3, 5]);
       expect(firstPage.payload?.nextOffset).toBe(3);
       expect(firstPage.payload?.hasMore).toBe(true);
       expect(firstPage.payload?.totalMessages).toBe(5);
@@ -3227,9 +3237,7 @@ describe("gateway server chat", () => {
         maxChars: 100,
       });
       expect(secondPage.ok).toBe(true);
-      expect(secondPage.payload?.messages?.map((message) => message.__openclaw?.seq)).toEqual([
-        1, 2,
-      ]);
+      expect(secondPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
       expect(JSON.stringify(secondPage.payload?.messages)).not.toContain("visible boundary");
       expect(secondPage.payload?.hasMore).toBe(false);
       expect(secondPage.payload?.nextOffset).toBeUndefined();
@@ -3279,9 +3287,7 @@ describe("gateway server chat", () => {
         maxChars: 1_000,
       });
       expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages?.map((message) => message.__openclaw?.seq)).toEqual([
-        2, 3,
-      ]);
+      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
       expect(firstPage.payload?.nextOffset).toBe(2);
       expect(firstPage.payload?.hasMore).toBe(true);
       expect(firstPage.payload?.totalMessages).toBe(3);
