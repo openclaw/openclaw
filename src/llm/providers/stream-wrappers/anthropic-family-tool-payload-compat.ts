@@ -14,13 +14,12 @@ type AnthropicToolPayloadCompatibilityOptions = {
 type PayloadFieldRead = { ok: true; value: unknown } | { ok: false };
 
 type OpenAiToolProjection = {
-  readonly kind?: "custom" | "function";
+  readonly kind?: "function";
   readonly name?: string;
   readonly tool: Record<string, unknown>;
 };
 
 type OpenAiFunctionToolsProjection = {
-  readonly customNames: ReadonlySet<string>;
   readonly functionNames: ReadonlySet<string>;
   readonly tools: readonly Record<string, unknown>[];
 };
@@ -111,6 +110,49 @@ function snapshotToolMetadata(tool: Record<string, unknown>): Record<string, unk
     }
   }
   return metadata;
+}
+
+function projectCustomToolSnapshot(
+  snapshot: Record<string, unknown>,
+): OpenAiToolProjection | undefined {
+  if (snapshot.type !== "custom" || !isRecord(snapshot.custom)) {
+    return undefined;
+  }
+  const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
+  if (!name) {
+    return undefined;
+  }
+  let parameters: Record<string, unknown> = { type: "object", properties: {} };
+  if (snapshot.custom.input_schema !== undefined) {
+    const projectedParameters = projectJsonObjectSchema(
+      snapshot.custom.input_schema,
+      `${name}.input_schema`,
+    );
+    if (!projectedParameters) {
+      return undefined;
+    }
+    parameters = projectedParameters;
+  }
+  const functionSpec: Record<string, unknown> = {
+    name,
+    parameters,
+  };
+  const description = normalizeOptionalString(snapshot.custom.description) ?? undefined;
+  if (description) {
+    functionSpec.description = description;
+  }
+  const metadata = { ...snapshot };
+  delete metadata.type;
+  delete metadata.custom;
+  return {
+    kind: "function",
+    name,
+    tool: {
+      ...metadata,
+      type: "function",
+      function: functionSpec,
+    },
+  };
 }
 
 function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): boolean {
@@ -235,9 +277,12 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     if (!snapshot) {
       return undefined;
     }
-    if (snapshot.type === "custom" && isRecord(snapshot.custom)) {
-      const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
-      return name ? { kind: "custom", name, tool: snapshot } : undefined;
+    const customProjection = projectCustomToolSnapshot(snapshot);
+    if (customProjection) {
+      return customProjection;
+    }
+    if (snapshot.type === "custom") {
+      return undefined;
     }
     return { tool: snapshot };
   }
@@ -298,7 +343,6 @@ function projectOpenAiFunctionAnthropicTools(
   tools: readonly unknown[],
 ): OpenAiFunctionToolsProjection {
   const projectedTools: Record<string, unknown>[] = [];
-  const customNames = new Set<string>();
   const functionNames = new Set<string>();
   for (const tool of tools) {
     const projection = normalizeOpenAiFunctionAnthropicToolDefinition(tool);
@@ -306,14 +350,11 @@ function projectOpenAiFunctionAnthropicTools(
       continue;
     }
     projectedTools.push(projection.tool);
-    if (projection.kind === "custom" && projection.name) {
-      customNames.add(projection.name);
-    } else if (projection.kind === "function" && projection.name) {
+    if (projection.kind === "function" && projection.name) {
       functionNames.add(projection.name);
     }
   }
   return {
-    customNames,
     functionNames,
     tools: projectedTools,
   };
@@ -321,12 +362,9 @@ function projectOpenAiFunctionAnthropicTools(
 
 function isProjectedToolAvailable(
   projection: OpenAiFunctionToolsProjection | undefined,
-  kind: "custom" | "function",
   name: string,
 ): boolean {
-  return (
-    !projection || (kind === "custom" ? projection.customNames : projection.functionNames).has(name)
-  );
+  return !projection || projection.functionNames.has(name);
 }
 
 function normalizeAllowedToolChoice(
@@ -349,7 +387,9 @@ function normalizeAllowedToolChoice(
       snapshot.type === "custom" ? "custom" : snapshot.type === "function" ? "function" : undefined;
     const definition = kind && isRecord(snapshot[kind]) ? snapshot[kind] : undefined;
     const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
-    return kind && name && isProjectedToolAvailable(toolProjection, kind, name) ? [snapshot] : [];
+    return kind && name && isProjectedToolAvailable(toolProjection, name)
+      ? [{ type: "function", function: { name } }]
+      : [];
   });
   if (tools.length === 0) {
     if (mode === "auto") {
@@ -404,7 +444,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
   }
   if (choice.type === "tool" && typeof choice.name === "string" && choice.name.trim()) {
     const name = choice.name.trim();
-    if (!isProjectedToolAvailable(toolProjection, "function", name)) {
+    if (!isProjectedToolAvailable(toolProjection, name)) {
       throw new Error(
         `OpenAI-compatible Anthropic tool_choice requested unavailable tool "${name}" after payload conversion`,
       );
@@ -416,7 +456,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
   }
   if (choice.type === "function" && isRecord(choice.function)) {
     const name = normalizeOptionalString(choice.function.name) ?? "";
-    if (name && !isProjectedToolAvailable(toolProjection, "function", name)) {
+    if (name && !isProjectedToolAvailable(toolProjection, name)) {
       throw new Error(
         `OpenAI-compatible Anthropic tool_choice requested unavailable tool "${name}" after payload conversion`,
       );
@@ -430,15 +470,15 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
   }
   if (choice.type === "custom" && isRecord(choice.custom)) {
     const name = normalizeOptionalString(choice.custom.name) ?? "";
-    if (name && !isProjectedToolAvailable(toolProjection, "custom", name)) {
+    if (name && !isProjectedToolAvailable(toolProjection, name)) {
       throw new Error(
         `OpenAI-compatible Anthropic tool_choice requested unavailable tool "${name}" after payload conversion`,
       );
     }
     if (name) {
       return {
-        type: "custom",
-        custom: { name },
+        type: "function",
+        function: { name },
       };
     }
   }

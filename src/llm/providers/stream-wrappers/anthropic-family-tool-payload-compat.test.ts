@@ -259,14 +259,20 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("preserves custom tools and named custom choices", () => {
+  it("converts custom tools and named custom choices to OpenAI functions", () => {
     const payload = runWrapper({
       tools: [
         {
           type: "custom",
+          cache_control: { type: "ephemeral" },
           custom: {
             name: "shell",
             description: "Run a shell command.",
+            input_schema: {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            },
           },
         },
       ],
@@ -279,21 +285,92 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload).toEqual({
       tools: [
         {
-          type: "custom",
-          custom: {
+          type: "function",
+          cache_control: { type: "ephemeral" },
+          function: {
             name: "shell",
             description: "Run a shell command.",
+            parameters: {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            },
           },
         },
       ],
       tool_choice: {
-        type: "custom",
-        custom: { name: "shell" },
+        type: "function",
+        function: { name: "shell" },
       },
     });
   });
 
-  it("filters allowed tool choices against surviving function and custom tools", () => {
+  it("defaults custom tool parameters when no input schema is provided", () => {
+    const payload = runWrapper({
+      tools: [
+        {
+          type: "custom",
+          custom: {
+            name: "shell",
+          },
+        },
+      ],
+    });
+
+    expect(payload?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "shell",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+  });
+
+  it("quarantines custom tools that cannot be projected", () => {
+    const payload = runWrapper({
+      tools: [
+        {
+          type: "custom",
+          custom: { description: "Missing tool name." },
+        },
+        {
+          type: "custom",
+          custom: {
+            name: "bad_schema",
+            input_schema: { type: "string" },
+          },
+        },
+      ],
+      tool_choice: { type: "auto" },
+    });
+
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
+
+  it("rejects named custom choices when the custom tool is quarantined", () => {
+    expect(() =>
+      runWrapper({
+        tools: [
+          {
+            type: "custom",
+            custom: {
+              name: "bad_schema",
+              input_schema: { type: "string" },
+            },
+          },
+        ],
+        tool_choice: {
+          type: "custom",
+          custom: { name: "bad_schema" },
+        },
+      }),
+    ).toThrow('requested unavailable tool "bad_schema"');
+  });
+
+  it("converts allowed custom tool choices against surviving function tools", () => {
     const payload = runWrapper({
       tools: [
         {
@@ -325,7 +402,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       type: "allowed_tools",
       allowed_tools: {
         mode: "required",
-        tools: [{ type: "custom", custom: { name: "shell" } }],
+        tools: [{ type: "function", function: { name: "shell" } }],
       },
     });
   });
