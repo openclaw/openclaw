@@ -327,7 +327,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       type: "allowed_tools",
       allowed_tools: {
         mode: "required",
-        tools: [{ type: "custom", custom: { name: "shell" } }],
+        tools: [{ type: "function", function: { name: "shell" } }],
       },
     });
   });

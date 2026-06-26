@@ -372,7 +372,16 @@ function normalizeAllowedToolChoice(
     const definitionKey = isCustom ? "custom" : kind;
     const definition = definitionKey && isRecord(snapshot[definitionKey]) ? snapshot[definitionKey] : undefined;
     const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
-    return kind && name && isProjectedToolAvailable(toolProjection, kind, name) ? [snapshot] : [];
+    if (!kind || !name || !isProjectedToolAvailable(toolProjection, kind, name)) return [];
+    // Project custom allowed_tools entries to function format (#97020).
+    if (isCustom) {
+      const desc = normalizeOptionalString(snapshot.custom.description) ?? undefined;
+      return [{
+        type: "function",
+        function: { name, ...(desc ? { description: desc } : {}) },
+      }];
+    }
+    return [snapshot];
   });
   if (tools.length === 0) {
     if (mode === "auto") {
