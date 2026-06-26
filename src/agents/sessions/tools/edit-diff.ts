@@ -173,7 +173,7 @@ function getNotFoundError(
           return { lineNum: idx + 1, line: trimmed, score: maxLen > 0 ? 1 - dist / maxLen : 0 };
         })
         .filter((s) => s.score > 0.3)
-        .sort((a, b) => b.score - a.score)
+        .toSorted((a, b) => b.score - a.score)
         .slice(0, 3);
       if (scored.length > 0) {
         hint =
