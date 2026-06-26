@@ -225,13 +225,16 @@ envelope with a `plugin.index_unavailable` error finding.
 
 ## Session SQLite migration
 
-`openclaw doctor --session-sqlite <mode>` is the targeted upgrade tool for
-moving legacy session rows and transcript history into each agent's SQLite
-database. Current runtime session rows live in
+OpenClaw imports legacy session rows and transcript history into each agent's
+SQLite database automatically during gateway startup and during
+`openclaw doctor --fix`. `openclaw doctor --session-sqlite <mode>` is the
+targeted inspection and validation tool for that migration. Current runtime
+session rows live in
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Legacy
-`sessions.json` files are migration sources; transcript JSONL files may still be
-active agent history as well as migration inputs, so do not delete them just
-because an import succeeded.
+`sessions.json` files are migration sources. Hot transcript JSONL files are
+imported and archived out of the active sessions directory after successful
+import; archive-tier JSONL files remain support artifacts, not runtime
+fallbacks.
 
 Modes:
 
@@ -249,7 +252,7 @@ Selectors:
 - `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
 - `--session-sqlite-store <path>`: one explicit legacy `sessions.json` path.
 
-Recommended upgrade sequence:
+Manual inspection sequence:
 
 ```bash
 openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
