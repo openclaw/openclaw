@@ -84,6 +84,17 @@ const ALLOWLIST = [
       "Lost on process restart; pending continuation work remains in TaskFlow and recovery re-arms the hedge timer so the row is not stranded.",
   },
   {
+    file: "src/auto-reply/continuation/work-dispatch.ts",
+    symbol: "idleRetryFailureTimers",
+    owner: "continuation work dispatcher",
+    purpose:
+      "Keeps a short recovery setTimeout per sessionKey when idle-event waiter registration fails, so queued idle-retry rows are retried without waiting for the slow hedge.",
+    safeVolatileClassification:
+      "The map stores timeout handles for the current Node process; the queued idle-retry intent remains persisted in TaskFlow.",
+    restartContract:
+      "Lost on process restart; pending continuation work remains in TaskFlow and restart recovery/normal scheduling can re-arm recovery or hedge timers from durable rows.",
+  },
+  {
     file: "src/auto-reply/reply/reply-run-registry.ts",
     symbol: "activeRunsByKey",
     owner: "reply run registry singleton",
