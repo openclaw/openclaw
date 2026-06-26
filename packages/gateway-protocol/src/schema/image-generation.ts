@@ -81,6 +81,7 @@ export type ImageProviderCapabilityGeometry =
 
 export type ImageProviderCapabilityOutput =
   | boolean
+  | string[]
   | {
       formats?: string[];
       qualities?: string[];
