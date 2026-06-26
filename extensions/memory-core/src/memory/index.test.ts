@@ -43,6 +43,7 @@ let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
 
 const identityAliasFixture = vi.hoisted(() => ({
   provider: "identity-alias-test",
@@ -56,6 +57,18 @@ function createLocalWorkerExitError(): Error {
     reason: "exit",
     exitCode: 134,
   });
+}
+
+function setMemoryIndexStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreMemoryIndexStateDir(): void {
+  if (originalMemoryIndexStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalMemoryIndexStateDir);
+  }
 }
 
 vi.mock("./embeddings.js", () => {
@@ -276,7 +289,7 @@ describe("memory index", () => {
     closeOpenClawStateDatabaseForTest();
     clearRegistry();
     managersForCleanup.clear();
-    vi.unstubAllEnvs();
+    restoreMemoryIndexStateDir();
   });
 
   beforeEach(async () => {
@@ -298,7 +311,7 @@ describe("memory index", () => {
 
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-memory-index"));
+    setMemoryIndexStateDir(path.join(workspaceDir, ".state-memory-index"));
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
       "# Log\nAlpha memory line.\nZebra memory line.",
@@ -488,7 +501,7 @@ describe("memory index", () => {
     stateDirName: string;
   }): Promise<MemoryIndexManager | null> {
     forceNoProvider = true;
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, params.stateDirName));
+    setMemoryIndexStateDir(path.join(workspaceDir, params.stateDirName));
     const cfg = createCfg({
       sources: ["memory", "sessions"],
       sessionMemory: true,
@@ -573,7 +586,7 @@ describe("memory index", () => {
 
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
     const stateDir = path.join(workspaceDir, "managed-memory-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setMemoryIndexStateDir(stateDir);
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
     agentDb.db
@@ -1117,7 +1130,7 @@ describe("memory index", () => {
 
   it("clears dirty after sessions-only identity reindex", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-only-reindex"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-only-reindex"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(
@@ -1167,13 +1180,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-missing-meta"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-missing-meta"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(
@@ -1223,13 +1236,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
@@ -1287,13 +1300,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-dirty-during-session"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-dirty-during-session"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(
@@ -1351,7 +1364,7 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
@@ -2230,7 +2243,7 @@ describe("memory index", () => {
       expect(results[0]?.source).toBe("sessions");
       expect(results[0]?.snippet).toContain("ORBIT-10");
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
@@ -2274,7 +2287,7 @@ describe("memory index", () => {
       expect(results[0]?.source).toBe("sessions");
       expect(results[0]?.snippet).toContain("ORBIT-10");
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 });
