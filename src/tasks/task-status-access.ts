@@ -2,11 +2,13 @@
 import {
   findTaskByRunId,
   getTaskById,
+  listFreshTasksForOwnerKey,
   listTaskRecords,
   listTasksForAgentId,
+  listTasksForRelatedSessionKey,
   listTasksForSessionKey,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 /** Returns only the session lookup fields needed by task status commands. */
 export function getTaskSessionLookupByIdForStatus(
@@ -34,6 +36,22 @@ export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: stri
   return listTaskRecords().filter(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );
+}
+
+export function isActiveTaskStatusForStatus(status: TaskStatus): boolean {
+  return status === "queued" || status === "running";
+}
+
+export function listTasksForSessionReconciliationForStatus(sessionKey: string): TaskRecord[] {
+  const byId = new Map<string, TaskRecord>();
+  for (const task of [
+    ...listFreshTasksForOwnerKey(sessionKey),
+    ...listTasksForSessionKey(sessionKey),
+    ...listTasksForRelatedSessionKey(sessionKey),
+  ]) {
+    byId.set(task.taskId, task);
+  }
+  return [...byId.values()];
 }
 
 export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {

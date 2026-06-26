@@ -3,15 +3,13 @@ import type { SessionEntry } from "../config/sessions.js";
 import { applyRestartRecoveryLifecycle } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  listFreshTasksForOwnerKey,
-  listTasksForRelatedSessionKey,
-  listTasksForSessionKey,
-} from "../tasks/task-registry.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+  isActiveTaskStatusForStatus,
+  listTasksForSessionReconciliationForStatus,
+} from "../tasks/task-status-access.js";
 
 const log = createSubsystemLogger("session-running-reconciliation");
 
-const STALE_RUNNING_STATUSES = new Set(["running", "processing", "timeout", "killed"]);
+const STALE_RUNNING_STATUSES = new Set(["running", "processing"]);
 
 export type SessionRunningReconciliationResult = {
   changed: boolean;
@@ -26,25 +24,15 @@ export type SessionRunningReconciliationResult = {
 
 type MutableSessionEntry = SessionEntry & Record<string, unknown>;
 
-function uniqueTasks(tasks: TaskRecord[]): TaskRecord[] {
-  const byId = new Map<string, TaskRecord>();
-  for (const task of tasks) {
-    byId.set(task.taskId, task);
-  }
-  return [...byId.values()];
-}
-
 export function countRunningTasksForSessionKey(sessionKey: string | undefined): number {
   const key = sessionKey?.trim();
   if (!key) {
     return 0;
   }
   try {
-    return uniqueTasks([
-      ...listFreshTasksForOwnerKey(key),
-      ...listTasksForSessionKey(key),
-      ...listTasksForRelatedSessionKey(key),
-    ]).filter((task) => task.status === "running").length;
+    return listTasksForSessionReconciliationForStatus(key).filter((task) =>
+      isActiveTaskStatusForStatus(task.status),
+    ).length;
   } catch (error) {
     log.warn("failed to count running tasks for persisted session reconciliation", {
       sessionKey: key,

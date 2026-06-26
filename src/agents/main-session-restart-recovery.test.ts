@@ -14,6 +14,7 @@ import {
   registerAgentRunContext,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -40,6 +41,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetTaskRegistryForTests({ persist: false });
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -1314,6 +1316,86 @@ describe("main-session-restart-recovery", () => {
     expect(store[sessionKey]?.status).toBe("failed");
     expect(store[sessionKey]?.recoveredFromStaleRunning).toBe(true);
     expect(store[sessionKey]?.staleRunningRecoveryReason).toBe("startup_stale_running_session");
+  });
+
+  it("does not rewrite terminal stale session rows during startup reconciliation", async () => {
+    const sessionsDir = await makeSessionsDir("openclaw");
+    const killedKey = "agent:openclaw:telegram:group:-1003789377335:topic:terminal-killed";
+    const timeoutKey = "agent:openclaw:telegram:group:-1003789377335:topic:terminal-timeout";
+    await writeStore(sessionsDir, {
+      [killedKey]: {
+        sessionId: "terminal-killed-session",
+        updatedAt: Date.now() - 10_000,
+        status: "killed",
+        abortedLastRun: true,
+      },
+      [timeoutKey]: {
+        sessionId: "terminal-timeout-session",
+        updatedAt: Date.now() - 10_000,
+        status: "timeout",
+        abortedLastRun: true,
+      },
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      activeSessionIds: [],
+      activeSessionKeys: [],
+      updatedBeforeMs: Date.now(),
+    });
+
+    expect(result).toMatchObject({
+      marked: 0,
+      recovered: 0,
+      failed: 0,
+      reconciledStale: 0,
+    });
+    const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
+    expect(store[killedKey]?.status).toBe("killed");
+    expect(store[killedKey]?.recoveredFromStaleRunning).toBeUndefined();
+    expect(store[timeoutKey]?.status).toBe("timeout");
+    expect(store[timeoutKey]?.recoveredFromStaleRunning).toBeUndefined();
+  });
+
+  it("does not reconcile stale running rows while queued requester work is active", async () => {
+    const sessionsDir = await makeSessionsDir("openclaw");
+    const sessionKey = "agent:openclaw:telegram:group:-1003789377335:topic:queued-work";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "queued-work-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        subagentRole: "leaf",
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      task: "queued requester work",
+      status: "queued",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      activeSessionIds: [],
+      activeSessionKeys: [],
+      updatedBeforeMs: Date.now(),
+    });
+
+    expect(result).toMatchObject({
+      marked: 0,
+      recovered: 0,
+      failed: 0,
+      reconciledStale: 0,
+    });
+    const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
+    expect(store[sessionKey]?.status).toBe("running");
+    expect(store[sessionKey]?.recoveredFromStaleRunning).toBeUndefined();
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {
