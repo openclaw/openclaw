@@ -1824,10 +1824,12 @@ export function renderApp(state: AppViewState) {
               : typeof agentsDefaults.thinkingLevel === "string"
                 ? agentsDefaults.thinkingLevel
                 : "off";
+          const resolvedFastMode =
+            activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults.fastMode;
           const fastMode =
-            typeof activeSession?.fastMode === "boolean"
-              ? activeSession.fastMode
-              : agentsDefaults.fastMode === true;
+            resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean"
+              ? resolvedFastMode
+              : false;
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -1842,8 +1844,8 @@ export function renderApp(state: AppViewState) {
                 requestHostUpdate?.(),
               );
             },
-            onFastModeToggle: () => {
-              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+            onFastModeChange: (mode) => {
+              void patchSession(state, state.sessionKey, { fastMode: mode }).then(() =>
                 requestHostUpdate?.(),
               );
             },
@@ -2324,8 +2326,7 @@ export function renderApp(state: AppViewState) {
       }
     })();
   }
-  const openChatWorkspaceFile = (filePath: string) => {
-    const itemId = `file:${filePath}`;
+  const startChatWorkspaceFileOpenRequest = (itemId: string) => {
     chatWorkspaceFiles.activeId = itemId;
     const previousRequest = chatWorkspaceFileOpenRequests.get(state);
     const openRequest = {
@@ -2347,6 +2348,11 @@ export function renderApp(state: AppViewState) {
         currentFiles?.activeId === itemId
       );
     };
+    return { isCurrentOpenRequest, openRequest };
+  };
+  const openChatWorkspaceFile = (filePath: string) => {
+    const itemId = `file:${filePath}`;
+    const { isCurrentOpenRequest, openRequest } = startChatWorkspaceFileOpenRequest(itemId);
     void (async () => {
       if (!state.client || !state.connected) {
         return;
@@ -2390,27 +2396,7 @@ export function renderApp(state: AppViewState) {
   };
   const openChatWorkspaceArtifact = (artifactId: string) => {
     const itemId = `artifact:${artifactId}`;
-    chatWorkspaceFiles.activeId = itemId;
-    const previousRequest = chatWorkspaceFileOpenRequests.get(state);
-    const openRequest = {
-      agentId: chatWorkspaceFiles.agentId,
-      id: (previousRequest?.id ?? 0) + 1,
-      itemId,
-      sessionKey: currentSessionWorkspaceKey(),
-    };
-    chatWorkspaceFileOpenRequests.set(state, openRequest);
-    const isCurrentOpenRequest = () => {
-      const currentRequest = chatWorkspaceFileOpenRequests.get(state);
-      const currentFiles = currentChatWorkspaceFilesState();
-      return (
-        currentRequest?.id === openRequest.id &&
-        currentRequest.agentId === resolveChatWorkspaceAgentId() &&
-        currentRequest.itemId === itemId &&
-        currentRequest.sessionKey === currentSessionWorkspaceKey() &&
-        currentFiles?.agentId === openRequest.agentId &&
-        currentFiles?.activeId === itemId
-      );
-    };
+    const { isCurrentOpenRequest, openRequest } = startChatWorkspaceFileOpenRequest(itemId);
     void (async () => {
       if (!state.client || !state.connected) {
         return;
@@ -3035,15 +3021,20 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 canWrite: hasOperatorWriteAccess(auth),
                 canModelOverride: hasOperatorAdminAccess(auth),
-                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
-                  enabledByDefault: false,
-                }),
+                pluginEnabled: state.configSnapshot
+                  ? isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                      enabledByDefault: false,
+                    })
+                  : null,
+                pluginEnablementError:
+                  !state.configSnapshot && !state.configLoading ? state.lastError : null,
                 agentsList: state.agentsList,
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onRequestUpdate: requestHostUpdate,
               });
             })

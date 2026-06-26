@@ -885,6 +885,7 @@
               "type": "object"
             },
             "runMode": {
+              "description": "Run mode for action=\"run\": omitted defaults to \"due\"; use \"force\" to trigger now.",
               "enum": ["due", "force"],
               "type": "string"
             },

@@ -6,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
@@ -105,31 +106,6 @@ function createLoggerSpies() {
     info: vi.fn(),
     warn: vi.fn(),
   };
-}
-
-function createZipCentralDirectoryArchive(params: {
-  actualEntryCount: number;
-  declaredEntryCount?: number;
-  declaredCentralDirectorySize?: number;
-}): Buffer {
-  const centralDirectory = Buffer.concat(
-    Array.from({ length: params.actualEntryCount }, (_, index) => {
-      const name = Buffer.from(`file-${index}.txt`);
-      const header = Buffer.alloc(46 + name.byteLength);
-      header.writeUInt32LE(0x02014b50, 0);
-      header.writeUInt16LE(name.byteLength, 28);
-      name.copy(header, 46);
-      return header;
-    }),
-  );
-  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
-  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
-  eocd.writeUInt32LE(0, 16);
-  return Buffer.concat([centralDirectory, eocd]);
 }
 
 function expectClawHubInstallFlow(params: {
@@ -832,6 +808,173 @@ describe("installPluginFromClawHub", () => {
     expect(success.clawhub?.clawpackSpecVersion).toBeUndefined();
     expect(success.clawhub?.clawpackManifestSha256).toBeUndefined();
     expect(success.clawhub?.clawpackSize).toBeUndefined();
+  });
+
+  it("does not inherit package-level compatibility when version-specific compatibility is absent for pinned older version", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.6.8" });
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.8");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.8",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@2026.6.8",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expectSuccessfulClawHubInstall(result);
+  });
+
+  it("recovers version-specific compatibility from version endpoint when artifact metadata is sparse", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.6.8" });
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.5");
+    // Artifact endpoint returns sparse metadata (no compatibility).
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.8",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+    // Version endpoint has the real version-specific compatibility.
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.8",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+        compatibility: {
+          pluginApiRange: ">=2026.6.8",
+          minGatewayVersion: "2026.6.8",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@2026.6.8",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.error).toContain("2026.6.8");
+  });
+
+  it("fails closed when version endpoint is unavailable for sparse artifact metadata on pinned version", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.6.8" });
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.8");
+    // Artifact endpoint returns sparse metadata (no compatibility).
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.8",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+    // Version endpoint fails.
+    fetchClawHubPackageVersionMock.mockRejectedValueOnce(new Error("500 Internal Server Error"));
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@2026.6.8",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.ok).toBe(false);
+  });
+
+  it("enforces package-level compatibility for unpinned latest install when version response omits compatibility", async () => {
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.6.10");
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.6.10",
+        compatibility: {
+          pluginApiRange: ">=2026.6.10",
+          minGatewayVersion: "2026.6.10",
+        },
+      },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.6.8");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.6.10",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.error).toContain("2026.6.10");
   });
 
   it("installs when ClawHub advertises a wildcard plugin API range", async () => {
@@ -2093,6 +2236,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2102,7 +2246,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {
@@ -2115,6 +2259,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2131,7 +2276,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {

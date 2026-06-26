@@ -16,7 +16,7 @@ import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-to
 export { OpenClawChannelBridge } from "./channel-bridge.js";
 
 /** Options accepted by the channel MCP server factory and stdio entry point. */
-export type OpenClawMcpServeOptions = {
+type OpenClawMcpServeOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   gatewayPassword?: string;

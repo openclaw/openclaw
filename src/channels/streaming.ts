@@ -372,6 +372,8 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
       return "apply_patch";
     case "search":
       return "web_search";
+    case "api":
+      return "api";
     case "tool":
       return "tool_call";
     default:
@@ -409,6 +411,15 @@ function resolveProgressDraftLineId(
 function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): string | undefined {
   const toolCallId = input.toolCallId?.trim();
   return toolCallId ? `command:${toolCallId}` : undefined;
+}
+
+function isTerminalProgressStatus(status: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(status);
+  return (
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized?.startsWith("exit ") === true
+  );
 }
 
 function isEmptyReasoningProgressItem(
@@ -1093,9 +1104,13 @@ export function normalizeChannelProgressDraftLineIdentity(
   /** Progress line whose duplicate/update identity should be normalized. */
   line: string | ChannelProgressDraftLine | undefined,
 ): string {
-  const text = typeof line === "string" ? line : line?.text;
-  const status = typeof line === "object" ? line.status : undefined;
-  return compactStrings([text, status]).join(" ");
+  const text = typeof line === "string" ? line : line ? getProgressDraftLineText(line) : undefined;
+  return (
+    text
+      ?.replace(/`([^`]+)`/gu, "$1")
+      .replace(/\s+/g, " ")
+      .trim() ?? ""
+  );
 }
 
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1118,8 +1133,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     );
     if (existingIndex >= 0) {
       const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
-      const replacementIdentity = normalizeChannelProgressDraftLineIdentity(replacement);
-      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === replacementIdentity) {
+      if (replacement === lines[existingIndex]) {
         return lines;
       }
       const next = [...lines];
@@ -1127,8 +1141,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return next.slice(-maxLines);
     }
   }
-  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
-  if (previous === normalized) {
+  const previous = lines.at(-1);
+  if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
     return lines;
   }
   return [...lines, line].slice(-maxLines);
@@ -1149,7 +1163,11 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     return line;
   }
   const previousDetail = previous.detail?.trim();
-  if (!previousDetail || previousDetail === previous.status) {
+  if (
+    !previousDetail ||
+    previousDetail === previous.status ||
+    isTerminalProgressStatus(previous.status)
+  ) {
     return line;
   }
   const replacement = {

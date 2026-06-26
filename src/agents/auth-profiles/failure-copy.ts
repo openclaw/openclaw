@@ -8,7 +8,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 
-export type AuthProfileFailureCopyParams = {
+type AuthProfileFailureCopyParams = {
   reason: FailoverReason;
   provider: string;
   /**

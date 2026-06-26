@@ -70,14 +70,6 @@ function npmViewVersion(spec: string): string {
   return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
 }
 
-export async function ensureCurrentBuild(input: {
-  lockDir: string;
-  requireControlUi?: boolean;
-  checkDirty?: boolean;
-}): Promise<void> {
-  await withPackageLock(input.lockDir, async () => ensureCurrentBuildUnlocked(input));
-}
-
 async function ensureCurrentBuildUnlocked(input: {
   requireControlUi?: boolean;
   checkDirty?: boolean;
@@ -202,18 +194,27 @@ async function withPackageLock<T>(lockDir: string, fn: () => Promise<T>): Promis
   }
 }
 
-async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<void> {
+async function acquirePackageLock(
+  lockDir: string,
+  ownerToken: string,
+  params: { writeOwner?: (lockDir: string, ownerToken: string) => Promise<void> } = {},
+): Promise<void> {
   const timeoutMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000);
   const staleMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_STALE_MS", 2 * 60 * 60_000);
   const startedAt = Date.now();
   let waitAnnouncementBudget = 1;
   const consumeWaitAnnouncement = () => waitAnnouncementBudget-- > 0;
   while (Date.now() - startedAt < timeoutMs) {
+    let createdLockDir = false;
     try {
       await mkdir(lockDir);
-      await writeLockOwner(lockDir, ownerToken);
+      createdLockDir = true;
+      await (params.writeOwner ?? writeLockOwner)(lockDir, ownerToken);
       return;
     } catch (error) {
+      if (createdLockDir) {
+        await rm(lockDir, { force: true, recursive: true }).catch(() => undefined);
+      }
       if (!isErrorCode(error, "EEXIST")) {
         throw error;
       }
@@ -256,7 +257,7 @@ async function removeStalePackageLock(lockDir: string, staleMs: number): Promise
     return;
   }
   const ageMs = Date.now() - ((await stat(lockDir).catch(() => undefined))?.mtimeMs ?? Date.now());
-  if (owner || ageMs >= staleMs) {
+  if (owner?.pid !== undefined || staleMs <= 0 || ageMs >= staleMs) {
     await rm(lockDir, { force: true, recursive: true }).catch(() => undefined);
   }
 }
@@ -269,7 +270,10 @@ async function readLockOwner(lockDir: string): Promise<{ pid?: number; token?: s
   try {
     const parsed = JSON.parse(text) as { pid?: unknown; token?: unknown };
     return {
-      pid: typeof parsed.pid === "number" ? parsed.pid : undefined,
+      pid:
+        typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0
+          ? parsed.pid
+          : undefined,
       token: typeof parsed.token === "string" ? parsed.token : undefined,
     };
   } catch {
@@ -295,3 +299,9 @@ async function delay(ms: number): Promise<void> {
     setTimeout(resolve, ms);
   });
 }
+
+export const testing = {
+  acquirePackageLock,
+  removeStalePackageLock,
+  readLockOwner,
+};

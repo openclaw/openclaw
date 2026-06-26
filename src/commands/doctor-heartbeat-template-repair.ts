@@ -109,7 +109,7 @@ const KNOWN_REPAIRABLE_DIRTY_HEARTBEAT_TEMPLATES = [
   LEGACY_DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE,
 ] as const;
 
-export type HeartbeatTemplateRepairAnalysis =
+type HeartbeatTemplateRepairAnalysis =
   | { status: "clean" }
   | { status: "dirty-template" }
   | { status: "dirty-template-with-custom-content"; customLines: string[] };

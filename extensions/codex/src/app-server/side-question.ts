@@ -322,12 +322,16 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
-          execPolicy,
-          execReviewerAgentId: sessionAgentId,
-          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
-          autoApprove: shouldAutoApproveCodexAppServerApprovals({ approvalPolicy, sandbox }),
-          signal: runAbortController.signal,
-        });
+	          execPolicy,
+	          execReviewerAgentId: sessionAgentId,
+	          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
+	          autoApprove: shouldAutoApproveCodexAppServerApprovals({
+	            approvalPolicy,
+	            networkProxy: modelScopedAppServer.networkProxy,
+	            sandbox,
+	          }),
+	          signal: runAbortController.signal,
+	        });
       }
       if (request.method !== "item/tool/call") {
         return undefined;
@@ -415,8 +419,12 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    const threadConfig =
-      mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
+	    const threadConfig =
+	      mergeCodexThreadConfigs(
+	        nativeHookRelayConfig,
+	        runtimeThreadConfig,
+	        modelScopedAppServer.networkProxy?.configPatch,
+	      ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
@@ -428,7 +436,7 @@ export async function runCodexAppServerSideQuestion(
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-          sandbox,
+	          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,

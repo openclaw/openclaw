@@ -1,7 +1,11 @@
 // Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { getWorkboardState } from "../controllers/workboard.ts";
+import {
+  getWorkboardState,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { renderWorkboard } from "./workboard.ts";
 
@@ -29,6 +33,458 @@ function dispatchKey(target: EventTarget, key: string, options: KeyboardEventIni
 }
 
 describe("renderWorkboard", () => {
+  it("hides the manual refresh button while auto-refresh is enabled", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.loading = true;
+    state.autoRefreshIntervalMs = 5000;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')).toBeNull();
+    expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
+      "Refreshing",
+    );
+  });
+
+  it("renders lifecycle refresh errors without replacing generic errors", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.lifecycleTaskRefreshError = "Task refresh unavailable";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    expect(container.querySelector(".callout.danger")?.textContent).toBe(
+      "Task refresh unavailable",
+    );
+
+    state.error = "Write denied";
+    renderInto(container, props);
+    expect(container.querySelector(".callout.danger")?.textContent).toBe("Write denied");
+  });
+
+  it("stops and does not rearm auto-refresh while disconnected", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.lifecycleTasksPrepared = true;
+    state.autoRefreshIntervalMs = 5000;
+    const request = vi.fn(async () => ({ cards: [], statuses: [] }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    } satisfies WorkboardRenderProps;
+
+    try {
+      renderInto(container, props);
+      renderInto(container, { ...props, connected: false });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(request).not.toHaveBeenCalled();
+
+      const interval = container.querySelector<HTMLSelectElement>(".workboard-auto-refresh select");
+      interval!.value = "15000";
+      interval!.dispatchEvent(new Event("change", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      stopWorkboardPolling(host);
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops lifecycle refresh and reconciliation while disconnected", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const task = {
+      id: "task-1",
+      taskId: "task-1",
+      status: "running" as const,
+      updatedAt: 1,
+    };
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Running card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        taskId: task.taskId,
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.tasksByCardId.set("card-1", task);
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const request = vi.fn();
+    const requestUpdate = vi.fn();
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: requestUpdate,
+    } satisfies WorkboardRenderProps;
+
+    try {
+      renderInto(container, props);
+      await Promise.resolve();
+      renderInto(container, { ...props, connected: false });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(state.lifecycleTasksPrepared).toBe(false);
+      expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    } finally {
+      stopWorkboardLifecycleRefresh(host);
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling and lifecycle refresh while the plugin is disabled", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.loading = true;
+    state.pollRefreshInProgress = true;
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshError = "Task refresh unavailable";
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: false,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    expect(state.pollRefreshInProgress).toBe(false);
+    expect(state.loading).toBe(false);
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+  });
+
+  it("keeps dispatch available during refresh and disables it during writes", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.loading = true;
+    state.autoRefreshIntervalMs = 5000;
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    render(renderWorkboard(props), container);
+
+    const dispatchButton = container.querySelector<HTMLButtonElement>(
+      'button[title="Dispatch ready work"]',
+    );
+    expect(dispatchButton?.disabled).toBe(false);
+
+    state.draftSaving = true;
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
+    ).toBe(true);
+
+    state.loading = false;
+    state.autoRefreshIntervalMs = 0;
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
+      true,
+    );
+
+    state.draftSaving = false;
+    state.dispatching = true;
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
+    ).toBe(true);
+
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
+      true,
+    );
+  });
+
+  it("disables card-write controls while dispatch is running", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:workboard-dispatch";
+    const request = vi.fn(async () => ({ card: state.cards[0] }));
+    state.loaded = true;
+    state.dispatching = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Dispatch-safe card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [
+        { key: sessionKey, kind: "direct", status: "running", hasActiveRun: true, updatedAt: 2 },
+      ],
+      onOpenSession: () => undefined,
+    };
+
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="New card"]')?.disabled).toBe(
+      true,
+    );
+    expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')?.disabled).toBe(
+      true,
+    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Archive card"]')?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Delete card"]')?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
+      "false",
+    );
+    expect(request).not.toHaveBeenCalled();
+
+    state.draftOpen = true;
+    state.editingCardId = "card-1";
+    state.draftTitle = "Dispatch-safe card";
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-draft .btn.primary")?.disabled,
+    ).toBe(true);
+  });
+
+  it("renders stable card action slots and top updated timestamps", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "ready",
+        title: "Ready card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        agentId: "workboard-dispatcher",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
+      },
+      {
+        id: "running",
+        title: "Running card",
+        status: "running",
+        priority: "high",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
+        sessionKey: "agent:main:dashboard:1",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const cards = [...container.querySelectorAll(".workboard-card")];
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card.querySelector(".workboard-card__updated")?.textContent).toMatch(/\d+:\d\d/);
+      expect(card.querySelector(".workboard-card__updated")?.textContent).not.toContain("Updated:");
+      expect(card.querySelector(".workboard-card__updated")?.getAttribute("aria-label")).toContain(
+        "Updated:",
+      );
+      expect(card.querySelector(".workboard-card__updated-icon svg")).toBeTruthy();
+      expect(card.querySelector(".workboard-card__top > .workboard-card__updated")).toBeTruthy();
+      expect(
+        card.querySelector(".workboard-card__chips")?.previousElementSibling?.className,
+      ).toContain("workboard-card__top");
+      expect(
+        card.querySelectorAll(".workboard-card__quick-actions .workboard-card__action-slot"),
+      ).toHaveLength(3);
+      expect(
+        card.querySelectorAll(".workboard-card__actions-primary .workboard-card__action-slot"),
+      ).toHaveLength(3);
+      expect(
+        card.querySelectorAll(".workboard-card__actions > .workboard-card__action-slot"),
+      ).toHaveLength(2);
+    }
+    expect(container.querySelector(".workboard-agent-chip")?.textContent).toContain(
+      "workboard-dispatcher",
+    );
+    const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
+    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+  });
+
+  it("renders date and time in detail drawer timestamps", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Timestamped card",
+        status: "running",
+        priority: "high",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
+        metadata: {
+          workerProtocol: {
+            state: "running",
+            updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
+          },
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const detailText = container.querySelector(".workboard-detail")?.textContent ?? "";
+    expect(detailText).toContain("Updated");
+    expect(detailText).toMatch(/\d+:\d\d/);
+  });
+
+  it("keeps the last updated timestamp stable next to density controls while refreshing", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.loading = true;
+    state.lastRefreshAt = new Date("2026-06-03T18:47:00Z").getTime();
+    state.lastRefreshStartedAt = Date.now();
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const layoutControls = container.querySelector(".workboard-layout-controls");
+    expect(layoutControls?.querySelector(".workboard-layout-toggle")).toBeTruthy();
+    expect(layoutControls?.querySelector(".workboard-refresh-status")?.textContent).toContain(
+      "Updated",
+    );
+    expect(layoutControls?.textContent).not.toContain("Refreshing");
+  });
+
   it("renders board columns and preloaded cards", () => {
     const now = Date.now();
     const host = {};
@@ -78,7 +534,758 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Running");
     expect(container.textContent).toContain("Dashboard session");
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
-    expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
+    expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("High");
+    expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
+  });
+
+  it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Stale cached card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    stopWorkboardLifecycleRefresh(host);
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: state.cards, statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector('button[title="Edit card"]')).toBeNull();
+    expect(container.querySelector('button[title="Archive card"]')).toBeNull();
+    expect(container.querySelector('button[title="New card"]')).toBeNull();
+    expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
+
+    await vi.waitFor(() => expect(state.mutationReadiness).toBe("ready"));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector('button[title="Edit card"]')).not.toBeNull();
+    expect(container.querySelector('button[title="New card"]')).not.toBeNull();
+  });
+
+  it("keeps a stale edit draft disabled until it is cancelled", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Canonical title",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draftOpen = true;
+    state.editingCardId = "card-1";
+    state.draftTitle = "Unsaved edit";
+    stopWorkboardLifecycleRefresh(host);
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: state.cards, statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    await vi.waitFor(() => expect(state.mutationReadiness).toBe("stale_edit_draft"));
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-modal__actions .primary")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Unsaved edit",
+    );
+
+    container
+      .querySelector<HTMLButtonElement>('button[title="Cancel"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(state.draftOpen).toBe(false);
+    expect(state.mutationReadiness).toBe("ready");
+  });
+
+  it("renders health counts and dense card metadata", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Blocked worker",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
+          claim: { ownerId: "agent-1", claimedAt: 1, lastHeartbeatAt: Date.now() },
+          diagnostics: [
+            {
+              kind: "protocol_violation",
+              severity: "warning",
+              title: "Old diagnostic",
+              detail: "Older detail.",
+              firstSeenAt: 1,
+              lastSeenAt: 1,
+              count: 1,
+            },
+            {
+              kind: "repeated_failures",
+              severity: "error",
+              title: "Repeated run failures",
+              detail: "Multiple attempts failed.",
+              firstSeenAt: 1,
+              lastSeenAt: 2,
+              count: 1,
+            },
+          ],
+          notifications: [{ id: "note-1", kind: "failed", createdAt: 1, message: "Needs proof." }],
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-health")?.textContent).toContain("1blocked");
+    expect(container.textContent).toContain("1 attempts");
+    expect(container.textContent).toContain("heartbeat");
+    expect(container.textContent).toContain("Repeated run failures");
+    expect(container.textContent).not.toContain("Old diagnostic");
+    expect(container.textContent).toContain("Needs proof.");
+  });
+
+  it("renders sub-minute heartbeat ages with the duration count interpolation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00Z"));
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Active worker",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          claim: {
+            ownerId: "agent-1",
+            claimedAt: 1,
+            lastHeartbeatAt: Date.now() - 42_000,
+          },
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    try {
+      renderInto(container, {
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      });
+
+      expect(container.textContent).toContain("heartbeat 42 s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("highlights cards matching a clicked health badge", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Blocked worker",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-2",
+        title: "Running worker",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const renderBoard = () =>
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+    renderBoard();
+
+    container
+      .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderBoard();
+
+    const cards = [...container.querySelectorAll<HTMLElement>(".workboard-card")];
+    expect(state.activeHealthHighlight).toBe("blocked");
+    expect(cards.find((card) => card.textContent?.includes("Blocked worker"))?.className).toContain(
+      "workboard-card--health-highlight",
+    );
+    expect(cards.find((card) => card.textContent?.includes("Blocked worker"))?.className).toContain(
+      "workboard-card--health-highlight-blocked",
+    );
+    expect(
+      cards.find((card) => card.textContent?.includes("Running worker"))?.className,
+    ).not.toContain("workboard-card--health-highlight");
+    expect(
+      container
+        .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    container
+      .querySelector<HTMLButtonElement>(".workboard-health__item--blocked")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderBoard();
+
+    expect(state.activeHealthHighlight).toBeNull();
+    expect(container.querySelector(".workboard-card--health-highlight")).toBeNull();
+  });
+
+  it("filters cards with the view preset selector", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.viewPreset = "ready";
+    state.cards = [
+      {
+        id: "ready",
+        title: "Ready card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "blocked",
+        title: "Blocked card",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Ready card");
+    expect(container.textContent).not.toContain("Blocked card");
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(1);
+    expect(container.querySelector(".workboard-board")?.className).toContain(
+      "workboard-board--single-column",
+    );
+    expect(container.querySelector(".workboard-column h2")?.textContent).toContain("Ready");
+    expect(
+      [...container.querySelectorAll(".workboard-column h2")].map((heading) => heading.textContent),
+    ).not.toContain("Blocked");
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-health__item--blocked")?.textContent,
+    ).toContain("0blocked");
+  });
+
+  it("shows an empty state and disables zero-result view presets", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.viewPreset = "running";
+    state.cards = [
+      {
+        id: "card-ready",
+        title: "Ready card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-column")).toBeNull();
+    expect(container.querySelector(".workboard-board")).toBeNull();
+    expect(container.querySelector(".workboard-empty-state")?.textContent).toContain(
+      "No cards match this view",
+    );
+    const viewSelect = container.querySelector(".workboard-toolbar__filters .workboard-select");
+    const runningOption = [
+      ...(viewSelect?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].find((button) => button.textContent?.includes("Running"));
+    expect(runningOption?.disabled).toBe(true);
+    expect(runningOption?.textContent).toContain("0 cards");
+  });
+
+  it("shows the empty state when non-view filters match no cards", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.viewPreset = "all";
+    state.priorityFilter = "urgent";
+    state.cards = [
+      {
+        id: "card-ready",
+        title: "Ready card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-column")).toBeNull();
+    expect(container.querySelector(".workboard-empty-state")?.textContent).toContain(
+      "No cards match this view",
+    );
+  });
+
+  it("uses the same custom dropdown control for Workboard toolbar filters", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [{ id: "main", name: "Main" }],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
+    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
+    expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(0);
+    expect(toolbarFilters?.textContent).toContain("All cards");
+    expect(toolbarFilters?.textContent).toContain("All priorities");
+    expect(toolbarFilters?.textContent).toContain("All agents");
+    const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(1);
+    expect(priorityFilter?.textContent).toContain("Low");
+    expect(priorityFilter?.textContent).toContain("Normal");
+    expect(priorityFilter?.textContent).toContain("High");
+    expect(priorityFilter?.textContent).toContain("Urgent");
+  });
+
+  it("closes the previous Workboard dropdown when another one opens", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const selects = [
+      ...container.querySelectorAll<HTMLDetailsElement>(
+        ".workboard-toolbar__filters .workboard-select",
+      ),
+    ];
+    expect(selects).toHaveLength(3);
+
+    selects[0].open = true;
+    selects[0].dispatchEvent(new Event("toggle"));
+    selects[1].open = true;
+    selects[1].dispatchEvent(new Event("toggle"));
+
+    expect(selects[0]?.open).toBe(false);
+    expect(selects[1]?.open).toBe(true);
+    expect(selects[2]?.open).toBe(false);
+  });
+
+  it("closes open Workboard dropdowns on outside pointer and Escape", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container
+        .querySelector(".workboard-toolbar__filters")
+        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
+        .item(1);
+      const board = container.querySelector<HTMLElement>(".workboard-board");
+      expect(select).toBeTruthy();
+      expect(board).toBeTruthy();
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      expect(select?.open).toBe(false);
+
+      select!.open = true;
+      const escape = dispatchKey(select!, "Escape");
+      expect(escape.defaultPrevented).toBe(true);
+      expect(select?.open).toBe(false);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("includes selected values in custom select accessible names", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const selects = [
+      ...container.querySelectorAll<HTMLElement>(".workboard-toolbar__filters .workboard-select"),
+    ];
+    expect(selects).toHaveLength(3);
+    for (const select of selects) {
+      const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
+      const selectedLabel = trigger?.querySelector(".workboard-select__value")?.textContent?.trim();
+      const fieldLabel = menu?.getAttribute("aria-label");
+      expect(trigger?.getAttribute("aria-label")).toBe(`${fieldLabel}: ${selectedLabel}`);
+    }
+  });
+
+  it("supports keyboard navigation and restores dropdown trigger focus", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container
+        .querySelector(".workboard-toolbar__filters")
+        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
+        .item(1);
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const options = [
+        ...(select?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
+      ];
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(options.length).toBeGreaterThan(2);
+      options[1].disabled = true;
+
+      trigger!.focus();
+      dispatchKey(trigger!, "ArrowDown");
+      expect(select?.open).toBe(true);
+      expect(document.activeElement).toBe(options[0]);
+
+      dispatchKey(options[0], "ArrowDown");
+      expect(document.activeElement).toBe(options[2]);
+
+      dispatchKey(options[2], "End");
+      expect(document.activeElement).toBe(options.at(-1));
+
+      dispatchKey(options.at(-1)!, "h");
+      expect(document.activeElement?.textContent).toContain("High");
+      expect(dispatchKey(document.activeElement!, " ").defaultPrevented).toBe(false);
+
+      (document.activeElement as HTMLButtonElement).click();
+      expect(select?.open).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+
+      dispatchKey(trigger!, " ");
+      expect(select?.open).toBe(true);
+      dispatchKey(document.activeElement!, "Escape");
+      expect(select?.open).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("skips lifecycle sync during a poll and reconciles after it completes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.pollRefreshInProgress = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Completed session",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:dashboard:1",
+      },
+    ];
+    const request = vi.fn(async (method: string) =>
+      method === "workboard.cards.update"
+        ? { card: { ...state.cards[0], status: "review" } }
+        : { cards: state.cards, statuses: ["running", "review"] },
+    );
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+
+    state.pollRefreshInProgress = false;
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    render(
+      renderWorkboard({
+        host,
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: expect.objectContaining({ status: "review" }),
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
   it("can hide empty columns while keeping populated columns visible", () => {
@@ -306,6 +1513,46 @@ describe("renderWorkboard", () => {
       expect(container.querySelector(".workboard-draft")).toBeNull();
       expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("lets Escape close the card modal from a closed custom select", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
+      await nextFrame();
+
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      expect(select?.open).toBe(false);
+      expect(trigger).toBeTruthy();
+
+      trigger!.focus();
+      dispatchKey(trigger!, "Escape");
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-draft")).toBeNull();
     } finally {
       render(nothing, container);
       container.remove();
@@ -863,6 +2110,153 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
+  it("keeps unresolved task-linked cards from exposing duplicate starts", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Historical task link",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        taskId: "task-older-than-poll-page",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
+  it("does not expose live controls for terminal cards with unresolved task links", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Completed historical task",
+        status: "done",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        taskId: "task-older-than-poll-page",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-live")).toBeNull();
+    expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
+  it("keeps newly started unresolved runs from exposing duplicate starts", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Newly started run",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:subagent:workboard-default-card-1",
+        runId: "run-1",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
+  it("allows starts for authoritatively missing historical task links", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Historical task link",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        taskId: "task-pruned-from-ledger",
+      },
+    ];
+    state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
+  });
+
   it("hides write controls for read-only operators", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1014,7 +2408,7 @@ describe("renderWorkboard", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
-    state.busyCardId = "card-1";
+    state.busyCardIds.add("card-1");
     state.cards = [
       {
         id: "card-1",
@@ -1377,6 +2771,17 @@ describe("renderWorkboard", () => {
         createdAt: 1,
         updatedAt: 1,
       },
+      {
+        id: "card-3",
+        title: "Dispatcher work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "workboard-dispatcher",
+        position: 3000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
     ];
     const container = document.createElement("div");
 
@@ -1401,11 +2806,15 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    const agentFilter = [...container.querySelectorAll<HTMLSelectElement>("select")].find(
-      (select) => select.title === "Filter by agent",
-    );
-    agentFilter!.value = "ops";
-    agentFilter!.dispatchEvent(new Event("change", { bubbles: true }));
+    const agentFilter = container.querySelector(".workboard-select--toolbar-agent");
+    expect(agentFilter?.textContent).toContain("Main (default)");
+    expect(agentFilter?.textContent).toContain("Unassigned (uses Main)");
+    expect(agentFilter?.textContent).toContain("workboard-dispatcher (not configured)");
+
+    const opsOption = [
+      ...(agentFilter?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
+    ].find((button) => button.textContent?.includes("Ops"));
+    opsOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
       renderWorkboard({
         host,
@@ -1429,7 +2838,419 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).not.toContain("Main work");
     expect(container.textContent).toContain("Ops work");
-    expect(container.textContent).toContain("Ops");
+    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
+      "Ops",
+    );
+
+    const dispatcherOption = [
+      ...(container
+        .querySelector(".workboard-select--toolbar-agent")
+        ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
+    ].find((button) => button.textContent?.includes("workboard-dispatcher"));
+    dispatcherOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Ops work");
+    expect(container.textContent).toContain("Dispatcher work");
+    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
+      "workboard-dispatcher (not configured)",
+    );
+  });
+
+  it("limits assignment choices to configured agents and preserves an unknown current assignee", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "Assign me";
+    state.draftAgentId = "workboard-dispatcher";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Assign me",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "workboard-dispatcher",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "main", name: "Main duplicate" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const draft = container.querySelector<HTMLElement>(".workboard-draft");
+    const agentSelect = [...(draft?.querySelectorAll<HTMLElement>(".workboard-select") ?? [])].at(
+      2,
+    );
+    const optionLabels = [
+      ...(agentSelect?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
+    ].map((option) => option.textContent?.trim());
+    expect(optionLabels).toEqual([
+      "Unassigned (uses Main)",
+      "Main (default)",
+      "Ops",
+      "workboard-dispatcher (not configured)",
+    ]);
+  });
+
+  it("renders the card modal with a single scrollable body and stable footer actions", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const draft = container.querySelector(".workboard-draft");
+    const body = draft?.querySelector(".workboard-draft__body");
+    const footer = draft?.querySelector(":scope > .workboard-modal__actions");
+
+    expect(body?.querySelector(".workboard-template-strip")).toBeTruthy();
+    expect(body?.querySelector(".workboard-draft__meta")).toBeTruthy();
+    expect(footer?.textContent).toContain("Create");
+    expect(body?.contains(footer as Node)).toBe(false);
+  });
+
+  it("positions card modal dropdown menus as overlays", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+    const innerWidth = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(menu).toBeTruthy();
+
+      Object.defineProperty(trigger, "getBoundingClientRect", {
+        value: () => ({
+          top: 120,
+          right: 420,
+          bottom: 156,
+          left: 180,
+          width: 240,
+          height: 36,
+          x: 180,
+          y: 120,
+          toJSON: () => ({}),
+        }),
+      });
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-left")).toBe("180px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+    } finally {
+      innerWidth.mockRestore();
+    }
+  });
+
+  it("positions short dropdown menus against their trigger when opening above", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+    const innerHeight = vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(menu).toBeTruthy();
+
+      Object.defineProperty(trigger, "getBoundingClientRect", {
+        value: () => ({
+          top: 700,
+          right: 420,
+          bottom: 736,
+          left: 180,
+          width: 240,
+          height: 36,
+          x: 180,
+          y: 700,
+          toJSON: () => ({}),
+        }),
+      });
+      Object.defineProperty(menu, "getBoundingClientRect", {
+        value: () => ({
+          top: 0,
+          right: 420,
+          bottom: 96,
+          left: 180,
+          width: 240,
+          height: 96,
+          x: 180,
+          y: 0,
+          toJSON: () => ({}),
+        }),
+      });
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("598px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+    } finally {
+      innerHeight.mockRestore();
+    }
+  });
+
+  it("closes fixed dropdown menus when their anchor container scrolls or resizes", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const body = container.querySelector<HTMLElement>(".workboard-draft__body");
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      expect(body).toBeTruthy();
+      expect(select).toBeTruthy();
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      body!.dispatchEvent(new Event("scroll"));
+      expect(select?.open).toBe(false);
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      window.dispatchEvent(new Event("resize"));
+      expect(select?.open).toBe(false);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("clears an active card tooltip when opening details", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Tooltip clearing task",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const detailsButton = container.querySelector<HTMLButtonElement>(
+      'button[title="View details"]',
+    );
+    const tooltip = document.createElement("div");
+    tooltip.className = "control-ui-floating-tooltip";
+    tooltip.dataset.open = "true";
+    document.body.append(tooltip);
+    detailsButton?.setAttribute("data-floating-tooltip-active", "true");
+    detailsButton?.setAttribute("data-native-tooltip-title", "View details");
+    detailsButton?.setAttribute("data-native-tooltip-generated", "true");
+    detailsButton?.setAttribute("data-tooltip", "View details");
+    detailsButton?.removeAttribute("title");
+
+    detailsButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(state.detailCardId).toBe("card-1");
+    expect(detailsButton?.getAttribute("title")).toBe("View details");
+    expect(detailsButton?.getAttribute("data-tooltip")).toBeNull();
+    expect(detailsButton?.getAttribute("data-floating-tooltip-active")).toBeNull();
+    expect(tooltip.dataset.open).toBe("false");
+
+    container.remove();
+    tooltip.remove();
+  });
+
+  it("clears active tooltips before opening create and edit modals", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Tooltip clearing task",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    try {
+      for (const title of ["New card", "Edit card"]) {
+        state.draftOpen = false;
+        state.editingCardId = null;
+        renderInto(container, props);
+        const button = container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
+        const tooltip = document.createElement("div");
+        tooltip.className = "control-ui-floating-tooltip";
+        tooltip.dataset.open = "true";
+        document.body.append(tooltip);
+        button?.setAttribute("data-floating-tooltip-active", "true");
+        button?.setAttribute("data-native-tooltip-title", title);
+        button?.setAttribute("data-native-tooltip-generated", "true");
+        button?.setAttribute("data-tooltip", title);
+        button?.removeAttribute("title");
+
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+        expect(state.draftOpen).toBe(true);
+        expect(button?.getAttribute("title")).toBe(title);
+        expect(button?.getAttribute("data-tooltip")).toBeNull();
+        expect(button?.getAttribute("data-floating-tooltip-active")).toBeNull();
+        expect(tooltip.dataset.open).toBe("false");
+        tooltip.remove();
+      }
+    } finally {
+      container.remove();
+      document.querySelector(".control-ui-floating-tooltip")?.remove();
+    }
   });
 
   it("preflights model-specific starts for ACP runtime agents", () => {
@@ -1708,10 +3529,14 @@ describe("renderWorkboard", () => {
     title!.value = "Renamed";
     title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     const priority = [
-      ...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select"),
+      ...(container
+        .querySelector(".workboard-draft")
+        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(1);
-    priority!.value = "high";
-    priority!.dispatchEvent(new Event("change", { bubbles: true }));
+    priority
+      ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option")
+      .item(2)
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -1738,9 +3563,12 @@ describe("renderWorkboard", () => {
       "Renamed",
     );
     expect(
-      [...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select")].at(1)
-        ?.value,
-    ).toBe("high");
+      [
+        ...(container
+          .querySelector(".workboard-draft")
+          ?.querySelectorAll<HTMLElement>(".workboard-select__value") ?? []),
+      ].at(1)?.textContent,
+    ).toBe("High");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {
@@ -1751,7 +3579,7 @@ describe("renderWorkboard", () => {
     state.editingCardId = "card-1";
     state.draftTitle = "Rename me";
     state.draftCommentBody = "Ship after CI";
-    state.busyCardId = "card-1";
+    state.busyCardIds.add("card-1");
     state.cards = [
       {
         id: "card-1",
@@ -1922,6 +3750,38 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Existing session");
   });
 
+  it("shows a missing current session key instead of a false empty selection", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftSessionKey = "agent:main:archived-session";
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const sessionSelect = [
+      ...(container
+        .querySelector(".workboard-draft")
+        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
+    ].at(3);
+    expect(sessionSelect?.querySelector(".workboard-select__value")?.textContent).toBe(
+      "agent:main:archived-session",
+    );
+    expect(sessionSelect?.querySelector('[aria-selected="true"]')).toBeNull();
+  });
+
   it("does not offer synthetic heartbeat sessions when creating a card", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1956,10 +3816,12 @@ describe("renderWorkboard", () => {
     );
 
     const sessionOptions = [
-      ...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select"),
+      ...(container
+        .querySelector(".workboard-draft")
+        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(3);
-    const labels = [...(sessionOptions?.querySelectorAll("option") ?? [])].map((option) =>
-      option.textContent?.trim(),
+    const labels = [...(sessionOptions?.querySelectorAll(".workboard-select__option") ?? [])].map(
+      (option) => option.textContent?.trim(),
     );
     expect(labels).toContain("Dashboard session");
     expect(labels).not.toContain("heartbeat");
@@ -1985,10 +3847,58 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column")).toBeNull();
   });
 
+  it("keeps the panel in a neutral loading state while config enablement is unknown", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host: {},
+        client: null,
+        connected: true,
+        pluginEnabled: null,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Loading panel");
+    expect(container.textContent).not.toContain("Workboard is disabled");
+    expect(container.querySelector(".workboard-column")).toBeNull();
+  });
+
+  it("shows config load failures with a retry action", () => {
+    const container = document.createElement("div");
+    const onReloadConfig = vi.fn();
+
+    render(
+      renderWorkboard({
+        host: {},
+        client: null,
+        connected: true,
+        pluginEnabled: null,
+        pluginEnablementError: "config.get failed",
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+        onReloadConfig,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
+    expect(container.textContent).not.toContain("Loading panel");
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
+    expect(onReloadConfig).toHaveBeenCalledOnce();
+  });
+
   it("does not retry a failed initial load on every render", async () => {
     const host = {};
     const container = document.createElement("div");
-    const request = vi.fn(async () => {
+    const request = vi.fn(async (_method: string) => {
       throw new Error("workboard unavailable");
     });
     const props = {
@@ -2008,7 +3918,11 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
     await Promise.resolve();
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "workboard.cards.diagnostics.refresh",
+      "workboard.cards.list",
+    ]);
     expect(getWorkboardState(host).error).toBe("workboard unavailable");
   });
 });

@@ -26,7 +26,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
 }
 
 public enum ShareGatewayRelaySettings {
-    private static let suiteName = "group.ai.openclaw.shared"
+    private static var suiteName: String { OpenClawAppGroup.identifier }
     private static let relayConfigKey = "share.gatewayRelay.config.v1"
     private static let lastEventKey = "share.gatewayRelay.event.v1"
 

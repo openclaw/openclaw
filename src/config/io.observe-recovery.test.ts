@@ -4,8 +4,13 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -16,6 +21,9 @@ import {
   type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -40,8 +48,30 @@ describe("config observe recovery", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  function readConfigHealthRow(home: string, configPath: string) {
+    const { db } = openOpenClawStateDatabase({ env: { HOME: home } as NodeJS.ProcessEnv });
+    const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      healthDb
+        .selectFrom("config_health_entries")
+        .select([
+          "config_path",
+          "last_known_good_json",
+          "last_promoted_good_json",
+          "last_observed_suspicious_signature",
+        ])
+        .where("config_path", "=", configPath),
+    );
+  }
 
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
@@ -239,47 +269,6 @@ describe("config observe recovery", () => {
       configPath,
       auditPath: path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
       warn,
-    };
-  }
-
-  function withAsyncHealthWriteFailure(
-    deps: ObserveRecoveryDeps,
-    healthPath: string,
-  ): ObserveRecoveryDeps {
-    const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
-    return {
-      ...deps,
-      fs: {
-        ...deps.fs,
-        promises: {
-          ...deps.fs.promises,
-          writeFile: async (target, data, options) => {
-            if (target === healthPath) {
-              throw new Error("health write failed");
-            }
-            return await writeFile(target, data, options);
-          },
-        },
-      },
-    };
-  }
-
-  function withSyncHealthWriteFailure(
-    deps: ObserveRecoveryDeps,
-    healthPath: string,
-  ): ObserveRecoveryDeps {
-    const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
-    return {
-      ...deps,
-      fs: {
-        ...deps.fs,
-        writeFileSync: (target, data, options) => {
-          if (target === healthPath) {
-            throw new Error("health write failed");
-          }
-          return writeFileSync(target, data, options);
-        },
-      },
     };
   }
 
@@ -952,43 +941,42 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("logs async health-state write failures", async () => {
+  it("writes async health state to SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
 
       await expect(
-        promoteConfigSnapshotToLastKnownGood({
-          deps: withAsyncHealthWriteFailure(deps, healthPath),
-          snapshot,
-          logger: deps.logger,
-        }),
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(true);
 
-      expectWarnContaining(
-        warn,
-        `Config health-state write failed: ${healthPath}: health write failed`,
-      );
+      await expectPathMissing(path.join(home, ".openclaw", "logs", "config-health.json"));
+      const row = readConfigHealthRow(home, configPath);
+      expect(row).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+        last_promoted_good_json: expect.any(String),
+        last_observed_suspicious_signature: null,
+      });
+      expectWarnNotContaining(warn, "Config health-state write failed");
     });
   });
 
-  it("logs sync health-state write failures", async () => {
+  it("writes sync health state to SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       await writeClobberedUpdateChannel(configPath);
 
-      recoverClobberedUpdateChannelSync({
-        deps: withSyncHealthWriteFailure(deps, healthPath),
-        configPath,
-      });
+      recoverClobberedUpdateChannelSync({ deps, configPath });
 
-      expectWarnContaining(
-        warn,
-        `Config health-state write failed: ${healthPath}: health write failed`,
-      );
+      await expectPathMissing(path.join(home, ".openclaw", "logs", "config-health.json"));
+      const row = readConfigHealthRow(home, configPath);
+      expect(row).toMatchObject({
+        config_path: configPath,
+        last_observed_suspicious_signature: expect.any(String),
+      });
+      expectWarnNotContaining(warn, "Config health-state write failed");
     });
   });
 

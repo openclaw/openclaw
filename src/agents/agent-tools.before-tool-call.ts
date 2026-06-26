@@ -15,6 +15,7 @@ import {
 import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSecurityEvent,
   type DiagnosticEventPrivateData,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
@@ -36,6 +37,7 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
@@ -97,20 +99,6 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
-/** Detect abort-related errors produced by the supplied signal. */
-export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (err === signal.reason) {
-    return true;
-  }
-  return (
-    err instanceof Error &&
-    (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))
-  );
-}
-
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -124,6 +112,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
@@ -205,9 +198,10 @@ export type BeforeToolCallPolicyDiagnosticState = {
 
 /** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
+  const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
-    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(),
+    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(policyRegistry),
   };
 }
 
@@ -566,6 +560,63 @@ function emitSkillUsedDiagnostic(params: {
   });
 }
 
+function emitToolBlockedSecurityEvent(params: {
+  ctx?: HookContext;
+  deniedReason: HookBlockedReason;
+  toolIdentity: ToolDiagnosticIdentity;
+  toolName: string;
+  trace?: DiagnosticTraceContext;
+  paramsSummary?: DiagnosticToolParamsSummary;
+}): void {
+  const control =
+    params.deniedReason === "tool-loop"
+      ? ({
+          policyId: "tool-loop-detection",
+          controlId: "tool-loop-detection",
+          family: "authorization",
+        } as const)
+      : params.deniedReason === "plugin-approval"
+        ? ({
+            policyId: "plugin-tool-approval",
+            controlId: "plugin-tool-approval",
+            family: "approval",
+          } as const)
+        : ({
+            policyId: "plugin-before-tool-call",
+            controlId: "before-tool-call",
+            family: "approval",
+          } as const);
+  emitTrustedSecurityEvent({
+    category: "tool",
+    action: "tool.execution.blocked",
+    outcome: "denied",
+    severity: "medium",
+    reason: params.deniedReason,
+    ...(params.trace ? { trace: params.trace } : {}),
+    actor: {
+      kind: "agent",
+    },
+    target: {
+      kind: "tool",
+      name: params.toolName,
+      ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
+    },
+    policy: {
+      id: control.policyId,
+      decision: "deny",
+      reason: params.deniedReason,
+    },
+    control: {
+      id: control.controlId,
+      family: control.family,
+    },
+    attributes: {
+      tool_source: params.toolIdentity.toolSource,
+      ...(params.paramsSummary ? { params_kind: params.paramsSummary.kind } : {}),
+    },
+  });
+}
+
 function notifyPluginApprovalResolution(
   approval: PluginApprovalRequest,
   resolution: PluginApprovalResolution,
@@ -615,6 +666,10 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs,
         twoPhase: true,
       },
@@ -724,7 +779,13 @@ async function requestPluginToolApproval(params: {
     };
   } catch (err) {
     notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
-    if (isAbortSignalCancellation(err, params.signal)) {
+    const signal = params.signal;
+    const abortCancelled =
+      signal?.aborted === true &&
+      (err === signal.reason ||
+        (err instanceof Error &&
+          (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))));
+    if (abortCancelled) {
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
         blocked: true,
@@ -1055,7 +1116,8 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
-    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
+    const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
+    const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
     const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
       toolName,
@@ -1107,6 +1169,7 @@ export async function runBeforeToolCallHook(args: {
           },
           toolContext,
           {
+            ...(policyRegistry ? { registry: policyRegistry } : {}),
             ...(args.ctx?.config ? { config: args.ctx.config } : {}),
             deriveEvent: deriveToolEventParams,
             normalizeEvent(eventValue) {
@@ -1352,6 +1415,14 @@ export function wrapToolWithBeforeToolCallHook(
             ...eventBase,
             reason: outcome.reason,
             deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+          });
+          emitToolBlockedSecurityEvent({
+            ctx,
+            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+            toolIdentity: diagnosticIdentity,
+            toolName: normalizedToolName,
+            trace,
+            paramsSummary: eventBase.paramsSummary,
           });
         }
         const blockedResult = buildBlockedToolResult({

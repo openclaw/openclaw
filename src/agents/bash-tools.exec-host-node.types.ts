@@ -21,6 +21,7 @@ export type ExecuteNodeHostCommandParams = {
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;

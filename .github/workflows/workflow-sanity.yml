@@ -115,7 +115,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -129,11 +129,28 @@ jobs:
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
           trusted_zizmor_config="$RUNNER_TEMP/zizmor-base.yml"
 
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
-              "+${BASE_SHA}:refs/remotes/origin/security-base" ||
+          fetch_base_ref() {
+            local ref="$1"
+            local target="$2"
+            local fetch_status
+            for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
-                "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+                "+${ref}:${target}" && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::trusted base fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            fetch_base_ref "$BASE_SHA" "refs/remotes/origin/security-base" ||
+              fetch_base_ref "refs/heads/${BASE_REF}" "refs/remotes/origin/${BASE_REF}"
           fi
 
           if git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then

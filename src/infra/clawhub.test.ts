@@ -3,17 +3,19 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
+  fetchClawHubSkillDetail,
+  fetchClawHubSkillInstallResolution,
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
-  fetchClawHubPackageReadiness,
-  fetchClawHubPackageSecurity,
   fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
@@ -38,7 +40,12 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as { code?: unknown }).code).toBe("ENOENT");
 }
 
-function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: Uint8Array }): {
+function createStalledBodyResponse(params: {
+  headers: HeadersInit;
+  firstChunk: Uint8Array;
+  status?: number;
+  statusText?: string;
+}): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
 } {
@@ -53,7 +60,8 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
   });
   return {
     response: new Response(body, {
-      status: 200,
+      status: params.status ?? 200,
+      statusText: params.statusText,
       headers: params.headers,
     }),
     cancel,
@@ -61,7 +69,7 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
 }
 
 describe("clawhub helpers", () => {
-  const originalHome = process.env.HOME;
+  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
 
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
@@ -71,12 +79,7 @@ describe("clawhub helpers", () => {
     delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
-    delete process.env.XDG_CONFIG_HOME;
-    if (originalHome == null) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    originalEnv.restore();
   });
 
   it("parses explicit ClawHub package specs", () => {
@@ -264,7 +267,7 @@ describe("clawhub helpers", () => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
           const configPath = path.join(xdgRoot, "clawhub", "config.json");
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-          process.env.XDG_CONFIG_HOME = xdgRoot;
+          setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
           try {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
@@ -316,6 +319,65 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.get("q")).toBe("calendar");
   });
 
+  it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillDetail({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              skill: {
+                slug: "weather",
+                displayName: "Weather",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ skill: { slug: "weather" } });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
+  it("sends owner-qualified skill install resolution lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillInstallResolution({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              slug: "weather",
+              installKind: "archive",
+              archive: {
+                version: "1.0.0",
+                downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true, slug: "weather" });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/install");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
   it("fetches skill verification reports and lets version take precedence over tag", async () => {
     let requestedUrl = "";
     const envelope = {
@@ -358,6 +420,43 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
     expect(url.searchParams.get("version")).toBe("1.2.3");
     expect(url.searchParams.has("tag")).toBe(false);
+  });
+
+  it("sends owner-qualified skill verification lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        version: "1.0.0",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              schema: "clawhub.skill.verify.v1",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              skill: {},
+              publisher: {},
+              version: {},
+              card: {},
+              artifact: {},
+              provenance: {},
+              security: {},
+              signature: {},
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ schema: "clawhub.skill.verify.v1" });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/verify");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+    expect(url.searchParams.get("version")).toBe("1.0.0");
   });
 
   it("posts bulk skill security verdict requests", async () => {
@@ -478,6 +577,27 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.has("version")).toBe(false);
   });
 
+  it("clamps oversized ClawHub request timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await expect(
+        fetchClawHubSkillCard({
+          slug: "agentreceipt",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          fetchImpl: async () =>
+            new Response("# Agent Receipt\n", {
+              status: 200,
+              headers: { "content-type": "text/markdown; charset=utf-8" },
+            }),
+        }),
+      ).resolves.toBe("# Agent Receipt\n");
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
     let requestedUrl = "";
 
@@ -527,33 +647,6 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
-  it("fetches typed package readiness reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageReadiness({
-        name: "@openclaw/diagnostics-otel",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-              phase: "legacy-zip-only",
-              blockers: [],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-      phase: "legacy-zip-only",
-      blockers: [],
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
-    );
-  });
-
   it("fetches typed package artifact resolver reports", async () => {
     let requestedUrl = "";
     await expect(
@@ -591,40 +684,6 @@ describe("clawhub helpers", () => {
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
-    );
-  });
-
-  it("fetches typed package security reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageSecurity({
-        name: "@openclaw/diagnostics-otel",
-        version: "2026.3.22",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              releaseId: "rel_demo",
-              state: "approved",
-              reasonCode: "clean",
-              createdAt: 1774256733107,
-              scanState: "clean",
-              moderationState: "approved",
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      releaseId: "rel_demo",
-      state: "approved",
-      reasonCode: "clean",
-      createdAt: 1774256733107,
-      scanState: "clean",
-      moderationState: "approved",
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
   });
 
@@ -748,6 +807,131 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
+  it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new TextEncoder().encode('{"results":['),
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/ClawHub \/api\/v1\/search response stalled after 5ms/);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled ClawHub error bodies", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new TextEncoder().encode("partial error"),
+      headers: { "content-type": "text/plain" },
+      status: 500,
+      statusText: "Server Error",
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= overshootChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancel();
+      },
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow(/ClawHub \/api\/v1\/search response exceeded 16777216 bytes/);
+    // The reader is cancelled at the cap so the oversized stream releases its
+    // socket/buffer instead of being drained into memory.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
+    const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
+    let error: unknown;
+    try {
+      await searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => new Response(oversized, { status: 500 }),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message.startsWith("ClawHub /api/v1/search failed (500): ")).toBe(true);
+    expect(message.endsWith("…")).toBe(true);
+    // prefix + 400-char snippet + "…" stays far below the raw ~320 KiB body.
+    expect(message.length).toBeLessThanOrEqual(500);
+  });
+
+  it("bounds oversized ClawHub install-resolution JSON responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= overshootChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancel();
+      },
+    });
+
+    await expect(
+      fetchClawHubSkillInstallResolution({
+        slug: "weather",
+        fetchImpl: async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow(
+      /ClawHub \/api\/v1\/skills\/weather\/install response exceeded 16777216 bytes/,
+    );
+    // Same bounded reader covers the sibling install-resolution JSON path so a
+    // hostile install response cannot exhaust memory either.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
@@ -855,6 +1039,32 @@ describe("clawhub helpers", () => {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
       await expectPathMissing(archiveDir);
+    }
+  });
+
+  it("sends owner-qualified skill archive downloads as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+    const archive = await downloadClawHubSkillArchive({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.0.0",
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(new Uint8Array([7, 8, 9]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      },
+    });
+
+    try {
+      const url = new URL(requestedUrl);
+      expect(url.pathname).toBe("/api/v1/download");
+      expect(url.searchParams.get("slug")).toBe("weather");
+      expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+      expect(url.searchParams.get("version")).toBe("1.0.0");
+    } finally {
+      await archive.cleanup();
     }
   });
 

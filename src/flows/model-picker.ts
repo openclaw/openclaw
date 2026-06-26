@@ -80,7 +80,7 @@ function resolvePickerAgentDir(params: {
   return params.agentDir ?? resolveDefaultAgentDir(params.cfg, params.env ?? process.env);
 }
 
-export type PromptDefaultModelParams = {
+type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
@@ -97,8 +97,8 @@ export type PromptDefaultModelParams = {
   message?: string;
 };
 
-export type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
-export type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
+type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
+type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
 
 async function loadModelPickerRuntime() {
   return import("../commands/model-picker.runtime.js");

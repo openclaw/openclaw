@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
@@ -146,7 +146,7 @@ export function resolveOxfmtInvocation(args, params = {}) {
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {
-      const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+      const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
       return {
         command: comSpec,
         args: ["/d", "/s", "/c", buildCmdExeCommandLine(shimPath, args)],

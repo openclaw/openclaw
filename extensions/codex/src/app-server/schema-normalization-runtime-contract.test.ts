@@ -49,6 +49,8 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -97,7 +99,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes prepared executable dynamic tool schemas through thread start unchanged", async () => {
+  it("passes prepared executable dynamic tool schemas through legacy thread start specs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const parameterFreeTool = createParameterFreeTool("message");
@@ -128,7 +130,13 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       throw new Error(`expected thread/start request, got ${method}`);
     }
     const startPayload = payload as CodexThreadStartParams | undefined;
-    expect(startPayload?.dynamicTools).toStrictEqual([dynamicTool]);
+    expect(startPayload?.dynamicTools).toStrictEqual([
+      {
+        name: dynamicTool.name,
+        description: dynamicTool.description,
+        inputSchema: dynamicTool.inputSchema,
+      },
+    ]);
     expect(startPayload?.cwd).toBe(workspaceDir);
     expect(startPayload?.model).toBe("gpt-5.4");
     expect(startPayload?.modelProvider).toBeUndefined();

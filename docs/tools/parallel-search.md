@@ -7,7 +7,7 @@ read_when:
 title: "Parallel search"
 ---
 
-OpenClaw bundles two [Parallel](https://parallel.ai/) `web_search` providers:
+The Parallel plugin provides two [Parallel](https://parallel.ai/) `web_search` providers:
 
 - **Parallel Search (Free)** (`parallel-free`) -- Parallel's free
   [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Requires no
@@ -26,6 +26,15 @@ explicitly.
   Set `tools.web.search.provider` to `parallel-free` or `parallel` to route them
   through Parallel.
 </Note>
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/parallel-plugin
+openclaw gateway restart
+```
 
 ## API key (paid provider)
 

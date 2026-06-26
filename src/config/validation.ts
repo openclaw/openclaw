@@ -5,6 +5,11 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  type ChannelDmAllowFromMode,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+} from "../channels/plugins/dm-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import {
@@ -43,12 +48,19 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import {
+  type DmPolicyAllowFromViolation,
+  evaluateDmPolicyAllowFromDependency,
+  isBuiltInModelProviderOverlayId,
+} from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set([
@@ -311,6 +323,144 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
 function formatRawChannelConfigIssueMessage(message: string): string {
   return `invalid config: ${message}`;
 }
+
+function buildDmPolicyDependencyWarning(params: {
+  channelId: string;
+  accountId?: string;
+  allowFromSource?: "explicit" | "inherited";
+  violation: DmPolicyAllowFromViolation;
+}): ConfigValidationIssue {
+  const channelBase = `channels.${params.channelId}`;
+  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
+  const allowFromPath = `${scope}.allowFrom`;
+  const inherited = params.accountId && params.allowFromSource === "inherited";
+  const allowFromSubject = inherited
+    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
+    : allowFromPath;
+  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
+  const accountOverrideFix =
+    params.accountId && !inherited
+      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
+      : "";
+  const message =
+    params.violation === "open_requires_wildcard"
+      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
+      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
+  return { path: allowFromPath, message };
+}
+
+// Channel map keys that are not channels and must be skipped while scanning DM policy.
+const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
+
+function hasDefinedConfigValue(record: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(record, key) && record[key] !== undefined;
+}
+
+function hasConfiguredDmAllowFrom(
+  record: Record<string, unknown>,
+  mode: ChannelDmAllowFromMode,
+): boolean {
+  const dm = isRecord(record.dm) ? record.dm : null;
+  if (mode === "nestedOnly") {
+    return (
+      (dm !== null && hasDefinedConfigValue(dm, "allowFrom")) ||
+      hasDefinedConfigValue(record, "allowFrom")
+    );
+  }
+  return (
+    hasDefinedConfigValue(record, "allowFrom") ||
+    (dm !== null && hasDefinedConfigValue(dm, "allowFrom"))
+  );
+}
+
+function isConfigRecordEnabled(record: Record<string, unknown>): boolean {
+  return record.enabled !== false;
+}
+
+type ChannelDmPolicyDependencyWarningOptions = {
+  dmAllowFromModes?: ReadonlyMap<string, ChannelDmAllowFromMode>;
+};
+
+function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawConfig): boolean {
+  if (!config.channels || !isRecord(config.channels)) {
+    return false;
+  }
+  return Object.entries(config.channels).some(
+    ([channelId, channelValue]) =>
+      !DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) &&
+      isRecord(channelValue) &&
+      isConfigRecordEnabled(channelValue),
+  );
+}
+
+/**
+ * Surface dmPolicy/allowFrom dependency problems generically for every channel that
+ * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
+ * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
+ * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
+ * configs on upgrade.
+ *
+ * Resolution goes through the shared DM-access helpers so the warning matches the
+ * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
+ * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
+ * are skipped because their config shape does not match this warning's top-level paths.
+ */
+function collectChannelDmPolicyDependencyWarnings(
+  config: OpenClawConfig,
+  options: ChannelDmPolicyDependencyWarningOptions = {},
+): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  for (const [channelId, channelValue] of Object.entries(config.channels)) {
+    if (
+      DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) ||
+      !isRecord(channelValue) ||
+      !isConfigRecordEnabled(channelValue)
+    ) {
+      continue;
+    }
+    const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
+    if (mode === "nestedOnly") {
+      continue;
+    }
+    const channelViolation = evaluateDmPolicyAllowFromDependency({
+      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
+      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
+    });
+    if (channelViolation) {
+      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
+    }
+    if (!isRecord(channelValue.accounts)) {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
+      if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
+        continue;
+      }
+      const allowFromSource = hasConfiguredDmAllowFrom(accountValue, mode)
+        ? "explicit"
+        : "inherited";
+      const accountViolation = evaluateDmPolicyAllowFromDependency({
+        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
+        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
+      });
+      if (accountViolation) {
+        warnings.push(
+          buildDmPolicyDependencyWarning({
+            channelId,
+            accountId,
+            allowFromSource,
+            violation: accountViolation,
+          }),
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -1086,6 +1236,7 @@ function validateConfigObjectWithPluginsBase(
     knownIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
+    channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
     channelSchemas?: Map<
       string,
       {
@@ -1140,6 +1291,8 @@ function validateConfigObjectWithPluginsBase(
     return registryInfo;
   };
 
+  const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
+
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIdsResolved) {
       return compatPluginIds ?? new Set<string>();
@@ -1180,7 +1333,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const ensureRegistry = (): RegistryInfo => {
-    const info = registryInfo ?? loadValidationRegistry();
+    const info = ensureLoadedRegistryInfo();
     ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
@@ -1247,6 +1400,28 @@ function validateConfigObjectWithPluginsBase(
     }
     return info.channelSchemas;
   };
+
+  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
+    const info = ensureLoadedRegistryInfo();
+    if (!info.channelDmAllowFromModes) {
+      info.channelDmAllowFromModes = new Map(
+        collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
+          entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
+        ),
+      );
+    }
+    return info.channelDmAllowFromModes;
+  };
+
+  // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
+  // so account inheritance matches the per-channel Zod refinements.
+  warnings.push(
+    ...(hasChannelDmPolicyDependencyWarningCandidates(base.config)
+      ? collectChannelDmPolicyDependencyWarnings(base.config, {
+          dmAllowFromModes: ensureChannelDmAllowFromModes(),
+        })
+      : collectChannelDmPolicyDependencyWarnings(base.config)),
+  );
 
   let mutatedConfig = config;
   let channelsCloned = false;

@@ -77,7 +77,7 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 1;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 2;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 1;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -125,10 +125,14 @@ export async function buildCodexPluginThreadConfig(
     nowMs: params.nowMs,
     suppressAppInventoryRefresh: true,
   });
+  const appInventoryRefreshDeferredForActivation =
+    inventory.records.some((record) => record.activationRequired) &&
+    shouldRefreshMissingAppInventory(params, policy, inventory);
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "initial_missing",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -154,6 +158,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
     if (!activation.ok) {
@@ -164,10 +169,20 @@ export async function buildCodexPluginThreadConfig(
       });
     }
   }
-  if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
+  const postInstallRefreshRequired = activationResults.some(
+    (activation) => activation.ok && activation.installAttempted,
+  );
+  // Activation can become unnecessary or fail before it refreshes apps. Rebuild the
+  // deferred missing snapshot so unrelated active plugin apps are not silently erased.
+  const deferredMissingRefreshRequired =
+    appInventoryRefreshDeferredForActivation &&
+    !postInstallRefreshRequired &&
+    shouldRefreshMissingAppInventory(params, policy, inventory);
+  if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
-      reason: "post_install",
+      reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -186,6 +201,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -215,24 +231,22 @@ export async function buildCodexPluginThreadConfig(
   const policyApps: Record<string, PluginAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
   for (const record of inventory.records) {
-    if (record.activationRequired) {
-      const activation = activationResults.find(
-        (item) => item.identity.configKey === record.policy.configKey,
-      );
-      if (!activation?.ok) {
-        continue;
-      }
+    const activation = activationResults.find(
+      (item) => item.identity.configKey === record.policy.configKey,
+    );
+    if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
+      continue;
     }
     if (record.appOwnership !== "proven") {
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
-      if (!app.accessible || !app.enabled) {
+      if (!isPluginAppReadyForThreadStart(app)) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
-          message: `${app.id} is not accessible or enabled for ${record.policy.pluginName}.`,
+          message: `${app.id} is not accessible for ${record.policy.pluginName}.`,
         });
         continue;
       }
@@ -358,6 +372,18 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+  // Install/enable first so the initial app/list can observe newly activated plugin apps.
+  if (inventory.records.some((record) => record.activationRequired)) {
+    return false;
+  }
+  return shouldRefreshMissingAppInventory(params, policy, inventory);
+}
+
+function shouldRefreshMissingAppInventory(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
   return Boolean(
     params.appCacheKey &&
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
@@ -368,7 +394,7 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string } = {},
+  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
@@ -382,6 +408,7 @@ async function refreshAppInventoryNow(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      targetAppIds: options.targetAppIds,
     });
     return snapshot;
   } catch (error) {
@@ -395,6 +422,12 @@ async function refreshAppInventoryNow(
   }
 }
 
+function collectInventoryOwnedAppIds(inventory: CodexPluginInventory): string[] {
+  return Array.from(
+    new Set(inventory.records.flatMap((record) => record.ownedAppIds).filter(Boolean)),
+  ).toSorted();
+}
+
 function resolveThreadConfigAppsForRecord(params: {
   record: CodexPluginInventoryRecord;
   inventory: CodexPluginInventory;
@@ -403,6 +436,13 @@ function resolveThreadConfigAppsForRecord(params: {
     return [];
   }
   return params.record.apps;
+}
+
+function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
+  // `app/list` is the source of truth for inventory and access posture, but
+  // OpenClaw owns the per-thread enablement decision. A listed app that is
+  // accessible can be re-enabled for this thread via `config.apps[app.id]`.
+  return app.accessible;
 }
 
 function shouldForceRefreshForNotReadyPluginApps(
@@ -420,7 +460,7 @@ function shouldForceRefreshForNotReadyPluginApps(
     (record) =>
       record.appOwnership === "proven" &&
       record.ownedAppIds.length > 0 &&
-      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible)),
   );
 }
 

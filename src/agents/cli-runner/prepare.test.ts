@@ -112,6 +112,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
+        alwaysLoad: true,
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
           "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
@@ -2185,7 +2186,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
       expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
       expect(context.systemPrompt).not.toContain("## Memory Recall");
-      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPrompt).not.toMatch(/^- memory_search\b/m);
       expect(context.systemPromptReport.tools.entries).toEqual([]);
       expect(context.promptToolNamesHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();

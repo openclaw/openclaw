@@ -305,6 +305,16 @@ does not import plugin runtime code, run a package manager, or repair missing
 dependencies.
 </Note>
 
+If startup logs `plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`,
+run `openclaw plugins list --enabled --verbose` or
+`openclaw plugins inspect <id>` with a listed plugin id to confirm the plugin
+ids and copy trusted ids into `plugins.allow` in `openclaw.json`. When the
+warning can list every discovered plugin, it prints a ready-to-paste
+`plugins.allow` snippet that already includes those ids. If a plugin loads
+without install/load-path provenance, inspect that plugin id, then either pin
+the trusted id in `plugins.allow` or reinstall the plugin from a trusted source
+so OpenClaw records install provenance.
+
 `plugins search` is a remote ClawHub catalog lookup. It does not inspect local
 state, mutate config, install packages, or load plugin runtime code. Search
 results include the ClawHub package name, family, channel, version, summary, and
@@ -389,13 +399,17 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
+
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
     Passing the npm package name without a version or tag also resolves back to the tracked plugin record. Use this when a plugin was pinned to an exact version and you want to move it back to the registry's default release line.
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the configured `update.channel` when it syncs trusted official plugin records to the official catalog target, so beta-channel installs can stay on the beta release line instead of being silently normalized to stable/latest.
+
+    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
