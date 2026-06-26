@@ -8,6 +8,7 @@ on:
       - apps/android/app/src/main/**
       - apps/ios/**
       - apps/macos/Sources/**
+      - apps/macos/Package.swift
       - apps/shared/OpenClawKit/Sources/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
@@ -29,7 +30,29 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        locale: [hi, ru]
+        locale:
+          [
+            zh-CN,
+            zh-TW,
+            pt-BR,
+            de,
+            es,
+            ja-JP,
+            ko,
+            fr,
+            hi,
+            ar,
+            it,
+            tr,
+            uk,
+            id,
+            pl,
+            th,
+            vi,
+            nl,
+            fa,
+            ru,
+          ]
     runs-on: ubuntu-latest
     name: Refresh native ${{ matrix.locale }}
     steps:
