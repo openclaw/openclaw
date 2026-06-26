@@ -1176,6 +1176,7 @@ async function scanTranscriptFile(params: {
         // (e.g. DeepSeek V4) return usage.cost.total: 0 even for non-zero token
         // usage, causing the Control UI Spend panel to show $0 for real spend.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
