@@ -26,6 +26,7 @@ type QmdRuntimeCacheContextBase = {
   agentId: string;
   qmdCommand: string;
   qmdVersion?: string;
+  qmdEnvironmentHash?: string;
   qmdIndexPath: string;
   searchMode: string;
 };
@@ -118,6 +119,7 @@ function buildCollectionValidationCacheContextInput(
   return JSON.stringify({
     agentId: normalizeText(params.agentId),
     commandHash: hashText(normalizeText(params.qmdCommand)),
+    environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
     indexPathHash: normalizePathIdentity(params.qmdIndexPath),
     qmdVersion: normalizeText(params.qmdVersion ?? ""),
     searchMode: params.searchMode,
@@ -132,6 +134,7 @@ function buildMultiCollectionProbeCacheContextInput(
   return JSON.stringify({
     agentId: normalizeText(params.agentId),
     commandHash: hashText(normalizeText(params.qmdCommand)),
+    environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
     indexPathHash: normalizePathIdentity(params.qmdIndexPath),
     qmdVersion: normalizeText(params.qmdVersion ?? ""),
     searchMode: params.searchMode,

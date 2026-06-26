@@ -650,12 +650,32 @@ export class QmdMemoryManager implements MemorySearchManager {
     }));
   }
 
+  private buildQmdRuntimeEnvironmentHash(): string {
+    const relevantEnv = Object.fromEntries(
+      Object.keys(this.env)
+        .filter(
+          (key) =>
+            key === "PATH" ||
+            key === "HOME" ||
+            key === "LOCALAPPDATA" ||
+            key === "XDG_CONFIG_HOME" ||
+            key === "XDG_CACHE_HOME" ||
+            key === "QMD_CONFIG_DIR" ||
+            key.startsWith("QMD_"),
+        )
+        .toSorted()
+        .map((key) => [key, this.env[key] ?? ""]),
+    );
+    return crypto.createHash("sha256").update(JSON.stringify(relevantEnv)).digest("hex");
+  }
+
   private async buildQmdCollectionValidationCacheContext(): Promise<QmdRuntimeCollectionValidationCacheContext> {
     return {
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
       qmdCommand: this.qmd.command,
       qmdVersion: await this.resolveQmdRuntimeIdentity(),
+      qmdEnvironmentHash: this.buildQmdRuntimeEnvironmentHash(),
       qmdIndexPath: this.indexPath,
       searchMode: this.qmd.searchMode,
       collections: this.qmdRuntimeCacheCollections(),
@@ -669,6 +689,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       agentId: this.agentId,
       qmdCommand: this.qmd.command,
       qmdVersion: await this.resolveQmdRuntimeIdentity(),
+      qmdEnvironmentHash: this.buildQmdRuntimeEnvironmentHash(),
       qmdIndexPath: this.indexPath,
       searchMode: this.qmd.searchMode,
       sources: this.qmdRuntimeCacheSources(),

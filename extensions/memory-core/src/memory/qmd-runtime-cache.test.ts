@@ -190,6 +190,34 @@ describe("qmd-runtime-cache", () => {
     });
   });
 
+  it("misses validation and probe caches when qmd runtime environment changes", async () => {
+    const workspaceDir = await makeWorkspace();
+    const validationContext = {
+      ...collectionValidationContext(workspaceDir),
+      qmdEnvironmentHash: "env-a",
+    };
+    const probeContext = {
+      ...multiCollectionProbeContext(workspaceDir),
+      qmdEnvironmentHash: "env-a",
+    };
+
+    expect(await writeQmdCollectionValidationCache(validationContext, 3_600)).toBe(true);
+    expect(await writeQmdMultiCollectionProbeCache(probeContext, true, 3_600)).toBe(true);
+
+    expect(
+      await readQmdCollectionValidationCache(
+        { ...validationContext, qmdEnvironmentHash: "env-b" },
+        3_601,
+      ),
+    ).toStrictEqual({ state: "miss" });
+    expect(
+      await readQmdMultiCollectionProbeCache(
+        { ...probeContext, qmdEnvironmentHash: "env-b" },
+        3_601,
+      ),
+    ).toStrictEqual({ state: "miss" });
+  });
+
   it("treats cache misses for malformed values and expired entries", async () => {
     const workspaceDir = await makeWorkspace();
     const context = multiCollectionProbeContext(workspaceDir);
