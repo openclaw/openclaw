@@ -75,8 +75,9 @@ describe("write tool", () => {
     });
   });
 
-  it("keeps the original abort when the file already matched before execution", async () => {
-    // Matching pre-existing content is not proof this call wrote successfully.
+  it("returns no-op when content already matches instead of throwing on pre-aborted signal", async () => {
+    // When the file already has the requested content, the tool returns a no-op
+    // result regardless of signal state — there is nothing to write.
     const filePath = await createTempPath();
     await fs.writeFile(filePath, "finished\n", "utf-8");
     const controller = new AbortController();
@@ -87,9 +88,16 @@ describe("write tool", () => {
       }),
     });
 
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
-    ).rejects.toThrow("Operation aborted");
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "finished\n" },
+      controller.signal,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `No changes: content is identical to existing ${filePath}`,
+    });
   });
 
   it("recovers timeout-like post-write errors when readback matches requested content", async () => {

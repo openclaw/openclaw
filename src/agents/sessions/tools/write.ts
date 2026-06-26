@@ -393,6 +393,17 @@ export function createWriteToolDefinition(
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        if (precheck.state === "same") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `No changes: content is identical to existing ${path}`,
+              },
+            ],
+            details: undefined,
+          };
+        }
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");

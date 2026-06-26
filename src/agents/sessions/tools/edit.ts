@@ -387,6 +387,19 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
+        // Detect no-op edits where oldText === newText.
+        if (edits.some((e) => e.oldText === e.newText)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No changes: one or more edits have identical old and new text in ${path}.`,
+              },
+            ],
+            details: undefined,
+          };
+        }
+
         try {
           await ops.access(absolutePath);
         } catch (error: unknown) {
