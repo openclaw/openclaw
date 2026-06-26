@@ -36,4 +36,5 @@ export {
 } from "../routing/default-account-warnings.js";
 export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
+export { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 export { normalizeMessageChannel, resolveGatewayMessageChannel } from "../utils/message-channel.js";

@@ -31,6 +31,8 @@ import {
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorSessionStoreAgentIds,
   listPluginDoctorStateMigrationEntries,
   type PluginDoctorStateMigrationContext,
   type PluginDoctorStateMigrationDetection,
@@ -2999,6 +3001,7 @@ function canonicalizeSessionKeyForAgent(params: {
   mainKey: string;
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
+  preserveAmbiguousKeys?: boolean;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
@@ -3009,6 +3012,14 @@ function canonicalizeSessionKeyForAgent(params: {
   const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
   if (rawLower === "global" || rawLower === "unknown") {
     return rawLower;
+  }
+  const legacyDefaultMainAlias =
+    rawLower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
+    rawLower === `agent:${DEFAULT_AGENT_ID}:${params.mainKey}`;
+  // Unscoped and legacy default-main keys in a potentially shared store have no durable owner.
+  // Keep it untouched instead of assigning another agent's history by iteration order.
+  if (params.preserveAmbiguousKeys && (!rawLower.startsWith("agent:") || legacyDefaultMainAlias)) {
+    return params.key;
   }
 
   // When shared-store guard is active, do not remap keys that belong to a
@@ -3032,9 +3043,9 @@ function canonicalizeSessionKeyForAgent(params: {
   const canonicalMain = canonicalizeMainSessionAlias({
     cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
     agentId,
-    sessionKey: raw,
+    sessionKey: normalized,
   });
-  if (canonicalMain !== raw) {
+  if (canonicalMain !== normalized) {
     return normalizeLowercaseStringOrEmpty(canonicalMain);
   }
 
@@ -3174,8 +3185,9 @@ function canonicalizeSessionStore(params: {
   mainKey: string;
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
+  preserveAmbiguousKeys?: boolean;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
-  const canonical: Record<string, SessionEntryLike> = {};
+  const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
   const legacyKeys: string[] = [];
 
@@ -3189,6 +3201,7 @@ function canonicalizeSessionStore(params: {
       mainKey: params.mainKey,
       scope: params.scope,
       skipCrossAgentRemap: params.skipCrossAgentRemap,
+      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -3223,6 +3236,19 @@ function canonicalizeSessionStore(params: {
   }
 
   return { store: canonical, legacyKeys };
+}
+
+function isAmbiguousSharedStoreKey(key: string, mainKey: string): boolean {
+  const raw = key.trim();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  if (!raw || lower === "global" || lower === "unknown") {
+    return false;
+  }
+  return (
+    !lower.startsWith("agent:") ||
+    lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
+    lower === `agent:${DEFAULT_AGENT_ID}:${mainKey}`
+  );
 }
 
 function resolveStaleLegacySessionFile(params: {
@@ -4896,6 +4922,7 @@ export async function runLegacyStateMigrations(params: {
 export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  additionalAgentIds?: readonly string[];
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -4905,6 +4932,15 @@ export async function migrateOrphanedSessionKeys(params: {
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
+  const pluginAgentIds =
+    params.additionalAgentIds ??
+    listPluginDoctorSessionStoreAgentIds({
+      config: params.cfg,
+      env,
+      pluginIds: collectRelevantDoctorPluginIds(params.cfg),
+    });
+  const fixedCustomStore =
+    typeof storeConfig === "string" && storeConfig.length > 0 && !storeConfig.includes("{agentId}");
 
   // Collect all known agent store paths with their owning agentIds.
   // A single path may be shared by multiple agents when session.store
@@ -4922,6 +4958,7 @@ export async function migrateOrphanedSessionKeys(params: {
   const defaultStorePath = storeConfig
     ? resolveStorePathFromTemplate(storeConfig, agentId, env)
     : path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  const fixedCustomStorePath = fixedCustomStore ? defaultStorePath : undefined;
   addToStoreMap(defaultStorePath, agentId);
   // Configured agents.
   for (const entry of params.cfg.agents?.list ?? []) {
@@ -4932,6 +4969,15 @@ export async function migrateOrphanedSessionKeys(params: {
         : path.join(stateDir, "agents", id, "sessions", "sessions.json");
       addToStoreMap(p, id);
     }
+  }
+  // Plugins can route core sessions to agents that are not declared in
+  // agents.list. A templated path proves ownership for those stores too.
+  for (const pluginAgentId of pluginAgentIds) {
+    const id = normalizeAgentId(pluginAgentId);
+    const p = storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, id, env)
+      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
+    addToStoreMap(p, id);
   }
   // Agent directories present on disk.
   // This only covers the standard state-dir layout so we can still pick up
@@ -4989,6 +5035,10 @@ export async function migrateOrphanedSessionKeys(params: {
     // agent's namespace.
     let working = parsed.store;
     let totalLegacy = 0;
+    const preserveAmbiguousKeys = storePath === fixedCustomStorePath || storeAgentIds.size > 1;
+    const preservedAmbiguousKeyCount = preserveAmbiguousKeys
+      ? Object.keys(working).filter((key) => isAmbiguousSharedStoreKey(key, mainKey)).length
+      : 0;
     for (const storeAgentId of storeAgentIds) {
       const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
         store: working,
@@ -4998,17 +5048,23 @@ export async function migrateOrphanedSessionKeys(params: {
         // When multiple agents share the store and "main" is one of them,
         // agent:main:* keys are legitimate — don't cross-agent remap them.
         skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
+        preserveAmbiguousKeys,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
       // once a key is canonicalized it is not counted again by later agent passes.
       totalLegacy += legacyKeys.length;
     }
+    if (preservedAmbiguousKeyCount > 0) {
+      warnings.push(
+        `Preserved ${preservedAmbiguousKeyCount} ambiguous session key(s) in potentially shared store ${storePath}`,
+      );
+    }
     if (totalLegacy === 0) {
       continue;
     }
 
-    const normalized: Record<string, SessionEntry> = {};
+    const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
       const ne = normalizeSessionEntry(entry);
       if (ne) {
@@ -5142,13 +5198,19 @@ export async function autoMigrateLegacyState(params: {
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
-
+  const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
+  const pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
+    config: pluginDoctorConfig,
+    env,
+    pluginIds: collectRelevantDoctorPluginIds(pluginDoctorConfig),
+  });
   // Canonicalize orphaned session keys regardless of whether legacy migration
   // is needed — the orphan-key bug (#29683) affects all installs with
   // non-default agent IDs or mainKey configuration.
   const orphanKeys = await migrateOrphanedSessionKeys({
     cfg: params.cfg,
     env,
+    additionalAgentIds: pluginSessionStoreAgentIds,
   });
   const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
     cfg: params.cfg,

@@ -155,11 +155,12 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
       },
+      coreSession: { mainKey: "work" },
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };
 
-    const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
+    const result = await initiateCall(ctx as never, "+14155550123", "main", {
       mode: "notify",
       message: "hello there",
     });
@@ -178,7 +179,7 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: "<Response />",
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
-    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("session-1");
+    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("agent:main:work");
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 

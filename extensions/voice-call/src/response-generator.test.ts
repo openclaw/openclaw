@@ -281,7 +281,7 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
-  it("uses the persisted per-call session key for classic responses", async () => {
+  it("canonicalizes a restored legacy per-call key for classic responses", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Fresh call context."}' },
     ]);
@@ -302,13 +302,102 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Fresh call context.");
-    const perCallSessionEntry = sessionStore["voice:call:call-123"];
+    const perCallSessionEntry = sessionStore["agent:main:voice:call:call-123"];
     expect(perCallSessionEntry?.sessionId).toBeTypeOf("string");
     expect(perCallSessionEntry?.sessionId).not.toBe("");
     expect(sessionStore["voice:15550001111"]).toBeUndefined();
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.sessionKey).toBe("voice:call:call-123");
+    expect(args.sessionKey).toBe("agent:main:voice:call:call-123");
     expect(args.sandboxSessionKey).toBe("agent:main:voice:call:call-123");
+  });
+
+  it("preserves an explicit call key while scoping its session-store identity", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Shared meeting context."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      agentId: "voice",
+      responseTimeoutMs: 5000,
+    });
+
+    await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      sessionKey: "meet-room-1",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(sessionStore["agent:voice:meet-room-1"]?.sessionId).toBeTypeOf("string");
+    expect(sessionStore["meet-room-1"]).toBeUndefined();
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).sessionKey).toBe("agent:voice:meet-room-1");
+  });
+
+  it("keeps wrapped foreign Matrix identities stable across restore", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Matrix context."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      agentId: "voice",
+      responseTimeoutMs: 5000,
+    });
+    const canonical = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const generate = (sessionKey: string) =>
+      generateVoiceResponse({
+        voiceConfig,
+        coreConfig: {} as CoreConfig,
+        agentRuntime: runtime,
+        callId: "call-123",
+        sessionKey,
+        from: "+15550001111",
+        transcript: [],
+        userMessage: "hello there",
+      });
+
+    await generate("agent:other:matrix:channel:!RoomAbC:example.org");
+    await generate(canonical);
+    await generate("agent:other:matrix:channel:!Roomabc:example.org");
+
+    expect(sessionStore[canonical]?.sessionId).toBeTypeOf("string");
+    expect(
+      sessionStore["agent:voice:agent:other:matrix:channel:!Roomabc:example.org"]?.sessionId,
+    ).toBeTypeOf("string");
+    expect(Object.keys(sessionStore)).toHaveLength(2);
+    const sessionKeys = runEmbeddedAgent.mock.calls.map(
+      (call) => (call[0] as EmbeddedAgentArgs).sessionKey,
+    );
+    expect(sessionKeys).toEqual([
+      canonical,
+      canonical,
+      "agent:voice:agent:other:matrix:channel:!Roomabc:example.org",
+    ]);
+  });
+
+  it("uses the configured core main key for restored call aliases", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Main context."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      agentId: "voice",
+      responseTimeoutMs: 5000,
+    });
+
+    await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: { session: { mainKey: "work" } },
+      agentRuntime: runtime,
+      callId: "call-123",
+      sessionKey: "agent:voice:main",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(sessionStore["agent:voice:work"]?.sessionId).toBeTypeOf("string");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).sessionKey).toBe("agent:voice:work");
   });
 
   it("uses the main agent workspace when voice config omits agentId", async () => {

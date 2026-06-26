@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
+  resolveVoiceCallAgentSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKey,
@@ -332,7 +333,7 @@ describe("resolveVoiceCallConfig session routing", () => {
     ).toBe("agent:main:voice:call:call-123");
   });
 
-  it("preserves explicit voice session keys", () => {
+  it("scopes explicit voice session keys by configured agent", () => {
     const config = resolveVoiceCallConfig({
       enabled: true,
       provider: "mock",
@@ -344,9 +345,123 @@ describe("resolveVoiceCallConfig session routing", () => {
         config,
         callId: "call-123",
         phone: "+1 (555) 000-1111",
-        explicitSessionKey: "meet-room-1",
+        explicitSessionKey: "Meet-Room-1",
       }),
-    ).toBe("meet-room-1");
+    ).toBe("agent:main:meet-room-1");
+  });
+
+  it("scopes persisted and explicit keys at the agent session boundary", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Voice",
+    });
+
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "voice:call:legacy-call",
+      }),
+    ).toBe("agent:voice:voice:call:legacy-call");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "meet-room-1",
+      }),
+    ).toBe("agent:voice:meet-room-1");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:shared-room",
+      }),
+    ).toBe("agent:voice:agent:main:shared-room");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:other:Matrix:Channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "Signal:Group:AbC123=",
+      }),
+    ).toBe("agent:voice:signal:group:AbC123=");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:broken",
+      }),
+    ).toBe("agent:voice:agent:broken");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent::broken",
+      }),
+    ).toBe("agent:voice:agent::broken");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:other:room::part",
+      }),
+    ).toBe("agent:voice:agent:other:room::part");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:voice:room::part",
+      }),
+    ).toBe("agent:voice:room::part");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:bad/id:room",
+      }),
+    ).toBe("agent:voice:agent:bad/id:room");
+  });
+
+  it("canonicalizes raw and scoped main aliases with the core session config", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Voice",
+    });
+
+    for (const sessionKey of ["main", "agent:voice:main"]) {
+      expect(
+        resolveVoiceCallAgentSessionKey({
+          config,
+          sessionKey,
+          coreSession: { mainKey: "work" },
+        }),
+      ).toBe("agent:voice:work");
+    }
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "main",
+        coreSession: { scope: "global" },
+      }),
+    ).toBe("global");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:main",
+        coreSession: { mainKey: "work" },
+      }),
+    ).toBe("agent:voice:agent:main:main");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
+        sessionKey: "agent:main:main",
+        coreSession: { scope: "global" },
+      }),
+    ).toBe("agent:voice:agent:main:main");
   });
 
   it("resolves per-number inbound route overrides over global voice settings", () => {

@@ -167,8 +167,10 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
             spans.push({ start: threadIdStart, end: raw.length, trim: false });
           }
         };
-        // Tail: anchored to the real agent-scoped head; preserve through key end.
-        const scopedRe = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
+        // Tail: anchored after one or more agent ownership wrappers; preserve
+        // through key end. Plugins may scope an opaque foreign key under their
+        // configured agent without making the inner identity a route.
+        const scopedRe = new RegExp(`^(?:agent:[^:]+:)+${channel}:${kind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
@@ -330,8 +332,13 @@ export function parseRawSessionConversationRef(
   }
 
   const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  let bodyStartIndex = 0;
+  while (
+    rawParts.length - bodyStartIndex >= 3 &&
+    normalizeOptionalLowercaseString(rawParts[bodyStartIndex]) === "agent"
+  ) {
+    bodyStartIndex += 2;
+  }
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return null;

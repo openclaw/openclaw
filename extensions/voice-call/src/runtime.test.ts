@@ -36,7 +36,10 @@ vi.mock("./config.js", () => ({
   }) => {
     const explicit = params.explicitSessionKey?.trim();
     if (explicit) {
-      return explicit;
+      const lower = explicit.toLowerCase();
+      return lower === "global" || lower === "unknown" || lower.startsWith("agent:")
+        ? explicit
+        : `agent:${params.config.agentId?.trim().toLowerCase() || "main"}:${explicit}`;
     }
     const agentId = params.config.agentId?.trim().toLowerCase() || "main";
     const prefix = `agent:${agentId}:voice`;
@@ -469,7 +472,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
-  it("uses persisted per-call session keys for realtime consults", async () => {
+  it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
@@ -492,7 +495,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
-      sessionKey: "agent:main:voice:call:call-1",
+      sessionKey: "voice:call:call-1",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",

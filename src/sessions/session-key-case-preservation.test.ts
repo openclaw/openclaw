@@ -140,6 +140,13 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     );
   });
 
+  it("preserves Matrix tails under nested agent ownership wrappers", () => {
+    const key = `Agent:Voice:Agent:Other:Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
+    const normalized = `agent:voice:agent:other:matrix:channel:${ROOM_A}:thread:${EVENT}`;
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+  });
+
   it("preserves unscoped Matrix room and thread ids before agent scoping", () => {
     expect(normalizeSessionKeyPreservingOpaquePeerIds(`Matrix:Channel:${ROOM_A}`)).toBe(
       `matrix:channel:${ROOM_A}`,

@@ -1,6 +1,9 @@
 /**
  * Gateway startup session migration tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
@@ -26,6 +29,50 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
 }
 
 describe("runStartupSessionMigration", () => {
+  it("discovers plugin-owned agents during direct gateway startup", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-migration-"));
+    try {
+      const storeTemplate = path.join(tempDir, "stores", "{agentId}", "sessions.json");
+      const voiceStorePath = path.join(tempDir, "stores", "voice", "sessions.json");
+      fs.mkdirSync(path.dirname(voiceStorePath), { recursive: true });
+      fs.writeFileSync(
+        voiceStorePath,
+        JSON.stringify({
+          "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 1 },
+        }),
+      );
+      const cfg = {
+        session: { store: storeTemplate },
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          entries: { "voice-call": { config: { agentId: "voice" } } },
+        },
+      } as ReturnType<typeof makeCfg>;
+      const log = makeLog();
+
+      await runStartupSessionMigration({
+        cfg,
+        env: {
+          ...process.env,
+          HOME: tempDir,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_STATE_DIR: path.join(tempDir, "state"),
+        },
+        log,
+      });
+
+      const store = JSON.parse(fs.readFileSync(voiceStorePath, "utf8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(store["agent:voice:voice:15550001111"]?.sessionId).toBe("legacy-voice");
+      expect(store["voice:15550001111"]).toBeUndefined();
+      expect(log.info).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("logs changes when orphaned keys are canonicalized", async () => {
     const log = makeLog();
     const migrate = vi.fn().mockResolvedValue({

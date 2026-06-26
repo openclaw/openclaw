@@ -34,6 +34,7 @@ type InitiateContext = Pick<
   | "providerCallIdMap"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "webhookUrl"
   | "streamSessionIssuer"
@@ -190,6 +191,7 @@ export async function initiateCall(
       callId,
       phone: to,
       explicitSessionKey: sessionKey,
+      coreSession: ctx.coreSession,
     }),
     startedAt: Date.now(),
     transcript: [],
