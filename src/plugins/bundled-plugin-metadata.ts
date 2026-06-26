@@ -157,7 +157,9 @@ function collectBundledPluginMetadata(
         ? { packageVersion: trimBundledPluginString(packageJson?.version) }
         : {}),
       ...(trimBundledPluginString(packageJson?.description)
-        ? { packageDescription: trimBundledPluginString(packageJson?.description) }
+        ? {
+            packageDescription: trimBundledPluginString(packageJson?.description),
+          }
         : {}),
       ...(packageManifest ? { packageManifest } : {}),
       manifest: {
@@ -233,11 +235,16 @@ function listBundledPluginEntryBaseDirs(params: {
   rootDir: string;
   pluginDirName?: string;
   scanDir?: string;
+  pluginRootDir?: string;
 }): string[] {
   const scanPluginRoot = params.scanDir
     ? path.resolve(params.scanDir, params.pluginDirName ?? "")
     : undefined;
+  // Installed runtimes resolve the plugin root (often a realpath) independently of the bundled
+  // scan dir, so search it first; otherwise a divergent rootDir leaves the built entry unreachable.
+  const pluginRoot = params.pluginRootDir ? path.resolve(params.pluginRootDir) : undefined;
   const baseDirs = [
+    ...(pluginRoot ? [path.resolve(pluginRoot, "dist"), pluginRoot] : []),
     ...(scanPluginRoot ? [path.resolve(scanPluginRoot, "dist")] : []),
     ...(scanPluginRoot ? [scanPluginRoot] : []),
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
@@ -257,8 +264,12 @@ function listBundledPluginEntryRoots(params: {
   rootDir: string;
   pluginDirName?: string;
   scanDir?: string;
+  pluginRootDir?: string;
 }): string[] {
+  // Include the registry-resolved plugin root so absolute entries under it keep their nested
+  // relative path; without it a realpath'd install root yields no relative entry to search.
   const roots = [
+    ...(params.pluginRootDir ? [path.resolve(params.pluginRootDir)] : []),
     ...(params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : []),
     path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
@@ -273,6 +284,7 @@ function listBundledPluginEntrySearchPaths(
     rootDir: string;
     pluginDirName?: string;
     scanDir?: string;
+    pluginRootDir?: string;
   },
 ): string[] {
   const paths: string[] = [];
@@ -307,6 +319,7 @@ export function resolveBundledPluginGeneratedPath(
   entry: BundledPluginPathPair | undefined,
   pluginDirName?: string,
   scanDir?: string,
+  pluginRootDir?: string,
 ): string | null {
   if (!entry) {
     return null;
@@ -315,11 +328,13 @@ export function resolveBundledPluginGeneratedPath(
     rootDir,
     pluginDirName,
     ...(scanDir ? { scanDir } : {}),
+    ...(pluginRootDir ? { pluginRootDir } : {}),
   });
   const baseDirs = listBundledPluginEntryBaseDirs({
     rootDir,
     pluginDirName,
     ...(scanDir ? { scanDir } : {}),
+    ...(pluginRootDir ? { pluginRootDir } : {}),
   });
   for (const baseDir of baseDirs) {
     for (const entryPath of entryOrder) {

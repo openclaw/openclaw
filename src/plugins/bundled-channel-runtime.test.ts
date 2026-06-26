@@ -28,9 +28,12 @@ describe("bundled channel runtime metadata", () => {
     const tempRoot = createTempRoot();
 
     expect(listBundledChannelPluginMetadata({ rootDir: tempRoot })).toStrictEqual([]);
-    expect(resolveBundledChannelWorkspacePath({ rootDir: tempRoot, pluginId: "telegram" })).toBe(
-      null,
-    );
+    expect(
+      resolveBundledChannelWorkspacePath({
+        rootDir: tempRoot,
+        pluginId: "telegram",
+      }),
+    ).toBe(null);
   });
 
   it("preserves explicit missing bundled scan roots", () => {
@@ -38,7 +41,10 @@ describe("bundled channel runtime metadata", () => {
     const missingScanDir = path.join(tempRoot, "missing-extensions");
 
     expect(
-      listBundledChannelPluginMetadata({ rootDir: tempRoot, scanDir: missingScanDir }),
+      listBundledChannelPluginMetadata({
+        rootDir: tempRoot,
+        scanDir: missingScanDir,
+      }),
     ).toStrictEqual([]);
   });
 
@@ -82,5 +88,53 @@ describe("bundled channel runtime metadata", () => {
         builtScanRoot,
       ),
     ).toBe(path.join(pluginRoot, "dist", "index.js"));
+  });
+
+  it("resolves nested installed-dist entries from the registry plugin root", () => {
+    // Installed runtimes resolve the plugin root (often a realpath) independently of the
+    // bundled scan dir. When the two diverge, the entry lives under the registry rootDir but
+    // not under any scan-dir-derived root; the resolver must still find the nested built entry.
+    const tempRoot = createTempRoot();
+    const installedRoot = path.join(tempRoot, "installed", "telegram");
+    const builtEntry = path.join(installedRoot, "setup", "index.js");
+    fs.mkdirSync(path.dirname(builtEntry), { recursive: true });
+    fs.writeFileSync(builtEntry, "export default {};\n", "utf8");
+
+    expect(
+      resolveBundledChannelGeneratedPath(
+        path.join(tempRoot, "logical"),
+        {
+          source: builtEntry,
+          built: builtEntry,
+        },
+        "telegram",
+        path.join(tempRoot, "logical", "dist", "extensions"),
+        installedRoot,
+      ),
+    ).toBe(builtEntry);
+  });
+
+  it("keeps nested installed-dist entries scoped to their subdirectory", () => {
+    // A nested entry must not collapse to a root-level basename; a stray sibling built file at the
+    // plugin root should never be returned in place of the manifest's nested entry path.
+    const tempRoot = createTempRoot();
+    const installedRoot = path.join(tempRoot, "installed", "telegram");
+    const nestedEntry = path.join(installedRoot, "setup", "index.js");
+    fs.mkdirSync(path.dirname(nestedEntry), { recursive: true });
+    fs.writeFileSync(nestedEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(installedRoot, "index.js"), "export default {};\n", "utf8");
+
+    expect(
+      resolveBundledChannelGeneratedPath(
+        path.join(tempRoot, "logical"),
+        {
+          source: path.join(installedRoot, "setup", "index.ts"),
+          built: path.join(installedRoot, "setup", "index.ts"),
+        },
+        "telegram",
+        path.join(tempRoot, "logical", "dist", "extensions"),
+        installedRoot,
+      ),
+    ).toBe(nestedEntry);
   });
 });

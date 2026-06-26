@@ -117,8 +117,9 @@ export function resolveBundledChannelGeneratedPath(
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"],
   pluginDirName?: string,
   scanDir?: string,
+  pluginRootDir?: string,
 ): string | null {
-  return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
+  return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir, pluginRootDir);
 }
 
 /** Resolves the source workspace path for a bundled channel plugin id. */
