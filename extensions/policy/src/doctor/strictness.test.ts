@@ -34,6 +34,10 @@ describe("policy doctor strictness", () => {
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["write"], ["exec"])).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["group:runtime"], ["exec"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["exec"], ["group:runtime"])).toBe(false);
+    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["group:fs"], ["grep", "find", "ls"])).toBe(
+      true,
+    );
+    expect(isPolicyValueAtLeastAsStrict(denyTools!, ["read", "write"], ["grep"])).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, true, true)).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, false, true)).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, true, true)).toBe(true);
