@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to backfill (for example v2026.3.22)
+        description: Existing stable or beta release tag to backfill (for example v2026.3.22 or v2026.3.22-beta.1)
         required: true
         type: string
 
@@ -591,7 +591,8 @@ jobs:
               browser_tags+=("${GHCR_IMAGE}:${version}-browser")
               dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
             fi
-            # Manual backfills should only republish the requested version tags.
+            # Beta releases and manual backfills publish only immutable version tags;
+            # do not advance latest/main aliases from those flows.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
               slim_tags+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
@@ -776,6 +777,8 @@ jobs:
               arm64_refs+=("${GHCR_IMAGE}:${version}-browser-arm64")
               dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-arm64")
             fi
+            # Beta releases and manual backfills publish only immutable version tags;
+            # do not advance latest/main aliases from those flows.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               multi_refs+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
               slim_multi_refs+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")

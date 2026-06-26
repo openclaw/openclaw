@@ -366,6 +366,19 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
+  it("publishes beta Docker tags without advancing latest aliases", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Existing stable or beta release tag to backfill");
+    expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
+    expect(workflow).toContain("(-beta\\.[1-9][0-9]*)?");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
+    expect(workflow.split("do not advance latest/main aliases from those flows")).toHaveLength(3);
+    expect(workflow.split('"$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9]+)?$')).toHaveLength(3);
+  });
+
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
