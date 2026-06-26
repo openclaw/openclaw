@@ -325,6 +325,9 @@ async function readJsonResponse<T>(params: {
   }
 }
 
+/** @internal Test-only export. */
+export const readJsonResponseForTest = readJsonResponse;
+
 function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
   const extension = extensionForMime(params.mimeType);
   if (extension) {
