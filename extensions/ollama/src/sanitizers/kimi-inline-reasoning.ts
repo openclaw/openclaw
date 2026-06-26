@@ -11,7 +11,8 @@ const INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
 const MARKERLESS_REASONING_BOUNDARY_RE = /\n\s*\n/u;
 const MARKERLESS_REASONING_PREFIX_RE =
   /^The user is\b(?=[\s\S]*\b(?:(?:my|[A-Za-z]+(?:'s|')?) previous response|conversation history|previous message)\b)/iu;
-const MARKERLESS_REASONING_PLANNING_RE = /\bI should\b/iu;
+const MARKERLESS_REASONING_PLANNING_RE =
+  /\bI should\s+(?:answer|call|check|decide|inspect|keep|not|play along|reason|reply|respond|think|use)\b/iu;
 
 type InlineReasoningVisibleTextResolution =
   | { kind: "visible"; text: string; bypassInlineReasoning?: boolean }

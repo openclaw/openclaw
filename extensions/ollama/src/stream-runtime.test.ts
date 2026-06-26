@@ -1162,6 +1162,44 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "text", text: "Visible answer." }]);
   });
 
+  it("strips markerless Kimi reasoning when the prefix references conversation history", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "The user is asking about the conversation history. I should inspect the prior turn before answering.\n\nVisible answer.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Visible answer." }]);
+  });
+
+  it("strips markerless Kimi reasoning when the prefix references the previous message", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "The user is asking about the previous message. I should respond without exposing this planning step.\n\nVisible answer.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Visible answer." }]);
+  });
+
   it("preserves ordinary Kimi text that starts with The user", () => {
     const response = {
       model: "kimi-k2.6:cloud",
@@ -1230,6 +1268,30 @@ describe("buildAssistantMessage", () => {
       {
         type: "text",
         text: 'The user is asking about my previous response and the conversation history. They wrote: "I should rotate the API key before deploy." That quoted text is part of the answer.\n\nHere is the safest sequence.',
+      },
+    ]);
+  });
+
+  it("preserves visible Kimi prose that discusses conversation history", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "The user is asking about the conversation history, and I should clarify what is visible in this chat before listing the options.\n\nOnly the current thread is available here.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "The user is asking about the conversation history, and I should clarify what is visible in this chat before listing the options.\n\nOnly the current thread is available here.",
       },
     ]);
   });
