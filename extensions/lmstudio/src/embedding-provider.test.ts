@@ -128,6 +128,43 @@ describe("createLmstudioEmbeddingProvider", () => {
     expect((params as Record<string, unknown>).requestedContextLength).toBe(2048);
   });
 
+  it("caps model contextWindow by provider contextTokens", async () => {
+    await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        contextTokens: 2048,
+        models: [
+          {
+            id: "text-embedding-qwen3-embedding-0.6b",
+            contextWindow: 32768,
+          },
+        ],
+      }) as never,
+      model: "text-embedding-qwen3-embedding-0.6b",
+    });
+
+    const [params] = requireMockCallArg(ensureLmstudioModelLoadedMock, "ensureLmstudioModelLoaded");
+    expect((params as Record<string, unknown>).requestedContextLength).toBe(2048);
+  });
+
+  it("does not cap model contextTokens by provider contextTokens", async () => {
+    await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        contextTokens: 2048,
+        models: [
+          {
+            id: "text-embedding-qwen3-embedding-0.6b",
+            contextTokens: 8192,
+            contextWindow: 32768,
+          },
+        ],
+      }) as never,
+      model: "text-embedding-qwen3-embedding-0.6b",
+    });
+
+    const [params] = requireMockCallArg(ensureLmstudioModelLoadedMock, "ensureLmstudioModelLoaded");
+    expect((params as Record<string, unknown>).requestedContextLength).toBe(8192);
+  });
+
   it("omits requestedContextLength when no context config is set", async () => {
     await createLmstudioEmbeddingProvider({
       config: buildConfig({

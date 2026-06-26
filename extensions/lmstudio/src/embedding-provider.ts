@@ -124,12 +124,23 @@ export async function createLmstudioEmbeddingProvider(
   // Resolve configured context window from model or provider config to
   // prevent LM Studio from loading with the maximum supported context length
   // which can cause CUDA OOM on GPUs with limited VRAM (#97016).
+  // Precedence: model contextTokens → model contextWindow (capped by
+  // provider contextTokens) → provider contextTokens → provider contextWindow.
   const modelConfig = providerConfig?.models?.find((m) => m.id === model);
-  const requestedContextLength =
-    asPositiveSafeInteger(modelConfig?.contextTokens) ??
-    asPositiveSafeInteger(modelConfig?.contextWindow) ??
-    asPositiveSafeInteger(providerConfig?.contextTokens) ??
-    asPositiveSafeInteger(providerConfig?.contextWindow);
+  const modelTokens = asPositiveSafeInteger(modelConfig?.contextTokens);
+  if (modelTokens !== undefined) {
+    var requestedContextLength: number | undefined = modelTokens;
+  } else {
+    const modelWindow = asPositiveSafeInteger(modelConfig?.contextWindow);
+    const providerTokens = asPositiveSafeInteger(providerConfig?.contextTokens);
+    if (modelWindow !== undefined) {
+      requestedContextLength =
+        providerTokens !== undefined ? Math.min(modelWindow, providerTokens) : modelWindow;
+    } else {
+      requestedContextLength =
+        providerTokens ?? asPositiveSafeInteger(providerConfig?.contextWindow);
+    }
+  }
 
   try {
     await ensureLmstudioModelLoaded({
