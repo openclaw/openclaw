@@ -9,9 +9,18 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {
   all?: boolean;
+  acknowledgeClawhubRisk?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
+
+type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawhubRisk?: boolean;
+};
+
+function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
+  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
+}
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -157,13 +166,18 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
+      false,
+    )
+    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
     .action(
       async (
         raw: string,
-        opts: {
+        opts: CommanderClawHubRiskOptions & {
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -172,7 +186,10 @@ export function registerPluginsCli(program: Command) {
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, opts);
+        await runPluginsInstallAction(raw, {
+          ...opts,
+          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+        });
       },
     );
 
@@ -187,9 +204,20 @@ export function registerPluginsCli(program: Command) {
       "Deprecated no-op; security.installPolicy may still block",
       false,
     )
+    .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
+      false,
+    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({
+        id,
+        opts: {
+          ...opts,
+          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+        },
+      });
     });
 
   plugins
