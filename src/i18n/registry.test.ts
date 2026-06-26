@@ -56,6 +56,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "ja-JP",
       "ko",
       "fr",
+      "hi",
       "ar",
       "it",
       "tr",
@@ -66,6 +67,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "vi",
       "nl",
       "fa",
+      "ru",
     ]);
     expect(localeRegistry.DEFAULT_LOCALE).toBe("en");
   });

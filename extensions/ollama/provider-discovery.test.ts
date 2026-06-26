@@ -25,8 +25,13 @@ describe("Ollama provider", () => {
     vi.stubEnv("NODE_ENV", "development");
   };
 
+  const fetchInputUrl = (input: unknown): string =>
+    typeof input === "object" && input !== null && "url" in input
+      ? String((input as { url?: unknown }).url)
+      : String(input);
+
   const fetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
-    fetchMock.mock.calls.map(([input]) => String(input));
+    fetchMock.mock.calls.map(([input]) => fetchInputUrl(input));
 
   const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
     fetchCallUrls(fetchMock).reduce((count, url) => count + (url.endsWith(suffix) ? 1 : 0), 0);
@@ -103,20 +108,20 @@ describe("Ollama provider", () => {
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
 
-  const tagsResponse = (names: string[]) => ({
-    ok: true,
-    json: async () => ({ models: names.map((name) => createTagModel(name)) }),
-  });
+  const jsonResponse = (body: unknown, init?: ResponseInit) =>
+    new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+      ...init,
+    });
 
-  const notFoundJsonResponse = () => ({
-    ok: false,
-    status: 404,
-    json: async () => ({}),
-  });
+  const tagsResponse = (names: string[]) =>
+    jsonResponse({ models: names.map((name) => createTagModel(name)) });
+
+  const notFoundJsonResponse = () => jsonResponse({}, { status: 404 });
 
   const stubTagsFetch = (names: string[] = []) => {
     const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
+      const url = fetchInputUrl(input);
       if (url.endsWith("/api/tags")) {
         return tagsResponse(names);
       }
@@ -204,7 +209,7 @@ describe("Ollama provider", () => {
   it("discovers per-model context windows from /api/show", async () => {
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
+      const url = fetchInputUrl(input);
       if (url.endsWith("/api/tags")) {
         return tagsResponse(["qwen3:32b", "llama3.3:70b"]);
       }
@@ -213,16 +218,10 @@ describe("Ollama provider", () => {
         const bodyText = typeof rawBody === "string" ? rawBody : "{}";
         const parsed = JSON.parse(bodyText) as { name?: string };
         if (parsed.name === "qwen3:32b") {
-          return {
-            ok: true,
-            json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
-          };
+          return jsonResponse({ model_info: { "qwen3.context_length": 131072 } });
         }
         if (parsed.name === "llama3.3:70b") {
-          return {
-            ok: true,
-            json: async () => ({ model_info: { "llama.context_length": 65536 } }),
-          };
+          return jsonResponse({ model_info: { "llama.context_length": 65536 } });
         }
       }
       return notFoundJsonResponse();
@@ -244,15 +243,12 @@ describe("Ollama provider", () => {
     await withoutAmbientOllamaEnv(async () => {
       enableDiscoveryEnv();
       const fetchMock = vi.fn(async (input: unknown) => {
-        const url = String(input);
+        const url = fetchInputUrl(input);
         if (url.endsWith("/api/tags")) {
           return tagsResponse(["deepseek-r1:latest", "llama3.3:latest"]);
         }
         if (url.endsWith("/api/show")) {
-          return {
-            ok: true,
-            json: async () => ({ model_info: {} }),
-          };
+          return jsonResponse({ model_info: {} });
         }
         return notFoundJsonResponse();
       });
@@ -326,15 +322,12 @@ describe("Ollama provider", () => {
   it("falls back to default context window when /api/show fails", async () => {
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
+      const url = fetchInputUrl(input);
       if (url.endsWith("/api/tags")) {
         return tagsResponse(["qwen3:32b"]);
       }
       if (url.endsWith("/api/show")) {
-        return {
-          ok: false,
-          status: 500,
-        };
+        return jsonResponse({}, { status: 500 });
       }
       return notFoundJsonResponse();
     });
@@ -357,17 +350,11 @@ describe("Ollama provider", () => {
       digest: "",
     }));
     const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
+      const url = fetchInputUrl(input);
       if (url.endsWith("/api/tags")) {
-        return {
-          ok: true,
-          json: async () => ({ models: manyModels }),
-        };
+        return jsonResponse({ models: manyModels });
       }
-      return {
-        ok: true,
-        json: async () => ({ model_info: { "llama.context_length": 65536 } }),
-      };
+      return jsonResponse({ model_info: { "llama.context_length": 65536 } });
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
@@ -427,7 +414,7 @@ describe("Ollama provider", () => {
       });
 
       const ollamaCalls = fetchMock.mock.calls.filter(([input]) => {
-        const url = String(input);
+        const url = fetchInputUrl(input);
         return url.endsWith("/api/tags") || url.endsWith("/api/show");
       });
       expect(ollamaCalls).toHaveLength(0);
@@ -640,7 +627,7 @@ describe("Ollama provider", () => {
   it("should preserve explicit apiKey from configured remote providers", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn(async (input: unknown) => {
-        const url = String(input);
+        const url = fetchInputUrl(input);
         if (url.endsWith("/api/tags")) {
           return tagsResponse([]);
         }
