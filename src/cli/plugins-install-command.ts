@@ -962,6 +962,7 @@ export async function runPluginInstallCommand(params: {
             ? {
                 pluginId: resolvedPluginId,
                 npmSpec,
+                ...(install.clawhubSpec ? { clawhubSpec: install.clawhubSpec } : {}),
                 ...(install.expectedIntegrity
                   ? { expectedIntegrity: install.expectedIntegrity }
                   : {}),
@@ -1293,6 +1294,33 @@ export async function runPluginInstallCommand(params: {
       runtime,
     });
     if (!npmResult.ok) {
+      if (officialExternalPlan.clawhubSpec) {
+        runtime.log(
+          `npm install failed for ${officialExternalPlan.npmSpec}; trying ClawHub fallback…`,
+        );
+        const clawhubResult = await installPluginFromClawHub({
+          ...safetyOverrides,
+          mode: installMode,
+          spec: officialExternalPlan.clawhubSpec,
+          extensionsDir,
+          logger: createPluginInstallLogger(runtime),
+        });
+        if (clawhubResult.ok) {
+          await persistPluginInstall({
+            snapshot,
+            pluginId: clawhubResult.pluginId,
+            install: {
+              ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
+              spec: officialExternalPlan.clawhubSpec,
+              installPath: clawhubResult.targetDir,
+            },
+            invalidateRuntimeCache,
+            runtime,
+          });
+          return;
+        }
+        runtime.error(clawhubResult.error);
+      }
       return runtime.exit(1);
     }
     return;

@@ -13,6 +13,7 @@ type OfficialExternalPluginLookup = (pluginId: string) =>
   | {
       pluginId: string;
       npmSpec?: string;
+      clawhubSpec?: string;
       expectedIntegrity?: string;
     }
   | undefined;
@@ -111,7 +112,7 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
 export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findOfficialExternalPlugin: OfficialExternalPluginLookup;
-}): { pluginId: string; npmSpec: string; expectedIntegrity?: string } | null {
+}): { pluginId: string; npmSpec: string; clawhubSpec?: string; expectedIntegrity?: string } | null {
   if (!isBareNpmPackageName(params.rawSpec)) {
     return null;
   }
@@ -123,6 +124,7 @@ export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
   return {
     pluginId: entry.pluginId,
     npmSpec,
+    ...(entry.clawhubSpec ? { clawhubSpec: entry.clawhubSpec } : {}),
     ...(entry.expectedIntegrity ? { expectedIntegrity: entry.expectedIntegrity } : {}),
   };
 }

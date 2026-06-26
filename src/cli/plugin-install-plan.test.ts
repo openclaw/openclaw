@@ -89,6 +89,25 @@ describe("plugin install plan helpers", () => {
     });
   });
 
+  it("includes clawhubSpec in official external plan when present", () => {
+    const findOfficialExternalPlugin = vi.fn().mockReturnValue({
+      pluginId: "searxng",
+      npmSpec: "@openclaw/searxng-plugin",
+      clawhubSpec: "clawhub:@openclaw/searxng-plugin",
+    });
+
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "searxng",
+      findOfficialExternalPlugin,
+    });
+
+    expect(result).toEqual({
+      pluginId: "searxng",
+      npmSpec: "@openclaw/searxng-plugin",
+      clawhubSpec: "clawhub:@openclaw/searxng-plugin",
+    });
+  });
+
   it("skips official external plan for explicit npm selectors", () => {
     const findOfficialExternalPlugin = vi.fn();
 
