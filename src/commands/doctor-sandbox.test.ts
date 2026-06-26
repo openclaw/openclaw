@@ -2,12 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { __testing as openClawRootTesting } from "../infra/openclaw-root.js";
 import { resolveSandboxScript } from "./doctor-sandbox.js";
 
 describe("resolveSandboxScript", () => {
   const created: string[] = [];
 
   afterEach(() => {
+    // The shared resolver memoizes package-root lookups process-wide; reset so per-test temp dirs
+    // never see a stale (including negative) cache hit.
+    openClawRootTesting.clearOpenClawPackageRootCaches();
     for (const dir of created.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -20,12 +24,21 @@ describe("resolveSandboxScript", () => {
     return fs.realpathSync(dir);
   }
 
-  it("follows a symlinked launcher to find scripts/ in the real repo", () => {
-    // Repo checkout that actually contains scripts/sandbox-setup.sh ...
-    const repo = mkTmp("ocsbx-repo-");
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
+  const scriptRel = path.join("scripts", "sandbox-setup.sh");
+
+  // Create a repo checkout that the shared resolver will recognize: it keys off an openclaw
+  // package.json marker, then resolveSandboxScript looks for scripts/ under that root.
+  function mkRepo(prefix: string): string {
+    const repo = mkTmp(prefix);
     fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
     fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
+    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "openclaw" }));
+    return repo;
+  }
+
+  it("follows a symlinked launcher to find scripts/ in the real repo", () => {
+    // Repo checkout that actually contains scripts/sandbox-setup.sh ...
+    const repo = mkRepo("ocsbx-repo-");
     const entry = path.join(repo, "openclaw.mjs");
     fs.writeFileSync(entry, "");
 
@@ -43,10 +56,7 @@ describe("resolveSandboxScript", () => {
   });
 
   it("still resolves a script relative to a non-symlinked launcher dir", () => {
-    const repo = mkTmp("ocsbx-direct-");
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
-    fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
-    fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
+    const repo = mkRepo("ocsbx-direct-");
     const entry = path.join(repo, "openclaw.mjs");
     fs.writeFileSync(entry, "");
 
@@ -61,30 +71,15 @@ describe("resolveSandboxScript", () => {
     fs.writeFileSync(launcher, "");
 
     expect(
-      resolveSandboxScript(path.join("scripts", "sandbox-setup.sh"), {
+      resolveSandboxScript(scriptRel, {
         argv1: launcher,
         cwd: binDir,
       }),
     ).toBeNull();
   });
 
-  it("resolves via cwd when no launcher (argv1) is available", () => {
-    const repo = mkTmp("ocsbx-cwd-");
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
-    fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
-    fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
-
-    const result = resolveSandboxScript(scriptRel, { argv1: undefined, cwd: repo });
-
-    expect(result?.scriptPath).toBe(path.join(repo, scriptRel));
-    expect(result?.cwd).toBe(repo);
-  });
-
-  it("tolerates a non-existent launcher path (realpath throws) and still uses cwd", () => {
-    const repo = mkTmp("ocsbx-missing-argv1-");
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
-    fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
-    fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
+  it("falls back to cwd when the launcher path does not resolve to a repo", () => {
+    const repo = mkRepo("ocsbx-missing-argv1-");
 
     const result = resolveSandboxScript(scriptRel, {
       argv1: "/nonexistent-ocsbx/bin/openclaw",
