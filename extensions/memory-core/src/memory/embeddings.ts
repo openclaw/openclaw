@@ -226,12 +226,19 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
+  const resolvedModel = resolveProviderModel(adapter, options.model);
   const result = await adapter.create({
     ...options,
-    model: resolveProviderModel(adapter, options.model),
+    model: resolvedModel,
   });
   return {
-    provider: result.provider,
+    // Backfill provider.model when the adapter returns an empty string so
+    // callers always see the resolved model name.  An empty model string
+    // during boot can overwrite a correct index identity and leave the
+    // search index permanently dirty.
+    provider: result.provider
+      ? { ...result.provider, model: result.provider.model || resolvedModel }
+      : null,
     requestedProvider: options.provider,
     runtime: result.runtime,
   };
