@@ -344,6 +344,33 @@ function mirrorResolvedProviderCredentialToDirectPaths(params: {
   }
 }
 
+function collectUnresolvedExecSecretRefPaths(params: {
+  sourceConfig: OpenClawConfig;
+  targetIds: ReadonlySet<string>;
+  unresolvedPaths: ReadonlySet<string>;
+  allowedPaths?: ReadonlySet<string>;
+}): Set<string> {
+  const defaults = params.sourceConfig.secrets?.defaults;
+  const execPaths = new Set<string>();
+  for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    if (!params.unresolvedPaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref?.source === "exec") {
+      execPaths.add(target.path);
+    }
+  }
+  return execPaths;
+}
+
 async function resolveForcedActiveCommandSecretTargets(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
@@ -569,6 +596,28 @@ async function resolveCommandSecretsFromSnapshot(params: {
     params.forcedActivePaths?.has(entry.path),
   );
   if (selectedProviderUnresolved.length > 0 || forcedActiveUnresolved.length > 0) {
+    return {
+      assignments: analyzed.assignments,
+      diagnostics: analyzed.diagnostics,
+      inactiveRefPaths,
+    };
+  }
+  const unresolvedPaths = new Set(analyzed.unresolved.map((entry) => entry.path));
+  const unresolvedExecPaths = collectUnresolvedExecSecretRefPaths({
+    sourceConfig,
+    targetIds: params.targetIds,
+    unresolvedPaths,
+    allowedPaths: params.allowedPaths,
+  });
+  if (unresolvedExecPaths.size > 0) {
+    const nonExecUnresolved = analyzed.unresolved.filter(
+      (entry) => !unresolvedExecPaths.has(entry.path),
+    );
+    if (nonExecUnresolved.length > 0) {
+      throw new Error(
+        `${params.commandName}: ${nonExecUnresolved[0]?.path ?? "target"} is unresolved in the active runtime snapshot.`,
+      );
+    }
     return {
       assignments: analyzed.assignments,
       diagnostics: analyzed.diagnostics,

@@ -60,11 +60,12 @@ discoverConfigSecretTargetsByIds(forcedFallbackConfig, new Set([firecrawlPath]))
 
 function activateMinimalSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
+  resolvedConfig?: OpenClawConfig;
   env: Record<string, string | undefined>;
 }) {
   const snapshot = {
     sourceConfig: structuredClone(params.config),
-    config: structuredClone(params.config),
+    config: structuredClone(params.resolvedConfig ?? params.config),
     authStores: [],
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
@@ -152,6 +153,60 @@ describe("runtime command secrets", () => {
       {
         path: firecrawlPath,
         value: "gateway-selected-firecrawl-key",
+      },
+    ]);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.inactiveRefPaths).toEqual([]);
+  });
+
+  it("returns resolved snapshot assignments when exec targets remain unresolved", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          google: {
+            enabled: true,
+            apiKey: { source: "exec", provider: "default", id: "models/google/api-key" },
+          },
+          openai: {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    activateMinimalSecretsRuntimeSnapshot({
+      config: sourceConfig,
+      resolvedConfig: {
+        ...sourceConfig,
+        models: {
+          providers: {
+            ...sourceConfig.models?.providers,
+            openai: {
+              ...sourceConfig.models?.providers?.openai,
+              apiKey: "gateway-openai-key",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      env: {
+        HOME: process.env.HOME,
+      },
+    });
+
+    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
+      commandName: "reply",
+      targetIds: new Set(["models.providers.*.apiKey"]),
+    });
+
+    expect(resolved.assignments).toMatchObject([
+      {
+        path: "models.providers.openai.apiKey",
+        value: "gateway-openai-key",
       },
     ]);
     expect(resolved.diagnostics).toEqual([]);
