@@ -214,10 +214,20 @@ export async function resolveBridgePublicArtifacts(params: {
   // persisted in the global plugin state. See openclaw#85655.
   // Use the public SDK host function directly instead of going through the
   // registered capability path, which may be unavailable in snapshot mode.
+  // Before falling back, check that memory-core is effectively enabled
+  // (not globally disabled, denied, or explicitly disabled in config).
   const memorySlot = params.cfg.plugins?.slots?.memory;
   if (memorySlot === "memory-core") {
-    const { listMemoryHostPublicArtifacts } = await import("openclaw/plugin-sdk/memory-host-core");
-    return listMemoryHostPublicArtifacts(params);
+    const pluginCfg = params.cfg.plugins;
+    if (
+      pluginCfg?.enabled !== false &&
+      !pluginCfg?.deny?.includes("memory-core") &&
+      pluginCfg?.entries?.["memory-core"]?.enabled !== false
+    ) {
+      const { listMemoryHostPublicArtifacts } =
+        await import("openclaw/plugin-sdk/memory-host-core");
+      return listMemoryHostPublicArtifacts(params);
+    }
   }
 
   return [];
