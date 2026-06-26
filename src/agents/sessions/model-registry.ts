@@ -935,7 +935,7 @@ export interface ProviderConfigInput {
     baseUrl?: string;
     reasoning: boolean;
     thinkingLevelMap?: Model["thinkingLevelMap"];
-    input: ("text" | "image")[];
+    input: Model["input"];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
