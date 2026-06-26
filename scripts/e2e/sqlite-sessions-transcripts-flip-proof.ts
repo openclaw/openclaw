@@ -290,6 +290,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         "assistant",
         context.fullTurnAssistantText,
       );
+      await waitForHistoryRoleContains(
+        restartedClient,
+        context.fullTurnSessionKey,
+        "assistant",
+        context.fullTurnAssistantText,
+      );
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
       await record("after-full-agent-turn");
 
@@ -1036,7 +1042,37 @@ async function requireHistoryContains(
   const text = JSON.stringify(result.messages ?? []);
   if (!text.includes(expected)) {
     throw new Error(
-      `chat.history for ${sessionKey} did not contain ${JSON.stringify(expected)}: ${tail(text)}`,
+      `chat.history for ${sessionKey} did not contain ${JSON.stringify(expected)}: ${tail(
+        JSON.stringify(result),
+      )}`,
+    );
+  }
+}
+
+async function requireHistoryRoleContains(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  sessionKey: string,
+  role: string,
+  expected: string,
+): Promise<void> {
+  const result: { messages?: unknown[] } = await client.request("chat.history", {
+    agentId: AGENT_ID,
+    sessionKey,
+    limit: 50,
+  });
+  const matching = (result.messages ?? []).some(
+    (message) =>
+      message &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      (message as { role?: unknown }).role === role &&
+      JSON.stringify(message).includes(expected),
+  );
+  if (!matching) {
+    throw new Error(
+      `chat.history for ${sessionKey} did not contain ${role} message ${JSON.stringify(
+        expected,
+      )}: ${tail(JSON.stringify(result))}`,
     );
   }
 }
@@ -1056,6 +1092,24 @@ async function waitForHistoryContains(
     }
   }
   await requireHistoryContains(client, sessionKey, expected);
+}
+
+async function waitForHistoryRoleContains(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  sessionKey: string,
+  role: string,
+  expected: string,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      await requireHistoryRoleContains(client, sessionKey, role, expected);
+      return;
+    } catch {
+      await sleep(50);
+    }
+  }
+  await requireHistoryRoleContains(client, sessionKey, role, expected);
 }
 
 async function waitForSqliteEvents(
