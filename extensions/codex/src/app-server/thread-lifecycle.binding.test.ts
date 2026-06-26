@@ -2,7 +2,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
