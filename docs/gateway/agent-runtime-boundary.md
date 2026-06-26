@@ -1,3 +1,11 @@
+---
+summary: "Documentation for the Gateway host agent runtime boundary — host-level coding-agent CLIs are temporary rescue tools only"
+read_when:
+  - Enabling or auditing host-level coding-agent access
+  - Planning long-running agent work on the Gateway host
+title: "Agent runtime boundary"
+---
+
 # Agent runtime boundary
 
 The Gateway host agent runtime boundary keeps host-level coding-agent access
@@ -39,7 +47,7 @@ After applying or updating a host agent runtime boundary:
 
 1. Confirm the host-level entrypoint exits non-zero with the refusal message.
 2. Confirm `openclaw gateway status` shows the Gateway runtime is running and
-   can list agents.
+   healthy.
 3. Confirm `openclaw agents list` returns expected agents from the managed
    runtime.
 4. Confirm no stale host-level agent processes remain after cleanup.
