@@ -746,6 +746,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
+  ["scripts/native-app-i18n.ts", ["test/scripts/native-app-i18n.test.ts"]],
   [
     "scripts/copy-bundled-plugin-metadata.mjs",
     ["src/plugins/copy-bundled-plugin-metadata.test.ts", "src/infra/run-node.test.ts"],
