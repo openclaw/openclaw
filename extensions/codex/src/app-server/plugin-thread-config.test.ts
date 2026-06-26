@@ -317,6 +317,63 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+  it("refreshes missing app inventory when plugin activation becomes unnecessary", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const appListParams: v2.AppsListParams[] = [];
+    let pluginListCalls = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/list") {
+        pluginListCalls += 1;
+        const active = pluginListCalls > 1;
+        return pluginList([
+          pluginSummary("google-calendar", { installed: active, enabled: active }),
+        ]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      if (method === "app/list") {
+        appListParams.push(params as v2.AppsListParams);
+        return {
+          data: [appInfo("google-calendar-app", true)],
+          nextCursor: null,
+        } satisfies v2.AppsListResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect(config.configPatch?.apps).toMatchObject({
+      "google-calendar-app": {
+        enabled: true,
+      },
+    });
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+    ]);
+  });
+
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

@@ -125,6 +125,9 @@ export async function buildCodexPluginThreadConfig(
     nowMs: params.nowMs,
     suppressAppInventoryRefresh: true,
   });
+  const appInventoryRefreshDeferredForActivation =
+    inventory.records.some((record) => record.activationRequired) &&
+    shouldRefreshMissingAppInventory(params, policy, inventory);
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
@@ -166,10 +169,19 @@ export async function buildCodexPluginThreadConfig(
       });
     }
   }
-  if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
+  const postInstallRefreshRequired = activationResults.some(
+    (activation) => activation.ok && activation.installAttempted,
+  );
+  // Activation can become unnecessary or fail before it refreshes apps. Rebuild the
+  // deferred missing snapshot so unrelated active plugin apps are not silently erased.
+  const deferredMissingRefreshRequired =
+    appInventoryRefreshDeferredForActivation &&
+    !postInstallRefreshRequired &&
+    shouldRefreshMissingAppInventory(params, policy, inventory);
+  if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
-      reason: "post_install",
+      reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
       targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
@@ -219,13 +231,11 @@ export async function buildCodexPluginThreadConfig(
   const policyApps: Record<string, PluginAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
   for (const record of inventory.records) {
-    if (record.activationRequired) {
-      const activation = activationResults.find(
-        (item) => item.identity.configKey === record.policy.configKey,
-      );
-      if (!activation?.ok) {
-        continue;
-      }
+    const activation = activationResults.find(
+      (item) => item.identity.configKey === record.policy.configKey,
+    );
+    if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
+      continue;
     }
     if (record.appOwnership !== "proven") {
       continue;
@@ -362,9 +372,18 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+  // Install/enable first so the initial app/list can observe newly activated plugin apps.
   if (inventory.records.some((record) => record.activationRequired)) {
     return false;
   }
+  return shouldRefreshMissingAppInventory(params, policy, inventory);
+}
+
+function shouldRefreshMissingAppInventory(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
   return Boolean(
     params.appCacheKey &&
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
