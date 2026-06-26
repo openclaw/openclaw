@@ -346,13 +346,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.text).toBe("Long report generated in final answer.");
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main",
-        agentId: "main",
-        text: "Long report generated in final answer.",
-        idempotencyKey: "run-1:message-tool-only-final-fallback:0",
-      },
     });
+    expect(
+      getReplyPayloadMetadata(payloads[0] as object)?.sourceReplyTranscriptMirror,
+    ).toBeUndefined();
   });
 
   it("falls back when message-tool-only final text followed an unproved message-tool send", () => {
@@ -369,13 +366,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.text).toBe("Report text that still needs delivery.");
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main",
-        agentId: "main",
-        text: "Report text that still needs delivery.",
-        idempotencyKey: "run-1:message-tool-only-final-fallback:0",
-      },
     });
+    expect(
+      getReplyPayloadMetadata(payloads[0] as object)?.sourceReplyTranscriptMirror,
+    ).toBeUndefined();
   });
 
   it("ignores accumulated internal/status text after the final answer", () => {

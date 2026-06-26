@@ -271,6 +271,7 @@ export function buildEmbeddedRunPayloads(params: {
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
     nonTerminalToolErrorWarning?: boolean;
+    deliverDespiteSourceReplySuppression?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -532,11 +533,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
       ...(shouldDeliverMessageToolOnlyAssistantFallback
         ? {
-            sourceReplyMirror: {
-              idempotencyKey: params.runId
-                ? `${params.runId}:message-tool-only-final-fallback:${replyItems.length}`
-                : undefined,
-            },
+            deliverDespiteSourceReplySuppression: true,
           }
         : {}),
     });
@@ -641,6 +638,9 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.channelData) {
         payload.channelData = item.channelData;
+      }
+      if (item.deliverDespiteSourceReplySuppression) {
+        markReplyPayloadForSourceSuppressionDelivery(payload);
       }
       if (item.sourceReplyMirror) {
         // Source-reply mirrors are transcript artifacts, not channel sends.
