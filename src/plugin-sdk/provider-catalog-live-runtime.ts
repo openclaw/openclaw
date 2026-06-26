@@ -242,6 +242,7 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const startedAt = Date.now();
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
   let pageUrl: string | undefined = params.endpoint;
@@ -249,15 +250,26 @@ export async function fetchLiveProviderModelRows(
     if (seenPageUrls.has(pageUrl)) {
       break;
     }
+    const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingTimeoutMs <= 0) {
+      throw new Error(
+        `${params.providerId} model discovery exceeded ${timeoutMs}ms before the catalog completed`,
+      );
+    }
     seenPageUrls.add(pageUrl);
     const result = await fetchLiveProviderModelCatalogPage({
       ...params,
       fetchGuard,
       url: pageUrl,
-      timeoutMs,
+      timeoutMs: remainingTimeoutMs,
     });
     rows.push(...result.rows);
     pageUrl = buildLiveModelCatalogNextPageUrl(pageUrl, result.body);
+  }
+  if (pageUrl) {
+    throw new Error(
+      `${params.providerId} model discovery exceeded ${LIVE_MODEL_CATALOG_MAX_PAGES} pages before the catalog completed`,
+    );
   }
   return rows;
 }

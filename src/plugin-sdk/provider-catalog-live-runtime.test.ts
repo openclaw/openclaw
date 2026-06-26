@@ -281,6 +281,79 @@ describe("provider-catalog-live-runtime", () => {
     );
   });
 
+  it("fails truncated live catalog pagination instead of returning partial rows", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async ({ url }) => {
+      const page = Number(new URL(url).searchParams.get("after") ?? "0");
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: `model-${page}`, object: "model" }],
+            has_more: true,
+            next_cursor: String(page + 1),
+          }),
+        ),
+        finalUrl: url,
+        release,
+      };
+    });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow("provider model discovery exceeded 50 pages before the catalog completed");
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(50);
+    expect(release).toHaveBeenCalledTimes(50);
+  });
+
+  it("uses one timeout budget across paginated live catalog discovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => undefined);
+      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await vi.advanceTimersByTimeAsync(800);
+          return {
+            response: new Response(
+              JSON.stringify({
+                data: [{ id: "model-a", object: "model" }],
+                has_more: true,
+                next_cursor: "cursor-2",
+              }),
+            ),
+            finalUrl: "https://provider.example.test/v1/models",
+            release,
+          };
+        })
+        .mockImplementationOnce(async () => ({
+          response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+          finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
+          release,
+        }));
+
+      await expect(
+        fetchLiveProviderModelIds({
+          providerId: "provider",
+          endpoint: "https://provider.example.test/v1/models",
+          fetchGuard: fetchGuardMock,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toEqual(["model-a", "model-b"]);
+
+      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
+      expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caches raw live model rows for provider-specific projection", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       models: [{ slug: "custom-a" }, { slug: "custom-b" }],
