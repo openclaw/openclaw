@@ -343,7 +343,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           id: entry.senderPeerId,
           peerId: entry.senderPeerId,
           displayName: entry.senderName,
-          role: entry.isGroup ? "participant" : "user",
+          role: "participant",
           context: "signal",
         },
       },
