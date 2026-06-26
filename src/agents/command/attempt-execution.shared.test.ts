@@ -146,4 +146,41 @@ describe("persistSessionEntry", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps rejecting repeated stale writes after clearing local memory", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const staleEntry = {
+        sessionId: "deleted-session",
+        updatedAt: 1,
+      };
+      const sessionStore = {
+        main: staleEntry,
+      };
+
+      const first = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: staleEntry,
+      });
+      const second = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: {
+          ...staleEntry,
+          updatedAt: 2,
+        },
+      });
+
+      expect(first).toBeUndefined();
+      expect(second).toBeUndefined();
+      expect(sessionStore.main).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
