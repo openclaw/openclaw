@@ -1,5 +1,6 @@
 // Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -44,7 +45,6 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -219,6 +219,22 @@ async function loadTelegramNativeCommandRuntime() {
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
+function resolveTelegramCommandSessionFile(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath: string;
+}): string {
+  const explicitSessionFile = params.sessionFile?.trim();
+  if (!explicitSessionFile) {
+    return `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
+  }
+  if (explicitSessionFile.startsWith("sqlite:")) {
+    return explicitSessionFile;
+  }
+  return path.resolve(path.dirname(params.storePath), explicitSessionFile);
+}
+
 function resolveTelegramProgressPlaceholder(command: {
   nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
 }): string | null {
@@ -246,17 +262,16 @@ async function resolveTelegramCommandTranscriptContext(params: {
       storePath,
     });
     const sessionId = entry?.sessionId?.trim() || randomUUID();
-    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
-    const target = await resolveSessionTranscriptLegacyFileTarget({
+    const sessionFile = resolveTelegramCommandSessionFile({
       agentId: params.agentId,
+      sessionFile: entry?.sessionFile,
       sessionId,
-      sessionKey,
       storePath,
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
+    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
     return {
       sessionId,
-      sessionFile: target.sessionFile,
+      sessionFile,
       ...(authProfileId ? { authProfileId } : {}),
     };
   } catch {

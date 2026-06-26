@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   cleanupSessionLifecycleArtifacts,
+  deleteSessionEntry,
   getSessionEntry,
   listSessionEntries,
   patchSessionEntry,
@@ -205,6 +206,18 @@ describe("session-store-runtime compatibility surface", () => {
     expect(getSessionEntry({ sessionKey: staleModelRunKey, storePath })).toMatchObject({
       sessionId: "session-probe",
     });
+  });
+
+  it("deletes entries by session identity", async () => {
+    const sessionKey = "agent:main:delete-me";
+    await seedSessionEntry(sessionKey, {
+      sessionId: "session-delete-me",
+      updatedAt: Date.now(),
+    });
+
+    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
+    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
   it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {

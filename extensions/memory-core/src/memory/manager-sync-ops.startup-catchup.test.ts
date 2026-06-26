@@ -36,7 +36,7 @@ type SyncParams = {
   reason?: string;
   force?: boolean;
   sessions?: MemorySyncParams["sessions"];
-  sessionFiles?: string[];
+  archiveFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
@@ -157,7 +157,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     await this.runSync(params);
   }
 
-  getDirtySessionFiles(): string[] {
+  getDirtyArchiveFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
 
@@ -165,7 +165,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return Array.from(this.sessionPendingTargets.values());
   }
 
-  getPendingSessionFiles(): string[] {
+  getPendingArchiveFiles(): string[] {
     return Array.from(this.sessionPendingFiles);
   }
 
@@ -184,18 +184,18 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     ).processSessionDeltaBatch();
   }
 
-  async combineTargetSessionFilesForTest(params: {
+  async combineTargetArchiveFilesForTest(params: {
     sessions?: MemorySyncParams["sessions"];
-    sessionFiles?: string[];
+    archiveFiles?: string[];
   }): Promise<Set<string> | null> {
     return await (
       this as unknown as {
-        combineTargetSessionFiles: (params: {
+        combineTargetArchiveFiles: (params: {
           sessions?: MemorySyncParams["sessions"];
-          sessionFiles?: string[];
+          archiveFiles?: string[];
         }) => Promise<Set<string> | null>;
       }
-    ).combineTargetSessionFiles(params);
+    ).combineTargetArchiveFiles(params);
   }
 
   isSessionsDirty(): boolean {
@@ -306,7 +306,7 @@ describe("session startup catch-up", () => {
     ]);
 
     await expect(harness.catchUp()).resolves.toEqual([session.filePath]);
-    expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
@@ -337,7 +337,7 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      await (harness as any).syncSessionFiles({ needsFullReindex: true });
+      await (harness as any).syncArchiveFiles({ needsFullReindex: true });
       expect(attempts).toBe(2);
     } finally {
       openSpy.mockRestore();
@@ -356,7 +356,7 @@ describe("session startup catch-up", () => {
     ]);
 
     await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.filePath]);
-    expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([]);
   });
@@ -373,7 +373,7 @@ describe("session startup catch-up", () => {
     ]);
 
     await expect(harness.catchUp()).resolves.toEqual([]);
-    expect(harness.getDirtySessionFiles()).toEqual([]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
     expect(harness.syncCalls).toEqual([]);
   });
@@ -508,7 +508,7 @@ describe("session startup catch-up", () => {
     await harness.processPendingSessionDeltas();
     await Promise.resolve();
 
-    expect(harness.getDirtySessionFiles()).toEqual([sessionFile]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([sessionFile]);
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
   });
 
@@ -539,7 +539,7 @@ describe("session startup catch-up", () => {
     const harness = new SessionStartupCatchupHarness([]);
 
     await expect(
-      harness.combineTargetSessionFilesForTest({ sessionFiles: [sessionFile] }),
+      harness.combineTargetArchiveFilesForTest({ archiveFiles: [sessionFile] }),
     ).resolves.toEqual(new Set([sessionFile]));
   });
 
@@ -584,14 +584,14 @@ describe("session startup catch-up", () => {
 
     await (
       harness as unknown as {
-        syncSessionFiles: (params: {
+        syncArchiveFiles: (params: {
           needsFullReindex: boolean;
-          targetSessionFiles: string[];
+          targetArchiveFiles: string[];
         }) => Promise<void>;
       }
-    ).syncSessionFiles({
+    ).syncArchiveFiles({
       needsFullReindex: false,
-      targetSessionFiles: [sessionFile],
+      targetArchiveFiles: [sessionFile],
     });
 
     expect(harness.indexedPaths).toEqual(["sessions/cron-thread.jsonl"]);
@@ -653,7 +653,7 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
@@ -692,7 +692,7 @@ describe("session startup catch-up", () => {
     });
     await Promise.resolve();
 
-    expect(harness.getPendingSessionFiles()).toEqual([sessionFile]);
+    expect(harness.getPendingArchiveFiles()).toEqual([sessionFile]);
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
@@ -712,7 +712,7 @@ describe("session startup catch-up", () => {
       },
     });
 
-    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });

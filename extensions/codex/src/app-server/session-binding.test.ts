@@ -88,6 +88,31 @@ describe("codex app-server session binding", () => {
     expect(bindingStat.isFile()).toBe(true);
   });
 
+  it("round-trips SQLite marker bindings through a support sidecar", async () => {
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const sessionFile = `sqlite:main:session-1:${storePath}`;
+
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-sqlite",
+      cwd: tempDir,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
+
+    expect(binding?.sessionFile).toBe(sessionFile);
+    expect(binding?.threadId).toBe("thread-sqlite");
+    expect(bindingPath).toBe(
+      path.join(path.dirname(storePath), ".codex-app-server.main.session-1.json"),
+    );
+    await expect(fs.stat(bindingPath)).resolves.toEqual(expect.objectContaining({}));
+    await expect(fs.stat(`${sessionFile}.codex-app-server.json`)).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  });
+
   it("round-trips plugin app policy context with app ids as record keys", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     const pluginAppPolicyContext = {

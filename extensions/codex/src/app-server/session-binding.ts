@@ -4,6 +4,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -40,6 +41,7 @@ const CODEX_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
 };
+const SQLITE_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):([^:]+):(.*)$/u;
 const bindingMutationQueues = new Map<string, Promise<void>>();
 const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
 
@@ -100,8 +102,25 @@ export type CodexAppServerContextEngineProjectionBinding = {
   fingerprint?: string;
 };
 
-/** Returns the JSON sidecar path for the Codex app-server binding beside a session file. */
+function resolveSqliteCodexAppServerBindingPath(sessionFile: string): string | undefined {
+  const match = SQLITE_SESSION_FILE_MARKER_RE.exec(sessionFile.trim());
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return undefined;
+  }
+  const safeAgentId = encodeURIComponent(match[1]);
+  const safeSessionId = encodeURIComponent(match[2]);
+  return path.join(
+    path.dirname(path.resolve(match[3])),
+    `.codex-app-server.${safeAgentId}.${safeSessionId}.json`,
+  );
+}
+
+/** Returns the JSON sidecar path for the Codex app-server binding. */
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
+  const sqliteBindingPath = resolveSqliteCodexAppServerBindingPath(sessionFile);
+  if (sqliteBindingPath) {
+    return sqliteBindingPath;
+  }
   return `${sessionFile}.codex-app-server.json`;
 }
 

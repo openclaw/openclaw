@@ -9,10 +9,9 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
-  loadSessionStore,
-  resolveSessionFilePath,
+  deleteSessionEntry,
+  listSessionEntries,
   resolveStorePath,
-  updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
@@ -20,6 +19,7 @@ const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
 const BLANK_USER_MESSAGE_REPAIR_THRESHOLD = 3;
 const SESSION_FILE_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
+const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 type FeishuDoctorFinding =
   | {
@@ -116,6 +116,14 @@ function existsFile(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveFeishuAgentSessionsDir(agentId: string): string {
+  return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
+}
+
+function isSqliteTranscriptMarker(value: string): boolean {
+  return value.trim().startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX);
 }
 
 function safeReadDir(dir: string): fs.Dirent[] {
@@ -317,29 +325,39 @@ function resolveSessionTranscriptCandidates(params: {
 }): string[] {
   const candidates = new Set<string>();
   const sessionsDir = path.dirname(params.storePath);
-  const addSafeCandidate = (candidate: string) => {
+  const agentSessionsDir = resolveFeishuAgentSessionsDir(params.agentId);
+  const addSafeCandidate = (candidate: string): boolean => {
     const resolved = path.isAbsolute(candidate)
       ? path.resolve(candidate)
       : path.resolve(sessionsDir, candidate);
-    if (resolved === sessionsDir || !isPathWithinRoot(resolved, sessionsDir)) {
-      return;
+    const isStoreCandidate = isPathWithinRoot(resolved, sessionsDir);
+    const isAgentSessionCandidate = isPathWithinRoot(resolved, agentSessionsDir);
+    if (
+      resolved === sessionsDir ||
+      resolved === agentSessionsDir ||
+      (!isStoreCandidate && !isAgentSessionCandidate)
+    ) {
+      return false;
     }
     candidates.add(resolved);
+    return true;
   };
 
   if (
     typeof params.entry.sessionId === "string" &&
     /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(params.entry.sessionId)
   ) {
-    candidates.add(
-      resolveSessionFilePath(
-        params.entry.sessionId,
-        typeof params.entry.sessionFile === "string"
-          ? { sessionFile: params.entry.sessionFile }
-          : undefined,
-        { agentId: params.agentId, sessionsDir },
-      ),
-    );
+    let addedExplicitCandidate = false;
+    if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
+      const explicitSessionFile = params.entry.sessionFile.trim();
+      if (isSqliteTranscriptMarker(explicitSessionFile)) {
+        return [];
+      }
+      addedExplicitCandidate = addSafeCandidate(explicitSessionFile);
+    }
+    if (!addedExplicitCandidate) {
+      candidates.add(path.join(sessionsDir, `${params.entry.sessionId}.jsonl`));
+    }
     return [...candidates].toSorted();
   }
 
@@ -558,13 +576,9 @@ export function inspectFeishuDoctorState(params: {
   const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
-    const store = loadSessionStore(target.storePath, { skipCache: true });
-    for (const [key, entry] of Object.entries(store).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      if (!isFeishuSessionEntry(key, entry)) {
-        continue;
-      }
+    for (const { sessionKey: key, entry } of listSessionEntries({ storePath: target.storePath })
+      .filter(({ sessionKey, entry }) => isFeishuSessionEntry(sessionKey, entry))
+      .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
       const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
@@ -736,25 +750,22 @@ async function repairFeishuDoctorState(params: {
     try {
       copyStoreBackup({ storePath, backupDir, agentId: group.agentId });
       const keys = new Set(group.entries.map((entry) => entry.key));
-      const removedEntries = await updateSessionStore(
-        storePath,
-        (store) => {
-          const removed: typeof group.entries = [];
-          for (const key of keys) {
-            if (Object.hasOwn(store, key)) {
-              delete store[key];
-              const entry = group.entries.find((candidate) => candidate.key === key);
-              if (entry) {
-                removed.push(entry);
-              }
-            }
-          }
-          return removed;
-        },
-        {
-          skipMaintenance: true,
-        },
-      );
+      const removedEntries: typeof group.entries = [];
+      for (const key of keys) {
+        const deleted = await deleteSessionEntry({
+          agentId: group.agentId,
+          archiveTranscript: false,
+          sessionKey: key,
+          storePath,
+        });
+        if (!deleted) {
+          continue;
+        }
+        const entry = group.entries.find((candidate) => candidate.key === key);
+        if (entry) {
+          removedEntries.push(entry);
+        }
+      }
       const removed = removedEntries.length;
       removedSessionEntries += removed;
       if (removed > 0) {

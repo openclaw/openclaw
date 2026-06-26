@@ -21,14 +21,14 @@ import {
   mirrorCodexAppServerTranscript,
 } from "./transcript-mirror.js";
 
-const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
+const publishSessionTranscriptFileUpdateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    publishSessionTranscriptUpdateByIdentity: publishSessionTranscriptUpdateByIdentityMock,
+    publishSessionTranscriptFileUpdate: publishSessionTranscriptFileUpdateMock,
   };
 });
 
@@ -45,7 +45,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetGlobalHookRunner();
-  publishSessionTranscriptUpdateByIdentityMock.mockReset();
+  publishSessionTranscriptFileUpdateMock.mockReset();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -179,7 +179,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-1",
     });
 
-    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+    const updates = publishSessionTranscriptFileUpdateMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
     );
     expect(updates).toHaveLength(1);
@@ -232,7 +232,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-1",
     });
 
-    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+    const updates = publishSessionTranscriptFileUpdateMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
     );
     expect(updates.map((update) => update.update?.messageSeq)).toEqual([1, 2]);

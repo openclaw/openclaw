@@ -11,8 +11,8 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  resolveSessionTranscriptTarget,
-  type SessionTranscriptTargetParams,
+  resolveSessionTranscriptFileTarget,
+  type SessionTranscriptFileTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
@@ -28,7 +28,7 @@ export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    await resolveSessionTranscriptTarget(resolveCodexHistoryTranscriptTarget(target));
+    resolveSessionTranscriptFileTarget(resolveCodexHistoryTranscriptTarget(target));
     const raw = await fs.readFile(target.sessionFile, "utf-8");
     const entries = parseSessionEntries(raw);
     if (entries.length === 0) {
@@ -58,7 +58,7 @@ export async function readCodexMirroredSessionHistoryMessages(
 
 function resolveCodexHistoryTranscriptTarget(
   target: CodexMirroredSessionHistoryTarget,
-): SessionTranscriptTargetParams {
+): SessionTranscriptFileTargetParams {
   return {
     ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionFile: target.sessionFile,

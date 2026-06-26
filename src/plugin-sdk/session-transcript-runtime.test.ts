@@ -18,7 +18,6 @@ import {
   readLatestAssistantTextByIdentity,
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
-  resolveSessionTranscriptLegacyFileTarget,
   resolveSessionTranscriptTarget,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   withSessionTranscriptWriteLock,
@@ -76,29 +75,6 @@ describe("session transcript runtime SDK", () => {
       memoryKey: "transcript:main:read-only-session",
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
-    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
-  });
-
-  it("returns an opaque legacy locator without persisting file metadata", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "legacy-command-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-
-    const target = await resolveSessionTranscriptLegacyFileTarget(scope);
-
-    expect(target).toMatchObject({
-      agentId: "main",
-      memoryKey: "transcript:main:legacy-command-session",
-      sessionId: "legacy-command-session",
-      sessionKey: "agent:main:main",
-      targetKind: "runtime-session",
-    });
-    expect(target.sessionFile).toContain("legacy-command-session");
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
   });
 
@@ -261,7 +237,7 @@ describe("session transcript runtime SDK", () => {
       memoryKey: "transcript:main:active-session",
       sessionId: "active-session",
       sessionKey: "agent:main:main",
-      targetKind: "legacy-transcript-locator",
+      targetKind: "runtime-session",
     });
     expect(target).not.toHaveProperty("sessionFile");
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
@@ -366,7 +342,7 @@ describe("session transcript runtime SDK", () => {
 
     expect(target).toMatchObject({
       sessionId: "locked-session",
-      targetKind: "legacy-transcript-locator",
+      targetKind: "runtime-session",
     });
     expect(target).not.toHaveProperty("sessionFile");
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
@@ -420,32 +396,6 @@ describe("session transcript runtime SDK", () => {
       return message?.role === "assistant";
     });
     expect(assistantMessages).toHaveLength(1);
-  });
-
-  it("preserves explicit transcript-file locking when no session key is available", async () => {
-    const scope = {
-      agentId: "main",
-      sessionFile: path.join(tempDir, "explicit-file-only.jsonl"),
-      sessionId: "explicit-file-only-session",
-      sessionKey: "",
-      storePath,
-    };
-
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
-      await locked.appendMessage({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "file-only mirror" }],
-          timestamp: 1,
-        },
-      });
-      expect(await locked.readEvents()).toEqual([
-        expect.objectContaining({ type: "session" }),
-        expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
-      ]);
-    });
-
-    expect(fs.readFileSync(scope.sessionFile, "utf8")).toContain("file-only mirror");
   });
 
   it("publishes queued locked updates after callback appends are visible", async () => {
