@@ -5,7 +5,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { appendTranscriptMessage } from "../../src/config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  type TranscriptEvent,
+} from "../../src/config/sessions/session-accessor.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { formatSqliteSessionFileMarker } from "../../src/config/sessions/sqlite-marker.js";
+import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -50,6 +56,7 @@ type ProofCheckpoint = {
   doctor?: DoctorCommandEvidence;
   gatewayLogTail?: string;
   label: string;
+  legacyStateJsonl: FileInventoryEntry[];
   sqlite: SqliteEvidence;
 };
 
@@ -61,6 +68,7 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   failures: string[];
   gatewayEntrypoint: string[];
   legacySessionId: string;
+  oldStateSessionKeys: string[];
   resetSessionKey: string;
   sharedSessionKeys: string[];
   stateDir: string;
@@ -72,7 +80,9 @@ type ProofContext = {
   agentId: string;
   archiveRoots: string[];
   deleteSessionKey: string;
+  legacySessionsDir: string;
   legacySessionId: string;
+  oldStateSessionKeys: string[];
   resetSessionKey: string;
   sharedSessionKeys: string[];
   stateDir: string;
@@ -91,6 +101,11 @@ const DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-delete";
 const SHARED_SESSION_KEYS = [
   "agent:main:dashboard:sqlite-shared-a",
   "agent:main:dashboard:sqlite-shared-b",
+] as const;
+const OLD_STATE_SESSION_KEYS = [
+  "agent:main:+15551234567",
+  "agent:main:partial-direct",
+  "agent:main:unknown:group:legacy-room",
 ] as const;
 
 /** Runs the isolated live gateway SQLite flip proof and returns structured evidence. */
@@ -224,6 +239,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     failures,
     gatewayEntrypoint,
     legacySessionId: context.legacySessionId,
+    oldStateSessionKeys: [...context.oldStateSessionKeys],
     resetSessionKey: context.resetSessionKey,
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
@@ -242,26 +258,35 @@ function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
 function buildProofContext(stateDir: string): ProofContext {
   const agentDir = path.join(stateDir, "agents", AGENT_ID);
   const activeSessionsDir = path.join(agentDir, "sessions");
+  const legacySessionsDir = path.join(stateDir, "sessions");
   return {
     activeSessionsDir,
     agentDbPath: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
     deleteSessionKey: DELETE_SESSION_KEY,
+    legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
+    oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
     stateDir,
     storePath: path.join(activeSessionsDir, "sessions.json"),
-    trackedSessionKeys: [RESET_SESSION_KEY, DELETE_SESSION_KEY, ...SHARED_SESSION_KEYS],
+    trackedSessionKeys: [
+      RESET_SESSION_KEY,
+      DELETE_SESSION_KEY,
+      ...SHARED_SESSION_KEYS,
+      ...OLD_STATE_SESSION_KEYS,
+    ],
   };
 }
 
 async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(context.activeSessionsDir, { recursive: true });
+  await fs.mkdir(context.legacySessionsDir, { recursive: true });
+  await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
   const entries = {
-    [context.resetSessionKey]: legacyEntry(context.legacySessionId, now),
     [context.deleteSessionKey]: legacyEntry("sqlite-delete-session", now - 1_000),
     [context.sharedSessionKeys[0]]: legacyEntry("sqlite-shared-session", now - 2_000, {
       sessionFile: "sqlite-shared-a.jsonl",
@@ -270,10 +295,36 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
       sessionFile: "sqlite-shared-b.jsonl",
     }),
   };
+  const oldStateEntries = {
+    main: legacyEntry(context.legacySessionId, now - 4_000),
+    "+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
+    "group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
+      room: "legacy-room",
+    }),
+    "partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
+  };
   await fs.writeFile(context.storePath, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
-  await writeTranscript(context.activeSessionsDir, context.legacySessionId, [
+  await fs.writeFile(
+    path.join(context.legacySessionsDir, "sessions.json"),
+    `${JSON.stringify(oldStateEntries, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await fs.writeFile(
+    path.join(context.stateDir, "agent", "old-settings.json"),
+    `${JSON.stringify({ source: "old-agent-layout" })}\n`,
+    { mode: 0o600 },
+  );
+  await writeTranscript(context.legacySessionsDir, context.legacySessionId, [
     legacySessionEvent(context.legacySessionId),
     { type: "message", id: "sqlite-user-1", message: { role: "user", content: "legacy hello" } },
+  ]);
+  await writeTranscript(context.legacySessionsDir, "sqlite-old-direct", [
+    legacySessionEvent("sqlite-old-direct"),
+    { type: "message", id: "sqlite-old-direct-1", message: { role: "user", content: "old dm" } },
+  ]);
+  await writeTranscript(context.legacySessionsDir, "sqlite-old-group", [
+    legacySessionEvent("sqlite-old-group"),
+    { type: "message", id: "sqlite-old-group-1", message: { role: "user", content: "old group" } },
   ]);
   await writeTranscript(context.activeSessionsDir, "sqlite-delete-session", [
     legacySessionEvent("sqlite-delete-session"),
@@ -288,8 +339,13 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     { type: "message", id: "sqlite-shared-2", message: { role: "user", content: "shared b" } },
   ]);
   await fs.writeFile(
-    path.join(context.activeSessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
+    path.join(context.legacySessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
     `${JSON.stringify({ type: "trajectory", sessionId: context.legacySessionId })}\n`,
+    { mode: 0o600 },
+  );
+  await fs.writeFile(
+    path.join(context.legacySessionsDir, "old-orphan.deleted.jsonl"),
+    `${JSON.stringify({ type: "event", id: "old-orphan" })}\n`,
     { mode: 0o600 },
   );
   const archiveDir = path.join(context.activeSessionsDir, "archive-fixture");
@@ -299,16 +355,38 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     `${JSON.stringify({ type: "event", id: "cold-archive" })}\n`,
     { mode: 0o600 },
   );
+  await importSqliteSessionRows({
+    agentId: context.agentId,
+    entry: {
+      ...legacyEntry("sqlite-partial-import", now - 7_000),
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: context.agentId,
+        sessionId: "sqlite-partial-import",
+        storePath: context.storePath,
+      }),
+    },
+    readTranscriptEvents(append) {
+      append(legacySessionEvent("sqlite-partial-import"));
+      append({
+        type: "message",
+        id: "sqlite-partial-import-1",
+        message: { role: "user", content: "already imported" },
+      });
+    },
+    sessionKey: "agent:main:partial-direct",
+    storePath: context.storePath,
+  });
 }
 
 function legacyEntry(
   sessionId: string,
   updatedAt: number,
-  options: { sessionFile?: string } = {},
-): Record<string, unknown> {
+  options: { room?: string; sessionFile?: string } = {},
+): SessionEntry & { channel: string; chatType: string; room?: string } {
   return {
     channel: "cli",
     chatType: "direct",
+    ...(options.room ? { room: options.room } : {}),
     sessionFile: options.sessionFile ?? `${sessionId}.jsonl`,
     sessionId,
     sessionStartedAt: updatedAt - 500,
@@ -316,7 +394,7 @@ function legacyEntry(
   };
 }
 
-function legacySessionEvent(sessionId: string): Record<string, unknown> {
+function legacySessionEvent(sessionId: string): TranscriptEvent {
   return { type: "session", sessionId };
 }
 
@@ -567,6 +645,7 @@ async function captureCheckpoint(
     ...(options.doctor ? { doctor: options.doctor } : {}),
     gatewayLogTail: tail(options.gatewayLogTail ?? ""),
     label,
+    legacyStateJsonl: await inventoryActiveJsonl(context.legacySessionsDir),
     sqlite: readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys),
   };
 }
@@ -713,6 +792,13 @@ function validateCheckpointInvariants(
         .join(", ")}`,
     );
   }
+  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0) {
+    failures.push(
+      `${checkpoint.label}: old sessions directory still has JSONL files: ${checkpoint.legacyStateJsonl
+        .map((entry) => entry.path)
+        .join(", ")}`,
+    );
+  }
   if (checkpoint.label.startsWith("after-doctor") && checkpoint.doctor?.code !== 0) {
     failures.push(`${checkpoint.label}: doctor ${checkpoint.doctor.mode} exited non-zero`);
   }
@@ -765,7 +851,7 @@ function printCheckpoint(checkpoint: ProofCheckpoint): void {
     [
       `[sqlite-sessions-transcripts-flip-proof] ${checkpoint.label}`,
       `  sqlite sessions=${checkpoint.sqlite.sessions} entries=${checkpoint.sqlite.sessionEntries} transcriptEvents=${checkpoint.sqlite.transcriptEvents}`,
-      `  activeJsonl=${checkpoint.activeJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
+      `  activeJsonl=${checkpoint.activeJsonl.length} legacyStateJsonl=${checkpoint.legacyStateJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
       checkpoint.doctor
         ? `  doctor ${checkpoint.doctor.mode} code=${String(checkpoint.doctor.code)} totals=${JSON.stringify(
             checkpoint.doctor.totals ?? {},

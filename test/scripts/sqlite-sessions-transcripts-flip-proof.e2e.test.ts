@@ -31,10 +31,24 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     expect(
       report.checkpoints.some(
         (checkpoint) =>
+          checkpoint.label === "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0,
+      ),
+    ).toBe(true);
+    expect(
+      report.checkpoints
+        .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
+        .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
+    ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
           checkpoint.label === "after-doctor-fix" &&
           checkpoint.doctor?.mode === "fix" &&
-          checkpoint.sqlite.sessionEntries >= 4 &&
-          checkpoint.sqlite.transcriptEvents >= 6,
+          report.oldStateSessionKeys.every((key) =>
+            checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
+          ) &&
+          checkpoint.sqlite.sessionEntries >= 7 &&
+          checkpoint.sqlite.transcriptEvents >= 14,
       ),
     ).toBe(true);
     expect(
