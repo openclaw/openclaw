@@ -5,6 +5,23 @@ import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 const log = createSubsystemLogger("fetch-timeout");
 const LOG_URL_MAX_CHARS = 500;
 const URL_SECRET_SUFFIX_PATTERN = /[?#]/;
+// Matches `/bot<TOKEN>` as a single path segment, where the Telegram token
+// shape is `<bot_id>:<secret>` (bot_id: 6+ digits, secret: 20+ base64url
+// chars). The leading `/` and trailing `/` (or EOS) enforce segment
+// boundaries so substrings like `bots`, `/v1/bots/chat`, `/botcat` never
+// match.
+const TELEGRAM_BOT_TOKEN_PATH_PATTERN = /\/bot(\d{6,}:[A-Za-z0-9_-]{20,})(?=\/|$)/g;
+
+/**
+ * Redacts Telegram Bot API tokens embedded as `/bot<TOKEN>` path segments
+ * so the full token never reaches a log line. Downstream `redactSensitiveText`
+ * would only emit a hinted mask (prefix+suffix retained) and is gated by
+ * config; this path-aware step guarantees full replacement even when
+ * downstream redaction is disabled.
+ */
+function redactTelegramBotTokenInPath(url: string): string {
+  return url.replace(TELEGRAM_BOT_TOKEN_PATH_PATTERN, "/botredacted");
+}
 
 type TimeoutAbortSignalParams = {
   timeoutMs?: number;
@@ -39,15 +56,17 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    const value = parsed.toString();
+    const value = redactTelegramBotTokenInPath(parsed.toString());
     return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
   } catch {
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
-    const cleaned = withoutQueryOrHash
-      .replace(/[\r\n\u2028\u2029]+/g, " ")
-      .replace(/\p{Cc}+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const cleaned = redactTelegramBotTokenInPath(
+      withoutQueryOrHash
+        .replace(/[\r\n\u2028\u2029]+/g, " ")
+        .replace(/\p{Cc}+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
     if (!cleaned) {
       return undefined;
     }

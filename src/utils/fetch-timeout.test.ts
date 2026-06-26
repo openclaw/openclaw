@@ -144,6 +144,81 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("redacts Telegram bot token embedded in an absolute URL path", async () => {
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url: "https://api.telegram.org/bot123456:ABCdefGHIjklMNOpqrST/sendMessage?chat_id=1",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    const record = requireWarnRecord(0);
+    expect(record.url).toBe("https://api.telegram.org/botredacted/sendMessage");
+    expect(String(record.consoleMessage)).toContain(
+      "url=https://api.telegram.org/botredacted/sendMessage",
+    );
+    expect(String(record.consoleMessage)).not.toContain("123456:ABCdefGHIjklMNOpqrST");
+    expect(String(record.url)).not.toContain("123456:ABCdefGHIjklMNOpqrST");
+
+    cleanup();
+  });
+
+  it("redacts Telegram bot token embedded in a relative URL path", async () => {
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url: "/bot123456:ABCdefGHIjklMNOpqrST/sendMessage",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    const record = requireWarnRecord(0);
+    expect(record.url).toBe("/botredacted/sendMessage");
+    expect(String(record.url)).not.toContain("123456:ABCdefGHIjklMNOpqrST");
+
+    cleanup();
+  });
+
+  it("leaves non-Telegram paths containing 'bot' as a subsegment unchanged", async () => {
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url: "https://api.example.com/v1/bots/chat?x=1",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    const record = requireWarnRecord(0);
+    expect(record.url).toBe("https://api.example.com/v1/bots/chat");
+    expect(String(record.url)).not.toContain("redacted");
+
+    cleanup();
+  });
+
+  it("redacts Telegram bot token before truncating to LOG_URL_MAX_CHARS", async () => {
+    const longToken = "A".repeat(20);
+    const url =
+      "https://api.telegram.org/bot123456:" + longToken + "/" + "f".repeat(500) + "/sendMessage";
+
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url,
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    const record = requireWarnRecord(0);
+    const logged = String(record.url);
+    expect(logged.endsWith("...")).toBe(true);
+    expect(logged.includes("/botredacted/")).toBe(true);
+    expect(logged.includes("123456:")).toBe(false);
+    expect(logged.includes(longToken)).toBe(false);
+
+    cleanup();
+  });
+
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
     const fetchFn = vi.fn<typeof fetch>(
       async (_input, init) =>
