@@ -302,6 +302,25 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry refresh on transport errors so a rotated refresh token is never resent", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new Error("socket hang up");
+    });
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+      "socket hang up",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not coerce partial xAI expires_in values", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({

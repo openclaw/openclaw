@@ -326,12 +326,11 @@ async function exchangeXaiOAuthToken(
         signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
       });
     } catch (err) {
-      lastMessage = `${params.context} failed: ${formatErrorMessage(err)}`;
-      if (attempt >= maxAttempts) {
-        throw new Error(lastMessage, { cause: err });
-      }
-      await sleep(XAI_OAUTH_REFRESH_RETRY_DELAY_MS);
-      continue;
+      // Transport failures are not safe to retry for refresh grants: xAI rotates
+      // refresh tokens, so a response lost after xAI consumed the token would burn
+      // it on resend. Retryable Cloudflare/5xx/429 cases are handled on the response
+      // branch below, where the request provably did not consume the refresh token.
+      throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
     const body = await readResponseBody(response);
     if (response.ok) {
