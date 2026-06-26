@@ -1171,34 +1171,58 @@ function readFirstSessionFileLine(filePath: string): string | undefined {
   }
 }
 
-function readSessionHeaderFromFile(filePath: string): SessionHeader | undefined {
+function readSessionFileHeader(filePath: string): SessionHeader | undefined {
   try {
     const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
       return undefined;
     }
-    const header = JSON.parse(firstLine);
-    if (header.type !== "session" || typeof header.id !== "string") {
-      return undefined;
+    const header = JSON.parse(firstLine) as unknown;
+    if (
+      header &&
+      typeof header === "object" &&
+      (header as { type?: unknown }).type === "session" &&
+      typeof (header as { id?: unknown }).id === "string"
+    ) {
+      return header as SessionHeader;
     }
-    return header as SessionHeader;
+    return undefined;
   } catch {
     return undefined;
   }
 }
 
+function sessionFileMatchesCwd(
+  header: SessionHeader | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!cwd) {
+    return true;
+  }
+  // Older sessions may not record a cwd; preserve backward compatibility by
+  // treating a missing/empty cwd as a match rather than orphaning them.
+  const headerCwd = header?.cwd;
+  if (!headerCwd) {
+    return true;
+  }
+  return headerCwd === cwd;
+}
+
 /** Exported for testing */
-export function findMostRecentSession(sessionDir: string, cwd?: string): string | null {
+export function findMostRecentSession(
+  sessionDir: string,
+  options?: { cwd?: string },
+): string | null {
   try {
     const files = readdirSync(sessionDir)
       .filter((f) => f.endsWith(".jsonl"))
       .map((f) => join(sessionDir, f))
-      .map((path) => ({ path, header: readSessionHeaderFromFile(path) }))
+      .map((path) => ({ path, header: readSessionFileHeader(path) }))
       .filter(
-        (candidate): candidate is { path: string; header: SessionHeader } =>
-          candidate.header !== undefined && (cwd === undefined || candidate.header.cwd === cwd),
+        (entry): entry is { path: string; header: SessionHeader } => entry.header !== undefined,
       )
-      .map((candidate) => ({ path: candidate.path, mtime: statSync(candidate.path).mtime }))
+      .filter((entry) => sessionFileMatchesCwd(entry.header, options?.cwd))
+      .map((entry) => ({ path: entry.path, mtime: statSync(entry.path).mtime }))
       .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
     return files[0]?.path || null;
@@ -2933,7 +2957,7 @@ export class SessionManager {
    */
   static continueRecent(cwd: string, sessionDir?: string): SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const mostRecent = findMostRecentSession(dir, cwd);
+    const mostRecent = findMostRecentSession(dir, { cwd });
     if (mostRecent) {
       return new SessionManager(cwd, dir, mostRecent, true);
     }
@@ -3009,7 +3033,9 @@ export class SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, cwd);
     sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-    return sessions;
+    // When the cwd encoder maps multiple cwds to the same directory, only
+    // return sessions that actually belong to the requested cwd.
+    return sessions.filter((session) => !session.cwd || session.cwd === cwd);
   }
 
   /**

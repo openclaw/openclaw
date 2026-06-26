@@ -12,6 +12,7 @@ import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
+  getDefaultSessionDir,
   loadEntriesFromFile,
   SessionManager,
   type SessionEntry,
@@ -176,7 +177,7 @@ describe("SessionManager.open", () => {
     );
 
     expect(findMostRecentSession(dir)).toBe(sessionB);
-    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
+    expect(findMostRecentSession(dir, { cwd: cwdA })).toBe(sessionA);
     expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
     await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
       expect.objectContaining({ path: sessionA, cwd: cwdA }),
@@ -2546,3 +2547,82 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+
+describe("SessionManager cwd collision guard", () => {
+  afterEach(async () => {
+    await Promise.all(
+      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("does not resume a session from a different cwd that shares the encoded session dir", async () => {
+    const agentDir = await makeTempDir();
+    const cwdA = "/home/alice/dev/client/app";
+    const cwdB = "/home/alice/dev/client-app";
+
+    // The current encoder maps these two distinct cwds to the same directory.
+    const sessionDir = getDefaultSessionDir(cwdA, agentDir);
+    expect(getDefaultSessionDir(cwdB, agentDir)).toBe(sessionDir);
+
+    const sessionFileA = path.join(sessionDir, "session-A.jsonl");
+    const sessionFileB = path.join(sessionDir, "session-B.jsonl");
+
+    await fs.writeFile(
+      sessionFileA,
+      `${JSON.stringify(buildSessionHeader(cwdA, "session-A"))}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      sessionFileB,
+      `${JSON.stringify(buildSessionHeader(cwdB, "session-B"))}\n`,
+      "utf8",
+    );
+
+    // Make B strictly newer so that a pure mtime-based pick would choose the
+    // wrong session for cwdA.
+    await fs.utimes(
+      sessionFileA,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      sessionFileB,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(findMostRecentSession(sessionDir, { cwd: cwdA })).toBe(sessionFileA);
+    expect(findMostRecentSession(sessionDir, { cwd: cwdB })).toBe(sessionFileB);
+
+    expect(SessionManager.continueRecent(cwdA, sessionDir).getSessionFile()).toBe(sessionFileA);
+    expect(SessionManager.continueRecent(cwdB, sessionDir).getSessionFile()).toBe(sessionFileB);
+  });
+
+  it("lists only sessions that belong to the requested cwd when dirs collide", async () => {
+    const agentDir = await makeTempDir();
+    const cwdA = "/home/alice/dev/client/app";
+    const cwdB = "/home/alice/dev/client-app";
+    const sessionDir = getDefaultSessionDir(cwdA, agentDir);
+    expect(getDefaultSessionDir(cwdB, agentDir)).toBe(sessionDir);
+
+    const sessionFileA = path.join(sessionDir, "session-A.jsonl");
+    const sessionFileB = path.join(sessionDir, "session-B.jsonl");
+
+    await fs.writeFile(
+      sessionFileA,
+      `${JSON.stringify(buildSessionHeader(cwdA, "session-A"))}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      sessionFileB,
+      `${JSON.stringify(buildSessionHeader(cwdB, "session-B"))}\n`,
+      "utf8",
+    );
+
+    const listA = await SessionManager.list(cwdA, sessionDir);
+    const listB = await SessionManager.list(cwdB, sessionDir);
+
+    expect(listA.map((s) => s.path)).toEqual([sessionFileA]);
+    expect(listB.map((s) => s.path)).toEqual([sessionFileB]);
+  });
+});
