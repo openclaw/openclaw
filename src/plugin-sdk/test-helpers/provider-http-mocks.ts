@@ -267,5 +267,6 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
   });
 }
