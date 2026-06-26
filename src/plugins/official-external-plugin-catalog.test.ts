@@ -14,6 +14,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -57,7 +58,7 @@ describe("official external plugin catalog", () => {
     ).toBe(false);
     expect(
       isOfficialExternalPluginCatalogFeed({
-        schemaVersion: 2,
+        schemaVersion: 3,
         id: "openclaw-official-external-plugins",
         generatedAt: "2026-06-22T00:00:00.000Z",
         sequence: 1,
@@ -66,10 +67,131 @@ describe("official external plugin catalog", () => {
     ).toBe(false);
   });
 
+  it("accepts the live ClawHub feed schema version", () => {
+    expect(
+      isOfficialExternalPluginCatalogFeed({
+        schemaVersion: 2,
+        id: "clawhub-official",
+        generatedAt: "2026-06-25T01:19:39.629Z",
+        sequence: 11,
+        entries: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps live ClawHub marketplace entries as metadata-only feed entries", () => {
+    const [entry] = parseOfficialExternalPluginCatalogEntries({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@expediagroup/expedia-openclaw",
+          title: "Expedia Travel",
+          version: "1.0.4",
+          state: "available",
+          publisher: {
+            id: "expediagroup",
+            trust: "official",
+          },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@expediagroup/expedia-openclaw",
+                version: "1.0.4",
+                integrity:
+                  "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(entry).toMatchObject({
+      id: "@expediagroup/expedia-openclaw",
+      title: "Expedia Travel",
+      version: "1.0.4",
+    });
+    expect(resolveOfficialExternalPluginId(entry!)).toBeUndefined();
+    expect(resolveOfficialExternalPluginInstall(entry!)).toBeNull();
+  });
+
+  it("does not synthesize trusted installs for unavailable or untrusted hosted entries", () => {
+    const entries = parseOfficialExternalPluginCatalogEntries({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@example/unavailable",
+          title: "Unavailable",
+          version: "1.0.0",
+          state: "disabled",
+          publisher: { id: "example", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@example/unavailable",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+        {
+          type: "plugin",
+          id: "@example/community",
+          title: "Community",
+          version: "1.0.0",
+          state: "available",
+          publisher: { id: "example", trust: "community" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@example/community",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+        {
+          type: "plugin",
+          id: "@example/private-source",
+          title: "Private Source",
+          version: "1.0.0",
+          state: "available",
+          publisher: { id: "example", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "private-feed",
+                package: "@example/private-source",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) {
+      expect(resolveOfficialExternalPluginId(entry)).toBeUndefined();
+      expect(resolveOfficialExternalPluginInstall(entry)).toBeNull();
+    }
+  });
+
   it("keeps unsupported versioned feed wrappers out of legacy catalog parsing", () => {
     expect(
       parseOfficialExternalPluginCatalogEntries({
-        schemaVersion: 2,
+        schemaVersion: 3,
         id: "future-feed",
         generatedAt: "2026-06-22T00:00:00.000Z",
         sequence: 1,
@@ -146,7 +268,7 @@ describe("official external plugin catalog", () => {
     expect(result.source).toBe("bundled-fallback");
     expect(result.entries.length).toBe(listOfficialExternalPluginCatalogEntries().length);
     if (result.source === "bundled-fallback") {
-      expect(result.error).toContain("schema version 1");
+      expect(result.error).toContain("supported schema version");
       expect(result.metadata?.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
     }
   });

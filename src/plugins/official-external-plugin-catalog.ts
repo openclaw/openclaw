@@ -78,16 +78,34 @@ export type OfficialExternalPluginCatalogManifest = {
 
 /** Raw official external catalog entry loaded from generated catalog JSON. */
 export type OfficialExternalPluginCatalogEntry = {
+  id?: string;
+  title?: string;
+  type?: string;
+  state?: string;
+  publisher?: {
+    id?: string;
+    trust?: string;
+  };
   name?: string;
   version?: string;
   description?: string;
   source?: string;
   kind?: string;
+  install?: {
+    candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
+  };
 } & Partial<Record<ManifestKey, OfficialExternalPluginCatalogManifest>>;
+
+export type OfficialExternalPluginCatalogInstallCandidate = {
+  sourceRef?: string;
+  package?: string;
+  version?: string;
+  integrity?: string;
+};
 
 /** Feed-shaped wrapper used by the bundled external plugin catalog fallback. */
 export type OfficialExternalPluginCatalogFeed = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   id: string;
   generatedAt: string;
   sequence: number;
@@ -134,13 +152,13 @@ const OFFICIAL_CATALOG_SOURCES = [
   officialExternalPluginCatalog,
 ] as const;
 
-const OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSION = 1;
+const OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set<unknown>([1, 2]);
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
-  "https://register.openclaw.ai/official-marketplace.json";
+  "https://clawhub.ai/v1/feeds/plugins";
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
-const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["register.openclaw.ai"];
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 
 export function isOfficialExternalPluginCatalogFeed(
   raw: unknown,
@@ -151,7 +169,7 @@ export function isOfficialExternalPluginCatalogFeed(
   const sequence = raw.sequence;
   const entries = raw.entries;
   return (
-    raw.schemaVersion === OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSION &&
+    OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS.has(raw.schemaVersion) &&
     typeof raw.id === "string" &&
     raw.id.trim().length > 0 &&
     typeof raw.generatedAt === "string" &&
@@ -426,7 +444,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     }
     const raw = JSON.parse(body) as unknown;
     if (!isOfficialExternalPluginCatalogFeed(raw)) {
-      return bundledFallbackResult("hosted catalog feed did not match schema version 1", {
+      return bundledFallbackResult("hosted catalog feed did not match a supported schema version", {
         ...base,
         checksum,
       });
