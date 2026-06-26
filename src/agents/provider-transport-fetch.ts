@@ -141,6 +141,7 @@ function sanitizeOpenAISdkSseResponse(
             }
           }
         } catch (error) {
+          await reader?.cancel(error).catch(() => {});
           controller.error(error);
         }
       },
@@ -172,14 +173,14 @@ function sanitizeOpenAISdkSseResponse(
   ): number => {
     let enqueued = 0;
     buffer += text;
-    if (buffer.length > SSE_SANITIZE_BUFFER_MAX_BYTES) {
-      throw new Error(
-        `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_BYTES} bytes) without event boundary`,
-      );
-    }
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
+        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_BYTES) {
+          throw new Error(
+            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_BYTES} bytes) without event boundary`,
+          );
+        }
         return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
@@ -223,6 +224,7 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
+        await reader?.cancel(error).catch(() => {});
         controller.error(error);
       }
     },

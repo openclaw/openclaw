@@ -1130,6 +1130,37 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("handles a large transport chunk containing many valid small SSE events", async () => {
+    // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
+    // events; the cap must apply only to the unterminated tail, not the full chunk.
+    const encoder = new TextEncoder();
+    const manyEvents = `data: ${JSON.stringify({ ok: true })}\n\n`.repeat(500);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(manyEvents, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items: unknown[] = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+    expect(items.length).toBe(500);
+    expect(items[0]).toEqual({ ok: true });
+  });
+
   it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('  {"ok": true}  ', {
