@@ -4006,6 +4006,7 @@ export async function detectLegacyStateMigrations(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   pluginSessionStoreAgentIds?: readonly string[];
+  preserveForeignMainAliases?: boolean;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
@@ -4033,17 +4034,15 @@ export async function detectLegacyStateMigrations(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
     });
-  const configuredStore = params.cfg.session?.store;
-  const preserveForeignMainAliases = pluginSessionStoreAgentIds.some((pluginAgentId) => {
-    const id = normalizeAgentId(pluginAgentId);
-    if (id === DEFAULT_AGENT_ID) {
-      return false;
-    }
-    const pluginStorePath = configuredStore
-      ? resolveStorePathFromTemplate(configuredStore, id, env)
-      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    return sessionStorePathsMatch(pluginStorePath, sessionsTargetStorePath);
-  });
+  const preserveForeignMainAliases =
+    params.preserveForeignMainAliases === true ||
+    hasForeignPluginSessionStoreAlias({
+      cfg: params.cfg,
+      env,
+      stateDir,
+      targetAgentId,
+      pluginSessionStoreAgentIds,
+    });
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
@@ -5018,11 +5017,15 @@ export async function migrateOrphanedSessionKeys(params: {
   // does not contain {agentId}.
   const storeMap = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
-    const existing = storeMap.get(p);
+    // Existing aliases are one ownership surface. Group them before any atomic
+    // rewrite can replace one pathname and hide their original identity.
+    const storePath =
+      [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
+    const existing = storeMap.get(storePath);
     if (existing) {
       existing.add(id);
     } else {
-      storeMap.set(p, new Set([id]));
+      storeMap.set(storePath, new Set([id]));
     }
   };
   // Default agent store.
@@ -5258,6 +5261,33 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
   }
 }
 
+function hasForeignPluginSessionStoreAlias(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  targetAgentId: string;
+  pluginSessionStoreAgentIds: readonly string[];
+}): boolean {
+  const targetStorePath = path.join(
+    params.stateDir,
+    "agents",
+    params.targetAgentId,
+    "sessions",
+    "sessions.json",
+  );
+  const configuredStore = params.cfg.session?.store;
+  return params.pluginSessionStoreAgentIds.some((pluginAgentId) => {
+    const id = normalizeAgentId(pluginAgentId);
+    if (id === DEFAULT_AGENT_ID) {
+      return false;
+    }
+    const pluginStorePath = configuredStore
+      ? resolveStorePathFromTemplate(configuredStore, id, params.env)
+      : path.join(params.stateDir, "agents", id, "sessions", "sessions.json");
+    return sessionStorePathsMatch(pluginStorePath, targetStorePath);
+  });
+}
+
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -5293,6 +5323,15 @@ export async function autoMigrateLegacyState(params: {
     env,
     pluginIds: collectRelevantDoctorPluginIds(pluginDoctorConfig),
   });
+  // Capture ownership before orphan-key rewrites. Atomic replacement can split
+  // a configured filesystem alias from the standard target pathname.
+  const preserveForeignMainAliases = hasForeignPluginSessionStoreAlias({
+    cfg: params.cfg,
+    env,
+    stateDir,
+    targetAgentId: normalizeAgentId(resolveDefaultAgentId(params.cfg)),
+    pluginSessionStoreAgentIds,
+  });
   // Canonicalize orphaned session keys regardless of whether legacy migration
   // is needed — the orphan-key bug (#29683) affects all installs with
   // non-default agent IDs or mainKey configuration.
@@ -5325,6 +5364,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     pluginDoctorConfig: params.pluginDoctorConfig,
     pluginSessionStoreAgentIds,
+    preserveForeignMainAliases,
     env,
     homedir: params.homedir,
   });

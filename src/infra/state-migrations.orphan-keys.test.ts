@@ -322,6 +322,37 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("coalesces configured and standard paths that alias one store", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+      writeStore(standardStorePath, {
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+      });
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      fs.linkSync(standardStorePath, configuredStorePath);
+      const cfg = {
+        session: { store: configuredStorePath },
+        agents: { list: [{ id: "voice", default: true }] },
+        plugins: {
+          entries: {
+            "voice-call": { config: { agentId: "voice" } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Preserved 1 ambiguous session key(s) in potentially shared store ${configuredStorePath}`,
+      ]);
+      expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
+      expect(fs.statSync(configuredStorePath).ino).toBe(fs.statSync(standardStorePath).ino);
+    });
+  });
+
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
