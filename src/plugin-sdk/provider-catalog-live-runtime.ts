@@ -54,6 +54,7 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
 // and grows) while still bounding memory, matching the existing bounded reads
 // for provider error bodies.
 const LIVE_MODEL_CATALOG_BODY_MAX_BYTES = 4 * 1024 * 1024;
+const LIVE_MODEL_CATALOG_MAX_PAGES = 50;
 
 export class LiveModelCatalogHttpError extends Error {
   readonly status: number;
@@ -154,18 +155,71 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
   return JSON.parse(new TextDecoder().decode(buffer));
 }
 
-export async function fetchLiveProviderModelRows(
-  params: FetchLiveProviderModelRowsParams,
-): Promise<readonly unknown[]> {
-  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
-  const timeoutMs = params.timeoutMs ?? 5_000;
-  const { response, release } = await fetchGuard({
-    url: params.endpoint,
+function readLiveModelCatalogString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
+  return body && typeof body === "object" && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : undefined;
+}
+
+function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
+  const record = readLiveModelCatalogRecord(body);
+  if (!record) {
+    return undefined;
+  }
+  const links = readLiveModelCatalogRecord(record.links);
+  return readLiveModelCatalogString(record.next) ?? readLiveModelCatalogString(links?.next);
+}
+
+function readLiveModelCatalogCursor(
+  body: unknown,
+): { name: "after" | "pageToken"; value: string } | undefined {
+  const record = readLiveModelCatalogRecord(body);
+  if (!record || record.has_more === false) {
+    return undefined;
+  }
+  const nextCursor = readLiveModelCatalogString(record.next_cursor);
+  if (nextCursor) {
+    return { name: "after", value: nextCursor };
+  }
+  const nextPageToken = readLiveModelCatalogString(record.nextPageToken);
+  return nextPageToken ? { name: "pageToken", value: nextPageToken } : undefined;
+}
+
+function buildLiveModelCatalogNextPageUrl(currentUrl: string, body: unknown): string | undefined {
+  const rawNextUrl = readLiveModelCatalogNextUrl(body);
+  if (rawNextUrl) {
+    const nextUrl = new URL(rawNextUrl, currentUrl);
+    if (nextUrl.origin === new URL(currentUrl).origin) {
+      return nextUrl.toString();
+    }
+  }
+  const cursor = readLiveModelCatalogCursor(body);
+  if (!cursor) {
+    return undefined;
+  }
+  const nextUrl = new URL(currentUrl);
+  nextUrl.searchParams.set(cursor.name, cursor.value);
+  return nextUrl.toString();
+}
+
+async function fetchLiveProviderModelCatalogPage(
+  params: FetchLiveProviderModelRowsParams & {
+    fetchGuard: LiveModelCatalogFetchGuard;
+    url: string;
+    timeoutMs: number;
+  },
+): Promise<{ body: unknown; rows: readonly unknown[] }> {
+  const { response, release } = await params.fetchGuard({
+    url: params.url,
     init: {
       headers: buildHeaders(params),
     },
     signal: params.signal,
-    timeoutMs,
+    timeoutMs: params.timeoutMs,
     policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
     ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
     ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
@@ -176,12 +230,36 @@ export async function fetchLiveProviderModelRows(
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    return (params.readRows ?? readDefaultLiveModelCatalogRows)(
-      await readLiveModelCatalogJson(response, timeoutMs),
-    );
+    const body = await readLiveModelCatalogJson(response, params.timeoutMs);
+    return { body, rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body) };
   } finally {
     await release();
   }
+}
+
+export async function fetchLiveProviderModelRows(
+  params: FetchLiveProviderModelRowsParams,
+): Promise<readonly unknown[]> {
+  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const timeoutMs = params.timeoutMs ?? 5_000;
+  const rows: unknown[] = [];
+  const seenPageUrls = new Set<string>();
+  let pageUrl: string | undefined = params.endpoint;
+  for (let page = 0; page < LIVE_MODEL_CATALOG_MAX_PAGES && pageUrl; page += 1) {
+    if (seenPageUrls.has(pageUrl)) {
+      break;
+    }
+    seenPageUrls.add(pageUrl);
+    const result = await fetchLiveProviderModelCatalogPage({
+      ...params,
+      fetchGuard,
+      url: pageUrl,
+      timeoutMs,
+    });
+    rows.push(...result.rows);
+    pageUrl = buildLiveModelCatalogNextPageUrl(pageUrl, result.body);
+  }
+  return rows;
 }
 
 function liveModelCatalogAuthCacheKey(params: LiveModelCatalogHeaderContext): string | undefined {
