@@ -78,7 +78,7 @@ export type {
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
 // unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
 // cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
