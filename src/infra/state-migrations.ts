@@ -65,7 +65,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import { assertNoSymlinkParentsSync, sameFileIdentity } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
@@ -4042,7 +4042,7 @@ export async function detectLegacyStateMigrations(params: {
     const pluginStorePath = configuredStore
       ? resolveStorePathFromTemplate(configuredStore, id, env)
       : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    return pluginStorePath === sessionsTargetStorePath;
+    return sessionStorePathsMatch(pluginStorePath, sessionsTargetStorePath);
   });
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
@@ -5245,6 +5245,17 @@ function resolveStorePathFromTemplate(
     return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
   }
   return path.resolve(expand(template));
+}
+
+function sessionStorePathsMatch(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return sameFileIdentity(fs.statSync(left), fs.statSync(right));
+  } catch {
+    return false;
+  }
 }
 
 export async function autoMigrateLegacyState(params: {

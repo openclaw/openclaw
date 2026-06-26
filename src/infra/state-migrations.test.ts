@@ -453,6 +453,9 @@ describe("state migrations", () => {
     >;
     targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+    const aliasedStorePath = path.join(root, "aliased-sessions.json");
+    await fs.link(targetStorePath, aliasedStorePath);
+    cfg.session = { ...cfg.session, store: aliasedStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     const legacyStore = JSON.parse(await fs.readFile(legacyStorePath, "utf8")) as Record<
       string,
