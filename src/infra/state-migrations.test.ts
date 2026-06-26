@@ -1122,6 +1122,88 @@ describe("state migrations", () => {
     );
   });
 
+  it("migrates malformed agent-shaped rows in single-owner plugin stores", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const storeTemplate = path.join(root, "stores", "{agentId}", "sessions.json");
+    const storePath = path.join(root, "stores", "voice", "sessions.json");
+    const cases = [
+      {
+        legacyKey: "agent::matrix:channel:!RoomAbC:example.org",
+        canonicalKey: "agent:voice:agent::matrix:channel:!RoomAbC:example.org",
+        sessionId: "malformed-owner",
+        runtimeSessionName: "malformed-runtime",
+      },
+      {
+        legacyKey: "agent:_bad:opaque",
+        canonicalKey: "agent:voice:agent:_bad:opaque",
+        sessionId: "invalid-owner",
+        runtimeSessionName: "invalid-runtime",
+      },
+    ];
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        Object.fromEntries(
+          cases.map(({ legacyKey, sessionId, runtimeSessionName }) => [
+            legacyKey,
+            {
+              sessionId,
+              updatedAt: 10,
+              acp: {
+                backend: "test",
+                agent: "voice",
+                runtimeSessionName,
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: 10,
+              },
+            },
+          ]),
+        ),
+      ),
+      "utf8",
+    );
+    const cfg = {
+      session: { store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }] },
+      plugins: {
+        entries: {
+          "voice-call": { config: { agentId: "voice" } },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      { sessionId: string; acp?: unknown }
+    >;
+    for (const { legacyKey, canonicalKey, sessionId, runtimeSessionName } of cases) {
+      expect(store[legacyKey]).toBeUndefined();
+      expect(store[canonicalKey]).toEqual({ sessionId, updatedAt: 10 });
+      expect(
+        readAcpSessionMetaForEntry({
+          sessionKey: canonicalKey,
+          entry: { sessionId },
+          env,
+        })?.runtimeSessionName,
+      ).toBe(runtimeSessionName);
+      expect(
+        readAcpSessionMetaForEntry({
+          sessionKey: legacyKey,
+          entry: { sessionId },
+          env,
+        }),
+      ).toBeUndefined();
+    }
+    expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
+    expect(result.warnings).toHaveLength(0);
+  });
+
   it("preserves multi-owner rows through coalesced templated-store migration", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

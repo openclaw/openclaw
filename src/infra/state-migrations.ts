@@ -3047,13 +3047,12 @@ function canonicalizeSessionKeyForAgent(params: {
   const rawLower = normalizeLowercaseStringOrEmpty(raw);
   const legacyDefaultMainAlias = isLegacyDefaultMainAliasKey(rawLower, params.mainKey);
   const configuredAgentId = normalizeAgentId(params.agentId);
+  const canonicalRowOwner = resolveCanonicalAgentSessionOwner(raw);
   // Shared stores may contain rows for several agents. Canonicalize a valid
   // wrapper within its declared owner so another agent pass cannot adopt it.
   // The default-agent main alias remains an orphan when a different single
   // owner is authoritative for this store.
-  const candidateOwner = params.preserveCanonicalAgentOwner
-    ? resolveCanonicalAgentSessionOwner(raw)
-    : undefined;
+  const candidateOwner = params.preserveCanonicalAgentOwner ? canonicalRowOwner : undefined;
   const parsedOwner =
     candidateOwner === DEFAULT_AGENT_ID &&
     configuredAgentId !== DEFAULT_AGENT_ID &&
@@ -3081,10 +3080,7 @@ function canonicalizeSessionKeyForAgent(params: {
   }
   // Unscoped and legacy default-main keys in a potentially shared store have no durable owner.
   // Keep it untouched instead of assigning another agent's history by iteration order.
-  if (
-    params.preserveAmbiguousKeys &&
-    (!resolveCanonicalAgentSessionOwner(raw) || legacyDefaultMainAlias)
-  ) {
+  if (params.preserveAmbiguousKeys && (!canonicalRowOwner || legacyDefaultMainAlias)) {
     return params.key;
   }
 
@@ -3134,7 +3130,9 @@ function canonicalizeSessionKeyForAgent(params: {
     }
   }
 
-  if (rawLower.startsWith("agent:")) {
+  // A malformed agent-shaped key has no authoritative row owner. Once shared-store
+  // preservation is ruled out, treat it as opaque input owned by the configured agent.
+  if (rawLower.startsWith("agent:") && canonicalRowOwner) {
     return normalized;
   }
   if (rawLower.startsWith("subagent:")) {
@@ -3603,18 +3601,19 @@ export function sessionStoreTextMayNeedCanonicalization(params: {
       return true;
     }
     const rowOwner = resolveCanonicalAgentSessionOwner(rawKey);
-    if (rowOwner) {
-      const agentMainAlias = `agent:${rowOwner}:${DEFAULT_MAIN_KEY}`;
-      const agentMainKey = `agent:${rowOwner}:${params.mainKey}`;
-      if (
-        lowerKey === agentMainAlias &&
-        (params.mainKey !== DEFAULT_MAIN_KEY || params.scope === "global")
-      ) {
-        return true;
-      }
-      if (lowerKey === agentMainKey && params.scope === "global") {
-        return true;
-      }
+    if (!rowOwner) {
+      return true;
+    }
+    const agentMainAlias = `agent:${rowOwner}:${DEFAULT_MAIN_KEY}`;
+    const agentMainKey = `agent:${rowOwner}:${params.mainKey}`;
+    if (
+      lowerKey === agentMainAlias &&
+      (params.mainKey !== DEFAULT_MAIN_KEY || params.scope === "global")
+    ) {
+      return true;
+    }
+    if (lowerKey === agentMainKey && params.scope === "global") {
+      return true;
     }
     if (
       lowerKey === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` &&

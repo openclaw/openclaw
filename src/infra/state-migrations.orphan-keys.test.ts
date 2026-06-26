@@ -149,6 +149,17 @@ describe("migrateOrphanedSessionKeys", () => {
         mainKey: "work",
       }),
     ).toBe(true);
+    for (const malformedKey of ["agent::room", "agent:_bad:room"]) {
+      expect(
+        sessionStoreTextMayNeedCanonicalization({
+          raw: JSON.stringify({
+            [malformedKey]: { sessionId: "opaque", updatedAt: 1 },
+          }),
+          storeAgentIds: ["voice"],
+          mainKey: "main",
+        }),
+      ).toBe(true);
+    }
   });
 
   it("renames orphaned raw key to canonical form", async () => {
