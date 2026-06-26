@@ -68,7 +68,7 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --category channel-framework.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
@@ -178,10 +178,21 @@ QA Lab, so package Docker release lanes do not run `qa` commands. Use
 `pnpm qa:observability:smoke` from a built source checkout when changing
 diagnostics instrumentation.
 
-For a transport-real Matrix smoke lane, run:
+For a transport-real Matrix smoke lane that does not require model-provider
+credentials, run the fast profile with the deterministic mock OpenAI provider:
 
 ```bash
-pnpm openclaw qa matrix --profile fast --fail-fast
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+```
+
+For the live-frontier provider lane, supply OpenAI-compatible credentials
+explicitly:
+
+```bash
+OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
 ```
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
@@ -201,9 +212,10 @@ environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`.
-Scheduled and default manual runs execute the fast Matrix profile with live
-frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into the five profile shards.
+Scheduled and default manual runs execute the fast Matrix profile with
+QA-provided live-frontier credentials, `--fast`, and
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans
+out into the five profile shards.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
@@ -966,6 +978,7 @@ output and whose artifact paths are resolved relative to that producer
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
+For scorecard context, see [Maturity scorecard](/maturity/scorecard).
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -1023,6 +1036,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Maturity scorecard](/maturity/scorecard)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)

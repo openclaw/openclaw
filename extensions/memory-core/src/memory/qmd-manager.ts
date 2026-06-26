@@ -96,6 +96,23 @@ type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
 const log = createSubsystemLogger("memory");
 
+/**
+ * Normalize an already-aborted search signal into the error thrown before any
+ * qmd work starts. Prefers the caller-supplied abort reason (so a deadline
+ * message such as "memory_search timed out after 15s" survives) and falls back
+ * to a stable abort error.
+ */
+function asAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.length > 0) {
+    return new Error(reason);
+  }
+  return new Error("qmd search aborted");
+}
+
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
@@ -352,6 +369,7 @@ type QmdMcporterSearchParams =
       minScore: number;
       collection?: string;
       timeoutMs: number;
+      signal?: AbortSignal;
     }
   | {
       mcporter: ResolvedQmdMcporterConfig;
@@ -363,6 +381,7 @@ type QmdMcporterSearchParams =
       minScore: number;
       collection?: string;
       timeoutMs: number;
+      signal?: AbortSignal;
     };
 type QmdMcporterAcrossCollectionsParams =
   | {
@@ -373,6 +392,7 @@ type QmdMcporterAcrossCollectionsParams =
       limit: number;
       minScore: number;
       collectionNames: string[];
+      signal?: AbortSignal;
     }
   | {
       tool: BuiltinQmdMcpTool;
@@ -382,6 +402,7 @@ type QmdMcporterAcrossCollectionsParams =
       limit: number;
       minScore: number;
       collectionNames: string[];
+      signal?: AbortSignal;
     };
 
 export class QmdMemoryManager implements MemorySearchManager {
@@ -1299,11 +1320,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      /**
+       * Caller-owned cancellation. When the caller stops waiting (e.g. the
+       * memory_search tool deadline fires), abort kills the in-flight qmd
+       * subprocess instead of leaving it running orphaned for the full qmd
+       * timeout.
+       */
+      signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
       return [];
+    }
+    const searchSignal = opts?.signal;
+    if (searchSignal?.aborted) {
+      throw asAbortError(searchSignal);
     }
     const trimmed = query.trim();
     if (!trimmed) {
@@ -1344,6 +1376,7 @@ export class QmdMemoryManager implements MemorySearchManager {
                 limit,
                 minScore,
                 collectionNames,
+                signal: searchSignal,
               });
             }
             return await this.runQmdSearchViaMcporter({
@@ -1356,6 +1389,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               minScore,
               collection: collectionNames[0],
               timeoutMs: this.qmd.limits.timeoutMs,
+              signal: searchSignal,
             });
           }
           const tool = this.resolveQmdMcpTool(qmdSearchCommand);
@@ -1368,6 +1402,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               limit,
               minScore,
               collectionNames,
+              signal: searchSignal,
             });
           }
           return await this.runQmdSearchViaMcporter({
@@ -1380,20 +1415,25 @@ export class QmdMemoryManager implements MemorySearchManager {
             minScore,
             collection: collectionNames[0],
             timeoutMs: this.qmd.limits.timeoutMs,
+            signal: searchSignal,
           });
         }
-        const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+        const collectionGroups = await this.resolveCollectionSearchGroups(
+          collectionNames,
+          searchSignal,
+        );
         if (collectionGroups.length > 1) {
           return await this.runQueryAcrossCollectionGroups(
             trimmed,
             limit,
             collectionGroups,
             qmdSearchCommand,
+            searchSignal,
           );
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames));
-        return await this.runQmdSearch(args, qmdSearchCommand);
+        return await this.runQmdSearch(args, qmdSearchCommand, searchSignal);
       } catch (err) {
         if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
           throw err;
@@ -1409,20 +1449,24 @@ export class QmdMemoryManager implements MemorySearchManager {
             `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
           );
           try {
-            const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+            const collectionGroups = await this.resolveCollectionSearchGroups(
+              collectionNames,
+              searchSignal,
+            );
             if (collectionGroups.length > 1) {
               return await this.runQueryAcrossCollectionGroups(
                 trimmed,
                 limit,
                 collectionGroups,
                 "query",
+                searchSignal,
               );
             }
             const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
             fallbackArgs.push(
               ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
             );
-            return await this.runQmdSearch(fallbackArgs, "query");
+            return await this.runQmdSearch(fallbackArgs, "query", searchSignal);
           } catch (fallbackErr) {
             log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
             throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
@@ -2156,7 +2200,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmd(
     args: string[],
-    opts?: { timeoutMs?: number; discardOutput?: boolean },
+    opts?: { timeoutMs?: number; discardOutput?: boolean; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string }> {
     return await runCliCommand({
       commandSummary: `qmd ${args.join(" ")}`,
@@ -2172,15 +2216,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       maxOutputChars: this.maxQmdOutputChars,
       // Large `qmd update` runs can easily exceed the output cap; keep only stderr.
       discardStdout: opts?.discardOutput,
+      signal: opts?.signal,
     });
   }
 
   private async runQmdSearch(
     args: string[],
     command: "query" | "search" | "vsearch",
+    signal?: AbortSignal,
   ): Promise<QmdQueryResult[]> {
     try {
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs, signal });
       return parseQmdQueryJson(result.stdout, result.stderr);
     } catch (err) {
       const recovered = this.parseFailedQmdSearchJson(err, command);
@@ -2323,7 +2369,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runMcporter(
     args: string[],
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string }> {
     const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
@@ -2339,12 +2385,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       cwd: this.workspaceDir,
       timeoutMs: opts?.timeoutMs,
       maxOutputChars: this.maxQmdOutputChars,
+      signal: opts?.signal,
     });
   }
 
   private async runQmdSearchViaMcporter(
     params: QmdMcporterSearchParams,
   ): Promise<QmdQueryResult[]> {
+    if (params.signal?.aborted) {
+      throw asAbortError(params.signal);
+    }
     await this.ensureMcporterDaemonStarted(params.mcporter);
 
     // If the version is already known as v1 but we received a stale "query" tool name
@@ -2401,7 +2451,10 @@ export class QmdMemoryManager implements MemorySearchManager {
           "--timeout",
           String(Math.max(0, params.timeoutMs)),
         ],
-        { timeoutMs: resolveQmdMcporterSearchProcessTimeoutMs(params.timeoutMs) },
+        {
+          timeoutMs: resolveQmdMcporterSearchProcessTimeoutMs(params.timeoutMs),
+          signal: params.signal,
+        },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
       if (useUnifiedQueryTool && this.qmdMcpToolVersion === null) {
@@ -2430,6 +2483,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           minScore: params.minScore,
           collection: params.collection,
           timeoutMs: params.timeoutMs,
+          signal: params.signal,
         });
       }
       throw err;
@@ -3484,28 +3538,39 @@ export class QmdMemoryManager implements MemorySearchManager {
     ]);
   }
 
-  private async resolveCollectionSearchGroups(collectionNames: string[]): Promise<string[][]> {
+  private async resolveCollectionSearchGroups(
+    collectionNames: string[],
+    signal?: AbortSignal,
+  ): Promise<string[][]> {
     if (collectionNames.length <= 1) {
       return [collectionNames];
     }
-    if (!(await this.supportsQmdMultiCollectionFilters())) {
+    if (!(await this.supportsQmdMultiCollectionFilters(signal))) {
       return collectionNames.map((collectionName) => [collectionName]);
     }
     return this.groupCollectionNamesBySource(collectionNames);
   }
 
-  private async supportsQmdMultiCollectionFilters(): Promise<boolean> {
+  private async supportsQmdMultiCollectionFilters(signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) {
+      throw asAbortError(signal);
+    }
     if (this.multiCollectionFilterSupported !== null) {
       return this.multiCollectionFilterSupported;
     }
     try {
       const result = await this.runQmd(["--help"], {
         timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+        signal,
       });
       const helpText = `${result.stdout}\n${result.stderr}`;
       this.multiCollectionFilterSupported =
         /\b(?:one or more collections|collection\(s\)|multiple -c flags)\b/i.test(helpText);
     } catch (err) {
+      // Cancellation says nothing about QMD capabilities; leave the probe uncached.
+      if (signal?.aborted) {
+        throw asAbortError(signal);
+      }
       this.multiCollectionFilterSupported = false;
       log.debug(`qmd multi-collection filter probe failed: ${String(err)}`);
     }
@@ -3517,6 +3582,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     limit: number,
     collectionGroups: string[][],
     command: "query" | "search" | "vsearch",
+    signal?: AbortSignal,
   ): Promise<QmdQueryResult[]> {
     log.debug(
       `qmd ${command} multi-source collection grouping active (${collectionGroups.length} groups)`,
@@ -3525,7 +3591,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const collectionNames of collectionGroups) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push(...this.buildCollectionFilterArgs(collectionNames));
-      const parsed = await this.runQmdSearch(args, command);
+      const parsed = await this.runQmdSearch(args, command, signal);
       for (const entry of parsed) {
         const defaultCollection = collectionNames.length === 1 ? collectionNames[0] : undefined;
         const normalizedHints = this.normalizeDocHints({
@@ -3608,6 +3674,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             minScore: params.minScore,
             collection: collectionName,
             timeoutMs: this.qmd.limits.timeoutMs,
+            signal: params.signal,
           })
         : await this.runQmdSearchViaMcporter({
             mcporter: this.qmd.mcporter,
@@ -3619,6 +3686,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             minScore: params.minScore,
             collection: collectionName,
             timeoutMs: this.qmd.limits.timeoutMs,
+            signal: params.signal,
           });
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {

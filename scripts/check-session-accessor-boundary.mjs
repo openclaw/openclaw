@@ -61,6 +61,7 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
   "saveSessionStore",
   "updateSessionStore",
 ]);
+const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
 export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "loadSessionStore",
@@ -74,11 +75,18 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "src/acp/runtime/session-meta.ts",
+  "src/agents/acp-spawn.ts",
+  "src/agents/auth-profiles/session-override.ts",
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.ts",
   "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+  "src/agents/live-model-switch.ts",
+  "src/agents/subagent-control.ts",
+  "src/agents/subagent-registry-helpers.ts",
+  "src/auto-reply/reply/abort.ts",
   "src/auto-reply/reply/agent-runner-helpers.ts",
   "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/commands-subagents/action-info.ts",
@@ -97,8 +105,10 @@ export const migratedSessionAccessorFiles = new Set([
   "src/cron/service/timer.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-history-state.ts",
+  "src/gateway/sessions-history-http.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/managed-image-attachments.ts",
+  "src/gateway/boot.ts",
   "src/gateway/server-methods/artifacts.ts",
   "src/gateway/server-methods/chat.ts",
   "src/gateway/sessions-resolve.ts",
@@ -108,23 +118,51 @@ export const migratedSessionAccessorFiles = new Set([
   "src/gateway/session-reset-service.ts",
   "src/infra/outbound/message-action-tts.ts",
   "src/agents/tools/embedded-gateway-stub.ts",
+  "src/agents/tools/session-status-tool.ts",
   "src/agents/tools/sessions-list-tool.ts",
+  "src/plugins/host-hook-state.ts",
   "src/status/status-message.ts",
   "src/tui/embedded-backend.ts",
 ]);
 
 export const migratedBundledPluginSessionAccessorFiles = new Set([
+  "extensions/codex/src/conversation-binding.ts",
+  "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
   "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
+  "extensions/feishu/src/reasoning-preview.ts",
+  "extensions/memory-core/src/dreaming-phases.ts",
+  "extensions/memory-core/src/dreaming-narrative.ts",
+  "extensions/mattermost/src/mattermost/model-picker.ts",
+  "extensions/matrix/src/matrix/monitor/handler.ts",
+  "extensions/matrix/src/session-route.ts",
+  "extensions/slack/src/monitor/slash.ts",
+  "extensions/telegram/src/bot-core.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
+  "extensions/telegram/src/bot.ts",
+  "extensions/telegram/src/bot-message-dispatch.ts",
+  "extensions/telegram/src/bot-native-commands.ts",
+  "extensions/voice-call/src/response-generator.ts",
+  "extensions/whatsapp/src/auto-reply/monitor/group-activation.ts",
+]);
+
+export const migratedEmbeddedAgentSessionTargetFiles = new Set([
+  "extensions/voice-call/src/response-generator.ts",
 ]);
 
 export const migratedSessionAccessorWriteFiles = new Set([
+  "src/acp/runtime/session-meta.ts",
+  "src/agents/auth-profiles/session-override.ts",
   "src/agents/command/attempt-execution.shared.ts",
   "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
+  "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
+  "src/auto-reply/reply/abort.ts",
+  "src/agents/subagent-control.ts",
+  "src/agents/subagent-registry-helpers.ts",
+  "src/agents/tools/session-status-tool.ts",
   "src/auto-reply/reply/abort-cutoff.runtime.ts",
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
@@ -134,6 +172,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/body.ts",
   "src/auto-reply/reply/commands-acp/lifecycle.ts",
   "src/auto-reply/reply/commands-reset.ts",
+  "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
   "src/auto-reply/reply/directive-handling.persist.ts",
   "src/auto-reply/reply/dispatch-from-config.runtime.ts",
@@ -146,7 +185,11 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
+  "src/gateway/boot.ts",
+  "src/gateway/server-node-events.ts",
+  "src/gateway/session-compaction-checkpoints.ts",
   "src/plugins/host-hook-cleanup.ts",
+  "src/plugins/host-hook-state.ts",
   "src/tui/embedded-backend.ts",
 ]);
 
@@ -212,6 +255,13 @@ function propertyAccessName(expression) {
   }
   if (ts.isElementAccessExpression(unwrapped) && ts.isStringLiteral(unwrapped.argumentExpression)) {
     return unwrapped.argumentExpression.text;
+  }
+  return null;
+}
+
+function propertyNameText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
+    return name.text;
   }
   return null;
 }
@@ -378,6 +428,51 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
   return findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind);
 }
 
+export function findEmbeddedAgentSessionTargetViolations(content, fileName = "source.ts") {
+  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const violations = findNamedBoundaryViolations(
+    content,
+    fileName,
+    embeddedAgentSessionFileRuntimeNames,
+    "legacy embedded-agent session file resolver",
+  );
+
+  const recordDeprecatedSessionFile = (name) => {
+    violations.push({
+      line: toLine(sourceFile, name),
+      reason:
+        'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
+    });
+  };
+
+  const visitRunOptions = (options) => {
+    for (const property of options.properties) {
+      if (ts.isPropertyAssignment(property) && propertyNameText(property.name) === "sessionFile") {
+        recordDeprecatedSessionFile(property.name);
+      } else if (
+        ts.isShorthandPropertyAssignment(property) &&
+        property.name.text === "sessionFile"
+      ) {
+        recordDeprecatedSessionFile(property.name);
+      }
+    }
+  };
+
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && propertyAccessName(node.expression) === "runEmbeddedAgent") {
+      const options = unwrapExpression(node.arguments[0]);
+      if (options && ts.isObjectLiteralExpression(options)) {
+        visitRunOptions(options);
+      }
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+}
+
 export function findSessionAccessorWriteBoundaryViolations(content, fileName = "source.ts") {
   return findNamedSessionStoreViolations(content, fileName, legacyWriterNames, "writer");
 }
@@ -527,7 +622,10 @@ export async function main() {
   const readSourceRoots = resolveSourceRoots(repoRoot, [
     "packages/memory-host-sdk/src/host",
     "extensions/discord/src/monitor",
+    "extensions/memory-core/src",
     "extensions/telegram/src",
+    "extensions/voice-call/src",
+    "src/acp",
     "src/agents",
     "src/auto-reply",
     "src/commands",
@@ -535,13 +633,16 @@ export async function main() {
     "src/cron",
     "src/gateway",
     "src/infra",
+    "src/plugins",
     "src/tui",
   ]);
   const writeSourceRoots = resolveSourceRoots(repoRoot, [
+    "src/acp",
     "src/agents",
     "src/auto-reply",
     "src/commands",
     "src/config/sessions",
+    "src/gateway",
     "src/plugins",
     "src/tui",
   ]);
@@ -615,6 +716,15 @@ export async function main() {
       ),
     findViolations: findMemoryHostSessionCorpusBoundaryViolations,
   });
+  const embeddedAgentSessionTargetViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["extensions/voice-call/src"]),
+    skipFile: (filePath) =>
+      !migratedEmbeddedAgentSessionTargetFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findEmbeddedAgentSessionTargetViolations,
+  });
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   const sessionStoreRuntimeCompatViolations =
     findSessionStoreRuntimeFileBackedCompatExportViolations(
@@ -631,6 +741,7 @@ export async function main() {
     ...manualCompactTrimViolations,
     ...lifecycleCleanupViolations,
     ...memoryHostSessionCorpusViolations,
+    ...embeddedAgentSessionTargetViolations,
     ...sessionStoreRuntimeCompatViolations,
   ];
 

@@ -515,6 +515,9 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+  if (legacyState.warnings.length > 0) {
+    note(legacyState.warnings.join("\n"), "Doctor warnings");
+  }
   if (legacyState.preview.length === 0) {
     return;
   }
@@ -1289,21 +1292,108 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+      healthChecks: {
+        id: "core/doctor/session-transcripts",
+        description: "Legacy or branchy session transcript files are represented as findings.",
+        async detect() {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToHealthFinding,
+          );
+        },
+        async repair(ctx) {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
+            await import("../commands/doctor-session-transcripts.js");
+          const effects = (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToRepairEffect,
+          );
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor session transcript contribution owns transcript rewrites",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
       label: "Session snapshots",
+      healthChecks: {
+        id: "core/doctor/session-snapshots",
+        description: "Stale cached session snapshot paths are represented as findings.",
+        async detect(ctx) {
+          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
+            await import("../commands/doctor-session-snapshots.js");
+          return (
+            await detectSessionSnapshotHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(sessionSnapshotIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToRepairEffect } =
+            await import("../commands/doctor-session-snapshots.js");
+          const effects = (
+            await detectSessionSnapshotHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(sessionSnapshotIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor session snapshot contribution owns snapshot rewrites",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runSessionSnapshotsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+      healthChecks: {
+        description:
+          "Historical config-audit argv redaction gaps are represented as structured findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { configAuditScrubToHealthFinding, detectConfigAuditScrubIssue } =
+            await import("../commands/doctor-config-audit-scrub.js");
+          const result = await detectConfigAuditScrubIssue();
+          return result.rewritten > 0 ? [configAuditScrubToHealthFinding(result)] : [];
+        },
+        async repair(ctx) {
+          const { configAuditScrubToRepairEffect, detectConfigAuditScrubIssue } =
+            await import("../commands/doctor-config-audit-scrub.js");
+          const result = await detectConfigAuditScrubIssue();
+          const effects = result.rewritten > 0 ? [configAuditScrubToRepairEffect(result)] : [];
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor config audit contribution owns cleanup",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({

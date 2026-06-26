@@ -3,6 +3,7 @@ import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
+  findEmbeddedAgentSessionTargetViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
@@ -11,6 +12,7 @@ import {
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
   migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
@@ -24,11 +26,18 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "packages/memory-host-sdk/src/host/session-files.ts",
+        "src/acp/runtime/session-meta.ts",
+        "src/agents/acp-spawn.ts",
+        "src/agents/auth-profiles/session-override.ts",
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+        "src/agents/live-model-switch.ts",
+        "src/agents/subagent-control.ts",
+        "src/agents/subagent-registry-helpers.ts",
+        "src/auto-reply/reply/abort.ts",
         "src/auto-reply/reply/agent-runner-helpers.ts",
         "src/auto-reply/reply/agent-runner.ts",
         "src/auto-reply/reply/commands-subagents/action-info.ts",
@@ -47,8 +56,10 @@ describe("session accessor boundary guard", () => {
         "src/cron/service/timer.ts",
         "src/gateway/session-compaction-checkpoints.ts",
         "src/gateway/session-history-state.ts",
+        "src/gateway/sessions-history-http.ts",
         "src/gateway/session-utils.ts",
         "src/gateway/managed-image-attachments.ts",
+        "src/gateway/boot.ts",
         "src/gateway/server-methods/artifacts.ts",
         "src/gateway/server-methods/chat.ts",
         "src/gateway/sessions-resolve.ts",
@@ -58,7 +69,9 @@ describe("session accessor boundary guard", () => {
         "src/gateway/session-reset-service.ts",
         "src/infra/outbound/message-action-tts.ts",
         "src/agents/tools/embedded-gateway-stub.ts",
+        "src/agents/tools/session-status-tool.ts",
         "src/agents/tools/sessions-list-tool.ts",
+        "src/plugins/host-hook-state.ts",
         "src/status/status-message.ts",
         "src/tui/embedded-backend.ts",
       ]),
@@ -68,21 +81,49 @@ describe("session accessor boundary guard", () => {
   it("ratchets only the bundled plugin files migrated by this slice", () => {
     expect(migratedBundledPluginSessionAccessorFiles).toEqual(
       new Set([
+        "extensions/codex/src/conversation-binding.ts",
+        "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
+        "extensions/feishu/src/reasoning-preview.ts",
+        "extensions/memory-core/src/dreaming-phases.ts",
+        "extensions/memory-core/src/dreaming-narrative.ts",
+        "extensions/mattermost/src/mattermost/model-picker.ts",
+        "extensions/matrix/src/matrix/monitor/handler.ts",
+        "extensions/matrix/src/session-route.ts",
+        "extensions/slack/src/monitor/slash.ts",
+        "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
+        "extensions/telegram/src/bot.ts",
+        "extensions/telegram/src/bot-message-dispatch.ts",
+        "extensions/telegram/src/bot-native-commands.ts",
+        "extensions/voice-call/src/response-generator.ts",
+        "extensions/whatsapp/src/auto-reply/monitor/group-activation.ts",
       ]),
+    );
+  });
+
+  it("ratchets only files migrated to embedded-agent session targets", () => {
+    expect(migratedEmbeddedAgentSessionTargetFiles).toEqual(
+      new Set(["extensions/voice-call/src/response-generator.ts"]),
     );
   });
 
   it("ratchets only files migrated to session accessor writes", () => {
     expect(migratedSessionAccessorWriteFiles).toEqual(
       new Set([
+        "src/acp/runtime/session-meta.ts",
+        "src/agents/auth-profiles/session-override.ts",
         "src/agents/command/attempt-execution.shared.ts",
         "src/agents/command/session-store.ts",
         "src/agents/embedded-agent-runner/run.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/live-model-switch.ts",
         "src/agents/main-session-restart-recovery.ts",
+        "src/auto-reply/reply/abort.ts",
+        "src/agents/subagent-control.ts",
+        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/tools/session-status-tool.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
         "src/auto-reply/reply/agent-runner-execution.ts",
@@ -92,6 +133,7 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/body.ts",
         "src/auto-reply/reply/commands-acp/lifecycle.ts",
         "src/auto-reply/reply/commands-reset.ts",
+        "src/auto-reply/reply/commands-session-store.ts",
         "src/auto-reply/reply/directive-handling.impl.ts",
         "src/auto-reply/reply/directive-handling.persist.ts",
         "src/auto-reply/reply/dispatch-from-config.runtime.ts",
@@ -104,7 +146,11 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-usage.ts",
         "src/commands/tasks.ts",
         "src/config/sessions/cleanup-service.ts",
+        "src/gateway/boot.ts",
+        "src/gateway/server-node-events.ts",
+        "src/gateway/session-compaction-checkpoints.ts",
         "src/plugins/host-hook-cleanup.ts",
+        "src/plugins/host-hook-state.ts",
         "src/tui/embedded-backend.ts",
       ]),
     );
@@ -480,6 +526,50 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorBoundaryViolations(`
         // loadSessionStore and readSessionEntries used to be called here.
         const description = "loadSessionStore";
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
+    expect(
+      findEmbeddedAgentSessionTargetViolations(`
+        const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, entry);
+        agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey,
+          sessionFile,
+        });
+        runEmbeddedAgent({
+          sessionId,
+          sessionFile: transcriptPath,
+        });
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'references legacy embedded-agent session file resolver "resolveSessionFilePath"',
+      },
+      {
+        line: 6,
+        reason:
+          'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
+      },
+      {
+        line: 10,
+        reason:
+          'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
+      },
+    ]);
+  });
+
+  it("allows embedded-agent calls that pass sessionTarget identity", () => {
+    expect(
+      findEmbeddedAgentSessionTargetViolations(`
+        agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey,
+          sessionTarget: { agentId, sessionId, sessionKey, storePath },
+        });
       `),
     ).toEqual([]);
   });
