@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 export type NativeI18nSurface = "android" | "apple";
 
@@ -39,17 +40,19 @@ export type NativeI18nEntry = {
 };
 
 type Candidate = Omit<NativeI18nEntry, "id">;
+type NativeTranslationArtifact = {
+  entries: Array<{ id: string; source: string; translated: string }>;
+  locale: string;
+  version: 1;
+};
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
-const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
-  android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
-  apple: [
-    path.join(ROOT, "apps", "ios"),
-    path.join(ROOT, "apps", "macos", "Sources"),
-    path.join(ROOT, "apps", "shared", "OpenClawKit", "Sources"),
-  ],
+const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
+const SOURCE_ROOTS: Record<NativeI18nSurface, string> = {
+  android: path.join(ROOT, "apps", "android", "app", "src", "main"),
+  apple: path.join(ROOT, "apps", "ios"),
 };
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
@@ -873,15 +876,77 @@ export async function syncNativeI18n(options: { checkOnly: boolean; write: boole
   process.stdout.write(`native-app-i18n: entries=${count} changed=${current !== expected}\n`);
 }
 
+async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
+  try {
+    return JSON.parse(
+      await readFile(
+        path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
+        "utf8",
+      ),
+    ) as Array<{ source: string; target: string }>;
+  } catch {
+    return [];
+  }
+}
+
+async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
+  const artifactPath = path.join(TRANSLATIONS_DIR, `${locale}.json`);
+  let previous: NativeTranslationArtifact = { entries: [], locale, version: 1 };
+  try {
+    previous = JSON.parse(await readFile(artifactPath, "utf8")) as NativeTranslationArtifact;
+  } catch {
+    // The first refresh creates the locale artifact.
+  }
+  const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const pending = entries
+    .filter((entry) => {
+      const current = previousById.get(entry.id);
+      return !current || current.source !== entry.source || !current.translated.trim();
+    })
+    .map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      sourcePath: entry.path,
+    }));
+  const translated = pending.length
+    ? await translateNativeEntries(pending, locale, await loadGlossary(locale))
+    : new Map<string, string>();
+  const artifact: NativeTranslationArtifact = {
+    version: 1,
+    locale,
+    entries: entries.map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      translated:
+        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+    })),
+  };
+  await mkdir(TRANSLATIONS_DIR, { recursive: true });
+  await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  process.stdout.write(
+    `native-app-i18n: locale=${locale} entries=${entries.length} translated=${translated.size}\n`,
+  );
+}
+
 async function main() {
-  const [command] = process.argv.slice(2);
+  const [command, ...args] = process.argv.slice(2);
   if (command !== "check" && command !== "sync") {
-    throw new Error("usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write]");
+    throw new Error(
+      "usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write] [--locale <code>]",
+    );
   }
   await syncNativeI18n({
     checkOnly: command === "check",
     write: command === "sync" && process.argv.includes("--write"),
   });
+  const localeFlag = args.indexOf("--locale");
+  const locale = localeFlag >= 0 ? args[localeFlag + 1] : undefined;
+  if (locale) {
+    if (command !== "sync" || !process.argv.includes("--write")) {
+      throw new Error("native locale refresh requires `sync --write --locale <code>`");
+    }
+    await syncNativeLocale(locale, await collectNativeI18nEntries());
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
