@@ -3327,16 +3327,17 @@ describe("gateway agent handler", () => {
         expect(task.runtime).not.toBe("cli");
       });
 
+      let run: ReturnType<typeof getSubagentRunByChildSessionKey> = null;
       await waitForAssertion(() => {
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
-          cleanupCompletedAt: expect.any(Number),
-        });
+        run = requireValue(
+          getSubagentRunByChildSessionKey(childSessionKey),
+          "expected subagent registry run",
+        );
       });
-      const run = requireValue(
-        getSubagentRunByChildSessionKey(childSessionKey),
-        "expected subagent registry run",
-      );
-      expectRecordFields(run, {
+      const observedRun = requireValue<
+        NonNullable<ReturnType<typeof getSubagentRunByChildSessionKey>>
+      >(run, "expected subagent registry run");
+      expectRecordFields(observedRun, {
         runId,
         childSessionKey,
         controllerSessionKey: "agent:work:main",
@@ -3346,11 +3347,11 @@ describe("gateway agent handler", () => {
         spawnMode: "run",
         label: "plugin:memory-core",
       });
-      expectRecordFields(run.completion, { required: false });
-      expectRecordFields(run.delivery, { status: "not_required" });
+      expectRecordFields(observedRun.completion, { required: false });
+      expectRecordFields(observedRun.delivery, { status: "not_required" });
 
       const commandCallCount = mocks.agentCommand.mock.calls.length;
-      const createdAt = run.createdAt;
+      const createdAt = observedRun.createdAt;
       await invokeAgent(
         {
           message: "background plugin subagent task",

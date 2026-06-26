@@ -2534,6 +2534,20 @@ describe("updateNpmInstalledPlugins", () => {
           },
         },
       },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                "memory.recall": "demo",
+                "memory.compaction": "demo",
+                "memory.capture": "keep",
+              },
+            },
+          },
+        ],
+      },
     } satisfies OpenClawConfig;
 
     const result = await updateNpmInstalledPlugins({
@@ -2555,6 +2569,11 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
       contextEngine: "legacy",
+    });
+    expect(result.config.agents?.list?.[0]?.plugins?.slots).toEqual({
+      "memory.recall": "memory-core",
+      "memory.compaction": "none",
+      "memory.capture": "keep",
     });
     expect(result.outcomes).toEqual([
       {
@@ -3633,6 +3652,19 @@ describe("updateNpmInstalledPlugins", () => {
             },
           },
         },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: {
+                  "memory.recall": "voice-call",
+                  "memory.compaction": "voice-call",
+                },
+              },
+            },
+          ],
+        },
       },
       pluginIds: ["voice-call"],
     });
@@ -3642,6 +3674,10 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.allow).toEqual(["@openclaw/voice-call"]);
     expect(result.config.plugins?.deny).toEqual(["@openclaw/voice-call"]);
     expect(result.config.plugins?.slots?.memory).toBe("@openclaw/voice-call");
+    expect(result.config.agents?.list?.[0]?.plugins?.slots).toEqual({
+      "memory.recall": "@openclaw/voice-call",
+      "memory.compaction": "@openclaw/voice-call",
+    });
     expect(result.config.plugins?.entries?.["@openclaw/voice-call"]).toEqual({
       enabled: false,
       hooks: { allowPromptInjection: false },

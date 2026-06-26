@@ -85,6 +85,7 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
@@ -1916,6 +1917,38 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.name).toBe("Memory (Core)");
     expect(memory?.version).toBe("1.2.3");
   });
+
+  it("does not treat the default memory role slot as explicit under restrictive allowlists", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "memory-core",
+      body: `module.exports = {
+        id: "memory-core",
+        kind: "memory",
+        register() {
+          throw new Error("memory-core should stay blocked by the allowlist");
+        },
+      };`,
+      dir: bundledDir,
+      filename: "memory-core.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          allow: ["some-other-plugin"],
+        },
+      },
+    });
+
+    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(memory?.status).toBe("disabled");
+    expect(memory?.activationReason).toBe("not in allowlist");
+  });
+
   it.each([
     {
       label: "loads plugins from config paths",
@@ -3773,17 +3806,17 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ];
 
     const first = loadOpenClawPlugins(options);
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual(expectedArtifacts);
 
     clearMemoryPluginState();
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual(expectedArtifacts);
   });
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
@@ -3848,9 +3881,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     ];
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: activateConfig as never }),
+    ).resolves.toEqual(expectedArtifacts);
 
     // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
     // load plugins again with activate:false. Each per-plugin snapshot/rollback must
@@ -3862,9 +3895,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config: activateConfig,
     });
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: activateConfig as never }),
+    ).resolves.toEqual(expectedArtifacts);
   });
 
   it("uses discovery registration mode for non-activating loads", () => {
@@ -8562,6 +8595,310 @@ module.exports = {
     runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
   });
 
+  it("loads capture and user-model role plugins without letting them own recall runtime", () => {
+    useNoBundledPlugins();
+    const capture = writePlugin({
+      id: "memory-capture",
+      filename: "memory-capture.cjs",
+      body: `module.exports = {
+        id: "memory-capture",
+        kind: "memory",
+        register(api) {
+          api.on("agent_end", () => undefined);
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "capture should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const userModel = writePlugin({
+      id: "memory-user-model",
+      filename: "memory-user-model.cjs",
+      body: `module.exports = {
+        id: "memory-user-model",
+        kind: "memory",
+        register(api) {
+          api.on("before_prompt_build", () => ({ appendContext: "profile" }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "user model should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [capture.file, userModel.file] },
+          allow: ["memory-capture", "memory-user-model"],
+          slots: {
+            "memory.recall": "none",
+            "memory.capture": "memory-capture",
+            "memory.userModel": "memory-user-model",
+          },
+          entries: {
+            "memory-capture": {
+              hooks: { allowConversationAccess: true },
+            },
+            "memory-user-model": {
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "memory-capture")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "memory-user-model")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => [entry.pluginId, entry.hookName])).toEqual([
+      ["memory-capture", "agent_end"],
+      ["memory-user-model", "before_prompt_build"],
+    ]);
+    expect(getMemoryRuntime()).toBeUndefined();
+    expect(
+      registry.diagnostics.filter((diag) =>
+        diag.message.includes("not selected for memory.recall slot"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("treats per-agent memory role slot selections as explicit plugin activation", () => {
+    useNoBundledPlugins();
+    const capture = writePlugin({
+      id: "agent-memory-capture",
+      filename: "agent-memory-capture.cjs",
+      body: `module.exports = {
+        id: "agent-memory-capture",
+        kind: "memory",
+        register(api) {
+          api.on("agent_end", () => undefined);
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "capture should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [capture.file] },
+          slots: { "memory.recall": "none" },
+          entries: {
+            "agent-memory-capture": {
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "agent-memory-capture" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "agent-memory-capture");
+    expect(record?.status).toBe("loaded");
+    expect(record?.memorySlotSelected).toBe(true);
+    expect(record?.memoryRolesSelected).toEqual(["capture"]);
+    expect(registry.typedHooks.map((entry) => [entry.pluginId, entry.hookName])).toEqual([
+      ["agent-memory-capture", "agent_end"],
+    ]);
+    expect(getMemoryRuntime()).toBeUndefined();
+  });
+
+  it("invalidates the plugin loader cache when only an agent memory slot changes", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const core = writePlugin({
+      id: "agent-cache-memory-core",
+      filename: "agent-cache-memory-core.cjs",
+      body: `module.exports = {
+        id: "agent-cache-memory-core",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "core" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const honcho = writePlugin({
+      id: "agent-cache-honcho",
+      filename: "agent-cache-honcho.cjs",
+      body: `module.exports = {
+        id: "agent-cache-honcho",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "honcho" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const baseConfig = {
+      plugins: {
+        load: { paths: [core.file, honcho.file] },
+        slots: { "memory.recall": "agent-cache-memory-core" },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.recall": "agent-cache-memory-core" },
+            },
+          },
+        ],
+      },
+    } satisfies PluginLoadConfig;
+    const variantConfig = {
+      ...baseConfig,
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.recall": "agent-cache-honcho" },
+            },
+          },
+        ],
+      },
+    } satisfies PluginLoadConfig;
+
+    const first = loadOpenClawPlugins({ config: baseConfig });
+    const second = loadOpenClawPlugins({ config: variantConfig });
+    const third = loadOpenClawPlugins({ config: variantConfig });
+
+    expect(second).not.toBe(first);
+    expect(third).toBe(second);
+    expect(
+      first.plugins.find((entry) => entry.id === "agent-cache-honcho")?.memoryRolesSelected ?? [],
+    ).not.toContain("recall");
+    expect(
+      second.plugins.find((entry) => entry.id === "agent-cache-honcho")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    expect(getMemoryRuntimeForPlugin("agent-cache-honcho")).toBeDefined();
+  });
+
+  it("keeps recall runtimes addressable by plugin id for global and per-agent owners", async () => {
+    useNoBundledPlugins();
+    const core = writePlugin({
+      id: "memory-core",
+      filename: "memory-core.cjs",
+      body: `module.exports = {
+        id: "memory-core",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "core" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const honcho = writePlugin({
+      id: "openclaw-honcho",
+      filename: "openclaw-honcho.cjs",
+      body: `module.exports = {
+        id: "openclaw-honcho",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "honcho" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [core.file, honcho.file] },
+          slots: { "memory.recall": "memory-core" },
+          entries: {
+            "memory-core": { enabled: true },
+            "openclaw-honcho": { enabled: true },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.recall": "openclaw-honcho" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "memory-core")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    expect(
+      registry.plugins.find((entry) => entry.id === "openclaw-honcho")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    await expect(
+      getMemoryRuntimeForPlugin("memory-core")?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "core" });
+    await expect(
+      getMemoryRuntimeForPlugin("openclaw-honcho")?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "research",
+      }),
+    ).resolves.toEqual({ manager: null, error: "honcho" });
+  });
+
   it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
@@ -9427,7 +9764,10 @@ module.exports = {
 
     try {
       const registry = withEnv(
-        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" },
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+          OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS: "1",
+        },
         () =>
           loadOpenClawPlugins({
             cache: false,

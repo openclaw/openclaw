@@ -618,7 +618,23 @@ async function registerPluginSubagentRunFromGateway(params: {
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: false,
+    completionSource: "gateway_dispatch",
     spawnMode: "run",
+  });
+}
+
+async function completePluginSubagentRunFromGateway(params: {
+  runId: string;
+  status: "succeeded" | "failed" | "timed_out";
+  error?: string;
+}) {
+  const { completeGatewayDispatchedSubagentRun } =
+    await import("../../agents/subagent-registry.js");
+  await completeGatewayDispatchedSubagentRun({
+    runId: params.runId,
+    status: params.status,
+    ...(params.error ? { error: params.error } : {}),
+    endedAt: Date.now(),
   });
 }
 
@@ -844,9 +860,10 @@ function dispatchAgentRunFromGateway(params: {
   cleanupAbortController: () => void;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
-  taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  taskTrackingMode: GatewayAgentTaskTrackingMode;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
+  const shouldTrackPluginSubagent = params.taskTrackingMode === "plugin_subagent";
   let taskTracked = false;
   if (shouldTrackTask) {
     try {
@@ -878,7 +895,7 @@ function dispatchAgentRunFromGateway(params: {
     }
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
-    .then((result) => {
+    .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
       if (taskTracked) {
@@ -888,6 +905,16 @@ function dispatchAgentRunFromGateway(params: {
           terminalSummary: aborted ? "aborted" : "completed",
           log: params.context.logGateway,
         });
+      }
+      if (shouldTrackPluginSubagent) {
+        try {
+          await completePluginSubagentRunFromGateway({
+            runId: params.runId,
+            status: aborted ? "timed_out" : "succeeded",
+          });
+        } catch {
+          // Best-effort only: registry completion must not break the agent response.
+        }
       }
       const payload = {
         runId: params.runId,
@@ -915,7 +942,7 @@ function dispatchAgentRunFromGateway(params: {
       // Swift clients will typically treat the first res as the result and ignore this.
       params.respond(true, payload, undefined, { runId: params.runId });
     })
-    .catch((err: unknown) => {
+    .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
       if (taskTracked) {
@@ -926,6 +953,17 @@ function dispatchAgentRunFromGateway(params: {
           terminalSummary: renderedErr,
           log: params.context.logGateway,
         });
+      }
+      if (shouldTrackPluginSubagent) {
+        try {
+          await completePluginSubagentRunFromGateway({
+            runId: params.runId,
+            status: aborted ? "timed_out" : "failed",
+            error: renderedErr,
+          });
+        } catch {
+          // Best-effort only: registry completion must not break the agent response.
+        }
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const stopReason = resolveGatewayAgentAbortStopReason(params.abortController.signal);
@@ -2513,32 +2551,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionKey: resolvedSessionKey,
         inputProvenance,
       });
-      let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
-        taskTrackingMode === "cli" ? "cli" : "none";
-      if (taskTrackingMode === "plugin_subagent" && resolvedSessionKey) {
-        try {
-          await registerPluginSubagentRunFromGateway({
-            cfg,
-            runId,
-            childSessionKey: resolvedSessionKey,
-            task: request.message.trim(),
-            requesterOrigin: normalizeDeliveryContext({
-              channel: resolvedChannel,
-              to: resolvedTo,
-              accountId: resolvedAccountId,
-              threadId: resolvedThreadId,
-            }),
-            pluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-          });
-        } catch (err) {
-          context.logGateway.warn(
-            `failed to register plugin subagent run ${runId}; falling back to cli task tracking: ${formatForLog(
-              err,
-            )}`,
-          );
-          dispatchTaskTrackingMode = "cli";
-        }
-      }
+      let dispatchTaskTrackingMode: GatewayAgentTaskTrackingMode = taskTrackingMode;
 
       const accepted = {
         runId,
@@ -2605,6 +2618,30 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionKey: resolvedSessionKey,
               runId,
             });
+          }
+          if (taskTrackingMode === "plugin_subagent" && resolvedSessionKey) {
+            try {
+              await registerPluginSubagentRunFromGateway({
+                cfg,
+                runId,
+                childSessionKey: resolvedSessionKey,
+                task: request.message.trim(),
+                requesterOrigin: normalizeDeliveryContext({
+                  channel: resolvedChannel,
+                  to: resolvedTo,
+                  accountId: resolvedAccountId,
+                  threadId: resolvedThreadId,
+                }),
+                pluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+              });
+            } catch (err) {
+              context.logGateway.warn(
+                `failed to register plugin subagent run ${runId}; falling back to cli task tracking: ${formatForLog(
+                  err,
+                )}`,
+              );
+              dispatchTaskTrackingMode = "cli";
+            }
           }
 
           if (requestedSessionKey && resolvedSessionKey && isNewSession) {

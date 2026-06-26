@@ -126,7 +126,11 @@ describe("Hermes migration provider", () => {
     expect(plan.summary.sensitive).toBe(1);
     expect(itemById(plan.items, "config:default-model")?.status).toBe("conflict");
     expect(itemById(plan.items, "config:memory")?.status).toBe("planned");
-    expect(itemById(plan.items, "config:memory-plugin-slot")?.status).toBe("planned");
+    const memoryPluginSlot = itemById(plan.items, "config:memory-plugin-slot");
+    expect(memoryPluginSlot?.status).toBe("planned");
+    expect(memoryPluginSlot?.details).toMatchObject({
+      value: { "memory.recall": "memory-core" },
+    });
     expect(itemById(plan.items, "config:model-providers")?.status).toBe("planned");
     expect(itemById(plan.items, "workspace:SOUL.md")?.status).toBe("conflict");
     const memory = itemById(plan.items, "memory:MEMORY.md");

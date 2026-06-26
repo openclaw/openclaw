@@ -106,6 +106,18 @@ export function listRegisteredCompactionProviders(): RegisteredCompactionProvide
   return Array.from(getCompactionProviderRegistryState().providers.values());
 }
 
+export function resolveCompactionProviderIdForOwnerPlugin(
+  ownerPluginId: string,
+): string | undefined {
+  const ownerEntries = listRegisteredCompactionProviders()
+    .filter((entry) => entry.ownerPluginId === ownerPluginId)
+    .toSorted((left, right) => left.provider.id.localeCompare(right.provider.id));
+  return (
+    ownerEntries.find((entry) => entry.provider.id === ownerPluginId)?.provider.id ??
+    (ownerEntries.length === 1 ? ownerEntries[0]?.provider.id : undefined)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle (clear / restore) — mirrors memory-embedding-providers.ts
 // ---------------------------------------------------------------------------

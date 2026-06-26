@@ -342,9 +342,12 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
-    return configuredSlot;
+  const configuredSlots = [slots?.["memory.dreaming"], slots?.["memory.recall"], slots?.memory];
+  for (const rawSlot of configuredSlots) {
+    const configuredSlot = normalizeTrimmedString(rawSlot);
+    if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
+      return configuredSlot;
+    }
   }
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
 }

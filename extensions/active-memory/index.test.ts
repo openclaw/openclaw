@@ -99,7 +99,7 @@ describe("active-memory plugin", () => {
         ...plugins,
         slots: {
           ...(plugins?.slots as Record<string, unknown> | undefined),
-          memory,
+          "memory.recall": memory,
         },
       },
     };
@@ -253,7 +253,7 @@ describe("active-memory plugin", () => {
   };
   const makeMemoryToolAllowlistError = (
     reason: string,
-    sources = "runtime toolsAllow: memory_search, memory_get",
+    sources = "runtime toolsAllow: memory_search, memory_get, memory_recall",
   ) =>
     new Error(
       `No callable tools remain after resolving explicit tool allowlist ` +
@@ -1543,12 +1543,13 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).toContain(
       "Use the bounded search query with the configured memory tools.",
     );
-    expect(runParams.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+    expect(runParams.prompt).toContain(
+      "Configured memory tools: memory_search, memory_get, memory_recall.",
+    );
     expect(runParams.prompt).toContain(
       "If the available memory tools find nothing useful, reply with NONE.",
     );
-    expect(runParams.prompt).not.toContain("memory_recall");
-    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get"]);
+    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get", "memory_recall"]);
     expect(runParams.allowGatewaySubagentBinding).toBe(true);
     expect(runParams.prompt).toContain(
       "When searching for preference or habit recall, use permissive search limits or thresholds before deciding that no useful memory exists.",
@@ -1604,7 +1605,7 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).not.toContain("If memory_recall is unavailable");
   });
 
-  it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
+  it("uses recall-capable memory tools by default regardless of selected recall plugin id", async () => {
     setMemorySlot("memory-lancedb");
 
     await hooks.before_prompt_build(
@@ -1621,11 +1622,13 @@ describe("active-memory plugin", () => {
     );
 
     const runParams = lastEmbeddedRunParams();
-    expect(runParams.toolsAllow).toEqual(["memory_recall"]);
-    expect(runParams.prompt).toContain("Configured memory tools: memory_recall.");
+    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get", "memory_recall"]);
+    expect(runParams.prompt).toContain(
+      "Configured memory tools: memory_search, memory_get, memory_recall.",
+    );
   });
 
-  it("keeps explicit custom memory tools authoritative when the memory slot selects LanceDB", async () => {
+  it("keeps explicit custom memory tools authoritative when the recall slot selects LanceDB", async () => {
     setMemorySlot("memory-lancedb");
     api.pluginConfig = {
       agents: ["main"],
@@ -1727,11 +1730,13 @@ describe("active-memory plugin", () => {
     );
 
     const runParams = lastEmbeddedRunParams();
-    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get"]);
-    expect(runParams.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get", "memory_recall"]);
+    expect(runParams.prompt).toContain(
+      "Configured memory tools: memory_search, memory_get, memory_recall.",
+    );
   });
 
-  it("falls back to LanceDB compat tools when custom memory tools only contain reserved entries", async () => {
+  it("falls back to default recall-capable tools when custom memory tools only contain reserved entries", async () => {
     setMemorySlot("memory-lancedb");
     api.pluginConfig = {
       agents: ["main"],
@@ -1752,8 +1757,10 @@ describe("active-memory plugin", () => {
     );
 
     const runParams = lastEmbeddedRunParams();
-    expect(runParams.toolsAllow).toEqual(["memory_recall"]);
-    expect(runParams.prompt).toContain("Configured memory tools: memory_recall.");
+    expect(runParams.toolsAllow).toEqual(["memory_search", "memory_get", "memory_recall"]);
+    expect(runParams.prompt).toContain(
+      "Configured memory tools: memory_search, memory_get, memory_recall.",
+    );
   });
 
   it("defaults prompt style by query mode when no promptStyle is configured", async () => {
@@ -2676,7 +2683,7 @@ describe("active-memory plugin", () => {
     };
     const error = makeMemoryToolAllowlistError(
       "no registered tools matched",
-      "tools.allow: *, lobster; runtime toolsAllow: memory_search, memory_get",
+      "tools.allow: *, lobster; runtime toolsAllow: memory_search, memory_get, memory_recall",
     );
     expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
@@ -2734,7 +2741,7 @@ describe("active-memory plugin", () => {
     };
     const error = makeMemoryToolAllowlistError(
       "no registered tools matched",
-      "tools.allow: read, exec; runtime toolsAllow: memory_search, memory_get",
+      "tools.allow: read, exec; runtime toolsAllow: memory_search, memory_get, memory_recall",
     );
     expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
@@ -4568,6 +4575,7 @@ describe("active-memory plugin", () => {
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
+      toolsAllow: ["memory_search"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);

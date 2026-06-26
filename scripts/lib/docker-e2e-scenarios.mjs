@@ -39,7 +39,7 @@ function liveDockerScriptCommand(script, envPrefix = "", options = {}) {
 }
 
 function lane(name, command, options = {}) {
-  return {
+  return omitUndefinedFields({
     cacheKey: options.cacheKey,
     command,
     e2eImageKind:
@@ -57,7 +57,11 @@ function lane(name, command, options = {}) {
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
     weight: options.weight ?? 1,
-  };
+  });
+}
+
+function omitUndefinedFields(fields) {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
 function liveProviderResource(provider) {

@@ -8,6 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -84,8 +85,17 @@ async function listen(
       sockets.delete(socket);
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, host, resolve);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.listen(0, host, onListening);
   });
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
@@ -316,7 +326,10 @@ async function withCanvasGatewayHarness(params: {
   }) => Promise<void>;
 }) {
   const clients = new Set<GatewayWsClient>();
-  const canvasWss = new WebSocketServer({ noServer: true });
+  const canvasWss = new WebSocketServer({
+    maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    noServer: true,
+  });
   const canvasHandler: CanvasHostHandler = {
     rootDir: "test",
     basePath: "/canvas",
@@ -358,7 +371,10 @@ async function withCanvasGatewayHarness(params: {
     rateLimiter: params.rateLimiter,
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    noServer: true,
+  });
   attachGatewayUpgradeHandler({
     httpServer,
     wss,
@@ -372,8 +388,9 @@ async function withCanvasGatewayHarness(params: {
     rateLimiter: params.rateLimiter,
   });
 
-  const listener = await listen(httpServer, params.listenHost);
+  let listener: Awaited<ReturnType<typeof listen>> | undefined;
   try {
+    listener = await listen(httpServer, params.listenHost);
     await params.run({ listener, clients });
   } finally {
     for (const ws of canvasWss.clients) {
@@ -388,7 +405,7 @@ async function withCanvasGatewayHarness(params: {
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
     });
-    await listener.close();
+    await listener?.close();
     params.rateLimiter?.dispose();
   }
 }

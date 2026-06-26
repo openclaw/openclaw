@@ -16,6 +16,11 @@ export type NormalizedPluginsConfig = {
   loadPaths: string[];
   slots: {
     memory?: string | null;
+    "memory.recall"?: string | null;
+    "memory.compaction"?: string | null;
+    "memory.capture"?: string | null;
+    "memory.dreaming"?: string | null;
+    "memory.userModel"?: string | null;
     contextEngine?: string | null;
   };
   entries: Record<
@@ -230,6 +235,7 @@ export function normalizePluginsConfigWithResolver(
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
+  const memoryRecallSlot = normalizeSlotValue(config?.slots?.["memory.recall"]);
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
@@ -237,6 +243,16 @@ export function normalizePluginsConfigWithResolver(
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      "memory.recall":
+        memoryRecallSlot === undefined
+          ? memorySlot === undefined
+            ? defaultSlotIdForKey("memory.recall")
+            : memorySlot
+          : memoryRecallSlot,
+      "memory.compaction": normalizeSlotValue(config?.slots?.["memory.compaction"]),
+      "memory.capture": normalizeSlotValue(config?.slots?.["memory.capture"]),
+      "memory.dreaming": normalizeSlotValue(config?.slots?.["memory.dreaming"]),
+      "memory.userModel": normalizeSlotValue(config?.slots?.["memory.userModel"]),
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),

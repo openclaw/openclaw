@@ -15,6 +15,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { resolveMemoryRoleSlot } from "../../plugins/slot-resolution.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
@@ -41,6 +42,7 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
 
 function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
+  agentId?: string;
   workspaceDir: string;
 }): string[] {
   const registry = loadPluginRegistrySnapshot({
@@ -48,7 +50,9 @@ function resolveSelectedMemoryPluginIds(params: {
     workspaceDir: params.workspaceDir,
   });
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const memorySlot = plugins.slots.memory;
+  const memorySlot = params.config
+    ? resolveMemoryRoleSlot({ cfg: params.config, role: "recall", agentId: params.agentId })
+    : (plugins.slots["memory.recall"] ?? plugins.slots.memory);
   if (
     typeof memorySlot !== "string" ||
     memorySlot.trim().length === 0 ||
@@ -194,6 +198,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   }
   const memoryPluginIds = resolveSelectedMemoryPluginIds({
     config: params.config,
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   });
   const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);

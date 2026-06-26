@@ -531,6 +531,33 @@ async function notifyContextEngineSubagentEnded(params: {
   }
 }
 
+export async function completeGatewayDispatchedSubagentRun(params: {
+  runId: string;
+  status: "succeeded" | "failed" | "timed_out";
+  error?: string;
+  endedAt?: number;
+  startedAt?: number;
+}) {
+  const outcome: SubagentRunOutcome =
+    params.status === "succeeded"
+      ? { status: "ok" }
+      : params.status === "timed_out"
+        ? { status: "timeout" }
+        : { status: "error", error: params.error ?? "gateway dispatch failed" };
+  await completeSubagentRunWithRecovery(
+    {
+      runId: params.runId,
+      outcome,
+      reason:
+        params.status === "failed" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+      ...(typeof params.endedAt === "number" ? { endedAt: params.endedAt } : {}),
+      ...(typeof params.startedAt === "number" ? { startedAt: params.startedAt } : {}),
+    },
+    "gateway-dispatch",
+  );
+}
+
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
 }

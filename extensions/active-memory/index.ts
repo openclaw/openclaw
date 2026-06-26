@@ -26,7 +26,8 @@ import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -58,8 +59,7 @@ const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
-const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
-const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
+const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get", "memory_recall"] as const;
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
 const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
   "error",
@@ -476,16 +476,12 @@ function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
   return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
 }
 
-function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
-  return cfg?.plugins?.slots?.memory === "memory-lancedb"
-    ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
-    : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+function resolveDefaultToolsAllow(): string[] {
+  return [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
 }
 
-function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawConfig }): string[] {
-  return (
-    normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
-  );
+function resolveToolsAllow(params: { pluginToolsAllow: unknown }): string[] {
+  return normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow();
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -834,10 +830,7 @@ function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
   "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
 
-function normalizePluginConfig(
-  pluginConfig: unknown,
-  cfg?: OpenClawConfig,
-): ResolvedActiveRecallPluginConfig {
+function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
@@ -863,7 +856,7 @@ function normalizePluginConfig(
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
-    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
+    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
     promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(
@@ -1766,10 +1759,7 @@ function extractToolResultNameFromSessionRecord(value: unknown): string | undefi
 
 function hasUnavailableMemoryResultInSessionRecord(
   value: unknown,
-  toolsAllow: readonly string[] = [
-    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
-    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
-  ],
+  toolsAllow: readonly string[] = DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
 ): boolean {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
@@ -1848,10 +1838,7 @@ function createActiveMemoryHookDeadline() {
 
 function hasUsableMemoryResultInSessionRecord(
   value: unknown,
-  toolsAllow: readonly string[] = [
-    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
-    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
-  ],
+  toolsAllow: readonly string[] = DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
 ): boolean {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
@@ -3440,17 +3427,7 @@ export default definePluginEntry({
   name: "Active Memory",
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
-    const readCurrentConfig = (): OpenClawConfig | undefined => {
-      try {
-        return (
-          (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-          (api.config as OpenClawConfig | undefined)
-        );
-      } catch {
-        return api.config as OpenClawConfig | undefined;
-      }
-    };
-    let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
+    let config = normalizePluginConfig(api.pluginConfig);
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         // Wording matters here: the previous text ("set config.modelFallback
@@ -3478,7 +3455,7 @@ export default definePluginEntry({
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
-      config = normalizePluginConfig(livePluginConfig ?? { enabled: false }, readCurrentConfig());
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }

@@ -48,9 +48,14 @@ type LegacyDeliveryState = SubagentCompletionDeliveryState & {
 /** Normalizes legacy subagent run fields into nested execution/completion/delivery state. */
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const legacy = entry as LegacySubagentRunRecord;
+  const completionExplicitlyNotRequired = legacy.completion?.required === false;
   entry.execution = mergeExecutionState(entry.execution, buildExecutionState(entry));
   entry.completion = mergeCompletionState(entry.completion, buildCompletionState(entry, legacy));
-  entry.delivery = mergeDeliveryState(entry, entry.delivery, buildDeliveryState(entry, legacy));
+  entry.delivery = mergeDeliveryState(
+    entry,
+    entry.delivery,
+    buildDeliveryState(entry, legacy, completionExplicitlyNotRequired),
+  );
   delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffLeaseId;
   delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffLeasedAt;
   delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffInjectedAt;
@@ -179,7 +184,7 @@ function buildCompletionState(
   legacy: LegacySubagentRunRecord,
 ): SubagentCompletionState {
   return {
-    required: entry.expectsCompletionMessage === true,
+    required: legacy.completion?.required ?? entry.expectsCompletionMessage !== false,
     ...(legacy.frozenResultText !== undefined ? { resultText: legacy.frozenResultText } : {}),
     ...(typeof legacy.frozenResultCapturedAt === "number"
       ? { capturedAt: legacy.frozenResultCapturedAt }
@@ -198,8 +203,9 @@ function buildCompletionState(
 function buildDeliveryState(
   entry: SubagentRunRecord,
   legacy: LegacySubagentRunRecord,
+  completionExplicitlyNotRequired: boolean,
 ): SubagentCompletionDeliveryState {
-  if (entry.expectsCompletionMessage === false) {
+  if (entry.expectsCompletionMessage === false || completionExplicitlyNotRequired) {
     return { status: "not_required" };
   }
   if (typeof legacy.deliveryDiscardedAt === "number") {
@@ -245,8 +251,9 @@ function buildDeliveryState(
       lastDropReason: legacy.lastAnnounceDropReason,
     };
   }
+  const status = shouldRetryRestoredCleanupDelivery(entry) ? "pending" : "not_required";
   return {
-    status: typeof entry.endedAt === "number" ? "pending" : "not_required",
+    status,
     enqueuedAt: legacy.completionEnqueuedAt,
     deliveredAt: legacy.completionDeliveredAt,
     lastAttemptAt: legacy.lastAnnounceRetryAt,
@@ -254,6 +261,10 @@ function buildDeliveryState(
     lastError: legacy.lastAnnounceDeliveryError ?? null,
     lastDropReason: legacy.lastAnnounceDropReason,
   };
+}
+
+function shouldRetryRestoredCleanupDelivery(entry: SubagentRunRecord): boolean {
+  return typeof entry.endedAt === "number" && typeof entry.cleanupCompletedAt !== "number";
 }
 
 /** Ensures a run has a nested completion state object. */
