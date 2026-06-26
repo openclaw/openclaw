@@ -417,23 +417,21 @@ describe("pw-session action download capture", () => {
 
     capture.dispose();
 
-    // After dispose, a new download is fired. The page's download handler
-    // looks at state.actionDownloadCaptures.at(-1), but our capture was
-    // removed from the list. The download should fall through to
-    // managedSave.catch(() => {}) without being captured.
-    const saveAs2 = vi.fn(async () => {});
+    // After dispose: the capture is removed from actionDownloadCaptures.
+    // A new download fires — it won't be added to this capture's
+    // promises (the handler can't find the capture in the list).
+    // Re-draining returns the pre-dispose results (promises array
+    // is not cleared by dispose — this is benign, callers should
+    // drain before disposing).
     handlers.get("download")?.[0]?.({
       suggestedFilename: () => "post.txt",
-      saveAs: saveAs2,
+      saveAs: vi.fn(async () => {}),
     });
 
-    // The disposed capture won't see new downloads from the page handler.
-    // But it may still return its previously captured results on re-drain
-    // since capture.promises is not cleared by dispose.
-    await capture.drain();
-    // The key assertion: the post-dispose download's saveAs was never called
-    // because it wasn't captured (fell through to managedSave.catch).
-    expect(saveAs2).not.toHaveBeenCalled();
+    const afterDrain = await capture.drain();
+    // Still returns pre-dispose download; new download not captured
+    expect(afterDrain?.count).toBe(1);
+    expect(afterDrain?.recent[0]?.suggestedFilename).toBe("pre.txt");
   });
 
   it("double dispose is safe", () => {
