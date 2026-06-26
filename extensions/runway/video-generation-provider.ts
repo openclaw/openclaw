@@ -9,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -65,16 +66,8 @@ const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
-async function readRunwayJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readRunwayJsonResponse<T>(response: Response, label: string): Promise<T> {
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }

@@ -63,6 +63,22 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
+function oversizedJsonResponse(onCancel: () => void): Response {
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    json: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  } as Response;
+}
+
 describe("runway video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
@@ -267,6 +283,29 @@ describe("runway video generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("Runway video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bounds oversized create JSON responses and cancels the stream", async () => {
+    let canceled = false;
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: oversizedJsonResponse(() => {
+        canceled = true;
+      }),
+      release,
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "oversized create response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video generation failed: JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledOnce();
   });
 

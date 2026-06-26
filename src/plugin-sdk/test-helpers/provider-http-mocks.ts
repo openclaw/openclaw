@@ -239,6 +239,66 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequest:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
+  readProviderJsonResponse: async (
+    response: Response,
+    label: string,
+    opts?: { maxBytes?: number },
+  ) => {
+    const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+    const body = response.body;
+    if (!body || typeof body.getReader !== "function") {
+      try {
+        if (typeof response.arrayBuffer === "function") {
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          if (bytes.length > maxBytes) {
+            throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+          }
+          return JSON.parse(new TextDecoder().decode(bytes));
+        }
+        return await response.json();
+      } catch (cause) {
+        if (cause instanceof Error && cause.message.includes("JSON response exceeds")) {
+          throw cause;
+        }
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    }
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value?.length) {
+          continue;
+        }
+        const nextTotal = total + value.length;
+        if (nextTotal > maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+        total = nextTotal;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    try {
+      return JSON.parse(
+        new TextDecoder().decode(
+          Buffer.concat(
+            chunks.map((chunk) => Buffer.from(chunk)),
+            total,
+          ),
+        ),
+      );
+    } catch (cause) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+  },
   waitProviderOperationPollInterval: async () => {},
 }));
 
