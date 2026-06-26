@@ -806,7 +806,8 @@ describe("state migrations", () => {
     await fs.writeFile(legacyStorePath, "{}\n", "utf8");
     const cfg = {
       session: { store: storeTemplate },
-      agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
+      agents: { list: [{ id: "main", default: true }] },
+      acp: { allowedAgents: ["voice"] },
     } as OpenClawConfig;
 
     const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });

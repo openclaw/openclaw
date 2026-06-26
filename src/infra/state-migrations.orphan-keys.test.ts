@@ -407,6 +407,29 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("defers a singleton final-component store symlink", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const outsideStorePath = path.join(tmpDir, "outside-sessions.json");
+      writeStore(outsideStorePath, {
+        "voice:15550001111": { sessionId: "outside-voice", updatedAt: 1000 },
+      });
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.symlinkSync(outsideStorePath, storePath);
+
+      const result = await migrateFixtureState(stateDir, {} as OpenClawConfig);
+
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Deferred migration of 1 ambiguous session key(s) in aliased store ${storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      ]);
+      expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
+      expect(requireStoreEntry(readStore(outsideStorePath), "voice:15550001111").sessionId).toBe(
+        "outside-voice",
+      );
+    });
+  });
+
   it("canonicalizes global main aliases in aliased stores without foreign owners", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const standardStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");

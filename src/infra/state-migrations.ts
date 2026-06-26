@@ -20,7 +20,10 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
+import {
+  listConfiguredSessionStoreAgentIds,
+  resolveAllAgentSessionStoreTargetsSync,
+} from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -5085,7 +5088,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
       [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
-    if (sessionStorePathsHaveDistinctEntries(storePath, p)) {
+    if (sessionStorePathIsFinalSymlink(p) || sessionStorePathsHaveDistinctEntries(storePath, p)) {
       aliasedStorePaths.add(storePath);
     }
     const existing = storeMap.get(storePath);
@@ -5100,16 +5103,13 @@ export async function migrateOrphanedSessionKeys(params: {
     ? resolveStorePathFromTemplate(storeConfig, agentId, env)
     : path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   const fixedCustomStorePath = fixedCustomStore ? defaultStorePath : undefined;
-  addToStoreMap(defaultStorePath, agentId);
-  // Configured agents.
-  for (const entry of params.cfg.agents?.list ?? []) {
-    if (entry?.id) {
-      const id = normalizeAgentId(entry.id);
-      const p = storeConfig
-        ? resolveStorePathFromTemplate(storeConfig, id, env)
-        : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-      addToStoreMap(p, id);
-    }
+  // Configured ownership includes normal agents plus ACP runtime/default hints.
+  for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {
+    const id = normalizeAgentId(configuredAgentId);
+    const p = storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, id, env)
+      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
+    addToStoreMap(p, id);
   }
   // Plugins can route core sessions to agents that are not declared in
   // agents.list. A templated path proves ownership for those stores too.
@@ -5263,10 +5263,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
     });
   const normalizedPluginAgentIds = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
   const declaredAgentIds = new Set([
-    normalizeAgentId(resolveDefaultAgentId(params.cfg)),
-    ...(params.cfg.agents?.list ?? []).flatMap((entry) =>
-      entry?.id ? [normalizeAgentId(entry.id)] : [],
-    ),
+    ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),
     ...normalizedPluginAgentIds,
   ]);
   const declaredTargets = [...declaredAgentIds].map((agentId) => ({
@@ -5466,6 +5463,14 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
   }
 }
 
+function sessionStorePathIsFinalSymlink(storePath: string): boolean {
+  try {
+    return fs.lstatSync(storePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 function sessionStorePathsHaveDistinctEntries(left: string, right: string): boolean {
   if (left === right) {
     return false;
@@ -5522,10 +5527,7 @@ function resolveSessionStoreOwnership(params: {
       ? resolveStorePathFromTemplate(configuredStore, params.targetAgentId, params.env)
       : undefined;
   const candidateAgentIds = new Set([
-    params.targetAgentId,
-    ...(Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : []).flatMap((entry) =>
-      entry?.id ? [normalizeAgentId(entry.id)] : [],
-    ),
+    ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),
     ...params.pluginSessionStoreAgentIds.map((id) => normalizeAgentId(id)),
   ]);
   const configuredOwnerStorePaths = [...candidateAgentIds].map(resolveAgentStorePath);
