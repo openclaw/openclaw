@@ -3208,6 +3208,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.nodeHostCommands).toStrictEqual([]);
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
+    expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");

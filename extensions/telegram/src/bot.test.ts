@@ -3482,6 +3482,76 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("routes code-agent callbacks to plugin handlers and clears original buttons", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    sendMessageSpy.mockClear();
+    const handler = vi.fn(async ({ callback, respond }: TelegramInteractiveHandlerContext) => {
+      expect(callback.namespace).toBe("code-agent");
+      expect(callback.payload).toBe("7506a349-84c8-4c56-8558-ce315bed2588");
+      await respond.clearButtons();
+      return { handled: true };
+    });
+    registerPluginInteractiveHandler("openclaw-code-agent", {
+      channel: "telegram",
+      namespace: "code-agent",
+      handler: handler as never,
+    });
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-code-agent-approve",
+        data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100987654321, type: "supergroup", title: "Forum Group" },
+          date: 1736380800,
+          is_topic_message: true,
+          message_id: 28,
+          message_thread_id: 28,
+          text: "[rust-hello-small-change] Plan approval required",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "Approve",
+                  callback_data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+                },
+              ],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(-100987654321, 28, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-code-agent-approve");
+  });
+
   it("deletes plugin-owned callback messages through the bot API", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

@@ -1,11 +1,15 @@
 // Resolves interactive plugin entries from registry metadata.
-import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
+import {
+  resolvePluginInteractiveNamespaceMatch,
+  restorePluginInteractiveHandlers,
+} from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
   releasePluginInteractiveCallbackDedupe,
   type RegisteredInteractiveHandler,
 } from "./interactive-state.js";
+import { collectLivePluginRegistries } from "./runtime.js";
 
 type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
@@ -30,6 +34,30 @@ export {
 } from "./interactive-registry.js";
 export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
+function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
+  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
+  if (existing) {
+    return existing;
+  }
+
+  const registrationsByKey = new Map<string, RegisteredInteractiveHandler>();
+  for (const registry of collectLivePluginRegistries()) {
+    for (const registration of registry.interactiveHandlers ?? []) {
+      const key = `${registration.channel.toLowerCase()}:${registration.namespace}`;
+      if (!registrationsByKey.has(key)) {
+        registrationsByKey.set(key, registration);
+      }
+    }
+  }
+  const registrations = [...registrationsByKey.values()];
+  if (registrations.length === 0) {
+    return null;
+  }
+
+  restorePluginInteractiveHandlers(registrations);
+  return resolvePluginInteractiveNamespaceMatch(channel, data);
+}
+
 /** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
@@ -41,7 +69,7 @@ export async function dispatchPluginInteractiveHandler<
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
 }): Promise<InteractiveDispatchResult<TResult>> {
-  const match = resolvePluginInteractiveNamespaceMatch(params.channel, params.data);
+  const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }

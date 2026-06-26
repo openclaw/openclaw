@@ -2872,7 +2872,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: result.error ?? "interactive handler registration failed",
                   });
+                  return;
                 }
+                registry.interactiveHandlers ??= [];
+                registry.interactiveHandlers.push({
+                  ...registration,
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
               },
               onConversationBindingResolved: (handler) =>
                 registerConversationBindingResolvedHandler(record, handler),
