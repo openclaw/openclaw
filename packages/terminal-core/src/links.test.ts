@@ -27,4 +27,12 @@ describe("formatDocsLink", () => {
     const out = formatDocsLink(null as unknown as string);
     expect(out).toBe("https://docs.openclaw.ai");
   });
+
+  it("strips terminal controls from non-OSC docs fallback text", () => {
+    const out = formatDocsLink("https://example.com/a\u0007b", "docs\u001b[31m", {
+      force: false,
+    });
+
+    expect(out).toBe("https://example.com/ab");
+  });
 });

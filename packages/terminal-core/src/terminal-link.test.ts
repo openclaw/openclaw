@@ -20,4 +20,13 @@ describe("formatTerminalLink", () => {
 
     expect(out).toBe("safelabel (https://example.test/a[31m)");
   });
+
+  it("strips terminal control characters from explicit fallback text", () => {
+    const out = formatTerminalLink("label", "https://example.test", {
+      fallback: "fallback\u0007text\u001b[31m",
+      force: false,
+    });
+
+    expect(out).toBe("fallbacktext[31m");
+  });
 });
