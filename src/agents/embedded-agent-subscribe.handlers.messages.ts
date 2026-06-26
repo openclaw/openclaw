@@ -590,9 +590,6 @@ export function handleMessageUpdate(
   ctx.noteLastAssistant(msg);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (suppressVisibleAssistantOutput) {
-    // Emit-always: commentary-phase messages stay out of every visible reply
-    // lane, but the agent-event bus and session archive still receive them so
-    // /verbose and channel progress drafts can present them by policy.
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
     if (commentaryText) {
       appendRawStream({
@@ -955,8 +952,6 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
-    // Archive-always: commentary message ends still land in the raw stream and
-    // close the lane on the bus with a final snapshot; only reply lanes skip.
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(assistantMessage));
     appendRawStream({
       ts: Date.now(),
@@ -971,10 +966,7 @@ export function handleMessageEnd(
         buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
       );
     }
-    // A commentary-tagged tool turn can also carry a native thinking block. Under
-    // /reasoning on the thinking must still surface as its own durable 🧠 message —
-    // the window-stream path only runs when reasoning is NOT "on", so without this
-    // the first thought of a tool turn is silently dropped in reasoning+verbose mode.
+    // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
       : "";

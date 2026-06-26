@@ -45,21 +45,11 @@ export function createChannelProgressDraftCompositor(params: {
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
-  /**
-   * Marker prepended to each window reasoning (🧠) line. The lane marker is a
-   * per-channel presentation choice, so the shared compositor stays neutral
-   * (default ""); Discord opts in with "🧠 ". Keeps other channels' render
-   * untouched until they adopt their own markers.
-   */
+  /** Marker prepended to each window reasoning line. */
   reasoningLinePrefix?: string;
-  /** Marker prepended to each window commentary (💬) line. Default ""; Discord opts in with "💬 ". */
+  /** Marker prepended to each window commentary line. */
   commentaryLinePrefix?: string;
-  /**
-   * Whether the window reasoning (🧠) lane may render. This gate is a new
-   * Discord-scoped feature, so the shared compositor stays neutral (default
-   * true = render, matching pre-feature behavior on every other channel);
-   * Discord passes its config-resolved value (default off) to gate it.
-   */
+  /** Whether the window reasoning lane may render. */
   reasoningGate?: boolean;
 }) {
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";

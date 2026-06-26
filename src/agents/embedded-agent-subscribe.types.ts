@@ -52,11 +52,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
     mediaUrls?: string[];
     isReasoningSnapshot?: boolean;
   }) => void | Promise<void>;
-  /**
-   * When true, the reasoning-window hook fires for any non-"on" reasoning mode.
-   * Discord opts into this and gates display with channels.discord.streaming.progress.thinking;
-   * absent/false preserves sibling behavior: only "stream" mode renders reasoning.
-   */
+  /** Expands window reasoning beyond "stream" mode for callers with their own display gate. */
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;

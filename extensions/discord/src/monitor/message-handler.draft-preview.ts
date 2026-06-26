@@ -87,19 +87,13 @@ export function createDiscordDraftPreviewController(params: {
       previewToolProgressEnabled,
     });
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
-  // Single source of truth for the Discord window-thinking gate (default-off).
-  // Drives both the compositor render gate AND the subscriber opt-in, so that
-  // when reasoning is off no reasoning callback side effects (status reaction,
-  // counters, render) occur unless the operator opts in via this config.
+  // One gate drives both rendering and subscriber side effects.
   const reasoningProgressEnabled = resolveChannelStreamingProgressThinking(params.discordConfig);
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
-    // Discord renders the lane markers and owns the (config-gated, default-off)
-    // window-thinking gate; the shared compositor stays neutral so other
-    // channels keep their existing window render until they adopt this feature.
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     reasoningGate: reasoningProgressEnabled,
@@ -269,9 +263,7 @@ export function createDiscordDraftPreviewController(params: {
       });
     },
     handleAssistantMessageBoundary() {
-      // A boundary after a delivered final means a queued/followup turn is
-      // starting: re-arm the draft so /reasoning stream and tool progress
-      // render exactly like a primary turn.
+      // Queued/followup turns need a fresh progress draft after the primary final.
       progressDraft.beginNewTurn();
       if (discordStreamMode === "progress") {
         return;

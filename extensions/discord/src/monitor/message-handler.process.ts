@@ -567,10 +567,7 @@ async function processDiscordMessageInner(
     chunkMode,
     log: logVerbose,
   });
-  // While the durable verbose commentary lane is active (dispatch reports it
-  // via onVerboseProgressVisibility), the ephemeral draft yields its commentary
-  // lines so commentary is not rendered in both lanes.
-  let verboseProgressActive: () => boolean = () => false;
+  let shouldYieldDraftProgress: () => boolean = () => false;
   const finalPreviewFlags =
     (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
@@ -594,9 +591,7 @@ async function processDiscordMessageInner(
     draftPreview.markFinalReplyDelivered();
     observer?.onFinalReplyDelivered?.();
   };
-  // Per-line "> " quoting (not ">>> ") so the blockquote survives message
-  // chunking. Blank lines are dropped: Discord renders a quoted empty line as
-  // a bare ">" row.
+  // Per-line quoting survives Discord chunking; blank quote rows render badly.
   const formatDiscordReasoningQuote = (quoteText: string): string | undefined => {
     const lines = quoteText
       .split("\n")
@@ -608,14 +603,11 @@ async function processDiscordMessageInner(
     lines[0] = `🧠 ${lines[0]}`;
     return lines.map((line) => `> ${line}`).join("\n");
   };
-  // Turn-activity counters feed the progress-draft summary line at finalize.
   const progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
-  // Distinct narration notes counted for the summary. Notes arrive as preamble
-  // events that re-fire (deltas/snapshots) under one id; count each id once, and
-  // for id-less notes count each new text so re-renders do not inflate the tally.
+  // Preamble updates can re-fire; count each item id or id-less text once.
   const seenCommentaryIds = new Set<string>();
   let lastCommentaryNoteText = "";
   const noteWindowCommentary = (itemId?: string, noteText?: string) => {
@@ -636,11 +628,7 @@ async function processDiscordMessageInner(
       progressCommentaryNotes += 1;
     }
   };
-  // True while a window thinking burst is streaming. A burst closes — and is
-  // counted once — at whichever boundary arrives first: the reasoning-end
-  // event, the next tool call, or the summary flush. deepseek does not emit a
-  // reliable thinking_end per burst, so counting on the end event alone
-  // undercounts; the tool-start and flush boundaries make it robust.
+  // DeepSeek does not always emit a thinking_end, so tool/final boundaries also close bursts.
   let windowReasoningOpen = false;
   const closePendingWindowThought = () => {
     if (windowReasoningOpen) {
@@ -681,9 +669,6 @@ async function processDiscordMessageInner(
       return null;
     }
     if (payload.isReasoning) {
-      // Pass through untouched: deliverDiscordPayload owns reasoning
-      // formatting and must still see the flag to bypass the progress-mode
-      // block suppression below (clearing it here got reasoning dropped).
       return payload;
     }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
@@ -718,9 +703,6 @@ async function processDiscordMessageInner(
     }
     const isFinal = info.kind === "final";
     if (payload.isReasoning) {
-      // Reasoning payloads render as persistent 🧠 blockquote messages,
-      // never the user-facing final. Pre-chunk the raw text so every chunk
-      // carries its own 🧠 header (the generic sender only decorates once).
       const raw = (payload.text ?? "").trim();
       const body = raw.startsWith("Reasoning:\n") ? raw.slice("Reasoning:\n".length).trim() : raw;
       if (!body) {
@@ -814,10 +796,6 @@ async function processDiscordMessageInner(
       draftPreview.hasProgressDraftStarted &&
       !deliverablePayload.isError;
     if (shouldCollapseProgressDraft && draftStream) {
-      // Progress drafts collapse to a persistent activity-summary line instead
-      // of being edited into the final. The final then posts fresh below the
-      // 🧠 step messages, keeping the timeline chronological:
-      // thoughts/tools → summary → answer.
       await draftPreview.flush();
       const draftId = draftStream.messageId();
       if (draftId !== undefined) {
@@ -1155,11 +1133,9 @@ async function processDiscordMessageInner(
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
-        // Discord renders reasoning payloads as 🧠 blockquote messages
-        // (deliverDiscordPayload), so dispatch must not suppress them.
         reasoningPayloadsEnabled: true,
         onVerboseProgressVisibility: (isActive) => {
-          verboseProgressActive = isActive;
+          shouldYieldDraftProgress = isActive;
         },
         onReasoningStream: async (payload) => {
           if (payload?.text) {
@@ -1170,12 +1146,6 @@ async function processDiscordMessageInner(
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
-        // Opt into non-stream reasoning ONLY when this Discord channel enables
-        // the window-thinking lane (channels.discord.streaming.progress.thinking,
-        // default-off). Gating the opt-in — not just the compositor render —
-        // ensures no reasoning callback side effects (e.g. the thinking status
-        // reaction) fire in plain mode when the config is off. In stream mode the
-        // subscriber keeps main's behavior regardless of this flag.
         streamReasoningInNonStreamModes: draftPreview.reasoningProgressEnabled,
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
@@ -1184,15 +1154,10 @@ async function processDiscordMessageInner(
           await maybeBindStatusReactionsToToolReaction(payload);
           await statusReactions.setTool(payload.name);
           if (payload.phase === "start") {
-            // A tool call ends the reasoning burst that preceded it; count it
-            // before the tool, so deepseek's no-thinking_end bursts still tally.
             closePendingWindowThought();
             progressToolCalls += 1;
           }
-          // Non-duplication: with verbose progress active, dispatch persists
-          // tool summaries as durable messages, so the ephemeral draft yields
-          // its tool lines (mirrors the commentary yield below).
-          if (verboseProgressActive()) {
+          if (shouldYieldDraftProgress()) {
             return;
           }
           await draftPreview.pushToolProgress(
@@ -1200,8 +1165,6 @@ async function processDiscordMessageInner(
               discordConfig,
               {
                 event: "tool",
-                // Call ids key the draft line so later phases update the same
-                // line instead of appending a near-duplicate.
                 itemId: payload.itemId,
                 toolCallId: payload.toolCallId,
                 name: payload.name,
@@ -1215,12 +1178,8 @@ async function processDiscordMessageInner(
         },
         onItemEvent: async (payload) => {
           if (payload.kind === "preamble") {
-            // Count narration for the summary regardless of mode (matches how
-            // thoughts/tools tally whether or not they also persist).
             noteWindowCommentary(payload.itemId, payload.progressText);
-            // While the durable verbose commentary lane is active, the ephemeral
-            // draft yields its commentary lines so commentary renders once.
-            if (verboseProgressActive()) {
+            if (shouldYieldDraftProgress()) {
               return;
             }
             if (draftPreview.commentaryProgressEnabled && payload.progressText) {
@@ -1230,15 +1189,13 @@ async function processDiscordMessageInner(
             }
             return;
           }
-          // Same yield as onToolStart: verbose persistence owns item lines.
-          if (verboseProgressActive()) {
+          if (shouldYieldDraftProgress()) {
             return;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLineForEntry(discordConfig, {
               event: "item",
               itemId: payload.itemId,
-              // Same call id as the tool line: item phases update it in place.
               toolCallId: payload.toolCallId,
               itemKind: payload.kind,
               title: payload.title,
@@ -1284,15 +1241,12 @@ async function processDiscordMessageInner(
           if (payload.phase !== "end") {
             return;
           }
-          // Same yield as onToolStart: command-output lines describe a tool
-          // call the durable verbose lane already persists.
-          if (verboseProgressActive()) {
+          if (shouldYieldDraftProgress()) {
             return;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLine({
               event: "command-output",
-              // Same call id as the tool line: completion updates it in place.
               itemId: payload.itemId,
               toolCallId: payload.toolCallId,
               phase: payload.phase,
@@ -1307,15 +1261,12 @@ async function processDiscordMessageInner(
           if (payload.phase !== "end") {
             return;
           }
-          // Same yield as onToolStart: patch summaries belong to the tool
-          // call the durable verbose lane already persists.
-          if (verboseProgressActive()) {
+          if (shouldYieldDraftProgress()) {
             return;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLine({
               event: "patch",
-              // Same call id as the tool line: the summary updates it in place.
               itemId: payload.itemId,
               toolCallId: payload.toolCallId,
               phase: payload.phase,
