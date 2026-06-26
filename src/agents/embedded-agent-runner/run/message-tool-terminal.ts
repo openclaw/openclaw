@@ -45,6 +45,7 @@ export function installMessageToolOnlyTerminalHook(params: {
     return;
   }
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
+  let hasDelivered = false;
   params.agent.afterToolCall = async (context, signal) => {
     const hookResult = await previousAfterToolCall?.(context, signal);
     if (
@@ -55,6 +56,10 @@ export function installMessageToolOnlyTerminalHook(params: {
       })
     ) {
       params.onDeliveredSourceReply?.();
+      if (hasDelivered) {
+        return { ...hookResult, terminate: true };
+      }
+      hasDelivered = true;
       return hookResult;
     }
     return hookResult;

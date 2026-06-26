@@ -209,6 +209,38 @@ describe("message-tool-only source replies", () => {
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
+  it("prevents repeated message_tool_only send cascade by terminating on subsequent deliveries", async () => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+    });
+
+    // First delivery: records evidence, no terminate
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "first reply" },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+
+    // Second delivery: records evidence + terminate
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "second reply" },
+        }),
+      ),
+    ).resolves.toEqual({ terminate: true });
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves existing after-tool-call output alone when the send failed", async () => {
     const previousAfterToolCall = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "failed" }],
