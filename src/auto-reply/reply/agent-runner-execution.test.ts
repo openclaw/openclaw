@@ -4166,6 +4166,56 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("keeps suppressed answer candidates out of channel item progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "msg-early-final",
+          kind: "answer_candidate",
+          title: "Answer candidate",
+          phase: "end",
+          status: "superseded",
+          progressText: "Draft answer",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "msg-selected-final",
+          kind: "answer_candidate",
+          title: "Answer candidate",
+          phase: "end",
+          status: "selected",
+          progressText: "Final answer",
+          suppressChannelProgress: true,
+        },
+      });
+      return { payloads: [{ text: "Final answer" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(result.runResult.payloads).toEqual([{ text: "Final answer" }]);
+  });
+
   it("skips channel item progress when a matching tool event carries the progress", async () => {
     const onItemEvent = vi.fn();
     const onToolStart = vi.fn();

@@ -480,6 +480,12 @@ export const fa: TranslationMap = {
     argumentsHidden: "{count} آرگومان پنهان شده‌اند",
     streamLabel: "ورودی‌های فعالیت ابزار",
     toolCallId: "فراخوانی ابزار",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "اجرا کنید",
     session: "نشست",
     outputTruncated: "پیش‌نمایش ویرایش و کوتاه شده است.",

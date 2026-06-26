@@ -269,7 +269,7 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
-      turn: { id: TURN_ID, status, items },
+      turn: { id: TURN_ID, threadId: THREAD_ID, status, items },
     },
   } as ProjectorNotification;
 }
@@ -429,6 +429,194 @@ describe("CodexAppServerEventProjector", () => {
       },
       { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
     ]);
+  });
+
+  it("records superseded and selected final-answer candidates without changing the final reply", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-early-final",
+          phase: "final_answer",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Draft answer", "msg-early-final"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "printf ok",
+          status: "running",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "printf ok",
+          status: "completed",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-selected-final",
+          phase: "final_answer",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Final answer", "msg-selected-final"));
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          threadId: THREAD_ID,
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-early-final",
+              phase: "final_answer",
+              text: "Draft answer",
+            },
+            {
+              type: "commandExecution",
+              id: "cmd-1",
+              command: "printf ok",
+              status: "completed",
+            },
+            {
+              type: "agentMessage",
+              id: "msg-selected-final",
+              phase: "final_answer",
+              text: "Final answer",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const candidateEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate");
+
+    expect(result.assistantTexts).toEqual(["Final answer"]);
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "Draft answer", delta: "Draft answer" },
+      { text: "Final answer", delta: "Final answer" },
+    ]);
+    expect(candidateEvents.map((event) => event.data)).toEqual([
+      {
+        itemId: "msg-early-final",
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: "update",
+        status: "candidate",
+        source: "codex-app-server",
+        suppressChannelProgress: true,
+        progressText: "Draft answer",
+      },
+      {
+        itemId: "msg-early-final",
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: "end",
+        status: "superseded",
+        source: "codex-app-server",
+        suppressChannelProgress: true,
+        progressText: "Draft answer",
+      },
+      {
+        itemId: "msg-selected-final",
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: "update",
+        status: "candidate",
+        source: "codex-app-server",
+        suppressChannelProgress: true,
+        progressText: "Final answer",
+      },
+      {
+        itemId: "msg-selected-final",
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: "end",
+        status: "selected",
+        source: "codex-app-server",
+        suppressChannelProgress: true,
+        progressText: "Final answer",
+      },
+    ]);
+  });
+
+  it("does not mark final-answer candidates selected for non-successful terminal attempts", async () => {
+    const terminalCases: Array<
+      | { name: string; status: string; sendTurnCompleted: true }
+      | { name: string; sendTurnCompleted: false }
+    > = [
+      { name: "failed turn", status: "failed", sendTurnCompleted: true },
+      { name: "aborted turn", status: "aborted", sendTurnCompleted: true },
+      { name: "timed out turn", status: "timed_out", sendTurnCompleted: true },
+      { name: "client close before turn completion", sendTurnCompleted: false },
+    ];
+
+    for (const terminalCase of terminalCases) {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+      const itemId = `msg-${terminalCase.name.replace(/\s+/g, "-")}`;
+
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "agentMessage",
+            id: itemId,
+            phase: "final_answer",
+            text: "",
+          },
+        }),
+      );
+      await projector.handleNotification(
+        agentMessageDelta("Candidate before terminal failure", itemId),
+      );
+      if (terminalCase.sendTurnCompleted) {
+        await projector.handleNotification(
+          turnWithStatus(terminalCase.status, [
+            {
+              type: "agentMessage",
+              id: itemId,
+              phase: "final_answer",
+              text: "Candidate before terminal failure",
+            },
+          ]),
+        );
+      }
+
+      projector.buildResult(buildEmptyToolTelemetry());
+
+      const candidateStatuses = onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+        .map((event) => event.data.status);
+
+      expect(candidateStatuses, terminalCase.name).toEqual(["candidate", "superseded"]);
+    }
   });
 
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {

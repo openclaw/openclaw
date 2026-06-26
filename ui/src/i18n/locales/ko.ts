@@ -477,6 +477,12 @@ export const ko: TranslationMap = {
     argumentsHidden: "인수 {count}개 숨김",
     streamLabel: "도구 활동 항목",
     toolCallId: "도구 호출",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "실행",
     session: "세션",
     outputTruncated: "미리 보기가 마스킹되고 잘렸습니다.",
