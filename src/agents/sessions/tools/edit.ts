@@ -13,6 +13,7 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
@@ -45,14 +46,18 @@ const replaceEditSchema = Type.Object(
       description:
         "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
     }),
-    newText: Type.String({ description: "Replacement text for this targeted edit." }),
+    newText: Type.String({
+      description: "Replacement text for this targeted edit.",
+    }),
   },
   { additionalProperties: false },
 );
 
 const editSchema = Type.Object(
   {
-    path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+    path: Type.String({
+      description: "Path to the file to edit (relative or absolute)",
+    }),
     edits: Type.Array(replaceEditSchema, {
       description:
         "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
@@ -123,7 +128,10 @@ function prepareEditArguments(input: unknown): EditToolInput {
   return { ...rest, edits } as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+function validateEditInput(input: EditToolInput): {
+  path: string;
+  edits: Edit[];
+} {
   if (!Array.isArray(input.edits) || input.edits.length === 0) {
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
@@ -183,7 +191,12 @@ type RenderableEditArgs = {
 };
 
 type EditToolResultLike = {
-  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  content: Array<{
+    type: string;
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
   details?: EditToolDetails;
 };
 
@@ -387,6 +400,17 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
+        // Pre-execution no-op: oldText === newText means no change.
+        if (edits.some((e) => e.oldText === e.newText)) {
+          return {
+            ...textResult(
+              `No changes made to ${path}. The replacement text is identical to the original.`,
+              undefined,
+            ),
+            terminate: true,
+          };
+        }
+
         try {
           await ops.access(absolutePath);
         } catch (error: unknown) {
@@ -441,7 +465,13 @@ export function createEditToolDefinition(
             .readFile(absolutePath)
             .then((current) => current.toString("utf-8"))
             .catch(() => rawContent);
-          if (didEditLikelyApply({ originalContent: rawContent, currentContent, edits })) {
+          if (
+            didEditLikelyApply({
+              originalContent: rawContent,
+              currentContent,
+              edits,
+            })
+          ) {
             return {
               content: [
                 {
@@ -454,6 +484,16 @@ export function createEditToolDefinition(
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
+          }
+          // Terminal no-op: the edit produced identical content.
+          if (normalizedError.message.includes("No changes made to")) {
+            return {
+              ...textResult(
+                `No changes made to ${path}. The replacement produced identical content.`,
+                undefined,
+              ),
+              terminate: true,
+            };
           }
           throw normalizedError;
         }
@@ -505,7 +545,10 @@ export function createEditToolDefinition(
           changed =
             setEditPreview(
               callComponent,
-              { diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+              {
+                diff: resultDiff,
+                firstChangedLine: typedResult.details?.firstChangedLine,
+              },
               argsKey,
             ) || changed;
         }
