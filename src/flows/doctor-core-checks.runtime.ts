@@ -1,4 +1,5 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,
@@ -52,6 +53,10 @@ type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const PROVIDER_CATALOG_ORDER_SET = new Set<ProviderCatalogOrder>(PROVIDER_CATALOG_ORDERS);
 
+function formatGatewayHealthTarget(url: string): string {
+  return redactSensitiveUrlLikeString(url);
+}
+
 export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
   const agentId = resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -77,7 +82,7 @@ export async function collectGatewayHealthFindings(
         checkId: "core/doctor/gateway-health",
         severity: "warning",
         message: `Gateway health probe could not be prepared: ${formatErrorMessage(error)}`,
-        path: ctx.cfg.gateway?.mode === "remote" ? "gateway.url" : "gateway",
+        path: ctx.cfg.gateway?.mode === "remote" ? "gateway.remote.url" : "gateway",
         fixHint:
           "Fix Gateway connection configuration, then rerun `openclaw doctor --lint --only core/doctor/gateway-health`.",
       },
@@ -101,8 +106,8 @@ export async function collectGatewayHealthFindings(
       checkId: "core/doctor/gateway-health",
       severity: "warning",
       message: `Gateway is not reachable: ${probe.error ?? "status probe failed"}`,
-      path: mode === "remote" ? "gateway.url" : "gateway.mode",
-      target: probeDetails.url,
+      path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
+      target: formatGatewayHealthTarget(probeDetails.url),
       fixHint:
         mode === "remote"
           ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
