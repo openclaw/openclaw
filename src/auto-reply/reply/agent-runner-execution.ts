@@ -41,6 +41,7 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
+import { isRunnerAbortError } from "../../agents/embedded-agent-runner/abort.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
@@ -333,6 +334,32 @@ function readNullableNumberValue(value: unknown): number | null | undefined {
     return null;
   }
   return readFiniteNumberValue(value);
+}
+
+function isAbortLikeRunFailure(value: unknown): boolean {
+  if (isRunnerAbortError(value)) {
+    return true;
+  }
+  const message =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object" && "message" in value
+        ? String((value as { message?: unknown }).message ?? "")
+        : "";
+  return /aborted/i.test(message);
+}
+
+function isDiagnosticBlockedTerminatedTimeout(params: {
+  error: unknown;
+  deferredMetadata: Record<string, unknown>;
+}): boolean {
+  if (!isFailoverError(params.error) || params.error.reason !== "timeout") {
+    return false;
+  }
+  return (
+    readStringValue(params.deferredMetadata.livenessState) === "blocked" &&
+    readStringValue(params.error.rawError)?.toLowerCase() === "terminated"
+  );
 }
 
 function isCommandToolName(name: string | undefined): boolean {
@@ -1596,6 +1623,7 @@ export async function runAgentTurnWithFallback(params: {
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
   isRestartRecoveryArmed?: () => boolean;
+  shouldDeferRunFailure?: (outcome: Extract<AgentRunLoopResult, { kind: "success" }>) => boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -1806,6 +1834,21 @@ export async function runAgentTurnWithFallback(params: {
     pendingLifecycleTerminal = undefined;
     return terminal;
   };
+  const buildSuccessfulOutcome = (): Extract<AgentRunLoopResult, { kind: "success" }> => ({
+    kind: "success",
+    runId,
+    runResult,
+    fallbackProvider,
+    fallbackModel,
+    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
+    fallbackAttempts,
+    didLogHeartbeatStrip,
+    autoCompactionCount,
+    directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    directlySentBlockPayloads: directlySentBlockPayloads.filter(
+      (payload): payload is ReplyPayload => payload !== undefined,
+    ),
+  });
   let transientHttpRetriesRemaining = 1;
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
@@ -2985,6 +3028,9 @@ export async function runAgentTurnWithFallback(params: {
       // of silently rotating the session key to a new session id.
       const embeddedError = runResult.meta?.error;
       const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
+      const shouldDeferEmbeddedRunFailure =
+        (embeddedError !== undefined || deferredLifecycleError !== undefined) &&
+        params.shouldDeferRunFailure?.(buildSuccessfulOutcome());
       const userFacingErrorPayload = runResult.payloads?.find(
         (payload) => payload.isError === true && typeof payload.text === "string",
       )?.text;
@@ -3059,7 +3105,7 @@ export async function runAgentTurnWithFallback(params: {
         });
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", exhaustionError);
-      } else if (deferredLifecycleError || embeddedError) {
+      } else if ((deferredLifecycleError || embeddedError) && !shouldDeferEmbeddedRunFailure) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
         emitSettledLifecycleError(terminalError, terminalMetadata);
         params.replyOperation?.retainFailureUntilComplete();
@@ -3240,6 +3286,38 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
 
+      const deferredLifecycleError = pendingLifecycleTerminal?.backstop.getDeferredError();
+      const deferredLifecycleMetadata =
+        pendingLifecycleTerminal?.backstop.getDeferredMetadata() ?? {};
+      const abortLikeThrownFailure =
+        isAbortLikeRunFailure(err) ||
+        isAbortLikeRunFailure(deferredLifecycleError) ||
+        (isFailoverError(err) && isAbortLikeRunFailure(err.rawError));
+      const diagnosticBlockedTimeout = isDiagnosticBlockedTerminatedTimeout({
+        error: err,
+        deferredMetadata: deferredLifecycleMetadata,
+      });
+      if (abortLikeThrownFailure || diagnosticBlockedTimeout) {
+        runResult = {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }],
+          meta: {
+            ...deferredLifecycleMetadata,
+            durationMs: 0,
+            aborted: true,
+            livenessState: "blocked",
+            agentMeta: {
+              sessionId: params.followupRun.run.sessionId,
+              provider: fallbackProvider,
+              model: fallbackModel,
+            },
+          },
+        };
+        if (params.shouldDeferRunFailure?.(buildSuccessfulOutcome())) {
+          takePendingLifecycleTerminal()?.emit("end", runResult);
+          break;
+        }
+      }
+
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       // Only classify as rate-limit when we have concrete evidence from the
       // underlying error. FallbackSummaryError messages embed per-attempt
@@ -3404,19 +3482,5 @@ export async function runAgentTurnWithFallback(params: {
     }
   }
 
-  return {
-    kind: "success",
-    runId,
-    runResult,
-    fallbackProvider,
-    fallbackModel,
-    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
-    fallbackAttempts,
-    didLogHeartbeatStrip,
-    autoCompactionCount,
-    directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
-    directlySentBlockPayloads: directlySentBlockPayloads.filter(
-      (payload): payload is ReplyPayload => payload !== undefined,
-    ),
-  };
+  return buildSuccessfulOutcome();
 }

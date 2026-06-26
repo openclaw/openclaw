@@ -2963,8 +2963,11 @@ describe("runReplyAgent transient HTTP retry", () => {
         payloads: [{ text: "LLM request failed.", isError: true }],
         meta: {
           aborted: true,
-          livenessState: "blocked",
           durationMs: 383_000,
+          error: {
+            kind: "incomplete_turn",
+            message: "Request was aborted",
+          },
           agentMeta: {
             sessionId: "stalled-session",
             provider: "codex-lb",
@@ -3036,7 +3039,6 @@ describe("runReplyAgent transient HTTP retry", () => {
       typing,
       sessionCtx,
       sessionEntry,
-      sessionStore,
       sessionKey,
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
@@ -3055,20 +3057,19 @@ describe("runReplyAgent transient HTTP retry", () => {
     expectRecordFields(payload, { text: "Recovered response" }, "reply result");
     expect(followupRun.run.sessionId).toBe("reset-session");
     expect(followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
-    expect(sessionStore[sessionKey]?.sessionId).toBe("reset-session");
-    expect(sessionStore[sessionKey]?.systemSent).toBe(false);
-    expect(sessionStore[sessionKey]?.totalTokens).toBeUndefined();
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.sessionId).toBe("reset-session");
+    expect(persisted[sessionKey]?.systemSent).toBe(false);
+    expect(persisted[sessionKey]?.totalTokens).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: sessionKey,
       previousSessionId: "stalled-session",
       nextSessionId: "reset-session",
-      nextSessionFile: sessionStore[sessionKey]?.sessionFile,
+      nextSessionFile: persisted[sessionKey]?.sessionFile,
     });
     expect(runtimeErrorMock).toHaveBeenCalledWith(
       "Stalled direct session aborted without visible output. Resetting hot session main stalled-session -> reset-session and retrying once.",
     );
-    const persisted = loadSessionStore(storePath);
-    expect(persisted[sessionKey]?.sessionId).toBe("reset-session");
   });
 
   it("does not reset when a stalled direct session has pending block delivery", async () => {

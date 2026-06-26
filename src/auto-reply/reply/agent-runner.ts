@@ -10,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isRunnerAbortError } from "../../agents/embedded-agent-runner/abort.js";
 import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -22,6 +23,7 @@ import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../.
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -374,9 +376,7 @@ function shouldAutoResetRetryStalledDirectSession(params: {
     return false;
   }
   if (
-    runResult.meta?.aborted !== true ||
-    runResult.meta?.error !== undefined ||
-    runResult.meta?.livenessState !== "blocked" ||
+    !isReplayableStalledDirectSessionAbort(runResult.meta) ||
     params.runOutcome.fallbackExhausted === true ||
     params.runOutcome.fallbackAttempts.length > 0 ||
     params.pendingToolTasks.size > 0 ||
@@ -394,6 +394,20 @@ function shouldAutoResetRetryStalledDirectSession(params: {
     successfulCronAdds: runResult.successfulCronAdds,
     didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
   });
+}
+
+function isReplayableStalledDirectSessionAbort(
+  meta: SuccessfulAgentRunOutcome["runResult"]["meta"] | undefined,
+): boolean {
+  const livenessState = meta?.livenessState;
+  // Diagnostic stuck-session recovery can abort an owned silent model call
+  // before the embedded runner attaches terminal liveness. The delivery,
+  // fallback, direct-chat, and compaction gates keep that replay one-shot.
+  return (
+    meta?.aborted === true &&
+    (meta.error === undefined || isRunnerAbortError(meta.error)) &&
+    (livenessState === "blocked" || livenessState === undefined)
+  );
 }
 
 function resolveConfiguredFallbackModel(params: {
@@ -1316,7 +1330,7 @@ export async function runReplyAgent(params: {
   } = params;
 
   let activeSessionEntry = sessionEntry;
-  const activeSessionStore = sessionStore;
+  let activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
   const effectiveResetTriggered = resetTriggered === true;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
@@ -1337,6 +1351,16 @@ export async function runReplyAgent(params: {
       config: followupRun.run.config,
       attributes: traceAttributes,
     });
+  const ensureActiveSessionStore = (): Record<string, SessionEntry> | undefined => {
+    if (activeSessionStore || !storePath || !sessionKey) {
+      return activeSessionStore;
+    }
+    // Gateway direct turns can arrive with a session entry but no mutable store;
+    // reset/retry must still rotate the canonical persisted session.
+    activeSessionStore = loadSessionStore(storePath, { skipCache: true });
+    activeSessionEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    return activeSessionStore;
+  };
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
   const typingSignals = createTypingSignaler({
@@ -1851,6 +1875,23 @@ export async function runReplyAgent(params: {
         toolProgressDetail,
         replyMediaContext,
         isRestartRecoveryArmed,
+        shouldDeferRunFailure: (outcome) => {
+          const resetRetrySessionStore =
+            !activeSessionStore && isReplayableStalledDirectSessionAbort(outcome.runResult.meta)
+              ? ensureActiveSessionStore()
+              : activeSessionStore;
+          return shouldAutoResetRetryStalledDirectSession({
+            isHeartbeat,
+            sessionKey,
+            storePath,
+            activeSessionStore: resetRetrySessionStore,
+            activeSessionEntry,
+            sessionCtx,
+            runOutcome: outcome,
+            blockReplyPipeline,
+            pendingToolTasks,
+          });
+        },
       });
     let runOutcome = await traceAgentPhase("reply.run_agent_turn", runAgentTurn);
 
@@ -1865,12 +1906,17 @@ export async function runReplyAgent(params: {
       await blockReplyPipeline.flush({ force: true });
     }
 
+    const resetRetryNeedsSessionStore =
+      !activeSessionStore && isReplayableStalledDirectSessionAbort(runOutcome.runResult.meta);
+    const resetRetrySessionStore = resetRetryNeedsSessionStore
+      ? ensureActiveSessionStore()
+      : activeSessionStore;
     if (
       shouldAutoResetRetryStalledDirectSession({
         isHeartbeat,
         sessionKey,
         storePath,
-        activeSessionStore,
+        activeSessionStore: resetRetrySessionStore,
         activeSessionEntry,
         sessionCtx,
         runOutcome,
