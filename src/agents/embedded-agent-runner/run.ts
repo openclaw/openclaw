@@ -14,6 +14,7 @@ import {
   resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -21,6 +22,7 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -264,6 +266,32 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+
+function buildContextEngineCompactionSessionTarget(params: {
+  agentId: string;
+  config?: RunEmbeddedAgentParams["config"];
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
+}): ContextEngineSessionTarget {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+  const storePath =
+    params.sessionTarget?.storePath ??
+    sqliteMarker?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId });
+  return {
+    agentId,
+    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -1903,11 +1931,7 @@ async function runEmbeddedAgentInternal(
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
-          const nextSessionFile = compactResult.result?.sessionFile;
           adoptActiveSessionId(nextSessionId);
-          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
-            activeSessionFile = nextSessionFile;
-          }
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1964,7 +1988,7 @@ async function runEmbeddedAgentInternal(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                sessionFile: activeSessionFile,
               },
               resolveActiveHookContext(),
             );
@@ -2614,7 +2638,15 @@ async function runEmbeddedAgentInternal(
                   {
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: params.sessionKey,
+                      sessionTarget: params.sessionTarget,
+                    }),
                     tokenBudget: ctxInfo.tokens,
                     force: true,
                     compactionTarget: "budget",
@@ -2819,7 +2851,15 @@ async function runEmbeddedAgentInternal(
                   {
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: params.sessionKey,
+                      sessionTarget: params.sessionTarget,
+                    }),
                     tokenBudget: ctxInfo.tokens,
                     ...(overflowTokenCountForCompaction !== undefined
                       ? { currentTokenCount: overflowTokenCountForCompaction }

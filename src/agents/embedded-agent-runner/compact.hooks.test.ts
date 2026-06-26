@@ -1666,7 +1666,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   it("passes the rotated session id to engine-owned after_compaction hooks", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const rotatedSessionId = "rotated-session";
-    const rotatedSessionFile = "/tmp/rotated-session.jsonl";
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
       compacted: true,
@@ -1677,7 +1676,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         tokensBefore: 120,
         tokensAfter: 50,
         sessionId: rotatedSessionId,
-        sessionFile: rotatedSessionFile,
       },
     } as never);
 
@@ -1687,7 +1685,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
-      sessionFile: rotatedSessionFile,
+      sessionFile: TEST_SESSION_FILE,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionId: rotatedSessionId,
@@ -2212,7 +2210,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("keeps owning context-engine compaction primary for legacy Codex native sessions", async () => {
     const successorSessionId = "engine-successor-session";
-    const successorSessionFile = "/tmp/engine-successor-session.jsonl";
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "codex",
       runtimeSource: "model",
@@ -2227,7 +2224,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         tokensBefore: 333,
         tokensAfter: 50,
         sessionId: successorSessionId,
-        sessionFile: successorSessionFile,
       },
     } as never);
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
@@ -2263,7 +2259,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: successorSessionId,
-        sessionFile: successorSessionFile,
+        sessionFile: TEST_SESSION_FILE,
         trigger: "budget",
       }),
       { nativeCompactionRequest: "after_context_engine" },
@@ -2450,14 +2446,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }
   });
 
-  it("reuses a delegated compaction successor transcript", async () => {
+  it("reuses a delegated compaction successor session identity", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-session";
-    const delegatedSessionFile = "/tmp/delegated-session.jsonl";
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
@@ -2473,7 +2468,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         tokensBefore: 120,
         tokensAfter: 50,
         sessionId: delegatedSessionId,
-        sessionFile: delegatedSessionFile,
       },
     } as never);
 
@@ -2493,10 +2487,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.result?.sessionId).toBe(delegatedSessionId);
-    expect(result.result?.sessionFile).toBe(delegatedSessionFile);
+    expect(result.result?.sessionFile).toBeUndefined();
     expectRecordFields(mockCallArg(maintain), {
       sessionId: delegatedSessionId,
-      sessionFile: delegatedSessionFile,
+      sessionFile: TEST_SESSION_FILE,
     });
   });
 
@@ -2521,7 +2515,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         tokensBefore: 120,
         tokensAfter: 50,
         sessionId: TEST_SESSION_ID,
-        sessionFile: TEST_SESSION_FILE,
       },
     } as never);
     const result = await compactEmbeddedAgentSession(

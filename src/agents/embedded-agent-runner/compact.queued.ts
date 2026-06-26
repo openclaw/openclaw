@@ -12,6 +12,7 @@ import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import {
@@ -89,6 +90,24 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
     params.contextEngine.info.turnMaintenanceMode === "background" &&
     typeof params.contextEngine.maintain === "function"
   );
+}
+
+function buildContextEngineCompactionSessionTarget(
+  params: CompactEmbeddedAgentSessionParams,
+): ContextEngineSessionTarget {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
 }
 
 async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
@@ -407,12 +426,16 @@ export async function compactEmbeddedAgentSession(
         // of throwing a raw rejection at callers that only inspect result.ok.
         let result: Awaited<ReturnType<typeof contextEngine.compact>>;
         try {
+          const compactionSessionTarget = buildContextEngineCompactionSessionTarget(params);
           result = await compactContextEngineWithSafetyTimeout(
             contextEngine,
             {
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
+              ...(compactionSessionTarget.agentId
+                ? { agentId: compactionSessionTarget.agentId }
+                : {}),
+              sessionTarget: compactionSessionTarget,
               tokenBudget: contextTokenBudget,
               currentTokenCount: params.currentTokenCount,
               compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
@@ -448,12 +471,10 @@ export async function compactEmbeddedAgentSession(
           };
         }
         const delegatedSessionId = result.result?.sessionId;
-        const delegatedSessionFile = result.result?.sessionFile;
         const delegatedRotatedTranscript =
-          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
-          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
+          typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId;
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
-        let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
+        let postCompactionSessionFile = params.sessionFile;
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
           if (
@@ -663,8 +684,10 @@ function buildCompactionContextEngineRuntimeContext(params: {
     config: params.params.config,
     agentId: params.params.agentId,
   });
+  const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
   return {
-    ...params.params,
+    ...runtimeParams,
+    sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.params.sessionKey,
       messageChannel: params.params.messageChannel,
