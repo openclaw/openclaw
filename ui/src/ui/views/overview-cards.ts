@@ -127,14 +127,27 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const sessionCount = props.sessionsResult?.count ?? null;
 
   const skills = props.skillsReport?.skills ?? [];
-  const enabledSkills = skills.filter((s) => !s.disabled).length;
-  const blockedSkills = skills.filter((s) => s.blockedByAllowlist).length;
+  let enabledSkills = 0;
+  let blockedSkills = 0;
+  for (const skill of skills) {
+    if (!skill.disabled) {
+      enabledSkills += 1;
+    }
+    if (skill.blockedByAllowlist) {
+      blockedSkills += 1;
+    }
+  }
   const totalSkills = skills.length;
 
   const cronEnabled = props.cronStatus?.enabled ?? null;
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
   const cronJobCount = props.cronJobs.length;
-  const failedCronCount = props.cronJobs.filter(isCronJobActiveFailure).length;
+  let failedCronCount = 0;
+  for (const job of props.cronJobs) {
+    if (isCronJobActiveFailure(job)) {
+      failedCronCount += 1;
+    }
+  }
   const authLoading = props.modelAuthStatus === null;
   const authProviders = props.modelAuthStatus?.providers ?? [];
   const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
@@ -205,10 +218,15 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       hint: "",
     });
   } else if (monitoredProviders.length > 0) {
-    const expired = monitoredProviders.filter(
-      (p) => p.status === "expired" || p.status === "missing",
-    ).length;
-    const expiring = monitoredProviders.filter((p) => p.status === "expiring").length;
+    let expired = 0;
+    let expiring = 0;
+    for (const provider of monitoredProviders) {
+      if (provider.status === "expired" || provider.status === "missing") {
+        expired += 1;
+      } else if (provider.status === "expiring") {
+        expiring += 1;
+      }
+    }
     const authValue =
       expired > 0
         ? html`<span class="danger"
