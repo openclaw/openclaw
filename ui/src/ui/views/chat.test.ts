@@ -5841,4 +5841,47 @@ describe("chat session controls", () => {
     expect(state.chatSessionPickerRenameDraft).toBe("");
     expect(state.chatSessionPickerRenamePendingKeys["agent:main:work"]).toBeUndefined();
   });
+
+  it("skips unchanged chat session rename saves for display-name-only rows", async () => {
+    patchSessionMock.mockClear();
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      {
+        key: "agent:main:channel",
+        kind: "direct",
+        displayName: "Channel display",
+        updatedAt: 1,
+      },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:channel");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+
+    expect(patchSessionMock).not.toHaveBeenCalled();
+    expect(state.chatSessionPickerRenameKey).toBeNull();
+    expect(state.chatSessionPickerRenameDraft).toBe("");
+    expect(state.chatSessionPickerRenamePendingKeys["agent:main:channel"]).toBeUndefined();
+  });
 });

@@ -587,6 +587,21 @@ function resolveChatSessionRenameCurrentLabel(state: AppViewState, key: string):
   );
 }
 
+function chatSessionRenameIsNoop(state: AppViewState, key: string, label: string | null): boolean {
+  const currentLabel = resolveChatSessionRenameCurrentLabel(state, key);
+  if (label === currentLabel) {
+    return true;
+  }
+  if (currentLabel !== null || label === null) {
+    return false;
+  }
+  const result = resolveChatSessionPickerResult(state);
+  const visibleLabel =
+    resolveChatSessionPickerRows(state, result).find((entry) => entry.row.key === key)?.label ??
+    resolveSessionDisplayName(key, resolveChatSessionRow(state, key));
+  return label === normalizeOptionalString(visibleLabel);
+}
+
 function resolveChatSessionRow(
   state: AppViewState,
   sessionKey: string,
@@ -755,7 +770,7 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
   state.chatSessionPickerRenameRequestId = requestId;
   const label = normalizeOptionalString(state.chatSessionPickerRenameDraft) ?? null;
   const draft = state.chatSessionPickerRenameDraft;
-  if (label === resolveChatSessionRenameCurrentLabel(state, key)) {
+  if (chatSessionRenameIsNoop(state, key, label)) {
     state.chatSessionPickerRenameKey = null;
     state.chatSessionPickerRenameDraft = "";
     state.chatSessionPickerError = null;
