@@ -1896,6 +1896,7 @@
     "test:sqlite:perf:large": "node --import tsx scripts/bench-sqlite-state.ts --profile large --output .artifacts/sqlite-perf/large.json",
     "test:sqlite:perf:smoke": "node --import tsx scripts/bench-sqlite-state.ts --profile smoke --output .artifacts/sqlite-perf/smoke.json",
     "test:plugins:gateway-gauntlet": "node scripts/check-plugin-gateway-gauntlet.mjs",
+    "test:plugins:init-provider-scaffold": "node --import tsx scripts/validate-plugin-init-provider-scaffold.ts",
     "test:plugins:kitchen-sink-live": "bash -lc 'if [ -x \"$HOME/.local/bin/openclaw-testbox-env\" ]; then exec \"$HOME/.local/bin/openclaw-testbox-env\" pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai; fi; exec pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai'",
     "test:plugins:kitchen-sink-rpc": "node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mjs",
     "test:sectriage": "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/process/exec.test.ts",
