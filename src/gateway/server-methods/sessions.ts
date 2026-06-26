@@ -1,7 +1,6 @@
 // Sessions gateway methods implement list/create/patch/delete/reset/compact/
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -60,6 +59,10 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  loadSessionEntry as loadAccessorSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntry as patchAccessorSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
@@ -114,7 +117,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -2413,17 +2415,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    // Lock + read in a short critical section; transcript work happens outside.
-    const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return { entry, primaryKey };
+    const compactSessionScope = {
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      storePath,
+    };
+    const entry = loadAccessorSessionEntry({
+      ...compactSessionScope,
+      readConsistency: "latest",
     });
-    const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(
@@ -2440,13 +2440,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     if (maxLines === undefined) {
-      const filePath = resolveSessionTranscriptCandidates(
+      const transcriptEvents = await loadTranscriptEvents({
+        agentId: target.agentId,
         sessionId,
+        sessionKey: target.canonicalKey,
         storePath,
-        entry?.sessionFile,
-        target.agentId,
-      ).find((candidate) => fs.existsSync(candidate));
-      if (!filePath) {
+      }).catch(() => []);
+      if (transcriptEvents.length === 0) {
         respond(
           true,
           {
@@ -2459,6 +2459,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const compactionTranscriptTarget = await resolveSessionTranscriptRuntimeTarget({
+        agentId: target.agentId,
+        sessionId,
+        sessionKey: target.canonicalKey,
+        storePath,
+      });
 
       const interruptResult = await interruptSessionRunIfActive({
         req,
@@ -2494,8 +2500,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.agentId,
+          sessionTarget: {
+            agentId: target.agentId,
+            sessionId,
+            sessionKey: target.canonicalKey,
+            storePath,
+          },
           allowGatewaySubagentBinding: true,
-          sessionFile: filePath,
+          sessionFile: compactionTranscriptTarget.sessionFile,
           workspaceDir,
           cwd,
           config: cfg,
@@ -2537,34 +2549,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
 
       if (result.ok && result.compacted) {
-        await updateSessionStore(storePath, (store) => {
-          const entryKey = compactTarget.primaryKey;
-          const entryToUpdate = store[entryKey];
-          if (!entryToUpdate) {
-            return;
-          }
-          entryToUpdate.updatedAt = Date.now();
-          entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-          if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
-            entryToUpdate.sessionId = result.result.sessionId;
-          }
-          if (result.result?.sessionFile) {
-            entryToUpdate.sessionFile = result.result.sessionFile;
-          }
-          delete entryToUpdate.inputTokens;
-          delete entryToUpdate.outputTokens;
-          delete entryToUpdate.contextBudgetStatus;
-          if (
-            typeof result.result?.tokensAfter === "number" &&
-            Number.isFinite(result.result.tokensAfter)
-          ) {
-            entryToUpdate.totalTokens = result.result.tokensAfter;
-            entryToUpdate.totalTokensFresh = true;
-          } else {
-            delete entryToUpdate.totalTokens;
-            delete entryToUpdate.totalTokensFresh;
-          }
-        });
+        await patchAccessorSessionEntry(
+          compactSessionScope,
+          (entryToUpdate) => {
+            if (entryToUpdate.sessionId !== sessionId) {
+              return null;
+            }
+            entryToUpdate.updatedAt = Date.now();
+            entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+            if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
+              entryToUpdate.sessionId = result.result.sessionId;
+            }
+            delete entryToUpdate.inputTokens;
+            delete entryToUpdate.outputTokens;
+            delete entryToUpdate.contextBudgetStatus;
+            if (
+              typeof result.result?.tokensAfter === "number" &&
+              Number.isFinite(result.result.tokensAfter)
+            ) {
+              entryToUpdate.totalTokens = result.result.tokensAfter;
+              entryToUpdate.totalTokensFresh = true;
+            } else {
+              delete entryToUpdate.totalTokens;
+              delete entryToUpdate.totalTokensFresh;
+            }
+            return entryToUpdate;
+          },
+          { replaceEntry: true },
+        );
       }
 
       respond(
@@ -2595,7 +2607,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: compactTarget.primaryKey,
+        sessionKey: target.canonicalKey,
         agentId: target.agentId,
       },
       {
@@ -2652,7 +2664,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: compactTarget.primaryKey,
+        sessionKey: target.canonicalKey,
         agentId: target.agentId,
       },
       {
