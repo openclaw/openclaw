@@ -160,18 +160,13 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
-FROM base-runtime
 
 # Pre-compute architecture for docker-cli install path to avoid repeating dpkg invocation
 # across different optional install layers.
-ARG OPENCLAW_APT_ARCH="$(dpkg --print-architecture 2>/dev/null || echo 'amd64')"
 
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # OCI base-image metadata for downstream image consumers.
-# If you change these annotations, also update:
-# - docs/install/docker.md ("Base image metadata" section)
-# - https://docs.openclaw.ai/install/docker
 LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.url="https://openclaw.ai" \
   org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
@@ -182,10 +177,6 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 WORKDIR /app
 
 # Install runtime system utilities missing from bookworm-slim.
-# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
-# so it must be installed explicitly here. Without it `/etc/ssl/certs/`
-# stays empty and every HTTPS outbound dies at TLS handshake with
-# `error setting certificate file`.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
@@ -195,24 +186,38 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 
 RUN chown node:node /app
 
-# Install additional system packages, Python packages, Chromium, and Docker CLI
-# as a single RUN layer to minimize image layers. These are conditional on build ARGs.
-# Each section is gated so default builds with empty ARGs skip installation.
+# 1. Copy essential runtime files first (needed by corepack and browser install below)
+COPY --from=runtime-assets --chown=node:node /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml .npmrc ./
+COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
+
+# 2. Prepare corepack (needs package.json from step 1)
+ENV COREPACK_HOME=/usr/local/share/corepack
+RUN install -d -m 0755 "$COREPACK_HOME" && \
+    corepack enable && \
+    for attempt in 1 2 3 4 5; do \
+      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+    done && \
+    chmod -R a+rX "$COREPACK_HOME"
+
+# 3. Install additional system packages, Python packages, Chromium, and Docker CLI
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 ARG OPENCLAW_IMAGE_PIP_PACKAGES=""
 ARG OPENCLAW_INSTALL_BROWSER=""
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-ARG OPENCLAW_APT_ARCH
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-# Consolidate optional apt installs into one RUN to reduce image layers.
-# Each section uses the shared apt cache mounts; none triggers an extra apt-get update
-# beyond what is needed.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     export install_list="" && \
-    export needs_apt_update=0 && \
+    # Compute architecture inside RUN to get the actual builder arch
+    export ARCH="$(dpkg --print-architecture 2>/dev/null || echo 'amd64')" && \
     \
     # Section 1: User-requested apt packages \
     apt_packages="${OPENCLAW_IMAGE_APT_PACKAGES-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
@@ -250,13 +255,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi && \
     \
-    # Section 6: Docker CLI repo setup & install (requires gnupg from section 4) \
+    # Section 6: Docker CLI repo setup & install \
     if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       install -m 0755 -d /etc/apt/keyrings && \
-      # Verify Docker apt signing key fingerprint before trusting it as a root key. \
-      # Require exactly one primary key (`pub` in --with-colons; subkeys use `sub`) so we \
-      # never pin the first fingerprint while apt trusts extra keys from the same file. \
-      # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys. \
       curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
       docker_gpg_pub_count="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "pub" { c++ } END { print c+0 }')" && \
@@ -273,39 +274,21 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       rm -f /tmp/docker.gpg.asc && \
       chmod a+r /etc/apt/keyrings/docker.gpg && \
       printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
-        "$OPENCLAW_APT_ARCH" > /etc/apt/sources.list.d/docker.list && \
+        "$ARCH" > /etc/apt/sources.list.d/docker.list && \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         docker-ce-cli docker-compose-plugin; \
     fi && \
     \
-    # Section 7: Browser (playwright) installation \
+    # Section 7: Browser (playwright) installation (needs node_modules copied in step 1) \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
-# Keep pnpm available in the runtime image for container-local workflows.
-# Use a shared Corepack home so the non-root `node` user does not need a
-# first-run network fetch when invoking pnpm.
-ENV COREPACK_HOME=/usr/local/share/corepack
-RUN install -d -m 0755 "$COREPACK_HOME" && \
-    corepack enable && \
-    for attempt in 1 2 3 4 5; do \
-      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
-        break; \
-      fi; \
-      if [ "$attempt" -eq 5 ]; then \
-        exit 1; \
-      fi; \
-      sleep $((attempt * 2)); \
-    done && \
-    chmod -R a+rX "$COREPACK_HOME"
-
+# 4. Copy remaining runtime assets
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
@@ -315,7 +298,6 @@ COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
-# Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 

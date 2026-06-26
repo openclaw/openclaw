@@ -2594,13 +2594,14 @@ export function createConfigIO(
         fileSystem: deps.fs,
         beforeRename: async () => {
           options.assertConfigPathForWrite?.();
-          if (options.baseSnapshot) {
-            await assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-          }
           if (deps.fs.existsSync(configPath)) {
             await maintainConfigBackups(configPath, deps.fs.promises);
           }
-          options.assertConfigPathForWrite?.();
+          // Re-check after backup rotation so a concurrent config edit during
+          // maintainConfigBackups does not get overwritten by the atomic rename.
+          if (options.baseSnapshot) {
+            await assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+          }
         },
       });
       configCommitted = true;
