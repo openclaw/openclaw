@@ -87,9 +87,10 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "tts",
     "gateway",
     "agents_list",
@@ -97,7 +98,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -227,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 45011,
-    "roughTokens": 11253
+    "chars": 50311,
+    "roughTokens": 12578
   },
   "openClawDeveloperInstructions": {
     "chars": 1964,
@@ -239,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6544
   },
   "totalWithDynamicToolsJson": {
-    "chars": 71189,
-    "roughTokens": 17798
+    "chars": 76489,
+    "roughTokens": 19123
   },
   "userInputText": {
     "chars": 1129,
@@ -543,9 +543,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "tts",
   "gateway",
   "agents_list",
@@ -553,7 +554,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -687,7 +687,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   }
 ]
 ```
