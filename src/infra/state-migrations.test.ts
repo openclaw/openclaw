@@ -639,6 +639,83 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves a singleton final symlink through all session migration phases", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const outsideStorePath = path.join(root, "outside-sessions.json");
+    await fs.writeFile(
+      outsideStorePath,
+      JSON.stringify({
+        "voice:15550001111": { sessionId: "outside-voice", updatedAt: 10 },
+      }),
+      "utf8",
+    );
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.symlink(outsideStorePath, storePath);
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
+    const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string }
+    >;
+    expect(outsideStore["voice:15550001111"]?.sessionId).toBe("outside-voice");
+    const warning = `Deferred migration of 1 ambiguous session key(s) in aliased store ${storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+    expect(result.warnings.filter((entry) => entry === warning)).toHaveLength(2);
+  });
+
+  it("preserves ACP metadata through a singleton fixed-store symlink", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const outsideStorePath = path.join(root, "outside-sessions.json");
+    await fs.writeFile(
+      outsideStorePath,
+      JSON.stringify({
+        "voice:15550001111": { sessionId: "outside-voice", updatedAt: 20 },
+        "agent:main:task": {
+          sessionId: "canonical-acp",
+          updatedAt: 10,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "outside-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 10,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const configuredStorePath = path.join(root, "configured-sessions.json");
+    await fs.symlink(outsideStorePath, configuredStorePath);
+    const cfg = {
+      session: { store: configuredStorePath },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
+    const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string; acp?: unknown }
+    >;
+    expect(outsideStore["voice:15550001111"]?.sessionId).toBe("outside-voice");
+    expect(outsideStore["agent:main:task"]?.acp).toBeDefined();
+    expect(result.warnings).toContain(
+      `Deferred ACP metadata migration for 1 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    );
+    expect(result.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
+  });
+
   it("migrates global main aliases through aliased store rewrites", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

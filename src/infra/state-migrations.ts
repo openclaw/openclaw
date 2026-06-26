@@ -5337,7 +5337,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
           )
           .map((declaredTarget) => declaredTarget.agentId),
       ]),
-      hasDistinctAliases: false,
+      hasDistinctAliases: sessionStorePathIsFinalSymlink(target.storePath),
     });
   }
 
@@ -5545,12 +5545,14 @@ function resolveSessionStoreOwnership(params: {
       candidateStorePaths.push(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
     }
   }
-  const targetStoreHasDistinctAlias = candidateStorePaths.some((candidatePath) => {
-    return (
-      sessionStorePathsMatch(candidatePath, targetStorePath) &&
-      sessionStorePathsHaveDistinctEntries(candidatePath, targetStorePath)
-    );
-  });
+  const targetStoreHasDistinctAlias =
+    sessionStorePathIsFinalSymlink(targetStorePath) ||
+    candidateStorePaths.some((candidatePath) => {
+      return (
+        sessionStorePathsMatch(candidatePath, targetStorePath) &&
+        sessionStorePathsHaveDistinctEntries(candidatePath, targetStorePath)
+      );
+    });
   return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreHasDistinctAlias };
 }
 
