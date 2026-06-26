@@ -280,6 +280,9 @@ class OpenClawShell extends LitElement {
     this.routeSelection = runtime.routeSnapshot.get();
     this.stopRouteSubscription = runtime.routeSnapshot.subscribe((selection) => {
       this.routeSelection = selection;
+      if (this.navDrawerOpen) {
+        this.closeNavDrawer({ restoreFocus: true });
+      }
     });
     this.overlaySnapshot = context.overlays.snapshot;
     this.stopOverlaySubscription = context.overlays.subscribe((snapshot) => {
@@ -488,8 +491,6 @@ class OpenClawShell extends LitElement {
               context.navigation.update({
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
               })}
-            .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-              this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
               routeId === "chat" ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>

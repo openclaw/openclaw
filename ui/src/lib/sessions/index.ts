@@ -12,7 +12,11 @@ import type {
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
 import { normalizeAgentId } from "../session-key.ts";
-import { resolveSessionCreateParams } from "./create.ts";
+import {
+  requestSessionCreate,
+  resolveSessionCreateParams,
+  type SessionCreateParams,
+} from "./create.ts";
 import {
   filterSessionRows,
   getVisibleSessionRows,
@@ -54,13 +58,6 @@ export type SessionListOptions = {
   configuredAgentsOnly?: boolean;
   showArchived?: boolean;
   append?: boolean;
-};
-
-export type SessionCreateParams = {
-  agentId?: string;
-  currentSessionKey?: string;
-  label?: string;
-  model?: string;
 };
 
 export type SessionPatch = {
@@ -177,6 +174,8 @@ export type SessionCapability = {
   dispose: () => void;
 };
 
+export { requestSessionCreate } from "./create.ts";
+export type { SessionCreateParams } from "./create.ts";
 export {
   filterSessionRows,
   getVisibleSessionRows,
@@ -263,21 +262,6 @@ export async function requestSessionList(
     buildSessionListParams(options),
   );
   return result ?? null;
-}
-
-export async function requestSessionCreate(
-  client: SessionRequestClient,
-  params: Omit<SessionCreateParams, "currentSessionKey"> & {
-    parentSessionKey?: string;
-    emitCommandHooks?: boolean;
-  } = {},
-): Promise<string> {
-  const result = await client.request<{ key?: unknown }>("sessions.create", params);
-  const key = typeof result?.key === "string" ? result.key.trim() : "";
-  if (!key) {
-    throw new Error("sessions.create returned no key");
-  }
-  return key;
 }
 
 export function requestSessionPatch(

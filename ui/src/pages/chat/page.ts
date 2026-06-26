@@ -886,7 +886,7 @@ export class ChatPage extends LitElement {
     state.chatMessage = preservedDraft;
     state.chatAttachments = preservedAttachments;
     state.requestUpdate?.();
-    this.context.replace("chat", {
+    this.context.navigate("chat", {
       search: searchForSession(nextSessionKey),
     });
     return true;
@@ -1103,7 +1103,7 @@ export class ChatPage extends LitElement {
     const props: ChatProps = {
       sessionKey: state.sessionKey,
       onSessionKeyChange: (next) => {
-        this.context.replace("chat", {
+        this.context.navigate("chat", {
           search: searchForSession(next),
         });
       },
@@ -1195,12 +1195,12 @@ export class ChatPage extends LitElement {
       onAgentChange: (agentId) => {
         this.context.agentSelection.set(agentId);
         const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.context.replace("chat", {
+        this.context.navigate("chat", {
           search: searchForSession(nextSessionKey),
         });
       },
       onSessionSelect: (next) => {
-        this.context.replace("chat", {
+        this.context.navigate("chat", {
           search: searchForSession(next),
         });
       },
