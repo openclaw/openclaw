@@ -1269,6 +1269,13 @@
   margin-top: 0;
 }
 
+.content--chat > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 :root[data-theme-mode="light"] .content {
   background: var(--bg-content);
 }
