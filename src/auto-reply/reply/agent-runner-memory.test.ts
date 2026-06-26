@@ -259,7 +259,7 @@ describe("runMemoryFlushIfNeeded", () => {
     );
 
     const followupRun = createTestFollowupRun();
-    await runMemoryFlushIfNeeded({
+    const entry = await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
           defaults: {
@@ -1012,7 +1012,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
 
-    await runMemoryFlushIfNeeded({
+    const entry = await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
           defaults: {
