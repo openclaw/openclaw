@@ -189,6 +189,38 @@ describe("agent tool definition adapter", () => {
     });
   });
 
+  it("does not throw WeakMap errors when preparing malformed backend sandbox exec params", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-malformed-backend-sandbox-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(JSON.stringify(result)).not.toContain("WeakMap");
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
   it("reports malformed exec params when elevated logging is enabled", async () => {
     const tool = createExecTool({
       security: "full",
