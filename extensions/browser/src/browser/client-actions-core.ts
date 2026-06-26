@@ -32,6 +32,11 @@ type BrowserActResponse = {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  /** Download info when a click/batch/evaluate action triggers a browser download. */
+  downloads?: {
+    count: number;
+    recent: Array<{ suggestedFilename: string; savedPath: string }>;
+  };
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;

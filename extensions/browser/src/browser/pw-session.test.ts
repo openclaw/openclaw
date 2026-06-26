@@ -430,7 +430,7 @@ describe("pw-session action download capture", () => {
     // The disposed capture won't see new downloads from the page handler.
     // But it may still return its previously captured results on re-drain
     // since capture.promises is not cleared by dispose.
-    const afterDispose = await capture.drain();
+    await capture.drain();
     // The key assertion: the post-dispose download's saveAs was never called
     // because it wasn't captured (fell through to managedSave.catch).
     expect(saveAs2).not.toHaveBeenCalled();
