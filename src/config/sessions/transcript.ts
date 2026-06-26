@@ -337,9 +337,7 @@ export async function readRecentUserAssistantTextForSession(
       target.sqliteScope,
       params,
     );
-    if (sqliteRecent.hasEvents) {
-      return sqliteRecent.recent;
-    }
+    return sqliteRecent.recent;
   }
   return await readRecentUserAssistantTextFromSessionTranscript(target.sessionFile, params);
 }
