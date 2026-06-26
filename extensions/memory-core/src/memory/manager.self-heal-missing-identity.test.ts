@@ -16,6 +16,19 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
     providerUnavailableReason: "No embeddings provider available.",
   })),
 );
+const originalSelfHealStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setSelfHealStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreSelfHealStateDir(): void {
+  if (originalSelfHealStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSelfHealStateDir);
+  }
+}
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
@@ -49,7 +62,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+    setSelfHealStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
@@ -59,7 +72,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
       manager = null;
     }
     await closeAllMemorySearchManagers();
-    vi.unstubAllEnvs();
+    restoreSelfHealStateDir();
   });
 
   afterAll(async () => {

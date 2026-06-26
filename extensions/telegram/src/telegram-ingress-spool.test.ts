@@ -17,6 +17,7 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+  refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
   writeTelegramSpooledUpdate,
@@ -137,6 +138,32 @@ describe("Telegram ingress spool", () => {
       const updates = await listTelegramSpooledUpdates({ spoolDir });
       expect(updates.map((entry) => entry.updateId)).toEqual([30]);
       expect(updates[0]?.path.endsWith(".json")).toBe(true);
+    });
+  });
+
+  it("refreshes active claim timestamps through the Telegram spool queue", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 31, message: { text: "refresh me" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      await expect(refreshTelegramSpooledUpdateClaim(claimed, { refreshedAt: 123 })).resolves.toBe(
+        true,
+      );
+
+      const claims = await listTelegramSpooledUpdateClaims({ spoolDir });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.updateId).toBe(31);
+      expect(claims[0]?.claim?.claimedAt).toBe(123);
     });
   });
 

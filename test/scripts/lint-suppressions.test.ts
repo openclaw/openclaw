@@ -228,6 +228,7 @@ describe("production lint suppressions", () => {
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/version.ts|eslint/no-underscore-dangle|1",
+        "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
       ]),
     );
   });

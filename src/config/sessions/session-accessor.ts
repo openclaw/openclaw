@@ -1792,6 +1792,7 @@ export async function commitReplySessionInitialization(params: {
       activeSessionKey: params.activeSessionKey,
       maintenanceConfig: params.maintenanceConfig,
       onWarn: params.onMaintenanceWarning,
+      reentrant: true,
       skipSaveWhenResult: (result) => !result.ok,
     },
   );
