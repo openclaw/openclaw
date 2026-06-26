@@ -295,8 +295,16 @@ export function registerNodesStatusCommands(nodes: Command) {
             return;
           }
 
-          const pairedCount = filtered.filter((n) => Boolean(n.paired)).length;
-          const connectedCount = filtered.filter((n) => Boolean(n.connected)).length;
+          let pairedCount = 0;
+          let connectedCount = 0;
+          for (const node of filtered) {
+            if (node.paired) {
+              pairedCount += 1;
+            }
+            if (node.connected) {
+              connectedCount += 1;
+            }
+          }
           const filteredLabel =
             filtered.length !== nodesLocal.length ? ` (of ${nodesLocal.length})` : "";
           defaultRuntime.log(
