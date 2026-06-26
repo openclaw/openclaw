@@ -301,10 +301,63 @@
   padding: 12px;
 }
 
+.codefarm-project-card--wide {
+  grid-column: 1 / -1;
+}
+
 .codefarm-project-card h3 {
   margin: 0 0 10px;
   font-size: 13px;
   letter-spacing: 0;
+}
+
+.codefarm-project-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.codefarm-project-form label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.codefarm-project-form input,
+.codefarm-project-form textarea {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+}
+
+.codefarm-project-form textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
+.codefarm-project-form__wide {
+  grid-column: 1 / -1;
+}
+
+.codefarm-project-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.codefarm-runtime-field {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.codefarm-runtime-field select {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
 }
 
 .codefarm-project-files {
@@ -421,6 +474,24 @@
   line-height: 1.55;
   padding: 12px;
   white-space: pre-wrap;
+}
+
+.codefarm-terminal-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.codefarm-terminal-input {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.codefarm-terminal-hint {
+  color: var(--muted);
+  margin: 6px 0 0;
+  font-size: 12px;
 }
 
 .codefarm-detail__empty {

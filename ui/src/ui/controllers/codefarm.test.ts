@@ -2,12 +2,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveCodefarmProject,
+  configureCodefarmProject,
   getCodefarmState,
   loadCodefarmJobs,
   loadCodefarmProject,
   loadCodefarmRepos,
   observeCodefarmJob,
   selectCodefarmRepo,
+  sendCodefarmProjectTerminalInput,
+  setCodefarmProjectRuntime,
 } from "./codefarm.ts";
 
 function createClient(responses: Record<string, unknown>) {
@@ -165,6 +168,139 @@ describe("codefarm controller", () => {
     expect(state.project).toEqual(expect.objectContaining({ archived: false }));
   });
 
+  it("configures project context through the Project Foreman gateway method", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    const client = createClient({
+      "codefarm.project.configure": {
+        repo: "/Users/me/agent-space",
+        name: "Agent Space",
+        jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+        contextFiles: [
+          {
+            path: ".codefarm/PROJECT.md",
+            title: "PROJECT.md",
+            kind: "project_doc",
+            content: "Mission: Make Code Farm observable.",
+            truncated: false,
+          },
+        ],
+        gsd: {
+          available: true,
+          files: [
+            {
+              path: ".gsd/STATE.md",
+              title: "STATE.md",
+              kind: "gsd_state",
+              content: "Milestone: Persistent project terminals",
+              truncated: false,
+            },
+          ],
+        },
+        projectForm: {
+          projectName: "Agent Space",
+          mission: "Make Code Farm observable.",
+          currentMilestone: "Persistent project terminals",
+          currentSlice: "Project Foreman profile and form",
+        },
+        profile: {
+          id: "project-foreman",
+          name: "Project Foreman",
+          status: "configured",
+          workspace: "/Users/me/.openclaw/workspaces/project-foreman",
+          agentDir: "/Users/me/.openclaw/agents/project-foreman/agent",
+          contract: ["GSD-first", "CodeFarm execution", "Persistent tmux"],
+        },
+      },
+    });
+
+    await configureCodefarmProject({
+      host,
+      client: client as never,
+      repo: "/Users/me/agent-space",
+      form: {
+        projectName: "Agent Space",
+        mission: "Make Code Farm observable.",
+        currentMilestone: "Persistent project terminals",
+        currentSlice: "Project Foreman profile and form",
+      },
+    });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project.configure", {
+      repo: "/Users/me/agent-space",
+      form: {
+        projectName: "Agent Space",
+        mission: "Make Code Farm observable.",
+        currentMilestone: "Persistent project terminals",
+        currentSlice: "Project Foreman profile and form",
+      },
+    });
+    expect(state.projectFormSaving).toBe(false);
+    expect(state.projectForm).toMatchObject({
+      mission: "Make Code Farm observable.",
+      currentMilestone: "Persistent project terminals",
+    });
+    expect(state.project).toEqual(
+      expect.objectContaining({
+        profile: expect.objectContaining({ name: "Project Foreman", status: "configured" }),
+      }),
+    );
+  });
+
+  it("sets the selected project runtime through a write gateway method", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.selectedRepo = "/Users/me/agent-space";
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "Agent Space",
+      jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+      runtime: {
+        selected: "codex-cli",
+        options: [
+          { id: "codex-cli", label: "Codex CLI" },
+          { id: "claude-code", label: "Claude Code" },
+        ],
+      },
+    };
+    const client = createClient({
+      "codefarm.project.runtime.set": {
+        repo: "/Users/me/agent-space",
+        name: "Agent Space",
+        jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+        contextFiles: [],
+        gsd: { available: false, files: [] },
+        runtime: {
+          selected: "claude-code",
+          options: [
+            { id: "codex-cli", label: "Codex CLI" },
+            { id: "claude-code", label: "Claude Code" },
+          ],
+        },
+      },
+    });
+
+    await setCodefarmProjectRuntime({
+      host,
+      client: client as never,
+      repo: "/Users/me/agent-space",
+      runtime: "claude-code",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project.runtime.set", {
+      repo: "/Users/me/agent-space",
+      runtime: "claude-code",
+    });
+    expect(state.runtimeSaving).toBe(false);
+    expect(state.project).toEqual(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ selected: "claude-code" }),
+      }),
+    );
+  });
+
   it("selects a repo and loads its jobs without requiring a manual path", async () => {
     const host = {};
     const state = getCodefarmState(host);
@@ -256,8 +392,15 @@ describe("codefarm controller", () => {
         projectTerminal: {
           session: "codefarm_agent-space-12345678",
           attachCommand: "tmux attach -t codefarm_agent-space-12345678",
-          running: false,
-          note: "No persistent project tmux session is running.",
+          running: true,
+          pane: "%1",
+          command: "zsh",
+          cwd: "/Users/me/agent-space",
+          terminal: {
+            source: "tmux",
+            truncated: false,
+            lines: ["project booted", "ready"],
+          },
         },
       },
     });
@@ -273,7 +416,62 @@ describe("codefarm controller", () => {
         gsd: expect.objectContaining({ available: true }),
         projectTerminal: expect.objectContaining({
           session: "codefarm_agent-space-12345678",
-          running: false,
+          running: true,
+          pane: "%1",
+          cwd: "/Users/me/agent-space",
+          terminal: expect.objectContaining({
+            source: "tmux",
+            lines: ["project booted", "ready"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("sends project terminal input and refreshes the project snapshot", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.selectedRepo = "/Users/me/agent-space";
+    state.terminalInput = "echo hello";
+    const client = createClient({
+      "codefarm.project.terminal.send": {
+        repo: "/Users/me/agent-space",
+        name: "agent-space",
+        jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+        contextFiles: [],
+        gsd: { available: true, files: [] },
+        projectTerminal: {
+          session: "codefarm_agent-space-12345678",
+          running: true,
+          persistent: true,
+          terminal: {
+            source: "tmux",
+            truncated: false,
+            lines: ["echo hello", "hello"],
+          },
+        },
+      },
+    });
+
+    await sendCodefarmProjectTerminalInput({
+      host,
+      client: client as never,
+      repo: "/Users/me/agent-space",
+      input: "echo hello",
+      enter: true,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("codefarm.project.terminal.send", {
+      repo: "/Users/me/agent-space",
+      input: "echo hello",
+      enter: true,
+    });
+    expect(state.terminalSending).toBe(false);
+    expect(state.terminalInput).toBe("");
+    expect(state.project).toEqual(
+      expect.objectContaining({
+        projectTerminal: expect.objectContaining({
+          terminal: expect.objectContaining({ lines: ["echo hello", "hello"] }),
         }),
       }),
     );

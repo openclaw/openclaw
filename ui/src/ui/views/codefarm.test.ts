@@ -161,8 +161,14 @@ describe("renderCodefarm", () => {
       projectTerminal: {
         session: "codefarm_agent-space-12345678",
         attachCommand: "tmux attach -t codefarm_agent-space-12345678",
-        running: false,
-        note: "No persistent project tmux session is running.",
+        running: true,
+        pane: "%1",
+        cwd: "/Users/me/agent-space",
+        terminal: {
+          source: "tmux",
+          truncated: false,
+          lines: ["project booted", "npm test -- --run tests/spaces.test.ts"],
+        },
       },
     };
     const container = document.createElement("div");
@@ -183,10 +189,75 @@ describe("renderCodefarm", () => {
     expect(container.querySelector(".codefarm-project")?.textContent).toContain(
       "codefarm_agent-space-12345678",
     );
+    expect(container.querySelector(".codefarm-project")?.textContent).toContain(
+      "/Users/me/agent-space",
+    );
+    expect(container.querySelector(".codefarm-terminal")?.textContent).toContain("project booted");
+    expect(container.querySelector(".codefarm-terminal")?.textContent).toContain(
+      "npm test -- --run tests/spaces.test.ts",
+    );
     expect(container.querySelector(".codefarm-project")?.textContent).toContain("cf_20260625_001");
     expect(container.querySelector(".codefarm-project")?.textContent).toContain(
       "Add pool-lazy proof",
     );
+  });
+
+  it("sends input from the Project Terminal card", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.loaded = true;
+    state.activeSection = "projects";
+    state.selectedRepo = "/Users/me/agent-space";
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "agent-space",
+      jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+      contextFiles: [],
+      gsd: { available: true, files: [] },
+      projectTerminal: {
+        session: "codefarm_agent-space-12345678",
+        attachCommand: "tmux attach -t codefarm_agent-space-12345678",
+        running: true,
+        persistent: true,
+        terminal: {
+          source: "tmux",
+          truncated: false,
+          lines: ["ready"],
+        },
+      },
+    };
+    const request = vi.fn(async () => ({
+      ...state.project,
+      projectTerminal: {
+        ...state.project?.projectTerminal,
+        terminal: { source: "tmux", truncated: false, lines: ["echo hello", "hello"] },
+      },
+    }));
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      onRequestUpdate: () => renderInto(container, props),
+    } satisfies CodefarmRenderProps;
+
+    renderInto(container, props);
+
+    const input = container.querySelector<HTMLInputElement>(".codefarm-terminal-input");
+    input!.value = "echo hello";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    container
+      .querySelector<HTMLButtonElement>(".codefarm-terminal-send")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("codefarm.project.terminal.send", {
+      repo: "/Users/me/agent-space",
+      input: "echo hello",
+      enter: true,
+    });
+    expect(container.querySelector(".codefarm-terminal")?.textContent).toContain("hello");
   });
 
   it("renders project archive controls in the Projects tab", async () => {
@@ -231,6 +302,114 @@ describe("renderCodefarm", () => {
 
     expect(request).toHaveBeenCalledWith("codefarm.project.archive", {
       repo: "/Users/me/agent-space",
+    });
+  });
+
+  it("renders the project form and Project Foreman profile in the Projects tab", async () => {
+    const host = {};
+    const state = getCodefarmState(host);
+    state.loaded = true;
+    state.activeSection = "projects";
+    state.selectedRepo = "/Users/me/agent-space";
+    state.projectForm = {
+      projectName: "Agent Space",
+      mission: "Make Code Farm observable.",
+      currentMilestone: "Persistent project terminals",
+      currentSlice: "Project Foreman profile and form",
+    };
+    state.project = {
+      repo: "/Users/me/agent-space",
+      name: "Agent Space",
+      jobs: { totalJobs: 0, activeJobs: 0, statuses: {} },
+      contextFiles: [],
+      gsd: { available: true, files: [] },
+      projectForm: state.projectForm,
+      runtime: {
+        selected: "codex-cli",
+        options: [
+          { id: "codex-cli", label: "Codex CLI" },
+          { id: "claude-code", label: "Claude Code" },
+        ],
+      },
+      profile: {
+        id: "project-foreman",
+        name: "Project Foreman",
+        status: "configured",
+        workspace: "/Users/me/.openclaw/workspaces/project-foreman",
+        agentDir: "/Users/me/.openclaw/agents/project-foreman/agent",
+        contract: ["GSD-first", "CodeFarm execution", "Persistent tmux"],
+      },
+    };
+    const request = vi.fn(async () => ({
+      ...state.project,
+      projectForm: {
+        ...state.projectForm,
+        mission: "Keep the project state live.",
+      },
+      runtime: {
+        selected: "claude-code",
+        options: [
+          { id: "codex-cli", label: "Codex CLI" },
+          { id: "claude-code", label: "Claude Code" },
+        ],
+      },
+    }));
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      onRequestUpdate: () => renderInto(container, props),
+    } satisfies CodefarmRenderProps;
+
+    renderInto(container, props);
+
+    const project = container.querySelector(".codefarm-project");
+    expect(project?.textContent).toContain("Project Form");
+    expect(project?.textContent).toContain("Project Foreman");
+    expect(project?.textContent).toContain("Runtime");
+    expect(project?.textContent).toContain("GSD-first");
+    expect(project?.textContent).toContain("Persistent tmux");
+    expect(container.querySelector<HTMLInputElement>(".codefarm-project-form__name")?.value).toBe(
+      "Agent Space",
+    );
+    expect(
+      container.querySelector<HTMLTextAreaElement>(".codefarm-project-form__mission")?.value,
+    ).toBe("Make Code Farm observable.");
+    expect(container.querySelector<HTMLSelectElement>(".codefarm-runtime-select")?.value).toBe(
+      "codex-cli",
+    );
+
+    const runtime = container.querySelector<HTMLSelectElement>(".codefarm-runtime-select");
+    if (runtime) {
+      runtime.value = "claude-code";
+      runtime.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("codefarm.project.runtime.set", {
+      repo: "/Users/me/agent-space",
+      runtime: "claude-code",
+    });
+
+    const mission = container.querySelector<HTMLTextAreaElement>(".codefarm-project-form__mission");
+    if (mission) {
+      mission.value = "Keep the project state live.";
+      mission.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    container
+      .querySelector<HTMLButtonElement>(".codefarm-project-form__save")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("codefarm.project.configure", {
+      repo: "/Users/me/agent-space",
+      form: expect.objectContaining({
+        projectName: "Agent Space",
+        mission: "Keep the project state live.",
+      }),
     });
   });
 });

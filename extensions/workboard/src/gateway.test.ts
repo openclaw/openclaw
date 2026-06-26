@@ -1,13 +1,19 @@
 // Workboard tests cover gateway plugin behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import {
+  configureCodefarmProject,
+  configureCodefarmProjectRuntime,
   discoverCodefarmReposFromRoots,
+  ensureProjectForemanProfile,
   readCodefarmProject,
   registerWorkboardGatewayMethods,
+  sendCodefarmProjectTerminalInput,
 } from "./gateway.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
@@ -28,6 +34,29 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
     },
   };
 }
+
+function hasTmux(): boolean {
+  try {
+    execFileSync("tmux", ["-V"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function codefarmProjectSessionName(repo: string): string {
+  const basename =
+    repo
+      .split("/")
+      .findLast(Boolean)
+      ?.toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "repo";
+  const digest = createHash("sha256").update(repo).digest("hex").slice(0, 8);
+  return `codefarm_${basename}-${digest}`;
+}
+
+const itWithTmux = hasTmux() ? it : it.skip;
 
 describe("workboard gateway methods", () => {
   it("registers CRUD methods with read/write scopes", async () => {
@@ -98,6 +127,9 @@ describe("workboard gateway methods", () => {
       "workboard.cards.export",
       "codefarm.repos",
       "codefarm.project",
+      "codefarm.project.configure",
+      "codefarm.project.runtime.set",
+      "codefarm.project.terminal.send",
       "codefarm.project.archive",
       "codefarm.project.unarchive",
       "codefarm.list",
@@ -113,6 +145,11 @@ describe("workboard gateway methods", () => {
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.repos")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("codefarm.project")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("codefarm.project.configure")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("codefarm.project.runtime.set")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("codefarm.project.terminal.send")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("codefarm.project.archive")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("codefarm.project.unarchive")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("codefarm.list")?.opts).toEqual({ scope: "operator.read" });
@@ -160,6 +197,69 @@ describe("workboard gateway methods", () => {
     } as never);
     expect(eventsRespond.mock.calls[0]?.[0]).toBe(false);
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
+  });
+
+  it("generates Project Foreman startup context from the canonical Code Farm project file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-project-foreman-"));
+    const previousHome = process.env.OPENCLAW_HOME;
+    try {
+      const openclawHome = join(root, "openclaw");
+      process.env.OPENCLAW_HOME = openclawHome;
+
+      await ensureProjectForemanProfile(openclawHome);
+
+      const workspace = join(openclawHome, "workspaces", "project-foreman");
+      const agents = readFileSync(join(workspace, "AGENTS.md"), "utf8");
+      const heartbeat = readFileSync(join(workspace, "Heartbeat.md"), "utf8");
+
+      expect(agents).toContain(".codefarm/project.json");
+      expect(heartbeat).toContain(".codefarm/project.json");
+      expect(agents).not.toContain("openclaw-project.json");
+      expect(heartbeat).not.toContain("openclaw-project.json");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousHome;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates stale Project Foreman startup context away from the legacy OpenClaw project file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-project-foreman-stale-"));
+    const previousHome = process.env.OPENCLAW_HOME;
+    try {
+      const openclawHome = join(root, "openclaw");
+      const workspace = join(openclawHome, "workspaces", "project-foreman");
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(
+        join(workspace, "AGENTS.md"),
+        "Read the active repo `.codefarm/openclaw-project.json` before steering work.\n",
+      );
+      writeFileSync(
+        join(workspace, "Heartbeat.md"),
+        "Read `.gsd/STATE.md` and `.codefarm/openclaw-project.json` when active.\n",
+      );
+      process.env.OPENCLAW_HOME = openclawHome;
+
+      await ensureProjectForemanProfile(openclawHome);
+
+      const agents = readFileSync(join(workspace, "AGENTS.md"), "utf8");
+      const heartbeat = readFileSync(join(workspace, "Heartbeat.md"), "utf8");
+
+      expect(agents).toContain(".codefarm/project.json");
+      expect(heartbeat).toContain(".codefarm/project.json");
+      expect(agents).not.toContain("openclaw-project.json");
+      expect(heartbeat).not.toContain("openclaw-project.json");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousHome;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("stores metadata updates through dedicated card methods", async () => {
@@ -680,6 +780,205 @@ describe("workboard gateway methods", () => {
     expect(unarchiveRespond.mock.calls[0]?.[1]).toMatchObject({ archived: false });
   });
 
+  it("sends project terminal input through a write gateway method", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const sendProjectTerminalInputCodefarm = vi.fn(async () => undefined);
+    const projectCodefarm = vi.fn(async (params: { repo: string }) => ({
+      schemaVersion: 1,
+      repo: params.repo,
+      name: "repo",
+      status: "active",
+      archived: false,
+      jobs: {
+        totalJobs: 0,
+        activeJobs: 0,
+        reviewJobs: 0,
+        blockedJobs: 0,
+        statuses: {},
+      },
+      contextFiles: [],
+      gsd: { available: false, files: [] },
+      projectTerminal: {
+        session: "codefarm_repo-12345678",
+        running: true,
+        persistent: true,
+        terminal: { source: "tmux", truncated: false, lines: ["hello from tmux"] },
+      },
+    }));
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({
+      api,
+      store: new WorkboardStore(createMemoryStore()),
+      projectCodefarm,
+      sendProjectTerminalInputCodefarm,
+    } as never);
+
+    const respond = vi.fn();
+    await methods.get("codefarm.project.terminal.send")?.handler({
+      params: { repo: "/Users/me/repo", input: "echo hello", enter: true },
+      respond,
+    } as never);
+
+    expect(sendProjectTerminalInputCodefarm).toHaveBeenCalledWith({
+      repo: "/Users/me/repo",
+      input: "echo hello",
+      enter: true,
+    });
+    expect(projectCodefarm).toHaveBeenCalledWith({ repo: "/Users/me/repo" });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      projectTerminal: expect.objectContaining({
+        terminal: expect.objectContaining({ lines: ["hello from tmux"] }),
+      }),
+    });
+  });
+
+  it("configures project context and installs the Project Foreman profile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-configure-"));
+    const previousHome = process.env.OPENCLAW_HOME;
+    try {
+      const repo = join(root, "agent-space");
+      const openclawHome = join(root, "openclaw-home");
+      mkdirSync(repo, { recursive: true });
+      mkdirSync(openclawHome, { recursive: true });
+      writeFileSync(
+        join(openclawHome, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: { model: "openai/gpt-5.5" },
+            list: [{ id: "main", name: "main" }],
+          },
+        }),
+      );
+      process.env.OPENCLAW_HOME = openclawHome;
+
+      const payload = await configureCodefarmProject({
+        repo,
+        form: {
+          projectName: "Agent Space",
+          mission: "Make Code Farm observable and project-oriented.",
+          currentMilestone: "Persistent project terminals",
+          currentSlice: "Project Foreman profile and form",
+        },
+      });
+
+      expect(payload).toMatchObject({
+        repo,
+        name: "Agent Space",
+        projectForm: {
+          projectName: "Agent Space",
+          mission: "Make Code Farm observable and project-oriented.",
+          currentMilestone: "Persistent project terminals",
+          currentSlice: "Project Foreman profile and form",
+        },
+        profile: {
+          id: "project-foreman",
+          name: "Project Foreman",
+          status: "configured",
+        },
+      });
+
+      expect(readFileSync(join(repo, ".codefarm", "openclaw-project.json"), "utf8")).toContain(
+        "Make Code Farm observable",
+      );
+      expect(readFileSync(join(repo, ".codefarm", "PROJECT.md"), "utf8")).toContain(
+        "Project Foreman",
+      );
+      expect(readFileSync(join(repo, ".gsd", "STATE.md"), "utf8")).toContain(
+        "Persistent project terminals",
+      );
+      expect(
+        readFileSync(join(openclawHome, "workspaces", "project-foreman", "SOUL.md"), "utf8"),
+      ).toContain("CodeFarm");
+      expect(
+        readFileSync(join(openclawHome, "workspaces", "project-foreman", "Tools.md"), "utf8"),
+      ).toContain("gsd_execute_task_with_codefarm");
+      expect(
+        readFileSync(join(openclawHome, "workspaces", "project-foreman", "Identity.md"), "utf8"),
+      ).toContain("Project Foreman");
+      expect(
+        readFileSync(join(openclawHome, "workspaces", "project-foreman", "Heartbeat.md"), "utf8"),
+      ).toContain("persistent tmux");
+      expect(existsSync(join(openclawHome, "workspaces", "project-foreman", "Bootstrap.md"))).toBe(
+        false,
+      );
+      expect(JSON.parse(readFileSync(join(openclawHome, "openclaw.json"), "utf8"))).toMatchObject({
+        agents: {
+          list: expect.arrayContaining([
+            expect.objectContaining({
+              id: "project-foreman",
+              identity: { name: "Project Foreman" },
+            }),
+          ]),
+        },
+      });
+
+      const runtimePayload = await configureCodefarmProjectRuntime({
+        repo,
+        runtime: "claude-code",
+      });
+      expect(runtimePayload).toMatchObject({
+        runtime: {
+          selected: "claude-code",
+          options: [
+            expect.objectContaining({ id: "codex-cli" }),
+            expect.objectContaining({ id: "claude-code" }),
+          ],
+        },
+      });
+      expect(
+        JSON.parse(readFileSync(join(repo, ".codefarm", "openclaw-project.json"), "utf8")),
+      ).toMatchObject({
+        runtime: {
+          selected: "claude-code",
+        },
+      });
+      expect(readFileSync(join(repo, ".codefarm", "PROJECT.md"), "utf8")).toContain(
+        "Runtime: claude-code",
+      );
+
+      await expect(readCodefarmProject({ repo })).resolves.toMatchObject({
+        projectForm: expect.objectContaining({ projectName: "Agent Space" }),
+        profile: expect.objectContaining({ id: "project-foreman", status: "configured" }),
+        runtime: expect.objectContaining({ selected: "claude-code" }),
+      });
+      await expect(discoverCodefarmReposFromRoots({ roots: [root], maxDepth: 1 })).resolves.toEqual(
+        expect.objectContaining({
+          repos: [
+            expect.objectContaining({
+              repo,
+              name: "Agent Space",
+              totalJobs: 0,
+            }),
+          ],
+        }),
+      );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousHome;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads project context, GSD state, and project terminal identity for a Code Farm repo", async () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-project-"));
     try {
@@ -738,6 +1037,74 @@ describe("workboard gateway methods", () => {
         }),
       );
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  itWithTmux("captures persistent project tmux scrollback for Code Farm repos", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-project-terminal-"));
+    const repo = join(root, "agent-space");
+    const session = codefarmProjectSessionName(repo);
+    try {
+      mkdirSync(join(repo, ".codefarm"), { recursive: true });
+      execFileSync("tmux", ["new-session", "-d", "-s", session, "-n", "project", "-c", repo, "sh"]);
+      execFileSync("tmux", [
+        "send-keys",
+        "-t",
+        `${session}:project.0`,
+        "-l",
+        "--",
+        "printf 'project booted\\n'",
+      ]);
+      execFileSync("tmux", ["send-keys", "-t", `${session}:project.0`, "Enter"]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const payload = await readCodefarmProject({ repo });
+
+      expect(payload.projectTerminal).toEqual(
+        expect.objectContaining({
+          session,
+          running: true,
+          terminal: expect.objectContaining({
+            source: "tmux",
+            lines: expect.arrayContaining([expect.stringContaining("project booted")]),
+          }),
+        }),
+      );
+    } finally {
+      try {
+        execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
+      } catch {
+        // Session may not exist if tmux failed before creation.
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  itWithTmux("sends input to the persistent project tmux session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-codefarm-project-terminal-send-"));
+    const repo = join(root, "agent-space");
+    const session = codefarmProjectSessionName(repo);
+    try {
+      mkdirSync(join(repo, ".codefarm"), { recursive: true });
+      execFileSync("tmux", ["new-session", "-d", "-s", session, "-n", "project", "-c", repo, "sh"]);
+
+      await sendCodefarmProjectTerminalInput({
+        repo,
+        input: "printf 'interactive hello\\n'",
+        enter: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const payload = await readCodefarmProject({ repo });
+
+      expect(payload.projectTerminal.terminal?.lines.join("\n")).toContain("interactive hello");
+    } finally {
+      try {
+        execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
+      } catch {
+        // Session may not exist if tmux failed before creation.
+      }
       rmSync(root, { recursive: true, force: true });
     }
   });

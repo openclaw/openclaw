@@ -1,18 +1,22 @@
 // Control UI view renders the first-class Code Farm page.
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import {
   archiveCodefarmProject,
+  configureCodefarmProject,
   getCodefarmState,
   loadCodefarmJobs,
   loadCodefarmProject,
   loadCodefarmRepos,
   observeCodefarmJob,
   selectCodefarmRepo,
+  sendCodefarmProjectTerminalInput,
+  setCodefarmProjectRuntime,
   type CodefarmProject,
+  type CodefarmProjectForm,
   type CodefarmProjectFile,
   type CodefarmJobSummary,
   type CodefarmRepoSummary,
+  type CodefarmRuntime,
 } from "../controllers/codefarm.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -51,7 +55,7 @@ function latestLabel(value: string | undefined): string {
 }
 
 function repoTitle(repo: CodefarmRepoSummary): string {
-  return repo.name || repo.repo.split("/").filter(Boolean).at(-1) || repo.repo;
+  return repo.name || repo.repo.split("/").findLast(Boolean) || repo.repo;
 }
 
 function renderRepoButton(props: CodefarmRenderProps, repo: CodefarmRepoSummary) {
@@ -258,6 +262,189 @@ function renderProjectJobs(props: CodefarmRenderProps) {
   `;
 }
 
+function setProjectFormValue(
+  host: object,
+  key: keyof CodefarmProjectForm,
+  event: Event,
+  requestUpdate?: () => void,
+) {
+  const state = getCodefarmState(host);
+  state.projectForm = {
+    ...state.projectForm,
+    [key]: (event.currentTarget as HTMLInputElement | HTMLTextAreaElement).value,
+  };
+  requestUpdate?.();
+}
+
+function renderProjectForm(props: CodefarmRenderProps, project: CodefarmProject) {
+  const state = getCodefarmState(props.host);
+  const form = state.projectForm;
+  return html`
+    <section class="codefarm-project-card codefarm-project-card--wide">
+      <h3>Project Form</h3>
+      <div class="codefarm-project-form">
+        <label>
+          <span>Project name</span>
+          <input
+            class="input codefarm-project-form__name"
+            .value=${form.projectName}
+            @input=${(event: Event) =>
+              setProjectFormValue(props.host, "projectName", event, props.onRequestUpdate)}
+          />
+        </label>
+        <label class="codefarm-project-form__wide">
+          <span>Mission</span>
+          <textarea
+            class="input codefarm-project-form__mission"
+            rows="3"
+            .value=${form.mission}
+            @input=${(event: Event) =>
+              setProjectFormValue(props.host, "mission", event, props.onRequestUpdate)}
+          ></textarea>
+        </label>
+        <label>
+          <span>Milestone</span>
+          <input
+            class="input codefarm-project-form__milestone"
+            .value=${form.currentMilestone}
+            @input=${(event: Event) =>
+              setProjectFormValue(props.host, "currentMilestone", event, props.onRequestUpdate)}
+          />
+        </label>
+        <label>
+          <span>Slice</span>
+          <input
+            class="input codefarm-project-form__slice"
+            .value=${form.currentSlice}
+            @input=${(event: Event) =>
+              setProjectFormValue(props.host, "currentSlice", event, props.onRequestUpdate)}
+          />
+        </label>
+      </div>
+      ${state.projectFormError
+        ? html`<p class="codefarm-error">${state.projectFormError}</p>`
+        : nothing}
+      <div class="codefarm-project-form__actions">
+        <button
+          type="button"
+          class="btn btn--sm codefarm-project-form__save"
+          ?disabled=${state.projectFormSaving || !props.connected}
+          @click=${() =>
+            void configureCodefarmProject({
+              host: props.host,
+              client: props.client,
+              repo: project.repo,
+              form: state.projectForm,
+              requestUpdate: props.onRequestUpdate,
+            })}
+        >
+          ${state.projectFormSaving ? "Saving" : "Save Project"}
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderProjectRuntime(props: CodefarmRenderProps, project: CodefarmProject) {
+  const state = getCodefarmState(props.host);
+  const runtime = project.runtime ?? {
+    selected: "codex-cli" as CodefarmRuntime,
+    options: [
+      { id: "codex-cli" as CodefarmRuntime, label: "Codex CLI" },
+      { id: "claude-code" as CodefarmRuntime, label: "Claude Code" },
+    ],
+  };
+  return html`
+    <section class="codefarm-project-card">
+      <h3>Runtime</h3>
+      <label class="codefarm-runtime-field">
+        <span>Worker runtime</span>
+        <select
+          class="input codefarm-runtime-select"
+          .value=${runtime.selected}
+          ?disabled=${state.runtimeSaving || !props.connected}
+          @change=${(event: Event) =>
+            void setCodefarmProjectRuntime({
+              host: props.host,
+              client: props.client,
+              repo: project.repo,
+              runtime: (event.currentTarget as HTMLSelectElement).value as CodefarmRuntime,
+              requestUpdate: props.onRequestUpdate,
+            })}
+        >
+          ${runtime.options.map(
+            (option) => html`<option value=${option.id}>${option.label}</option>`,
+          )}
+        </select>
+      </label>
+      <div class="codefarm-detail__facts">
+        <span>${runtime.selected}</span>
+        <span>${state.runtimeSaving ? "saving" : "selected"}</span>
+      </div>
+      ${state.runtimeError ? html`<p class="codefarm-error">${state.runtimeError}</p>` : nothing}
+    </section>
+  `;
+}
+
+function renderProjectForeman(project: CodefarmProject) {
+  const profile = project.profile;
+  return html`
+    <section class="codefarm-project-card">
+      <h3>${profile?.name ?? "Project Foreman"}</h3>
+      <div class="codefarm-detail__facts">
+        <span>${profile?.status ?? "missing"}</span>
+        ${(profile?.contract ?? ["GSD-first", "CodeFarm execution", "Persistent tmux"]).map(
+          (item) => html`<span>${item}</span>`,
+        )}
+      </div>
+      ${profile?.workspace
+        ? html`<div class="codefarm-attach">${profile.workspace}</div>`
+        : nothing}
+      ${profile?.agentDir ? html`<div class="codefarm-attach">${profile.agentDir}</div>` : nothing}
+    </section>
+  `;
+}
+
+function setTerminalInputValue(host: object, event: Event, requestUpdate?: () => void) {
+  const state = getCodefarmState(host);
+  state.terminalInput = (event.currentTarget as HTMLInputElement).value;
+  requestUpdate?.();
+}
+
+function submitProjectTerminalInput(
+  props: CodefarmRenderProps,
+  project: CodefarmProject,
+  event?: Event,
+) {
+  event?.preventDefault();
+  const state = getCodefarmState(props.host);
+  const input = state.terminalInput;
+  if (!input.trim() || state.terminalSending) {
+    return;
+  }
+  void sendCodefarmProjectTerminalInput({
+    host: props.host,
+    client: props.client,
+    repo: project.repo,
+    input,
+    enter: true,
+    requestUpdate: props.onRequestUpdate,
+  });
+}
+
+function terminalInputDisabledReason(
+  props: CodefarmRenderProps,
+  projectTerminal: CodefarmProject["projectTerminal"],
+): string | null {
+  if (!props.connected) {
+    return "Gateway disconnected.";
+  }
+  if (!projectTerminal?.running) {
+    return "Project tmux session is not running.";
+  }
+  return null;
+}
+
 function renderProjectDetail(props: CodefarmRenderProps) {
   const state = getCodefarmState(props.host);
   const project = state.project;
@@ -275,6 +462,13 @@ function renderProjectDetail(props: CodefarmRenderProps) {
       </section>
     `;
   }
+  const projectTerminal = project.projectTerminal;
+  const projectTerminalText = projectTerminal?.terminal?.lines.length
+    ? projectTerminal.terminal.lines.join("\n")
+    : projectTerminal?.running
+      ? "Project terminal is running, but no output has been captured yet."
+      : "No project terminal output captured yet.";
+  const terminalDisabledReason = terminalInputDisabledReason(props, projectTerminal);
   return html`
     <section class="codefarm-project">
       <div class="codefarm-project__header">
@@ -316,20 +510,65 @@ function renderProjectDetail(props: CodefarmRenderProps) {
         ? html`<div class="callout danger">${state.projectError}</div>`
         : nothing}
       <div class="codefarm-project-grid">
+        ${renderProjectForm(props, project)} ${renderProjectRuntime(props, project)}
+        ${renderProjectForeman(project)}
         <section class="codefarm-project-card">
           <h3>Project Terminal</h3>
           <div class="codefarm-detail__facts">
             <span>${project.projectTerminal?.running ? "running" : "not running"}</span>
             ${project.projectTerminal?.persistent ? html`<span>persistent</span>` : nothing}
+            ${projectTerminal?.terminal?.source
+              ? html`<span>Source: ${projectTerminal.terminal.source}</span>`
+              : nothing}
+            ${projectTerminal?.pane ? html`<span>Pane: ${projectTerminal.pane}</span>` : nothing}
+            ${projectTerminal?.command
+              ? html`<span>Command: ${projectTerminal.command}</span>`
+              : nothing}
+            ${projectTerminal?.terminal?.truncated ? html`<span>truncated</span>` : nothing}
           </div>
           ${project.projectTerminal?.session
             ? html`<div class="codefarm-attach">${project.projectTerminal.session}</div>`
+            : nothing}
+          ${projectTerminal?.cwd
+            ? html`<div class="codefarm-attach">${projectTerminal.cwd}</div>`
             : nothing}
           ${project.projectTerminal?.attachCommand
             ? html`<div class="codefarm-attach">${project.projectTerminal.attachCommand}</div>`
             : nothing}
           ${project.projectTerminal?.note
             ? html`<p class="codefarm-note">${project.projectTerminal.note}</p>`
+            : nothing}
+          <form
+            class="codefarm-terminal-controls"
+            @submit=${(event: Event) => submitProjectTerminalInput(props, project, event)}
+          >
+            <input
+              class="input codefarm-terminal-input"
+              placeholder="Type a command for the project tmux session"
+              .value=${state.terminalInput}
+              ?disabled=${state.terminalSending || Boolean(terminalDisabledReason)}
+              autocomplete="off"
+              spellcheck="false"
+              @input=${(event: Event) =>
+                setTerminalInputValue(props.host, event, props.onRequestUpdate)}
+            />
+            <button
+              type="submit"
+              class="btn btn--sm codefarm-terminal-send"
+              ?disabled=${state.terminalSending ||
+              Boolean(terminalDisabledReason) ||
+              !state.terminalInput.trim()}
+              @click=${(event: Event) => submitProjectTerminalInput(props, project, event)}
+            >
+              ${state.terminalSending ? "Sending" : "Send"}
+            </button>
+          </form>
+          ${terminalDisabledReason
+            ? html`<p class="codefarm-terminal-hint">${terminalDisabledReason}</p>`
+            : nothing}
+          <pre class="codefarm-terminal">${projectTerminalText}</pre>
+          ${state.terminalError
+            ? html`<p class="codefarm-error">${state.terminalError}</p>`
             : nothing}
         </section>
 
