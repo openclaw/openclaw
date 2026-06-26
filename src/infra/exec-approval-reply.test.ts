@@ -116,6 +116,18 @@ describe("exec approval reply helpers", () => {
     );
   });
 
+  it("includes host=node recovery commands in unavailable fallback guidance", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "no-approval-route",
+      host: "node",
+      nodeId: "mac-1",
+    }).text;
+
+    expect(text).toContain("`openclaw dashboard --no-open`");
+    expect(text).toContain("`openclaw approvals get --node mac-1`");
+    expect(text).not.toContain("exec-approvals list");
+  });
+
   it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
