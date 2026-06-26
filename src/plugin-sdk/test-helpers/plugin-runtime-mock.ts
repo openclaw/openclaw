@@ -351,7 +351,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
       RequireMention: params.access?.mentions?.requireMention,
       EffectiveWasMentioned: params.access?.mentions?.effectiveWasMentioned,
-      MentionShouldSkip: params.access?.mentions?.shouldSkip,
       MentionSource: params.access?.mentions?.mentionSource,
       GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
       Provider: params.provider ?? params.channel,
