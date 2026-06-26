@@ -164,6 +164,9 @@ function replacementForCandidate(params: {
     return { ok: false, reason: "shell quoting required in wrapper payload" };
   }
   if (hasDispatchWrapper(params.candidate.sourceSegment)) {
+    const sourceArgv =
+      params.candidate.sourceSegment.resolution?.effectiveArgv ??
+      params.candidate.sourceSegment.argv;
     const spanResult = validateSpan({
       command: params.command,
       span: params.candidate.sourceStep.span,
@@ -175,7 +178,7 @@ function replacementForCandidate(params: {
     return {
       startIndex: params.candidate.sourceStep.span.startIndex,
       endIndex: params.candidate.sourceStep.span.endIndex,
-      text: renderSourcePreservingArgv(plannedArgv),
+      text: renderSourcePreservingArgv(sourceArgv),
     };
   }
   const executable = plannedArgv[0];

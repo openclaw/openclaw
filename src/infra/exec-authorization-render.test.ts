@@ -103,7 +103,7 @@ describe("exec authorization renderer", () => {
       }),
     );
 
-    expect(command).toBe("/usr/bin/rg -n needle");
+    expect(command).toBe("rg -n needle");
   });
 
   it("renders shell-wrapper payloads by preserving wrapper transport", async () => {
