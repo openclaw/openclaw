@@ -148,6 +148,9 @@ describe("number-coercion", () => {
     );
     expect(parseStrictTimestampStringMs("01/02/03")).toBeUndefined();
     expect(parseStrictTimestampStringMs("9999-12-31")).toBeUndefined();
+    expect(parseStrictTimestampStringMs("2026-02-29T00:00:00.000Z")).toBeUndefined();
+    expect(parseStrictTimestampStringMs("2026-02-31T00:00:00.000Z")).toBeUndefined();
+    expect(parseStrictTimestampStringMs("2026-01-01T24:00:00.000Z")).toBeUndefined();
     expect(parseStrictTimestampStringMs("+275760-09-13T00:00:00.001Z")).toBeUndefined();
   });
 
