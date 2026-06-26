@@ -6,10 +6,17 @@ const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
+  const runSubagentSpawnedMock = vi.fn(async () => {});
+  const getGlobalHookRunnerMock = vi.fn(() => ({
+    hasHooks: (hookName: string) => hookName === "subagent_spawned",
+    runSubagentSpawned: runSubagentSpawnedMock,
+  }));
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
     registerSubagentRunMock,
+    runSubagentSpawnedMock,
+    getGlobalHookRunnerMock,
   };
 });
 
@@ -28,6 +35,10 @@ vi.mock("../acp-spawn.js", () => ({
 
 vi.mock("../subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -52,6 +63,8 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.runSubagentSpawnedMock.mockClear();
+    hoisted.getGlobalHookRunnerMock.mockClear();
   });
 
   function registerAcpBackendForTest() {
@@ -309,6 +322,7 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      currentMessageId: "msg-1",
     });
 
     const result = await tool.execute("call-1", {
@@ -561,6 +575,7 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      currentMessageId: "msg-1",
     });
 
     const result = await tool.execute("call-2", {
@@ -589,11 +604,40 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(spawnContext.requesterAgentIdOverride).toBe("main");
+    expect(spawnContext.currentMessageId).toBe("msg-1");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
     expect(registration.runId).toBe("run-acp");
     expect(registration.childSessionKey).toBe("agent:codex:acp:1");
     expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterOrigin).toEqual({
+      channel: "quietchat",
+      accountId: "default",
+      to: "channel:123",
+      threadId: "456",
+      messageId: "msg-1",
+    });
+    expect(hoisted.runSubagentSpawnedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        agentId: "codex",
+        requester: {
+          channel: "quietchat",
+          accountId: "default",
+          to: "channel:123",
+          threadId: "456",
+          messageId: "msg-1",
+        },
+        threadRequested: true,
+        mode: "session",
+      }),
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:main",
+      }),
+    );
     expect(registration.requesterAgentId).toBe("main");
     expect(registration.task).toBe("investigate the failing CI run");
     expect(registration.cleanup).toBe("keep");

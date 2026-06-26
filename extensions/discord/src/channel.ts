@@ -262,7 +262,10 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveDiscordAccount,
   resolveToken: (account: ResolvedDiscordAccount) => account.token,
   resolveNames: async ({ token, entries }) =>
-    (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
+    (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({
+      token,
+      entries,
+    }),
 });
 
 function toConversationLifecycleBinding(binding: {
@@ -280,7 +283,7 @@ function toConversationLifecycleBinding(binding: {
   };
 }
 
-export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
+export const discordPlugin = Object.assign(
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
     base: {
       ...createDiscordPluginBase({
@@ -291,9 +294,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           channelId: "discord",
           resolveAccount: resolveDiscordAccount,
           normalize: ({ cfg, accountId, values }) =>
-            discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+            discordConfigAdapter.formatAllowFrom!({
+              cfg,
+              accountId,
+              allowFrom: values,
+            }),
           resolveDmAllowFrom: (account, { cfg }) =>
-            resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }),
+            resolveDiscordAccountAllowFrom({
+              cfg,
+              accountId: account.accountId,
+            }),
           resolveGroupPolicy: (account) => account.config.groupPolicy,
           resolveGroupOverrides: resolveDiscordAllowlistGroupOverrides,
         }),
@@ -488,8 +498,13 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId, threadId }) => {
-          const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
-          const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
+          const resolvedTo = resolveDiscordAttachedOutboundTarget({
+            to,
+            threadId,
+          });
+          const target = parseDiscordTarget(resolvedTo, {
+            defaultKind: "channel",
+          });
           if (!target || target.kind !== "channel") {
             return;
           }
@@ -534,7 +549,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           if (!target?.trim()) {
             return undefined;
           }
-          const parsedTarget = parseDiscordTarget(target.trim(), { defaultKind: "channel" });
+          const parsedTarget = parseDiscordTarget(target.trim(), {
+            defaultKind: "channel",
+          });
           const details: Record<string, unknown> = {
             target: {
               raw: target,
@@ -613,13 +630,19 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
                   text: `Permissions (${perms.channelId}): ${perms.permissions.length ? perms.permissions.join(", ") : "none"}`,
                 },
                 missingRequired.length > 0
-                  ? { text: `Missing required: ${missingRequired.join(", ")}`, tone: "warn" }
+                  ? {
+                      text: `Missing required: ${missingRequired.join(", ")}`,
+                      tone: "warn",
+                    }
                   : { text: "Missing required: none", tone: "success" },
               ],
             };
           } catch (err) {
             const message = formatErrorMessage(err);
-            details.permissions = { channelId: parsedTarget.id, error: message };
+            details.permissions = {
+              channelId: parsedTarget.id,
+              error: message,
+            };
             return {
               details,
               lines: [{ text: `Permissions: ${message}`, tone: "error" }],
@@ -756,4 +779,37 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint,
         }),
     },
-  });
+  }),
+  {
+    subagentProgress: {
+      handleEnded: async (params: {
+        config: OpenClawConfig;
+        event: Parameters<
+          typeof import("./subagent-progress.js").handleDiscordSubagentProgressEnded
+        >[1];
+      }): Promise<boolean> => {
+        const { handleDiscordSubagentProgressEnded } = await import("./subagent-progress.js");
+        const logger = getDiscordRuntime().logging.getChildLogger({
+          plugin: "discord",
+          feature: "subagent-progress",
+        });
+        return handleDiscordSubagentProgressEnded(
+          {
+            config: params.config,
+            logger,
+          },
+          params.event,
+        );
+      },
+    },
+  },
+) satisfies ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> & {
+  subagentProgress: {
+    handleEnded: (params: {
+      config: OpenClawConfig;
+      event: Parameters<
+        typeof import("./subagent-progress.js").handleDiscordSubagentProgressEnded
+      >[1];
+    }) => Promise<boolean>;
+  };
+};

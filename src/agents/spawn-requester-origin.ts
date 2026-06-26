@@ -104,6 +104,7 @@ export function resolveRequesterOriginForChild(params: {
   requesterAccountId?: string;
   requesterTo?: string;
   requesterThreadId?: string | number;
+  requesterMessageId?: string | number;
   requesterGroupSpace?: string | null;
   requesterMemberRoleIds?: string[];
 }) {
@@ -134,5 +135,6 @@ export function resolveRequesterOriginForChild(params: {
     accountId: boundAccountId ?? params.requesterAccountId,
     to: params.requesterTo,
     threadId: params.requesterThreadId,
+    messageId: params.requesterMessageId,
   });
 }

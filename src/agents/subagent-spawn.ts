@@ -191,6 +191,7 @@ export type SpawnSubagentContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -1210,6 +1211,7 @@ export async function spawnSubagentDirect(
     ...(ctx.agentThreadId != null && ctx.agentThreadId !== ""
       ? { threadId: ctx.agentThreadId }
       : {}),
+    messageId: ctx.currentMessageId,
   });
   let childSessionOrigin = resolveRequesterOriginForChild({
     cfg,
@@ -1219,6 +1221,7 @@ export async function spawnSubagentDirect(
     requesterAccountId: ctx.agentAccountId,
     requesterTo: ctx.agentTo,
     requesterThreadId: ctx.agentThreadId,
+    requesterMessageId: ctx.currentMessageId,
     requesterGroupSpace: ctx.agentGroupSpace,
     requesterMemberRoleIds: ctx.agentMemberRoleIds,
   });
@@ -1703,18 +1706,20 @@ export async function spawnSubagentDirect(
 
   if (hookRunner?.hasHooks("subagent_spawned")) {
     try {
+      const requester = {
+        channel: requesterOrigin?.channel,
+        accountId: requesterOrigin?.accountId,
+        to: requesterOrigin?.to,
+        threadId: requesterOrigin?.threadId,
+        messageId: requesterOrigin?.messageId,
+      };
       await hookRunner.runSubagentSpawned(
         {
           runId: childRunId,
           childSessionKey,
           agentId: targetAgentId,
           label: label || undefined,
-          requester: {
-            channel: requesterOrigin?.channel,
-            accountId: requesterOrigin?.accountId,
-            to: requesterOrigin?.to,
-            threadId: requesterOrigin?.threadId,
-          },
+          requester,
           threadRequested: requestThreadBinding,
           mode: spawnMode,
           ...resolvedModelMetadata,

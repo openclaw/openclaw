@@ -109,6 +109,7 @@ async function spawn(params?: {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessageId?: string | number;
 }) {
   return await spawnSubagentDirect(
     {
@@ -128,6 +129,7 @@ async function spawn(params?: {
       agentAccountId: params?.agentAccountId,
       agentTo: params?.agentTo,
       agentThreadId: params?.agentThreadId,
+      currentMessageId: params?.currentMessageId,
     },
   );
 }
@@ -291,6 +293,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
+      currentMessageId: "msg-1",
       context: "isolated",
     });
 
@@ -356,6 +359,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         accountId: "work",
         to: "channel:123",
         threadId: 456,
+        messageId: "msg-1",
       },
       "spawned requester",
     );

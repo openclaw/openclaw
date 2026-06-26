@@ -373,6 +373,33 @@ describe("discord config schema", () => {
         },
       },
     },
+    {
+      name: "subagent progress config",
+      config: {
+        subagentProgress: {
+          enabled: true,
+          reactions: {
+            enabled: true,
+            runningOrdinals: ["1️⃣", "2️⃣"],
+            failure: "🔴",
+          },
+          typing: {
+            enabled: true,
+            intervalMs: 8500,
+            maxDurationMs: 3600000,
+          },
+        },
+        accounts: {
+          work: {
+            subagentProgress: {
+              typing: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    },
   ] as const)("accepts $name", ({ config }) => {
     expect(DiscordConfigSchema.safeParse(config).success).toBe(true);
   });
@@ -393,6 +420,19 @@ describe("discord config schema", () => {
           enabled: true,
           intervalMs: 5000,
           minUpdateIntervalMs: 6000,
+        },
+      },
+    },
+    {
+      name: "invalid subagent progress config",
+      config: {
+        subagentProgress: {
+          reactions: {
+            runningOrdinals: [""],
+          },
+          typing: {
+            intervalMs: 0,
+          },
         },
       },
     },

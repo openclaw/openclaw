@@ -30,6 +30,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   emitSubagentEndedHookOnce,
+  resetSubagentRunProgressEndedHookMarker,
   shouldUpdateRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
@@ -421,6 +422,7 @@ export function createSubagentRunManager(params: {
         endedAt: entry.endedAt,
       });
       if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+        resetSubagentRunProgressEndedHookMarker(entry);
         entry.outcome = outcome;
         mutated = true;
       }
@@ -581,6 +583,7 @@ export function createSubagentRunManager(params: {
       endedReason: undefined,
       pauseReason: undefined,
       endedHookEmittedAt: undefined,
+      progressEndedHookEmittedAt: undefined,
       browserCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,

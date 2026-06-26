@@ -45,7 +45,10 @@ import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
+import {
+  resetSubagentRunProgressEndedHookMarker,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -130,6 +133,12 @@ export function createSubagentRegistryLifecycleController(params: {
     reason: SubagentLifecycleEndedReason;
   }): boolean;
   emitSubagentEndedHookForRun(args: {
+    entry: SubagentRunRecord;
+    reason?: SubagentLifecycleEndedReason;
+    sendFarewell?: boolean;
+    accountId?: string;
+  }): Promise<void>;
+  emitSubagentProgressEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason?: SubagentLifecycleEndedReason;
     sendFarewell?: boolean;
@@ -1172,6 +1181,7 @@ export function createSubagentRegistryLifecycleController(params: {
       endedAt,
     });
     if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+      resetSubagentRunProgressEndedHookMarker(entry);
       entry.outcome = outcome;
       mutated = true;
     }
@@ -1243,6 +1253,14 @@ export function createSubagentRegistryLifecycleController(params: {
       completeParams.triggerCleanup &&
       entry.expectsCompletionMessage === true &&
       !suppressedForSteerRestart;
+    if (!suppressedForSteerRestart) {
+      await params.emitSubagentProgressEndedHookForRun({
+        entry,
+        reason: completionReason,
+        sendFarewell: completeParams.sendFarewell,
+        accountId: completeParams.accountId,
+      });
+    }
     if (!shouldDeferEndedHook && shouldEmitEndedHook) {
       await params.emitSubagentEndedHookForRun({
         entry,

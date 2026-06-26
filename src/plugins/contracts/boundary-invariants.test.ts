@@ -29,7 +29,11 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/active-memory/index.ts": ["before_prompt_build"],
   "extensions/codex/index.ts": ["inbound_claim"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
-  "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/discord/subagent-hooks-api.ts": [
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_spawned",
+  ],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
@@ -158,7 +162,10 @@ function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): st
   if (!rootRelativePath || rootRelativePath.startsWith("..")) {
     return null;
   }
-  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: rootRelativePath });
+  const files = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: rootRelativePath,
+  });
   if (!files) {
     return null;
   }

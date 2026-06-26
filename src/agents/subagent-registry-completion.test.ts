@@ -8,17 +8,36 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const lifecycleMocks = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
+  getChannelPlugin: vi.fn(),
+  handleProgressEnded: vi.fn<(params?: unknown) => Promise<boolean | void>>(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: lifecycleMocks.getGlobalHookRunner,
 }));
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: lifecycleMocks.getChannelPlugin,
+}));
+
+function firstSubagentEndedEvent(): unknown {
+  return (
+    lifecycleMocks.runSubagentEnded.mock.calls as unknown as Array<[event: unknown, ctx: unknown]>
+  )[0]?.[0];
+}
+
 function createRunEntry(): SubagentRunRecord {
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:child-1",
     requesterSessionKey: "agent:main:main",
+    requesterOrigin: {
+      channel: "discord",
+      accountId: "work",
+      to: "channel:123",
+      threadId: "456",
+      messageId: "msg-1",
+    },
     requesterDisplayKey: "main",
     task: "task",
     cleanup: "keep",
@@ -50,20 +69,44 @@ describe("emitSubagentEndedHookOnce", () => {
 
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
+    lifecycleMocks.getChannelPlugin.mockReset();
+    lifecycleMocks.handleProgressEnded.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
   it("treats timing differences as different only after both outcomes have timing", () => {
     expect(
       mod.shouldUpdateRunOutcome(
-        { status: "timeout", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
-        { status: "timeout", startedAt: 1_000, endedAt: 2_500, elapsedMs: 1_500 },
+        {
+          status: "timeout",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          elapsedMs: 1_000,
+        },
+        {
+          status: "timeout",
+          startedAt: 1_000,
+          endedAt: 2_500,
+          elapsedMs: 1_500,
+        },
       ),
     ).toBe(true);
     expect(
       mod.shouldUpdateRunOutcome(
-        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
-        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        {
+          status: "error",
+          error: "boom",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          elapsedMs: 1_000,
+        },
+        {
+          status: "error",
+          error: "boom",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          elapsedMs: 1_000,
+        },
       ),
     ).toBe(false);
     expect(
@@ -84,6 +127,17 @@ describe("emitSubagentEndedHookOnce", () => {
         { status: "ok" },
       ),
     ).toBe(false);
+  });
+
+  it("clears progress-ended marker before replacing a completed outcome", () => {
+    const entry = createRunEntry();
+    entry.endedHookEmittedAt = 1_000;
+    entry.progressEndedHookEmittedAt = 1_100;
+
+    mod.resetSubagentRunProgressEndedHookMarker(entry);
+
+    expect(entry.endedHookEmittedAt).toBe(1_000);
+    expect(entry.progressEndedHookEmittedAt).toBeUndefined();
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
@@ -112,8 +166,57 @@ describe("emitSubagentEndedHookOnce", () => {
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(firstSubagentEndedEvent()).toMatchObject({
+      requester: {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:123",
+        threadId: "456",
+        messageId: "msg-1",
+      },
+    });
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
     expect(params.persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs internal progress-ended hooks without marking subagent_ended emitted", async () => {
+    lifecycleMocks.getChannelPlugin.mockReturnValue({
+      subagentProgress: { handleEnded: lifecycleMocks.handleProgressEnded },
+    });
+    const params = createEmitParams();
+    params.config = { channels: { discord: { enabled: true } } };
+    const emitted = await mod.emitSubagentProgressEndedHookOnce(params);
+
+    expect(emitted).toBe(true);
+    expect(lifecycleMocks.getChannelPlugin).toHaveBeenCalledWith("discord");
+    expect(lifecycleMocks.handleProgressEnded).toHaveBeenCalledWith({
+      config: params.config,
+      event: expect.objectContaining({
+        runId: "run-1",
+        requester: expect.objectContaining({
+          channel: "discord",
+          messageId: "msg-1",
+        }),
+      }),
+    });
+    expect(typeof params.entry.progressEndedHookEmittedAt).toBe("number");
+    expect(params.entry.endedHookEmittedAt).toBeUndefined();
+    expect(params.persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps progress-ended cleanup retryable when the channel reports it was not handled", async () => {
+    lifecycleMocks.handleProgressEnded.mockResolvedValueOnce(false);
+    lifecycleMocks.getChannelPlugin.mockReturnValue({
+      subagentProgress: { handleEnded: lifecycleMocks.handleProgressEnded },
+    });
+    const params = createEmitParams();
+    params.config = { channels: { discord: { enabled: true } } };
+    const emitted = await mod.emitSubagentProgressEndedHookOnce(params);
+
+    expect(emitted).toBe(false);
+    expect(lifecycleMocks.handleProgressEnded).toHaveBeenCalledTimes(1);
+    expect(params.entry.progressEndedHookEmittedAt).toBeUndefined();
+    expect(params.persist).not.toHaveBeenCalled();
   });
 
   it("returns false when the global hook runner is not initialized yet", async () => {

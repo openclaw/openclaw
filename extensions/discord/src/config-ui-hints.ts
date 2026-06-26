@@ -174,6 +174,34 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
+  "subagentProgress.enabled": {
+    label: "Discord Subagent Progress",
+    help: "Show the active spawned subagent count on the original Discord message with a count reaction and typing keepalive. Default: false; set true to opt in.",
+  },
+  "subagentProgress.reactions.enabled": {
+    label: "Discord Subagent Progress Reactions",
+    help: "Replace the Discord count reaction as active subagents start and stop, and keep a durable failure reaction when any subagent ends non-ok. Default: true.",
+  },
+  "subagentProgress.reactions.runningOrdinals": {
+    label: "Discord Subagent Running Reactions",
+    help: "Emoji list used for active subagent counts. Counts above the list use the last configured emoji. Defaults to 1 through 10 keycap emoji.",
+  },
+  "subagentProgress.reactions.failure": {
+    label: "Discord Subagent Failure Reaction",
+    help: "Generic durable emoji added to the source Discord message when any tracked subagent ends non-ok. Default: red circle.",
+  },
+  "subagentProgress.typing.enabled": {
+    label: "Discord Subagent Typing",
+    help: "Keep Discord typing active while tracked subagents remain active. Default: true.",
+  },
+  "subagentProgress.typing.intervalMs": {
+    label: "Discord Subagent Typing Interval (ms)",
+    help: "How often to refresh Discord typing for active subagents. Default: 8500.",
+  },
+  "subagentProgress.typing.maxDurationMs": {
+    label: "Discord Subagent Typing TTL (ms)",
+    help: "Safety maximum duration for one subagent typing keepalive. Default: 3600000.",
+  },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
     help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",

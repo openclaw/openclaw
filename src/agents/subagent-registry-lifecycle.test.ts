@@ -187,6 +187,7 @@ function createLifecycleController({
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
+    emitSubagentProgressEndedHookForRun: vi.fn(async () => {}),
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
     callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
@@ -883,18 +884,20 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
-  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
+  it("emits progress-ended and ended hooks while retrying cleanup after completion was already delivered", async () => {
     const entry = createRunEntry({
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
       expectsCompletionMessage: true,
     });
     const emitSubagentEndedHookForRun = vi.fn(async () => {});
+    const emitSubagentProgressEndedHookForRun = vi.fn(async () => {});
 
     const controller = createLifecycleController({
       entry,
       shouldEmitEndedHookForRun: () => true,
       emitSubagentEndedHookForRun,
+      emitSubagentProgressEndedHookForRun,
     });
 
     await expect(
@@ -912,6 +915,50 @@ describe("subagent registry lifecycle hardening", () => {
       entry,
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       sendFarewell: true,
+    });
+    expect(emitSubagentProgressEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentProgressEndedHookForRun).toHaveBeenCalledWith({
+      entry,
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("emits progress-ended hook for persistent session-mode completion without ended hook", async () => {
+    const entry = createRunEntry({
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+    const emitSubagentProgressEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun,
+      emitSubagentProgressEndedHookForRun,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
+    expect(emitSubagentProgressEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentProgressEndedHookForRun).toHaveBeenCalledWith({
+      entry,
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: undefined,
+      accountId: undefined,
     });
   });
 

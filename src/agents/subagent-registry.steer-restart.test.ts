@@ -76,6 +76,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
+const handleProgressEndedMock = vi.fn(async (_params?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
 
@@ -155,6 +156,12 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   resetGlobalHookRunner: vi.fn(),
 }));
 
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: vi.fn(() => ({
+    subagentProgress: { handleEnded: handleProgressEndedMock },
+  })),
+}));
+
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
 }));
@@ -190,6 +197,8 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
     runSubagentEndedHookMock.mockImplementation(async () => {});
+    handleProgressEndedMock.mockReset();
+    handleProgressEndedMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     removeInternalSessionEffectsTranscriptMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
@@ -314,6 +323,8 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
     runSubagentEndedHookMock.mockImplementation(async () => {});
+    handleProgressEndedMock.mockReset();
+    handleProgressEndedMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
     removeInternalSessionEffectsTranscriptMock.mockClear();
@@ -413,6 +424,7 @@ describe("subagent registry steer restarts", () => {
       await waitForRegistrySideEffect(() => {
         expect(announceSpy).toHaveBeenCalledTimes(1);
       });
+      expect(handleProgressEndedMock).toHaveBeenCalledTimes(1);
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
       resolveAnnounce(true);
@@ -441,6 +453,7 @@ describe("subagent registry steer restarts", () => {
       emitLifecycleEnd("run-persistent-session");
 
       await flushAnnounce();
+      expect(handleProgressEndedMock).toHaveBeenCalledTimes(1);
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
       resolveAnnounce(true);
@@ -465,7 +478,11 @@ describe("subagent registry steer restarts", () => {
       const previous = listMainRuns()[0];
       expect(previous?.runId).toBe("run-retry-reset-old");
       if (previous) {
-        previous.delivery = { status: "pending", attemptCount: 2, lastAttemptAt: Date.now() };
+        previous.delivery = {
+          status: "pending",
+          attemptCount: 2,
+          lastAttemptAt: Date.now(),
+        };
       }
 
       const run = replaceRunAfterSteer({
@@ -484,12 +501,18 @@ describe("subagent registry steer restarts", () => {
         runId: "run-terminal-state-old",
         childSessionKey: "agent:main:subagent:terminal-state",
         task: "terminal state",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "work",
+        },
       });
 
       const previous = listMainRuns()[0];
       expect(previous?.runId).toBe("run-terminal-state-old");
       if (previous) {
         previous.endedHookEmittedAt = Date.now();
+        previous.progressEndedHookEmittedAt = Date.now();
         previous.endedReason = "subagent-complete";
         previous.endedAt = Date.now();
         previous.outcome = { status: "ok" };
@@ -501,14 +524,20 @@ describe("subagent registry steer restarts", () => {
         fallback: previous,
       });
       expect(run.endedHookEmittedAt).toBeUndefined();
+      expect(run.progressEndedHookEmittedAt).toBeUndefined();
       expect(run.endedReason).toBeUndefined();
 
+      handleProgressEndedMock.mockClear();
       emitLifecycleEnd("run-terminal-state-new");
 
       await waitForRegistrySideEffect(() => {
         const hookCall = requireSubagentEndedHookCall("run-terminal-state-new");
         expect(hookCall.event.runId).toBe("run-terminal-state-new");
         expect(hookCall.ctx.runId).toBe("run-terminal-state-new");
+      });
+      expect(handleProgressEndedMock).toHaveBeenCalledWith({
+        config: expect.any(Object),
+        event: expect.objectContaining({ runId: "run-terminal-state-new" }),
       });
       const lifecycleEvent = requireSessionLifecycleEventCall("terminal-state lifecycle event");
       expect(lifecycleEvent.sessionKey).toBe("agent:main:subagent:terminal-state");
@@ -760,9 +789,12 @@ describe("subagent registry steer restarts", () => {
       task: "race test",
     });
 
-    expect(mod.markSubagentRunTerminated({ runId: "run-kill-race", reason: "manual kill" })).toBe(
-      1,
-    );
+    expect(
+      mod.markSubagentRunTerminated({
+        runId: "run-kill-race",
+        reason: "manual kill",
+      }),
+    ).toBe(1);
     expect(listMainRuns()[0]?.suppressAnnounceReason).toBe("killed");
     expect(listMainRuns()[0]?.cleanupHandled).toBe(true);
     expect(typeof listMainRuns()[0]?.cleanupCompletedAt).toBe("number");

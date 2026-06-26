@@ -214,6 +214,7 @@ export function createOpenClawTools(
     to: options?.agentTo,
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
+    messageId: options?.currentMessageId,
   });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
@@ -522,6 +523,7 @@ export function createOpenClawTools(
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
             agentThreadId: options?.agentThreadId,
+            currentMessageId: options?.currentMessageId,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,

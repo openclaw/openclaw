@@ -49,6 +49,11 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   if (threadId != null) {
     normalized.threadId = threadId;
   }
+  const messageId =
+    typeof context.messageId === "string" ? context.messageId.trim() : context.messageId;
+  if (messageId != null && messageId !== "") {
+    normalized.messageId = messageId;
+  }
   return normalized;
 }
 
@@ -138,6 +143,7 @@ function mergeExternalDeliveryContextOverInternalRoute(
     to: deliveryContext?.to,
     accountId: deliveryContext?.accountId ?? internalContext?.accountId,
     threadId: deliveryContext?.threadId ?? internalContext?.threadId,
+    messageId: deliveryContext?.messageId ?? internalContext?.messageId,
   });
 }
 
@@ -256,6 +262,9 @@ export function mergeDeliveryContext(
     threadId: channelsConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
+    messageId: channelsConflict
+      ? normalizedPrimary?.messageId
+      : (normalizedPrimary?.messageId ?? normalizedFallback?.messageId),
   });
 }
 

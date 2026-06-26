@@ -26,6 +26,8 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     createdAt: 100,
     startedAt: 110,
     endedAt: 250,
+    endedHookEmittedAt: 300,
+    progressEndedHookEmittedAt: 310,
     outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
     expectsCompletionMessage: true,
     completion: {
@@ -91,6 +93,8 @@ describe("subagent registry sqlite store", () => {
         task: run.task,
         endedAt: run.endedAt,
         outcome: run.outcome,
+        endedHookEmittedAt: run.endedHookEmittedAt,
+        progressEndedHookEmittedAt: run.progressEndedHookEmittedAt,
         completion: run.completion,
         delivery: run.delivery,
       });

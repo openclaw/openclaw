@@ -42,6 +42,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   emitSubagentEndedHookOnce,
+  emitSubagentProgressEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
@@ -303,6 +304,7 @@ export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxR
 
 const resumedRuns = new Set<string>();
 const endedHookInFlightRunIds = new Set<string>();
+const progressEndedHookInFlightRunIds = new Set<string>();
 const pendingLifecycleErrorByRunId = new Map<
   string,
   {
@@ -582,6 +584,37 @@ async function emitSubagentEndedHookForRun(params: {
   });
 }
 
+async function emitSubagentProgressEndedHookForRun(params: {
+  entry: SubagentRunRecord;
+  reason?: SubagentLifecycleEndedReason;
+  sendFarewell?: boolean;
+  accountId?: string;
+}) {
+  if (params.entry.progressEndedHookEmittedAt) {
+    return;
+  }
+  const cfg = subagentRegistryDeps.getRuntimeConfig();
+  await ensureSubagentRegistryPluginRuntimeLoaded({
+    config: cfg,
+    workspaceDir: params.entry.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
+  const reason = params.reason ?? params.entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+  const outcome = resolveLifecycleOutcomeFromRunOutcome(params.entry.outcome);
+  const error = params.entry.outcome?.status === "error" ? params.entry.outcome.error : undefined;
+  await emitSubagentProgressEndedHookOnce({
+    entry: params.entry,
+    config: cfg,
+    reason,
+    sendFarewell: params.sendFarewell,
+    accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
+    outcome,
+    error,
+    inFlightRunIds: progressEndedHookInFlightRunIds,
+    persist: persistSubagentRuns,
+  });
+}
+
 const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
@@ -592,6 +625,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   suppressAnnounceForSteerRestart,
   shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun,
+  emitSubagentProgressEndedHookForRun,
   notifyContextEngineSubagentEnded,
   resumeSubagentRun,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
@@ -1256,6 +1290,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
+  progressEndedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
   clearAllPendingLifecycleTimeouts();
   contextEngineInitLoader.clear();

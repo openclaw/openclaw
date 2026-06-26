@@ -145,8 +145,10 @@ observation-only.
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
 - `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
+- Subagent lifecycle hooks expose source-request metadata for plugin authors who need to correlate launches, completions, and delivery cleanup with the originating channel event. `subagent_spawned`, `subagent_ended`, and deprecated `subagent_spawning` include an optional `requester` object (`PluginHookSubagentRequester`) with `channel`, `accountId`, `to`, `threadId`, and `messageId` when known.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 - `subagent_ended` carries `targetSessionKey` (identity — this matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the corresponding `subagent_spawned` event.
+- The deprecated `subagent_spawning` `deliveryOrigin`, `subagent_delivery_target` event `requesterOrigin`, and `subagent_delivery_target` result `origin` use the same generic delivery-origin shape (`channel`, `accountId`, `to`, `threadId`, and `messageId`). Prefer core route projection and channel session bindings for new routing behavior; use these fields only for compatibility, observation, or cleanup logic.
 
 **Lifecycle**
 

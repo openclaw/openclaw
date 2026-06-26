@@ -24,6 +24,8 @@ export type DeliveryContext = Pick<
   accountId?: string;
   /** Optional thread/topic id nested under `to`. */
   threadId?: string | number;
+  /** Optional inbound source message id for channel-local reaction/status targets. */
+  messageId?: string | number;
   /** Optional queued-delivery intent associated with this context. */
   deliveryIntent?: DeliveryIntentRef;
 };

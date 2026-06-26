@@ -76,6 +76,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     to: params.options?.agentTo,
     accountId: params.options?.agentAccountId,
     threadId: params.options?.agentThreadId,
+    messageId: params.options?.currentMessageId,
   });
 
   const resolveCurrentRuntimeConfig = () => {

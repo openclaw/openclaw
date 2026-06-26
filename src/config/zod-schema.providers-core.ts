@@ -746,6 +746,28 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z
+      .object({
+        enabled: z.boolean().optional(),
+        reactions: z
+          .object({
+            enabled: z.boolean().optional(),
+            runningOrdinals: z.array(z.string().min(1)).optional(),
+            failure: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        typing: z
+          .object({
+            enabled: z.boolean().optional(),
+            intervalMs: z.number().int().positive().optional(),
+            maxDurationMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),

@@ -15,11 +15,13 @@ describe("delivery context helpers", () => {
         channel: " demo-channel ",
         to: " +1555 ",
         accountId: " acct-1 ",
+        messageId: " msg-1 ",
       }),
     ).toEqual({
       channel: "demo-channel",
       to: "+1555",
       accountId: "acct-1",
+      messageId: "msg-1",
     });
 
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();

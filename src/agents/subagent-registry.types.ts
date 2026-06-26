@@ -118,6 +118,8 @@ export type SubagentRunRecord = {
   completion?: SubagentCompletionState;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
+  /** Set after visible source-message progress cleanup hooks have run once. */
+  progressEndedHookEmittedAt?: number;
   /** Set after cleanupBrowserSessionsForLifecycleEnd has been dispatched once. */
   browserCleanupDispatchedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
