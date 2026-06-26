@@ -344,7 +344,7 @@ function isAbortLikeRunFailure(value: unknown): boolean {
     typeof value === "string"
       ? value
       : value && typeof value === "object" && "message" in value
-        ? String((value as { message?: unknown }).message ?? "")
+        ? (readStringValue((value as { message?: unknown }).message) ?? "")
         : "";
   return /aborted/i.test(message);
 }
