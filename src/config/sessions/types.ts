@@ -260,6 +260,10 @@ export type SessionEntry = {
   recoveredFromStaleRunning?: boolean;
   /** Machine-readable reason for the stale running row reconciliation. */
   staleRunningRecoveryReason?: string;
+  /** Timestamp (ms) when the stale running row was reconciled. */
+  staleRunningRecoveredAt?: number;
+  /** True when the reconciliation path already emitted a safe fallback final. */
+  safeFallbackDelivered?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */
