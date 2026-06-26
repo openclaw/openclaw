@@ -127,9 +127,10 @@ export async function createLmstudioEmbeddingProvider(
   // Precedence: model contextTokens → model contextWindow (capped by
   // provider contextTokens) → provider contextTokens → provider contextWindow.
   const modelConfig = providerConfig?.models?.find((m) => m.id === model);
+  let requestedContextLength: number | undefined;
   const modelTokens = asPositiveSafeInteger(modelConfig?.contextTokens);
   if (modelTokens !== undefined) {
-    var requestedContextLength: number | undefined = modelTokens;
+    requestedContextLength = modelTokens;
   } else {
     const modelWindow = asPositiveSafeInteger(modelConfig?.contextWindow);
     const providerTokens = asPositiveSafeInteger(providerConfig?.contextTokens);
