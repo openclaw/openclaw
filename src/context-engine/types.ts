@@ -137,6 +137,8 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
+    /** Storage-neutral successor session target after compaction. */
+    sessionTarget?: ContextEngineSessionTarget;
   };
 };
 
