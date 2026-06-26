@@ -15,9 +15,13 @@ export type ExecApprovalRequestPayload = {
     endIndex: number;
   }[];
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
 };
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type ExecApprovalAllowAlwaysUnavailableReason =
+  | "approval-policy-always"
+  | "non-persistable-command";
 
 export type ExecApprovalRequest = {
   id: string;
@@ -103,6 +107,14 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parseAllowAlwaysUnavailableReason(
+  value: unknown,
+): ExecApprovalAllowAlwaysUnavailableReason | undefined {
+  return value === "approval-policy-always" || value === "non-persistable-command"
+    ? value
+    : undefined;
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -135,6 +147,9 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      allowAlwaysUnavailableReason: parseAllowAlwaysUnavailableReason(
+        request.allowAlwaysUnavailableReason,
+      ),
     },
     createdAtMs,
     expiresAtMs,
@@ -188,6 +203,9 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      allowAlwaysUnavailableReason: parseAllowAlwaysUnavailableReason(
+        request.allowAlwaysUnavailableReason,
+      ),
     },
     pluginTitle: title,
     pluginDescription: description,

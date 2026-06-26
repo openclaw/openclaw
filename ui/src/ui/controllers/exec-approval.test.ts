@@ -67,12 +67,14 @@ describe("parseExecApprovalRequested", () => {
       request: {
         command: "pwd",
         allowedDecisions: ["allow-once", "bad", "deny", "allow-always"],
+        allowAlwaysUnavailableReason: "non-persistable-command",
       },
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });
 
     expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
+    expect(result?.request.allowAlwaysUnavailableReason).toBe("non-persistable-command");
   });
 });
 

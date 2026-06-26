@@ -32,6 +32,8 @@ import {
 } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
+  describeExecApprovalAllowAlwaysUnavailableReason,
+  describeExecApprovalBackgroundModeUnavailableReason,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -289,12 +291,16 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
-      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
+      : describeExecApprovalBackgroundModeUnavailableReason(
+          request.request.allowAlwaysUnavailableReason,
+        ),
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      describeExecApprovalAllowAlwaysUnavailableReason(
+        request.request.allowAlwaysUnavailableReason,
+      ),
     );
   }
   return lines.join("\n");

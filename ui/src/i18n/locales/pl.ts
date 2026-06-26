@@ -372,6 +372,8 @@ export const pl: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "Obowiązująca zasada zatwierdzania wymaga zatwierdzenia za każdym razem, więc opcja Zawsze zezwalaj jest niedostępna.",
+    allowAlwaysUnavailableNonPersistable:
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",

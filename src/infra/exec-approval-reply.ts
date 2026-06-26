@@ -18,7 +18,9 @@ import {
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
 import {
+  describeExecApprovalAllowAlwaysUnavailableReason,
   resolveExecApprovalAllowedDecisions,
+  type ExecApprovalAllowAlwaysUnavailableReason,
   type ExecApprovalDecision,
   type ExecHost,
 } from "./exec-approvals.js";
@@ -35,6 +37,7 @@ export type ExecApprovalReplyMetadata = {
   approvalKind: "exec" | "plugin";
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   sessionKey?: string;
 };
 
@@ -53,6 +56,7 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -335,6 +339,11 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
+  const allowAlwaysUnavailableReason =
+    record.allowAlwaysUnavailableReason === "approval-policy-always" ||
+    record.allowAlwaysUnavailableReason === "non-persistable-command"
+      ? record.allowAlwaysUnavailableReason
+      : undefined;
   const agentId = normalizeOptionalString(record.agentId);
   const sessionKey = normalizeOptionalString(record.sessionKey);
   return {
@@ -343,6 +352,7 @@ export function getExecApprovalReplyMetadata(
     approvalKind,
     agentId,
     allowedDecisions,
+    allowAlwaysUnavailableReason,
     sessionKey,
   };
 }
@@ -377,7 +387,7 @@ export function buildExecApprovalPendingReplyPayload(
   }
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      describeExecApprovalAllowAlwaysUnavailableReason(params.allowAlwaysUnavailableReason),
     );
   }
   const info: string[] = [];
@@ -409,6 +419,7 @@ export function buildExecApprovalPendingReplyPayload(
         approvalKind: "exec",
         agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
+        allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason ?? undefined,
         sessionKey: normalizeOptionalString(params.sessionKey),
       },
     },

@@ -26,6 +26,7 @@ let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarge
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
 let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
 let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").normalizeExecApprovalUnavailableDecisions;
+let resolveExecApprovalAllowAlwaysUnavailableReason: typeof import("./exec-approvals.js").resolveExecApprovalAllowAlwaysUnavailableReason;
 let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
@@ -54,6 +55,8 @@ async function loadActualExecApprovalModules(): Promise<void> {
   requiresExecApproval = execApprovals.requiresExecApproval;
   normalizeExecApprovalUnavailableDecisions =
     execApprovals.normalizeExecApprovalUnavailableDecisions;
+  resolveExecApprovalAllowAlwaysUnavailableReason =
+    execApprovals.resolveExecApprovalAllowAlwaysUnavailableReason;
   resolveExecApprovalUnavailableDecisions = execApprovals.resolveExecApprovalUnavailableDecisions;
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
@@ -263,6 +266,19 @@ describe("exec approvals policy helpers", () => {
         allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
       }),
     ).toEqual(["allow-always"]);
+  });
+
+  it("explains why allow-always is unavailable", () => {
+    expect(resolveExecApprovalAllowAlwaysUnavailableReason({ ask: "always" })).toBe(
+      "approval-policy-always",
+    );
+    expect(
+      resolveExecApprovalAllowAlwaysUnavailableReason({
+        ask: "on-miss",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      }),
+    ).toBe("non-persistable-command");
+    expect(resolveExecApprovalAllowAlwaysUnavailableReason({ ask: "on-miss" })).toBeNull();
   });
 
   it.each([

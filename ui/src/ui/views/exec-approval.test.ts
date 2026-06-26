@@ -158,6 +158,20 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("explains non-persistable exec approvals", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "deny"];
+    request.request.allowAlwaysUnavailableReason = "non-persistable-command";
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
+    );
+  });
+
   it("falls back to ask when exec approval decisions are omitted", async () => {
     const request = createExecRequest();
     request.request.ask = "always";

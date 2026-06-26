@@ -18,6 +18,7 @@ import {
   resolveExecApprovals,
   resolveExecApprovalsTranscriptPath,
   type ExecAsk,
+  type ExecApprovalAllowAlwaysUnavailableReason,
   type ExecApprovalDecision,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
@@ -503,6 +504,7 @@ export function buildExecApprovalPendingToolResult(params: {
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
@@ -525,6 +527,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
                 allowedDecisions,
+                allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,
@@ -553,6 +556,7 @@ export function buildExecApprovalPendingToolResult(params: {
             approvalSlug: params.approvalSlug,
             expiresAtMs: params.expiresAtMs,
             allowedDecisions,
+            allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason ?? undefined,
             host: params.host,
             command: params.command,
             cwd: params.cwd,

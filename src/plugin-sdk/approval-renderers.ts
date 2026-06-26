@@ -29,6 +29,8 @@ export function buildApprovalPendingReplyPayload(params: {
   agentId?: string | null;
   /** Decisions rendered as buttons and accepted by the approval command. */
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  /** Optional reason shown when Allow Always is hidden for exec approvals. */
+  allowAlwaysUnavailableReason?: "approval-policy-always" | "non-persistable-command" | null;
   /** Optional session key associated with the approval request. */
   sessionKey?: string | null;
   /** Channel-specific metadata merged with the shared approval metadata. */
@@ -50,6 +52,7 @@ export function buildApprovalPendingReplyPayload(params: {
         approvalKind: params.approvalKind ?? "exec",
         agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
+        allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason ?? undefined,
         sessionKey: normalizeOptionalString(params.sessionKey),
         state: "pending",
       },

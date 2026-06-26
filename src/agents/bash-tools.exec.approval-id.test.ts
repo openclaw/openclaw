@@ -250,7 +250,7 @@ function expectPendingApprovalText(
     expect(pendingText).toContain(
       (options.allowedDecisions ?? "").includes("allow-always")
         ? "Background mode requires pre-approved policy"
-        : "Background mode requires an effective policy that allows pre-approval",
+        : "Background mode note: non-interactive runs cannot wait for chat approvals",
     );
   }
   return details;

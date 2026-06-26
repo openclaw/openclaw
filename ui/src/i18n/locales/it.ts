@@ -373,6 +373,8 @@ export const it: TranslationMap = {
     alwaysAllow: "Consenti sempre",
     allowAlwaysUnavailable:
       "Il criterio di approvazione effettivo richiede l’approvazione ogni volta, quindi Consenti sempre non è disponibile.",
+    allowAlwaysUnavailableNonPersistable:
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     deny: "Nega",
     labels: {
       host: "Host",

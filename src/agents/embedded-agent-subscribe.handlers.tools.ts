@@ -579,6 +579,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalSlug: string;
   expiresAtMs?: number;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: "approval-policy-always" | "non-persistable-command";
   host: "gateway" | "node";
   command: string;
   cwd?: string;
@@ -613,6 +614,11 @@ function readExecApprovalPendingDetails(result: unknown): {
             decision === "allow-once" || decision === "allow-always" || decision === "deny",
         )
       : undefined,
+    allowAlwaysUnavailableReason:
+      details.allowAlwaysUnavailableReason === "approval-policy-always" ||
+      details.allowAlwaysUnavailableReason === "non-persistable-command"
+        ? details.allowAlwaysUnavailableReason
+        : undefined,
     host,
     command,
     cwd: readStringValue(details.cwd),
@@ -692,6 +698,7 @@ async function emitToolResultOutput(params: {
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
+          allowAlwaysUnavailableReason: approvalPending.allowAlwaysUnavailableReason,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,

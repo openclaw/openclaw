@@ -164,6 +164,22 @@ const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
         : [],
   ),
 );
+const resolveExecApprovalAllowAlwaysUnavailableReasonMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): "approval-policy-always" | "non-persistable-command" | null => {
+      if (params?.ask === "always") {
+        return "approval-policy-always";
+      }
+      if (params?.allowAlwaysPersistence?.kind === "one-shot") {
+        return "non-persistable-command";
+      }
+      return null;
+    },
+  ),
+);
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
@@ -222,6 +238,8 @@ vi.mock("../infra/exec-approvals.js", () => ({
   resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
   resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
+  resolveExecApprovalAllowAlwaysUnavailableReason:
+    resolveExecApprovalAllowAlwaysUnavailableReasonMock,
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
   resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
   maxAsk: (a: ExecAsk, b: ExecAsk): ExecAsk => {
@@ -1791,9 +1809,13 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "approval-policy-always",
+    );
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "approval-policy-always",
       }),
     );
   });
@@ -2247,9 +2269,13 @@ describe("executeNodeHostCommand", () => {
       allowAlwaysPersistence: { kind: "one-shot", reasons: ["unplanned"] },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "non-persistable-command",
+    );
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "non-persistable-command",
       }),
     );
   });

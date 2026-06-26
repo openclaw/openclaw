@@ -2646,6 +2646,7 @@ describe("exec approval handlers", () => {
         validateExecApprovalRequestParams({
           ...baseParams,
           unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "non-persistable-command",
         }),
       ).toBe(true);
     });
@@ -3345,7 +3346,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     });
 
     const denyRespond = vi.fn();
@@ -3371,6 +3372,7 @@ describe("exec approval handlers", () => {
       params: {
         twoPhase: true,
         unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "non-persistable-command",
       },
     });
     const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
@@ -3388,7 +3390,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     });
 
     const allowOnceRespond = vi.fn();
@@ -3414,11 +3416,13 @@ describe("exec approval handlers", () => {
       params: {
         twoPhase: true,
         unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "non-persistable-command",
       },
     });
     const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(request.allowAlwaysUnavailableReason).toBe("non-persistable-command");
 
     const denyRespond = vi.fn();
     await resolveExecApproval({

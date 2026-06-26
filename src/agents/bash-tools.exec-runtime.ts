@@ -13,9 +13,12 @@ import {
 } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  describeExecApprovalAllowAlwaysUnavailableReason,
+  describeExecApprovalBackgroundModeUnavailableReason,
   resolveExecApprovalAllowedDecisions,
-  type ExecHost,
+  type ExecApprovalAllowAlwaysUnavailableReason,
   type ExecApprovalDecision,
+  type ExecHost,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -368,6 +371,7 @@ export function buildApprovalPendingMessage(params: {
   approvalSlug: string;
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   command: string;
   cwd: string | undefined;
   host: "gateway" | "node";
@@ -397,12 +401,12 @@ export function buildApprovalPendingMessage(params: {
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode requires pre-approved policy (allow-always or ask=off)."
-      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
+      : describeExecApprovalBackgroundModeUnavailableReason(params.allowAlwaysUnavailableReason),
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      describeExecApprovalAllowAlwaysUnavailableReason(params.allowAlwaysUnavailableReason),
     );
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");

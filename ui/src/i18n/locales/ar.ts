@@ -370,6 +370,8 @@ export const ar: TranslationMap = {
     alwaysAllow: "السماح دائمًا",
     allowAlwaysUnavailable:
       "تتطلب سياسة الموافقة السارية الحصول على الموافقة في كل مرة، لذا فإن خيار السماح دائمًا غير متاح.",
+    allowAlwaysUnavailableNonPersistable:
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     deny: "رفض",
     labels: {
       host: "المضيف",

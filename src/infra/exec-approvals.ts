@@ -221,6 +221,7 @@ export type ExecApprovalRequestPayload = {
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -1783,10 +1784,17 @@ export const OPTIONAL_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
 ] as const satisfies readonly ExecApprovalDecision[];
 export type ExecApprovalUnavailableDecision = (typeof OPTIONAL_EXEC_APPROVAL_DECISIONS)[number];
+export type ExecApprovalAllowAlwaysUnavailableReason =
+  | "approval-policy-always"
+  | "non-persistable-command";
 
 const OPTIONAL_EXEC_APPROVAL_DECISION_SET: ReadonlySet<string> = new Set(
   OPTIONAL_EXEC_APPROVAL_DECISIONS,
 );
+const EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASON_SET: ReadonlySet<string> = new Set([
+  "approval-policy-always",
+  "non-persistable-command",
+]);
 
 function isOptionalExecApprovalDecision(
   decision: string,
@@ -1814,6 +1822,50 @@ export function normalizeExecApprovalUnavailableDecisions(
 ): readonly ExecApprovalUnavailableDecision[] {
   const unavailable = collectExecApprovalUnavailableDecisionSet(decisions);
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => unavailable.has(decision));
+}
+
+export function normalizeExecApprovalAllowAlwaysUnavailableReason(
+  reason?: string | null,
+): ExecApprovalAllowAlwaysUnavailableReason | null {
+  return reason && EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASON_SET.has(reason)
+    ? (reason as ExecApprovalAllowAlwaysUnavailableReason)
+    : null;
+}
+
+export function resolveExecApprovalAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): ExecApprovalAllowAlwaysUnavailableReason | null {
+  const ask = normalizeExecAsk(params?.ask);
+  if (ask === "always") {
+    return "approval-policy-always";
+  }
+  if (params?.allowAlwaysPersistence?.kind === "one-shot") {
+    return "non-persistable-command";
+  }
+  return null;
+}
+
+export function describeExecApprovalAllowAlwaysUnavailableReason(reason?: string | null): string {
+  switch (normalizeExecApprovalAllowAlwaysUnavailableReason(reason)) {
+    case "non-persistable-command":
+      return "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.";
+    case "approval-policy-always":
+    case null:
+      return "The effective approval policy requires approval every time, so Allow Always is unavailable.";
+  }
+}
+
+export function describeExecApprovalBackgroundModeUnavailableReason(
+  reason?: string | null,
+): string {
+  switch (normalizeExecApprovalAllowAlwaysUnavailableReason(reason)) {
+    case "non-persistable-command":
+      return "Background mode note: non-interactive runs cannot wait for chat approvals, and this command cannot be pre-approved with Allow Always.";
+    case "approval-policy-always":
+    case null:
+      return "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.";
+  }
 }
 
 export function resolveExecApprovalAllowedDecisions(params?: {
