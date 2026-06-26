@@ -956,7 +956,8 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       return { ok: false, error: "Use either --version or --tag." };
     }
 
-    const trackedSlug = normalizeTrackedSkillSlug(params.slug);
+    const requestedRef = parseRequestedClawHubSkillRef(params.slug);
+    const trackedSlug = requestedRef.slug;
     const skillDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
     const originRead = await readClawHubSkillOriginStrict(skillDir);
     if (originRead.kind === "malformed") {
@@ -997,6 +998,13 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
+      if (requestedRef.ownerHandle && lockedOwnerHandle !== requestedRef.ownerHandle) {
+        const trackedRef = lockedOwnerHandle ? `@${lockedOwnerHandle}/${trackedSlug}` : trackedSlug;
+        return {
+          ok: false,
+          error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
+        };
+      }
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
         : tag
@@ -1033,12 +1041,12 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       };
     }
 
-    const slug = validateRequestedSkillSlug(params.slug);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
-      slug,
+      slug: requestedRef.slug,
+      ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
       baseUrl: registry,
       version,
       tag,

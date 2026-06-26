@@ -2167,6 +2167,7 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     });
   });
 
@@ -2202,6 +2203,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
           },
         },
       },
@@ -2278,6 +2280,51 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves the default toolsAllow flag across an update that omits toolsAllow", async () => {
+    // Regression guard: a routine update (here, toggling enabled) of an
+    // agentTurn job whose cap was an auto-stamped default must keep
+    // toolsAllowIsDefault set. Otherwise the run-time CLI drop (which keys off
+    // the flag) stops applying and the job fails closed again after a restart —
+    // re-breaking the exact #91499 regression this change fixes.
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-13",
+        payload: {
+          kind: "agentTurn",
+          message: "hi",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+    await tool.execute("call-update-preserve-default-flag", {
+      action: "update",
+      id: "job-13",
+      patch: { enabled: false },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-13",
+        patch: {
+          enabled: false,
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      },
+    });
+  });
+
   it("adds the creator tool surface when converting an existing job to agentTurn", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -2310,6 +2357,7 @@ describe("cron tool", () => {
             kind: "agentTurn",
             message: "run later",
             toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
           },
         },
       },

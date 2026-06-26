@@ -50,6 +50,9 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
 
+const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+
 export interface SessionHeader {
   type: "session";
   version?: number; // v1 sessions don't have this
@@ -1140,13 +1143,36 @@ function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[
   return [header, ...recoveredEntries];
 }
 
+function readFirstSessionFileLine(filePath: string): string | undefined {
+  const fd = openSync(filePath, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes < MAX_SESSION_HEADER_BYTES) {
+      const buffer = Buffer.alloc(
+        Math.min(SESSION_HEADER_READ_CHUNK_BYTES, MAX_SESSION_HEADER_BYTES - totalBytes),
+      );
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, totalBytes);
+      if (bytesRead === 0) {
+        break;
+      }
+      const newlineIndex = buffer.indexOf(0x0a);
+      if (newlineIndex >= 0 && newlineIndex < bytesRead) {
+        chunks.push(buffer.subarray(0, newlineIndex));
+        return Buffer.concat(chunks).toString("utf8");
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function isValidSessionFile(filePath: string): boolean {
   try {
-    const fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(512);
-    const bytesRead = readSync(fd, buffer, 0, 512, 0);
-    closeSync(fd);
-    const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+    const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
       return false;
     }

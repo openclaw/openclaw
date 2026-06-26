@@ -11,9 +11,13 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+import {
+  buildMemorySearchUnavailableResult,
+  MemoryGetSchema,
+  MemorySearchSchema,
+} from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -117,6 +121,37 @@ describe("memory_search unavailable payloads", () => {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
+    });
+  });
+
+  it("returns explicit unavailable metadata for missing node:sqlite failures", async () => {
+    const error =
+      "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite";
+    setMemorySearchImpl(async () => {
+      throw new Error(error);
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("missing-node-sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error,
+      warning:
+        "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+      action:
+        "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+    });
+  });
+
+  it("keeps explicit unavailable metadata overrides for missing node:sqlite reasons", () => {
+    const result = buildMemorySearchUnavailableResult("missing node:sqlite", {
+      warning: "custom warning",
+      action: "custom action",
+    });
+
+    expectUnavailableMemorySearchDetails(result, {
+      error: "missing node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
     });
   });
 

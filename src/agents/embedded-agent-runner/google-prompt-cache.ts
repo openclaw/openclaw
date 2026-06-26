@@ -2,6 +2,7 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -23,6 +24,9 @@ import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cac
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
+// CachedContent metadata responses are tiny (name + expireTime); cap the read so
+// a buggy/hostile Google endpoint cannot stream an unbounded body into memory.
+const GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES = 1024 * 1024;
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
 const GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS = 30_000;
 const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -278,6 +282,19 @@ async function cancelUnreadResponseBody(response: Response | undefined): Promise
   }
 }
 
+/**
+ * Reads a Google cachedContents JSON body under a byte cap and parses it.
+ * Streams through the shared limiter so an oversized response is cancelled
+ * mid-flight instead of being fully buffered by `response.json()`.
+ */
+async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
+  const buffer = await readResponseWithLimit(response, GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Google prompt cache response too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+  });
+  return JSON.parse(buffer.toString("utf8")) as T;
+}
+
 async function updateGooglePromptCacheTtl(params: {
   apiKey: string;
   baseUrl: string;
@@ -300,7 +317,7 @@ async function updateGooglePromptCacheTtl(params: {
     if (!response.ok) {
       return null;
     }
-    const json = (await response.json()) as { expireTime?: string };
+    const json = await readGooglePromptCacheJson<{ expireTime?: string }>(response);
     return json;
   } finally {
     await cancelUnreadResponseBody(response);
@@ -338,7 +355,7 @@ async function createGooglePromptCache(params: {
     if (!response.ok) {
       return null;
     }
-    const json = (await response.json()) as { name?: string; expireTime?: string };
+    const json = await readGooglePromptCacheJson<{ name?: string; expireTime?: string }>(response);
     const cachedContent = normalizeOptionalString(json.name) ?? "";
     return cachedContent ? { cachedContent, expireTime: json.expireTime } : null;
   } finally {

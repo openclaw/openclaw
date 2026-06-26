@@ -1,34 +1,181 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
+import { withEnv } from "../../src/test-utils/env.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
-function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+function isProcessAlive(pid: number): boolean {
   try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 describe("bench-cli-startup", () => {
+  it("rejects unknown CLI options before running benchmarks", () => {
+    expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects short flag values before running benchmarks", () => {
+    expect(() => testing.validateCliArgs(["--output", "-h"])).toThrow("--output requires a value");
+    expect(() => testing.validateCliArgs(["--case", "-h"])).toThrow("--case requires a value");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--output", "-h"],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output requires a value");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects duplicate benchmark cases before running benchmarks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-cli-startup.ts",
+        "--case",
+        "version",
+        "--case",
+        "version",
+      ],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('Duplicate --case "version"');
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects duplicate single-value controls before running benchmarks", () => {
+    expect(() =>
+      testing.validateCliArgs(["--output", "one.json", "--output", "two.json"]),
+    ).toThrow("--output was provided more than once");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-cli-startup.ts",
+        "--output",
+        "one.json",
+        "--output",
+        "two.json",
+      ],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output was provided more than once");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans timed-out benchmark process groups when the leader exits first",
+    () => {
+      const tempDirs = createTempDirTracker();
+      const tmpDir = tempDirs.make("openclaw-cli-startup-timeout-group-");
+      const entryPath = join(tmpDir, "entry.mjs");
+      const childPidPath = join(tmpDir, "child.pid");
+      let childPid: number | undefined;
+      try {
+        writeFileSync(
+          entryPath,
+          [
+            "import { spawn } from 'node:child_process';",
+            "import { writeFileSync } from 'node:fs';",
+            "process.on('SIGTERM', () => process.exit(0));",
+            "const child = spawn(process.execPath, [",
+            "  '-e',",
+            "  \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\",",
+            "], { stdio: 'ignore' });",
+            `writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+            "setInterval(() => {}, 1000);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            entryPath,
+            "--case",
+            "version",
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+            "--timeout-ms",
+            "100",
+            "--json",
+          ],
+          {
+            cwd: join(__dirname, "../.."),
+            encoding: "utf8",
+            timeout: 8_000,
+          },
+        );
+
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        expect(result.status).toBe(1);
+        expect(result.signal).toBeNull();
+        expect(result.stderr).toContain("version sample 1: timed out");
+        expect(isProcessAlive(childPid)).toBe(false);
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        tempDirs.cleanup();
+      }
+    },
+  );
+
   it("writes compare-mode JSON output and creates parent directories", () => {
     const tempDirs = createTempDirTracker();
     const tmpDir = tempDirs.make("openclaw-cli-startup-compare-output-");
@@ -93,6 +240,12 @@ describe("bench-cli-startup", () => {
     } finally {
       tempDirs.cleanup();
     }
+  });
+
+  it("passes generated import hook paths as file URL specifiers", () => {
+    const hookPath = resolve("measure-rss.mjs");
+
+    expect(testing.nodeImportSpecifierForPath(hookPath)).toBe(pathToFileURL(hookPath).href);
   });
 
   it("fails reports with no measured samples", () => {

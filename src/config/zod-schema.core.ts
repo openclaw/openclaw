@@ -463,7 +463,6 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "nvidia",
   "ollama",
   "openai",
-  "openai",
   "opencode",
   "opencode-go",
   "openrouter",

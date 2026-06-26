@@ -1198,6 +1198,9 @@ describe("telegram live qa runtime", () => {
       id: 42,
     });
     expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      capture: false,
+    });
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();

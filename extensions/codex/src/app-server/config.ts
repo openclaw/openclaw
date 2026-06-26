@@ -167,6 +167,7 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
   authToken?: string;
@@ -188,7 +189,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: CodexServiceTier;
+  serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
@@ -332,7 +333,9 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -874,6 +877,7 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),

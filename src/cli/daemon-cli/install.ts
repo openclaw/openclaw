@@ -268,6 +268,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       },
       config: cfg,
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -279,6 +286,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       await service.install({
         env: installEnv,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

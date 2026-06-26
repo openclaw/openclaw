@@ -7,7 +7,7 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../agents/embedded-agent-runner/run-state.js";
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import { loadModelCatalog, resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -539,6 +539,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (shouldRefreshContextWindowCache(plan)) {
       await refreshContextWindowCache(nextConfig);
+      // Provider discovery is best-effort; a slow hook must not hold hot reload open.
+      void loadModelCatalog({ config: nextConfig });
     }
     void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);

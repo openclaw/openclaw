@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
+import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
 
 export const GENERATED_MODULE_FORMAT_TIMEOUT_MS = 30_000;
 export const GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -13,9 +14,27 @@ const FORMATTER_OUTPUT_TAIL_BYTES = 16 * 1024;
 export function resolveGeneratedModuleFormatter(params) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
-  const directFormatterPath = path.join(params.repoRoot, "node_modules", ".bin", "oxfmt");
-  const useDirectFormatter = platform !== "win32" && existsSync(directFormatterPath);
-  if (useDirectFormatter) {
+  const directFormatterPath = path.join(
+    params.repoRoot,
+    "node_modules",
+    ".bin",
+    platform === "win32" ? "oxfmt.cmd" : "oxfmt",
+  );
+  if (existsSync(directFormatterPath)) {
+    if (platform === "win32") {
+      const comSpec = params.comSpec || process.env.ComSpec || "cmd.exe";
+      return {
+        command: comSpec,
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          buildCmdExeCommandLine(directFormatterPath, ["--write", params.outputPath]),
+        ],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
     return {
       command: directFormatterPath,
       args: ["--write", params.outputPath],

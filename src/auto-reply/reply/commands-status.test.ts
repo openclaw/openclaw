@@ -1249,6 +1249,155 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("uses active fallback provider usage for legacy fallback notices", async () => {
+    const fallbackModel: ModelDefinitionConfig = {
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 32_000,
+    };
+    const selectedModel: ModelDefinitionConfig = {
+      id: "mimo-v2-flash",
+      name: "MiMo V2 Flash",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    };
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      updatedAt: Date.now(),
+      providers:
+        options?.providers?.includes("minimax") === true
+          ? [
+              {
+                provider: "minimax",
+                displayName: "MiniMax",
+                windows: [{ label: "day", usedPercent: 20 }],
+              },
+            ]
+          : [],
+    }));
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimax.test/v1",
+              models: [fallbackModel],
+            },
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.test/v1",
+              models: [selectedModel],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-legacy-fallback-usage",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        totalTokensFresh: true,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 1_048_576,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).toContain("Usage: day 80% left");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["minimax"] }),
+    );
+  });
+
+  it("uses live runtime context for unresolved active fallback notices", async () => {
+    const selectedModel: ModelDefinitionConfig = {
+      id: "mimo-v2-flash",
+      name: "MiMo V2 Flash",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    };
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.test/v1",
+              models: [selectedModel],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-unresolved-fallback-context",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        totalTokensFresh: true,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 123_456,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/123k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("shows DeepSeek balance summaries in /status output", async () => {
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
@@ -1295,6 +1444,241 @@ describe("buildStatusReply subagent summary", () => {
       throw new Error("expected provider usage summary call for deepseek");
     }
     expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
+  });
+
+  it("uses the session-selected model provider for /status usage", async () => {
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(
+      async ({ providers = [] } = {}) => ({
+        updatedAt: Date.now(),
+        providers: providers.map((provider) =>
+          provider === "openai"
+            ? {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [
+                  {
+                    label: "5h",
+                    usedPercent: 9,
+                    resetAt: (usageResetBase + 60 * 60) * 1000,
+                  },
+                ],
+              }
+            : {
+                provider,
+                displayName: "DeepSeek",
+                windows: [],
+                summary: "Balance ¥42.50",
+              },
+        ),
+      }),
+    );
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "deepseek/deepseek-v4-flash",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-session-selected-usage",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "telegram",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth (openai:status)",
+      activeModelAuthOverride: "oauth (openai:status)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    expect(normalized).not.toContain("Usage: Balance ¥42.50");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["openai"] }),
+    );
+  });
+
+  it("uses the session-selected provider for /status usage when runtime state is stale", async () => {
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(
+      async ({ providers = [] } = {}) => ({
+        updatedAt: Date.now(),
+        providers: providers.map((provider) =>
+          provider === "openai"
+            ? {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [
+                  {
+                    label: "5h",
+                    usedPercent: 9,
+                    resetAt: (usageResetBase + 60 * 60) * 1000,
+                  },
+                ],
+              }
+            : {
+                provider,
+                displayName: "DeepSeek",
+                windows: [],
+                summary: "Balance ¥42.50",
+              },
+        ),
+      }),
+    );
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "deepseek/deepseek-v4-flash",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-stale-runtime-selected-usage",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "telegram",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth (openai:status)",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    expect(normalized).not.toContain("Usage: Balance ¥42.50");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["openai"] }),
+    );
+  });
+
+  it("uses provider-qualified model overrides for /status usage lookup", async () => {
+    await withTempHome(
+      async (dir) => {
+        saveStatusTestAuthProfile({ dir, profileId: "openai:status", provider: "openai" });
+
+        const usageResetBase = Math.floor(Date.now() / 1000);
+        providerUsageMock.loadProviderUsageSummary.mockImplementation(
+          async ({ providers = [] } = {}) => ({
+            updatedAt: Date.now(),
+            providers: providers.map((provider) =>
+              provider === "openai"
+                ? {
+                    provider: "openai",
+                    displayName: "OpenAI",
+                    windows: [
+                      {
+                        label: "5h",
+                        usedPercent: 9,
+                        resetAt: (usageResetBase + 60 * 60) * 1000,
+                      },
+                    ],
+                  }
+                : {
+                    provider,
+                    displayName: "DeepSeek",
+                    windows: [],
+                    summary: "Balance ¥42.50",
+                  },
+            ),
+          }),
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://chatgpt.com/backend-api/codex",
+                  models: [{ ...codexStatusModel, contextWindow: 258_000, contextTokens: 258_000 }],
+                },
+              },
+            },
+            agents: {
+              defaults: {
+                model: "deepseek/deepseek-v4-flash",
+              },
+            },
+            auth: {
+              order: {
+                openai: ["openai:status"],
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-qualified-session-selected-usage",
+            updatedAt: 0,
+            modelOverride: "openai/gpt-5.5",
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "telegram",
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          contextTokens: 1_000_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+        expect(normalized).toContain("clear /model default");
+        expect(normalized).toContain("oauth (openai:status)");
+        expect(normalized).toContain("Context: ?/258k");
+        expect(normalized).toContain("Usage: 5h 91% left");
+        expect(normalized).not.toContain("Usage: Balance ¥42.50");
+        expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+          expect.objectContaining({ providers: ["openai"] }),
+        );
+      },
+      { env: { OPENAI_API_KEY: undefined } },
+    );
   });
 
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
@@ -1470,7 +1854,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
     expect(normalized).toContain("oauth (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");

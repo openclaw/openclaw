@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -19,7 +19,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
@@ -70,6 +70,11 @@ const execFile = vi.fn((...args: unknown[]) => {
 });
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
+const serviceEnvSnapshot = captureEnv([
+  "OPENCLAW_SERVICE_MARKER",
+  "OPENCLAW_SERVICE_KIND",
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+]);
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -366,6 +371,7 @@ const { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardC
 const updateCliShared = await import("./update-cli/shared.js");
 const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
+const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -715,6 +721,9 @@ describe("update-cli", () => {
   };
 
   beforeEach(() => {
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+    delete process.env.OPENCLAW_SERVICE_KIND;
+    delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     vi.clearAllMocks();
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
@@ -871,6 +880,10 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
+  });
+
+  afterAll(() => {
+    serviceEnvSnapshot.restore();
   });
 
   afterEach(async () => {
@@ -5891,23 +5904,17 @@ describe("update-cli", () => {
       },
     );
 
-    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
-    const sentinel = JSON.parse(raw) as {
-      payload?: {
-        status?: string;
-        message?: string | null;
-        continuation?: { kind?: string; message?: string };
-        stats?: { mode?: string; after?: { version?: string | null } };
-      };
-    };
-    expect(sentinel.payload?.status).toBe("ok");
-    expect(sentinel.payload?.message).toBe("Update requested from the agent.");
-    expect(sentinel.payload?.continuation).toEqual({
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("ok");
+    expect(sentinel?.payload.message).toBe("Update requested from the agent.");
+    expect(sentinel?.payload.continuation).toEqual({
       kind: "agentTurn",
       message: "Check the running version and finish the update report.",
     });
-    expect(sentinel.payload?.stats?.mode).toBe("npm");
-    expect(sentinel.payload?.stats?.after?.version).toBe("2026.4.24");
+    expect(sentinel?.payload.stats?.mode).toBe("npm");
+    expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
   });
 
   it("marks the control-plane update sentinel failed when restart health verification fails", async () => {
@@ -5966,17 +5973,12 @@ describe("update-cli", () => {
       },
     );
 
-    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
-    const sentinel = JSON.parse(raw) as {
-      payload?: {
-        status?: string;
-        continuation?: unknown;
-        stats?: { reason?: string | null };
-      };
-    };
-    expect(sentinel.payload?.status).toBe("error");
-    expect(sentinel.payload?.stats?.reason).toBe("restart-unhealthy");
-    expect(sentinel.payload?.continuation).toBeUndefined();
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("error");
+    expect(sentinel?.payload.stats?.reason).toBe("restart-unhealthy");
+    expect(sentinel?.payload.continuation).toBeUndefined();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

@@ -11,6 +11,7 @@ import {
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -384,7 +385,8 @@ describe("qa-lab server", () => {
       port: 0,
       outputPath,
       repoRoot,
-      controlUiUrl: "http://127.0.0.1:18789/?token=qa-token&panel=chat#token=fragment-token",
+      controlUiUrl:
+        "https://gateway.example.test/?token=qa-token&api_key=qa-api-key&id_token=qa-id-token&panel=chat#token=fragment-token",
       embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
@@ -403,8 +405,8 @@ describe("qa-lab server", () => {
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
-    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/?panel=chat");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/?panel=chat");
+    expect(bootstrap.controlUiUrl).toBe("https://gateway.example.test/?panel=chat");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("https://gateway.example.test/?panel=chat");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
@@ -422,7 +424,20 @@ describe("qa-lab server", () => {
     ).json()) as {
       status: { gateway: { url: string } };
     };
-    expect(startupStatus.status.gateway.url).toBe("http://127.0.0.1:18789/?panel=chat");
+    expect(startupStatus.status.gateway.url).toBe("https://gateway.example.test/?panel=chat");
+
+    lab.setControlUi({
+      controlUiUrl:
+        "/control-ui/?token=late-token&api_key=late-api-key&id_token=late-id-token&panel=chat#token=fragment-token",
+    });
+    const relativeBootstrap = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)
+    ).json()) as {
+      controlUiUrl: string | null;
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(relativeBootstrap.controlUiUrl).toBe("/control-ui/?panel=chat");
+    expect(relativeBootstrap.controlUiEmbeddedUrl).toBe("/control-ui/?panel=chat");
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -543,6 +558,37 @@ describe("qa-lab server", () => {
     expect(getResponse.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await getResponse.text()).toBe("streamed body\n");
 
+    const indexedArtifactUrl = new URL("/api/evidence/artifact", lab.baseUrl);
+    indexedArtifactUrl.searchParams.set(
+      "evidencePath",
+      ".artifacts/qa-e2e/server/qa-evidence.json",
+    );
+    indexedArtifactUrl.searchParams.set("entryIndex", "0");
+    indexedArtifactUrl.searchParams.set("artifactIndex", "0");
+    const indexedResponse = await fetchWithRetry(indexedArtifactUrl.toString());
+    expect(indexedResponse.status).toBe(200);
+    expect(await indexedResponse.text()).toBe("streamed body\n");
+
+    const hexIndexUrl = new URL(indexedArtifactUrl);
+    hexIndexUrl.searchParams.set("entryIndex", "0x0");
+    const hexIndexResponse = await fetchWithRetry(hexIndexUrl.toString());
+    expect(hexIndexResponse.status).toBe(400);
+
+    const exponentIndexUrl = new URL(indexedArtifactUrl);
+    exponentIndexUrl.searchParams.set("artifactIndex", "1e0");
+    const exponentIndexResponse = await fetchWithRetry(exponentIndexUrl.toString());
+    expect(exponentIndexResponse.status).toBe(400);
+
+    const leadingZeroIndexUrl = new URL(indexedArtifactUrl);
+    leadingZeroIndexUrl.searchParams.set("entryIndex", "00");
+    const leadingZeroIndexResponse = await fetchWithRetry(leadingZeroIndexUrl.toString());
+    expect(leadingZeroIndexResponse.status).toBe(400);
+
+    const whitespaceIndexUrl = new URL(indexedArtifactUrl);
+    whitespaceIndexUrl.searchParams.set("entryIndex", " 0 ");
+    const whitespaceIndexResponse = await fetchWithRetry(whitespaceIndexUrl.toString());
+    expect(whitespaceIndexResponse.status).toBe(400);
+
     await writeFile(path.join(evidenceDir, "undeclared.log"), "hidden\n", "utf8");
     const undeclaredUrl = new URL(artifactUrl);
     undeclaredUrl.searchParams.set("artifactPath", "undeclared.log");
@@ -611,7 +657,8 @@ describe("qa-lab server", () => {
     });
 
     const result = await lab.runSelfCheck();
-    expect(result.outputPath).toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md"));
+    expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
     expect(await readFile(result.outputPath, "utf8")).toContain("Synthetic Slack-class roundtrip");
   });
 
@@ -773,6 +820,12 @@ describe("qa-lab server", () => {
     const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
     expect(await rootResponse.text()).toContain("repo-root-ui");
+
+    const versionResponse = await fetchWithRetry(`${lab.baseUrl}/api/ui-version`);
+    expect(versionResponse.status).toBe(200);
+    const versionPayload = (await versionResponse.json()) as { version?: string | null };
+    expect(versionPayload.version).toBe(resolveUiAssetVersion(null, repoRoot));
+    expect(versionPayload.version).toMatch(/^[0-9a-f]{12}$/);
 
     const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
     expect(runnerCatalog.status).toBe("ready");

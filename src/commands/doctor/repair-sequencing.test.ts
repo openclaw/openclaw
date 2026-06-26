@@ -663,6 +663,74 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+  it("repairs #94184 stale Codex model-map refs before missing plugin install repair", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
+      async (params: { cfg: OpenClawConfig }) => {
+        expect(params.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+        expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+        expect(params.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+          id: "codex",
+        });
+        expect(params.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toBeUndefined();
+        return {
+          changes: [],
+          warnings: [],
+        };
+      },
+    );
+
+    const staleUpgradeConfig = {
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { reasoning_effort: "high" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: staleUpgradeConfig,
+        candidate: staleUpgradeConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.candidate.plugins?.allow).toEqual(["openai", "codex"]);
+    expect(result.state.candidate.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(
+      result.state.candidate.agents?.defaults?.models?.["openai-codex/gpt-5.5"],
+    ).toBeUndefined();
+    expect(result.state.candidate.agents?.defaults?.models?.["openai/gpt-5.5"]).toMatchObject({
+      params: { reasoning_effort: "high" },
+      agentRuntime: { id: "codex" },
+    });
+    const changeNotes = result.changeNotes.join("\n");
+    expect(changeNotes).toContain("agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5");
+    expect(changeNotes).toContain(
+      "agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5",
+    );
+    expect(changeNotes).toContain(
+      'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex"',
+    );
+    expect(changeNotes).toContain("Added codex to plugins.allow");
+  });
+
   it("runs group allowFrom fallback migration after open-policy allowFrom repair", async () => {
     const events: string[] = [];
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementationOnce((cfg: OpenClawConfig) => {
