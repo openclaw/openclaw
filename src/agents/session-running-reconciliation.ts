@@ -2,12 +2,12 @@ import type { SessionEntry } from "../config/sessions.js";
 // Reconciles persisted session lifecycle when runtime state has already ended.
 import { applyRestartRecoveryLifecycle } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  listFreshTasksForOwnerKey,
-  listTasksForRelatedSessionKey,
-  listTasksForSessionKey,
-} from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  listFreshTasksForOwnerKeyForStatus,
+  listTasksForRelatedSessionKeyForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../tasks/task-status-access.js";
 
 const log = createSubsystemLogger("session-running-reconciliation");
 
@@ -41,9 +41,9 @@ export function countRunningTasksForSessionKey(sessionKey: string | undefined): 
   }
   try {
     return uniqueTasks([
-      ...listFreshTasksForOwnerKey(key),
-      ...listTasksForSessionKey(key),
-      ...listTasksForRelatedSessionKey(key),
+      ...listFreshTasksForOwnerKeyForStatus(key),
+      ...listTasksForSessionKeyForStatus(key),
+      ...listTasksForRelatedSessionKeyForStatus(key),
     ]).filter((task) => task.status === "running").length;
   } catch (error) {
     log.warn("failed to count running tasks for persisted session reconciliation", {
