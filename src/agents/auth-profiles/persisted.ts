@@ -151,11 +151,30 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     return normalized as Partial<AuthProfileCredential>;
   }
   if (entry.type === "token") {
+    const token = normalizeOptionalCredentialString(entry.token);
+    // Auto-correct when a token value looks like an Anthropic Enterprise API key
+    // (sk-ant- prefix). Using type: "token" routes the credential as Bearer auth
+    // which requires OAuth. Enterprise accounts need x-api-key auth with type: "api_key".
+    if (typeof token === "string" && /^sk-ant-/i.test(token)) {
+      log.warn(
+        `auth-profiles: detected Anthropic API key in type:"token" profile — auto-correcting to type:"api_key". ` +
+          `Enterprise accounts require x-api-key auth. Update auth-profiles.json to use type:"api_key" with "key" field.`,
+      );
+      const normalized: Record<string, unknown> = {
+        type: "api_key",
+        ...normalizeCommonCredentialFields(entry),
+        key: token,
+      };
+      const metadata = normalizeCredentialMetadata(entry.metadata);
+      if (metadata) {
+        normalized.metadata = metadata;
+      }
+      return normalized as Partial<AuthProfileCredential>;
+    }
     const normalized: Record<string, unknown> = {
       type: "token",
       ...normalizeCommonCredentialFields(entry),
     };
-    const token = normalizeOptionalCredentialString(entry.token);
     const tokenRef = coerceSecretRef(entry.tokenRef);
     const expires = normalizeExpiryField(entry.expires);
     if (token !== undefined) {
