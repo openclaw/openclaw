@@ -139,6 +139,20 @@ function isTarEofRaceError(err: unknown): boolean {
   return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
 }
 
+/**
+ * Returns true when the error is an ENOENT from a concurrent file deletion
+ * during tar archive creation. The `path` property distinguishes this from
+ * unrelated ENOENT errors (e.g. temp-dir cleanup): node-tar sets it to the
+ * file that disappeared mid-walk.
+ */
+function isTarEnoentRaceError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const nodeErr = err as NodeJS.ErrnoException;
+  return nodeErr.code === "ENOENT" && typeof nodeErr.path === "string";
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -161,7 +175,8 @@ async function writeTarArchiveWithRetry(params: {
       return;
     } catch (err) {
       lastErr = err;
-      if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
+      const isRetryable = isTarEofRaceError(err) || isTarEnoentRaceError(err);
+      if (!isRetryable || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
         break;
       }
       try {
@@ -176,8 +191,9 @@ async function writeTarArchiveWithRetry(params: {
       }
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
       const offendingPath = (err as NodeJS.ErrnoException).path;
+      const raceKind = isTarEnoentRaceError(err) ? "concurrent file deletion" : "live-write race";
       params.log?.(
-        `Backup archiver hit a live-write race${
+        `Backup archiver hit a ${raceKind}${
           offendingPath ? ` on ${offendingPath}` : ""
         } (attempt ${attempt}/${BACKUP_TAR_MAX_ATTEMPTS}); retrying in ${Math.round(backoff / 1000)}s.`,
       );
@@ -192,7 +208,7 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError, isTarEnoentRaceError };
 export { testApi as __test };
 
 async function resolveOutputPath(params: {
