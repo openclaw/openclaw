@@ -67,9 +67,13 @@ describe("official external plugin catalog", () => {
       });
     }
     const clawHubFirstUntilNpmArtifactsPublish = new Set(["searxng", "tavily"]);
+    const betaTaggedClawHubSpecsUntilLatestTagsPublish = new Set(["searxng", "tavily"]);
     for (const [id, npmSpec] of newlyExternalized) {
+      const expectedClawHubSpec = betaTaggedClawHubSpecsUntilLatestTagsPublish.has(id)
+        ? `clawhub:${npmSpec}@beta`
+        : `clawhub:${npmSpec}`;
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toMatchObject({
-        clawhubSpec: `clawhub:${npmSpec}`,
+        clawhubSpec: expectedClawHubSpec,
         npmSpec,
         defaultChoice: clawHubFirstUntilNpmArtifactsPublish.has(id) ? "clawhub" : "npm",
         minHostVersion: ">=2026.6.9",

@@ -275,7 +275,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 
-- **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - ClawHub: `clawhub:@openclaw/searxng-plugin`; npm. Adds web search provider support.
+- **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - ClawHub: `clawhub:@openclaw/searxng-plugin@beta`; npm. Adds web search provider support.
 
 - **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - npm; ClawHub: `clawhub:@openclaw/signal`. Adds the Signal channel surface for sending and receiving OpenClaw messages.
 
@@ -287,7 +287,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm; ClawHub. Synology Chat channel plugin for OpenClaw channels and direct messages.
 
-- **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - ClawHub: `clawhub:@openclaw/tavily-plugin`; npm. Adds agent-callable tools. Adds web search provider support.
+- **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - ClawHub: `clawhub:@openclaw/tavily-plugin@beta`; npm. Adds agent-callable tools. Adds web search provider support.
 
 - **[tencent](/plugins/reference/tencent)** (`@openclaw/tencent-provider`) - npm; ClawHub: `clawhub:@openclaw/tencent-provider`. Adds Tencent TokenHub model provider support to OpenClaw.
 

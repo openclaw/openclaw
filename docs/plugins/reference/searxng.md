@@ -12,7 +12,7 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/searxng-plugin`
-- Install route: ClawHub: `clawhub:@openclaw/searxng-plugin`; npm
+- Install route: ClawHub: `clawhub:@openclaw/searxng-plugin@beta`; npm
 
 ## Surface
 

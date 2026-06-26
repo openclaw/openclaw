@@ -14,7 +14,7 @@
       "./index.ts"
     ],
     "install": {
-      "clawhubSpec": "clawhub:@openclaw/tavily-plugin",
+      "clawhubSpec": "clawhub:@openclaw/tavily-plugin@beta",
       "npmSpec": "@openclaw/tavily-plugin",
       "defaultChoice": "clawhub",
       "minHostVersion": ">=2026.6.9",

@@ -11,7 +11,7 @@
       "./index.ts"
     ],
     "install": {
-      "clawhubSpec": "clawhub:@openclaw/searxng-plugin",
+      "clawhubSpec": "clawhub:@openclaw/searxng-plugin@beta",
       "npmSpec": "@openclaw/searxng-plugin",
       "defaultChoice": "clawhub",
       "minHostVersion": ">=2026.6.9",

@@ -5,7 +5,7 @@ Official OpenClaw plugin for Tavily.
 ## Install
 
 ```sh
-openclaw plugins install clawhub:@openclaw/tavily-plugin
+openclaw plugins install clawhub:@openclaw/tavily-plugin@beta
 ```
 
 ## Docs

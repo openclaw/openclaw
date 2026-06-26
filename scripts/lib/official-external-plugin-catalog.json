@@ -518,7 +518,7 @@
           }
         ],
         "install": {
-          "clawhubSpec": "clawhub:@openclaw/searxng-plugin",
+          "clawhubSpec": "clawhub:@openclaw/searxng-plugin@beta",
           "npmSpec": "@openclaw/searxng-plugin",
           "defaultChoice": "clawhub",
           "minHostVersion": ">=2026.6.9",
@@ -565,7 +565,7 @@
           }
         ],
         "install": {
-          "clawhubSpec": "clawhub:@openclaw/tavily-plugin",
+          "clawhubSpec": "clawhub:@openclaw/tavily-plugin@beta",
           "npmSpec": "@openclaw/tavily-plugin",
           "defaultChoice": "clawhub",
           "minHostVersion": ">=2026.6.9",

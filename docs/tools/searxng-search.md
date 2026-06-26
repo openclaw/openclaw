@@ -22,7 +22,7 @@ Advantages:
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@openclaw/searxng-plugin
+    openclaw plugins install clawhub:@openclaw/searxng-plugin@beta
     ```
   </Step>
   <Step title="Run a SearXNG instance">
