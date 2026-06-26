@@ -16,6 +16,14 @@ const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>
 const SESSION_MEMORY_MEDIA_PLACEHOLDER_RE = /(^|\n)\s*<media:[^>]+>(?:\s*\([^)]*\))?\s*/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
 
+// Strip orphan plain-text role-token lines (e.g. a line containing only "user",
+// "assistant", or "system") that leak from quantized-local-model SSE streams.
+// These are distinct from XML role directives (/<system>...</system>/ etc.) which
+// are already removed above by SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK/TAG_RE.
+// The /m flag anchors ^/$ to line boundaries so we only match lines whose sole
+// content after trimming is a bare role word (optionally followed by a colon).
+const SESSION_MEMORY_ORPHAN_ROLE_LINE_RE = /^\s*(?:user|assistant|system)\s*:?\s*$/gim;
+
 function isNoReplyMarker(text: string): boolean {
   const trimmed = text.trim();
   return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
@@ -31,6 +39,7 @@ export function sanitizeSessionMemoryTranscriptText(text: string): string | null
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
     .replace(SESSION_MEMORY_MEDIA_PLACEHOLDER_RE, "$1")
     .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
+    .replace(SESSION_MEMORY_ORPHAN_ROLE_LINE_RE, "")
     .trim();
 
   return withoutArtifacts || null;

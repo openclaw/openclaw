@@ -80,4 +80,54 @@ describe("session-memory transcript extraction", () => {
       "assistant: Answer [REMOVED_SPECIAL_TOKEN]",
     );
   });
+
+  it("strips orphan plain-text role lines but preserves embedded mentions", () => {
+    // Lines whose sole content is a bare role word → stripped (may leave blank lines).
+    expect(
+      sanitizeSessionMemoryTranscriptText(
+        "user\nVisible log output\nassistant\nIncomplete\nsystem\nShutting down",
+      ),
+    ).toBe("Visible log output\n\nIncomplete\n\nShutting down");
+
+    // Role word followed only by a colon → stripped (may leave blank lines).
+    expect(
+      sanitizeSessionMemoryTranscriptText("user:\nStatus: ok\nassistant:\nsystem: Ready"),
+    ).toBe("Status: ok\n\nsystem: Ready");
+
+    // Role word embedded as part of a sentence → preserved.
+    expect(
+      sanitizeSessionMemoryTranscriptText(
+        "The user submitted a form and the assistant confirmed.",
+      ),
+    ).toBe("The user submitted a form and the assistant confirmed.");
+
+    // Role word as a standalone line with leading/trailing whitespace → stripped.
+    expect(sanitizeSessionMemoryTranscriptText("  user  \nHello\n  assistant  ")).toBe("Hello");
+
+    // Pure role-line input → returns null (no meaningful content).
+    expect(sanitizeSessionMemoryTranscriptText("user\nassistant\nsystem")).toBeNull();
+    expect(sanitizeSessionMemoryTranscriptText("user:\nassistant:\nsystem:")).toBeNull();
+  });
+
+  it("strips orphan role lines from session content when present in transcript", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("user", "What is the server status?\nuser\nTell me more"),
+        message(
+          "assistant",
+          "assistant\nEverything is running normally.\nsystem\nAll services green.",
+        ),
+      ].join("\n"),
+    );
+
+    const memoryContent = await getRecentSessionContent(transcriptPath);
+
+    expect(memoryContent).toContain("user: What is the server status?\n\nTell me more");
+    expect(memoryContent).not.toContain("\nuser:");
+    expect(memoryContent).not.toMatch(/^\s*(?:user|assistant|system)\s*:?\s*$/m);
+    expect(memoryContent).toContain("assistant: Everything is running normally");
+    expect(memoryContent).toContain("All services green.");
+    expect(memoryContent).not.toContain("\nassistant\n");
+    expect(memoryContent).not.toContain("\nsystem\n");
+  });
 });
