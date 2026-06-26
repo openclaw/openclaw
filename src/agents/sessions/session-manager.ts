@@ -437,15 +437,7 @@ export function buildSessionContext(
  * Encodes cwd into a safe directory name under ~/.openclaw/agent/sessions/.
  */
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
-  // Use an injective encoding so that paths differing only by separator
-  // (e.g. client/app vs client-app) produce distinct session directories.
-  // Strip leading/trailing separators, escape literal "--", then replace
-  // internal separators with "--".
-  const safePath = `--${cwd
-    .replace(/^[/\\\\]/, "")
-    .replace(/[/\\\\]$/, "")
-    .replace(/--/g, "~D")
-    .replace(/[/\\\\:]/g, "--")}--`;
+  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
@@ -3013,8 +3005,13 @@ export class SessionManager {
   ): Promise<SessionInfo[]> {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const sessions = await listSessionsFromDir(dir, onProgress);
-    sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-    return sessions;
+    // Filter out sessions whose header cwd does not match the requested cwd.
+    // The default session directory encoding is not injective (e.g. client/app
+    // and client-app share the same directory), so cwd-aware filtering prevents
+    // cross-project session leakage.
+    const filtered = sessions.filter((s) => !s.cwd || s.cwd === cwd);
+    filtered.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+    return filtered;
   }
 
   /**
