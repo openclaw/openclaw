@@ -437,7 +437,14 @@ export function buildSessionContext(
  * Encodes cwd into a safe directory name under ~/.openclaw/agent/sessions/.
  */
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
-  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  // Percent-encode path separators so distinct cwds never collide on encoding.
+  // Previously '/' '\\' ':' all mapped to '-', causing /home/a/b-c and
+  // /home/a/b/c to share one session directory (#96542).
+  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, (ch) => {
+    if (ch === "/") return "%2F";
+    if (ch === "\\") return "%5C";
+    return "%3A";
+  })}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
@@ -2923,6 +2930,15 @@ export class SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const mostRecent = findMostRecentSession(dir);
     if (mostRecent) {
+      // Verify the session header cwd matches the requested cwd so a collision
+      // in the encoding never silently resumes the wrong project (#96542).
+      const entries = loadEntriesFromFile(mostRecent);
+      const header = entries.find((e) => e.type === "session");
+      const headerCwd =
+        header && "cwd" in header ? String((header as Record<string, unknown>).cwd ?? "") : "";
+      if (headerCwd && headerCwd !== cwd) {
+        return new SessionManager(cwd, dir, undefined, true);
+      }
       return new SessionManager(cwd, dir, mostRecent, true);
     }
     return new SessionManager(cwd, dir, undefined, true);
