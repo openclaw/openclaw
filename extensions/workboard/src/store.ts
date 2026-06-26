@@ -2181,17 +2181,24 @@ function buildWorkerContext(card: WorkboardCard, cards: readonly WorkboardCard[]
 }
 
 function cardParentIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "parent" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return dependencyTargetIds(card, "parent");
 }
 
 function cardChildIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "child" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return dependencyTargetIds(card, "child");
+}
+
+function dependencyTargetIds(card: WorkboardCard, type: "parent" | "child"): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const link of card.metadata?.links ?? []) {
+    if (link.type !== type || !link.targetCardId || seen.has(link.targetCardId)) {
+      continue;
+    }
+    seen.add(link.targetCardId);
+    ids.push(link.targetCardId);
+  }
+  return ids;
 }
 
 function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {
