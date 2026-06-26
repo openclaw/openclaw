@@ -1355,9 +1355,16 @@ function findSessionCompactionCheckpoint(params: {
   if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
     return undefined;
   }
-  return [...params.entry.compactionCheckpoints]
-    .toSorted((a, b) => b.createdAt - a.createdAt)
-    .find((checkpoint) => checkpoint.checkpointId === checkpointId);
+  let newest: SessionCompactionCheckpoint | undefined;
+  for (const checkpoint of params.entry.compactionCheckpoints) {
+    if (checkpoint.checkpointId !== checkpointId) {
+      continue;
+    }
+    if (!newest || checkpoint.createdAt > newest.createdAt) {
+      newest = checkpoint;
+    }
+  }
+  return newest;
 }
 
 type ApplySessionCompactionCheckpointMutationParams = {
