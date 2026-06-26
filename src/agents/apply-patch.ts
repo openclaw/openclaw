@@ -71,7 +71,10 @@ type ApplyPatchToolDetails = {
 
 function normalizeUpdateComparison(content: string): string {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  return normalized.length === 0 || normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+  if (normalized.length === 0 || normalized.endsWith("\n")) {
+    return normalized;
+  }
+  return `${normalized}\n`;
 }
 
 type SandboxApplyPatchConfig = {

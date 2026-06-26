@@ -202,6 +202,21 @@ describe("applyPatch", () => {
     }
   });
 
+  it("applies a real deletion of the sole blank line", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.noOp).toBeUndefined();
+    expect(memory.files.get("/sandbox/source.txt")).toBe("");
+    expect(memory.writeFile.mock.calls).toHaveLength(1);
+  });
+
   it("preserves formatting for same-path move no-op hunks", async () => {
     const patch = `*** Begin Patch
 *** Update File: source.txt

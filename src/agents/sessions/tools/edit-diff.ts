@@ -499,6 +499,9 @@ export async function computeEditsDiff(
     const noOpEdits = edits.filter((edit) => edit.oldText === edit.newText);
     const realEdits = edits.filter((edit) => edit.oldText !== edit.newText);
     validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+    if (realEdits.length === 0) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     const { baseContent, newContent } = applyEditsToNormalizedContent(
       normalizedContent,
       realEdits,

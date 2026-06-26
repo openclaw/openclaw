@@ -276,6 +276,41 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
+  it("shows an empty preview for an all-no-op edit", async () => {
+    const readFile = vi.fn(async () => Buffer.from("unchanged content\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: "unchanged", newText: "unchanged" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(
+      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
+    ).toEqual({ diff: "", firstChangedLine: undefined });
+  });
+
   it("does not hide a mismatched no-op edit", async () => {
     const filePath = await createTempFile("actual content\n");
     const tool = createEditTool(tmpDir);
