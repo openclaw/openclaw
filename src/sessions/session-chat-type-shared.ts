@@ -71,10 +71,10 @@ function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyCha
 function deriveBuiltInLegacySessionChatType(
   scopedSessionKey: string,
 ): SessionKeyChatType | undefined {
-  if (/^group:[^:]+$/.test(scopedSessionKey)) {
+  if (/^group:[^:]+(?::.*)?$/u.test(scopedSessionKey)) {
     return "group";
   }
-  if (/^channel:[^:]+$/.test(scopedSessionKey)) {
+  if (/^channel:[^:]+(?::.*)?$/u.test(scopedSessionKey)) {
     return "channel";
   }
   if (/^(?:whatsapp:)?[^:]+@g\.us$/.test(scopedSessionKey)) {

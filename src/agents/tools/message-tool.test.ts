@@ -781,6 +781,23 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelId).toBeUndefined();
   });
 
+  it("does not infer delivery from a nested opaque agent identity", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {} as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:voice:agent:channel:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
+  });
+
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
     mockSendResult({ channel: "discord", to: "user:123456789" });
 

@@ -218,6 +218,10 @@ function isMainScopeStaleDirectSessionKey(params: {
     return false;
   }
   const parts = parsed.rest.split(":");
+  // A nested agent wrapper is opaque plugin identity, never a stale DM route.
+  if (parts[0] === "agent") {
+    return false;
+  }
   return (
     (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
     (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||

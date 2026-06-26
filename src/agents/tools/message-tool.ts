@@ -883,7 +883,8 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const parts = parsed.rest.split(":");
-  if (parts.length < 3) {
+  // A nested agent wrapper is opaque plugin identity, never a delivery route.
+  if (parts[0] === "agent" || parts.length < 3) {
     return null;
   }
   const channel = normalizeMessageChannel(parts[0]);

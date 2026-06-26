@@ -136,6 +136,8 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
     { key: "agent:main:channel:legacy-room", expected: "channel" },
+    { key: "agent:main:channel:!room:example.org", expected: "channel" },
+    { key: "agent:main:group:room:part", expected: "group" },
     { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
