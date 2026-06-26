@@ -158,6 +158,24 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("promotes legacy voice sessions before canonical runtime access", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      writeStore(storePath, {
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2_000 },
+        "agent:main:voice:15550001111": { sessionId: "stale-canonical", updatedAt: 1_000 },
+      });
+
+      await migrateFixtureState(stateDir, {} as OpenClawConfig);
+
+      const store = readStore(storePath);
+      expect(requireStoreEntry(store, "agent:main:voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
+      expect(store["voice:15550001111"]).toBeUndefined();
+    });
+  });
+
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);

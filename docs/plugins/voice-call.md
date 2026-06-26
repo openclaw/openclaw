@@ -214,7 +214,8 @@ represent different meetings.
 Voice Call stores generated session keys under the configured agent namespace
 (`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
 canonicalization after restarts. Explicit session keys provided by integrations
-are preserved as-is.
+are preserved as-is. Gateway startup promotes older `voice:*` entries into the
+agent namespace before plugin services start.
 
 ## Realtime voice conversations
 

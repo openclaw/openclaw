@@ -706,6 +706,8 @@ export function resolveVoiceCallSessionKey(params: {
   if (explicit) {
     return explicit;
   }
+  // Startup migration promotes shipped `voice:*` rows before plugin services run;
+  // generate only canonical keys here so restarts do not split session history.
   const prefix = `agent:${normalizeAgentId(params.config.agentId)}:voice`;
   if (params.config.sessionScope === "per-call") {
     return `${prefix}:call:${params.callId}`.toLowerCase();
