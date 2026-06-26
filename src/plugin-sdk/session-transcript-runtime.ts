@@ -12,9 +12,7 @@ import {
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
-import { runSessionTranscriptAppendTransaction } from "../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
-import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import {
   type LatestAssistantTranscriptText,
   type SessionTranscriptAppendResult,
@@ -24,7 +22,6 @@ import {
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -60,18 +57,6 @@ export type SessionTranscriptTarget = SessionTranscriptIdentity & {
   targetKind: "runtime-session";
 };
 
-export type SessionTranscriptFileTargetParams = {
-  agentId?: string;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey?: string;
-};
-
-export type SessionTranscriptFileTarget = SessionTranscriptIdentity & {
-  sessionFile: string;
-  targetKind: "transcript-file";
-};
-
 export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
   TranscriptMessageAppendOptions<TMessage>;
 
@@ -88,17 +73,13 @@ export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
   config?: TranscriptMessageAppendOptions<unknown>["config"];
 };
 
-export type SessionTranscriptFileWriteLockParams = SessionTranscriptFileTargetParams & {
-  config?: TranscriptMessageAppendOptions<unknown>["config"];
-};
-
 export type SessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
     options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
-  target: SessionTranscriptTarget | SessionTranscriptFileTarget;
+  target: SessionTranscriptTarget;
 };
 
 type SessionTranscriptMirrorAppendResult =
@@ -133,21 +114,6 @@ export async function resolveSessionTranscriptTarget(
     ...target,
     targetKind: "runtime-session",
   });
-}
-
-/** Resolves an explicit support/archive transcript file target. */
-export function resolveSessionTranscriptFileTarget(
-  params: SessionTranscriptFileTargetParams,
-): SessionTranscriptFileTarget {
-  const agentId = normalizeAgentId(params.agentId);
-  return {
-    agentId,
-    memoryKey: formatSessionTranscriptMemoryHitKey({ agentId, sessionId: params.sessionId }),
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? "",
-    targetKind: "transcript-file",
-  };
 }
 
 /**
@@ -271,24 +237,6 @@ export async function publishSessionTranscriptUpdateByIdentity(
   );
 }
 
-/** Publishes a transcript update for an explicit support/archive transcript file. */
-export function publishSessionTranscriptFileUpdate(
-  params: SessionTranscriptFileTargetParams & { update?: TranscriptUpdatePayload },
-): void {
-  const target = resolveSessionTranscriptFileTarget(params);
-  emitSessionTranscriptUpdate({
-    ...params.update,
-    agentId: target.agentId,
-    sessionFile: target.sessionFile,
-    sessionKey: target.sessionKey,
-    target: {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-    },
-  });
-}
-
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
  */
@@ -332,52 +280,6 @@ export async function withSessionTranscriptWriteLock<T>(
     });
   }
   return result;
-}
-
-/** Runs transcript work under the write lock for an explicit support/archive transcript file. */
-export async function withSessionTranscriptFileWriteLock<T>(
-  params: SessionTranscriptFileWriteLockParams,
-  run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
-): Promise<T> {
-  const target = resolveSessionTranscriptFileTarget(params);
-  const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
-  const result = await runSessionTranscriptAppendTransaction(
-    {
-      config: params.config,
-      transcriptPath: target.sessionFile,
-    },
-    (transaction) =>
-      run({
-        target,
-        readEvents: () => readSessionTranscriptFileEvents(target.sessionFile),
-        appendMessage: (options) =>
-          transaction.appendMessage({
-            ...options,
-            sessionId: target.sessionId,
-          }),
-        publishUpdate: async (update) => {
-          queuedUpdates.push(update ? { ...update } : undefined);
-        },
-      }),
-  );
-  for (const update of queuedUpdates) {
-    publishSessionTranscriptFileUpdate({ ...target, update });
-  }
-  return result;
-}
-
-async function readSessionTranscriptFileEvents(
-  sessionFile: string,
-): Promise<SessionTranscriptEvent[]> {
-  const events: SessionTranscriptEvent[] = [];
-  for await (const line of streamSessionTranscriptLines(sessionFile)) {
-    try {
-      events.push(JSON.parse(line) as SessionTranscriptEvent);
-    } catch {
-      continue;
-    }
-  }
-  return events;
 }
 
 function createAssistantMirrorMessage(params: {
