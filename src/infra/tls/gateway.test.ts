@@ -272,4 +272,54 @@ describe("loadGatewayTlsRuntime", () => {
     expect(san).toContain("IP Address:127.0.0.1");
     expect(san).toContain("IP Address:0:0:0:0:0:0:0:1");
   });
+
+  it("does not upgrade custom certificates with non-OpenClaw CN", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "custom-cert.pem");
+    const keyPath = path.join(dir, "custom-key.pem");
+
+    // Generate a custom cert with a different CN (not openclaw-gateway) and no SAN
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    await execFileAsync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      keyPath,
+      "-out",
+      certPath,
+      "-subj",
+      "/CN=custom-server",
+    ]);
+
+    const x509Before = new X509Certificate(
+      await (await import("node:fs/promises")).readFile(certPath, "utf8"),
+    );
+    expect(x509Before.subject).toContain("CN=custom-server");
+    expect(x509Before.subjectAltName).toBeFalsy();
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: true,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+
+    // Custom cert must not be regenerated — CN and SAN must be unchanged
+    const certPem = await (await import("node:fs/promises")).readFile(certPath, "utf8");
+    const x509After = new X509Certificate(certPem);
+    expect(x509After.subject).toContain("CN=custom-server");
+    expect(x509After.subjectAltName).toBeFalsy();
+    expect(result.fingerprintSha256).toBe(normalizeFingerprint(x509After.fingerprint256 ?? ""));
+  });
 });
