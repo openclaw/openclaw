@@ -225,6 +225,48 @@ describe("sandboxRecreateCommand", () => {
       expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(match.containerName);
     });
 
+    it("should filter workspace-qualified session containers by raw session key", async () => {
+      const container = createContainer({
+        containerName: "container-workspace-a",
+        sessionKey: "target-session:workspace:1234abcd",
+      });
+      const noMatch = createContainer({
+        containerName: "container-workspace-b",
+        sessionKey: "target-session:workspace:not-a-hash",
+      });
+      mocks.listSandboxContainers.mockResolvedValue([container, noMatch]);
+
+      await sandboxRecreateCommand(
+        { session: "target-session", all: false, browser: false, force: true },
+        runtime as never,
+      );
+
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(1);
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(container.containerName);
+      expect(mocks.removeSandboxBrowserContainer).not.toHaveBeenCalled();
+    });
+
+    it("should filter workspace-qualified session browsers by raw session key", async () => {
+      const browser = createBrowser({
+        containerName: "browser-workspace-a",
+        sessionKey: "target-session:workspace:5678abcd",
+      });
+      const noMatch = createBrowser({
+        containerName: "browser-workspace-b",
+        sessionKey: "target-session:workspace:not-a-hash",
+      });
+      mocks.listSandboxBrowsers.mockResolvedValue([browser, noMatch]);
+
+      await sandboxRecreateCommand(
+        { session: "target-session", all: false, browser: true, force: true },
+        runtime as never,
+      );
+
+      expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
+      expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledTimes(1);
+      expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledWith(browser.containerName);
+    });
+
     it("should filter by agent (exact + subkeys)", async () => {
       const agent = createContainer({ sessionKey: "agent:work" });
       const agentSub = createContainer({ sessionKey: "agent:work:subtask" });

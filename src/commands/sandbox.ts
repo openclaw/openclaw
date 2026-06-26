@@ -128,8 +128,9 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
   let browsers = opts.browser ? allBrowsers : [];
 
   if (opts.session) {
-    containers = containers.filter((c) => c.sessionKey === opts.session);
-    browsers = browsers.filter((b) => b.sessionKey === opts.session);
+    const matchesSession = createSessionMatcher(opts.session);
+    containers = containers.filter(matchesSession);
+    browsers = browsers.filter(matchesSession);
   } else if (opts.agent) {
     // Agent-scoped cleanup removes both the agent root session and its child
     // session keys while leaving unrelated agent containers untouched.
@@ -139,6 +140,19 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
   }
 
   return { containers, browsers };
+}
+
+function createSessionMatcher(sessionKey: string) {
+  const rawSessionKey = sessionKey.trim();
+  return (item: ContainerItem) => {
+    if (item.sessionKey === rawSessionKey) {
+      return true;
+    }
+    const workspaceSuffix = item.sessionKey.slice(rawSessionKey.length);
+    // Non-shared session-scope runtimes append an internal workspace hash, but
+    // CLI users still recreate them by the raw documented session key.
+    return /^:workspace:[a-f0-9]{8}$/i.test(workspaceSuffix);
+  };
 }
 
 function createAgentMatcher(agentId: string) {

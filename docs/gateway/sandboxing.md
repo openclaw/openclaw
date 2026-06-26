@@ -167,6 +167,7 @@ Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and m
 
     - Host-local edits made outside OpenClaw after the seed step are not visible remotely until you recreate the sandbox.
     - `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use.
+    - Non-shared sandbox identity is scoped by the local workspace root. After upgrading from older releases, existing session/agent runtimes may be created once under new names and old runtimes can be removed with `openclaw sandbox recreate` or existing prune settings.
     - Browser sandboxing is not supported on the SSH backend.
     - `sandbox.docker.*` settings do not apply to the SSH backend.
 
@@ -285,6 +286,7 @@ OpenShell sandboxes are still managed through the normal sandbox lifecycle:
 - `openclaw sandbox list` shows OpenShell runtimes as well as Docker runtimes
 - `openclaw sandbox recreate` deletes the current runtime and lets OpenClaw recreate it on next use
 - prune logic is backend-aware too
+- non-shared runtimes are keyed by both session/agent scope and workspace root, so co-hosted workspaces do not share a sandbox runtime by accident
 
 For `remote` mode, recreate is especially important:
 
