@@ -1011,6 +1011,59 @@ describe("durable continuation_work dispatch", () => {
     expect(turnGrants).toHaveLength(0);
   });
 
+  it("does not let a busy slow hedge delay running recovery due sooner", async () => {
+    const sessionKey = "agent:main:busy-with-running-recovery";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "running recovery sooner",
+    });
+    const runningFlow = [...mockFlows.values()][0];
+    if (!runningFlow) {
+      throw new Error("expected running continuation flow");
+    }
+    runningFlow.status = "running";
+    runningFlow.updatedAt = Date.now() - 50_000;
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "busy slow hedge",
+    });
+    mainQueueSize = 1;
+
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now() - 60_000,
+    });
+    expect(turnGrants).toHaveLength(0);
+    await waitForMockWaiter(laneIdleWaiters, "main");
+    mainQueueSize = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForTurnGrantCount(1);
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          Body: expect.stringContaining("running recovery sooner"),
+        }),
+      }),
+    ]);
+  });
+
   it("keeps the shared idle waiter when a hedge delivers one of several parked rows", async () => {
     const sessionKey = "agent:main:sibling-idle-retry";
     mockSessionStore[sessionKey] = { sessionKey };

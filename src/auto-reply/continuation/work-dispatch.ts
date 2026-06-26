@@ -184,8 +184,7 @@ function requeueWorkForRetry(
 ): boolean {
   const requeued = requeuePendingWork(work, params);
   if (requeued) {
-    const soonestQueued = peekSoonestQueuedWorkDueAt(work.sessionKey);
-    armWorkTimer(work.sessionKey, earlierDueAt(params.dueAt, soonestQueued) ?? params.dueAt);
+    armNextWorkTimer(work.sessionKey, params.dueAt);
   }
   return requeued;
 }
@@ -451,6 +450,16 @@ function earlierDueAt(left: number | undefined, right: number | undefined): numb
     return right;
   }
   return right === undefined ? left : Math.min(left, right);
+}
+
+function armNextWorkTimer(sessionKey: string, dueAt: number): void {
+  const soonestQueued = peekSoonestQueuedWorkDueAt(sessionKey);
+  const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
+    sessionKey,
+    RUNNING_WORK_RECOVERY_STALE_MS,
+  );
+  const soonest = earlierDueAt(earlierDueAt(dueAt, soonestQueued), runningRecoveryDueAt);
+  armWorkTimer(sessionKey, soonest ?? dueAt);
 }
 
 /**
@@ -779,11 +788,9 @@ export async function scheduleContinuationWork(params: {
     traceparent: params.request.traceparent,
     log: (message) => params.log?.(message),
   });
-  const soonestDueAt = peekSoonestQueuedWorkDueAt(params.sessionKey);
-  const fireAt = soonestDueAt === undefined ? dueAt : Math.min(dueAt, soonestDueAt);
   // Let callers persist the advanced chain state before even zero-delay work
   // can start the next turn; the timer fires on the next event-loop tick.
-  armWorkTimer(params.sessionKey, fireAt);
+  armNextWorkTimer(params.sessionKey, dueAt);
   return { scheduled: true, capped: false, chainState: nextState };
 }
 
