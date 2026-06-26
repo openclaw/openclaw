@@ -2,6 +2,7 @@
  * GitHub Copilot OAuth flow
  */
 
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   nonNegativeSecondsToSafeMilliseconds,
@@ -28,6 +29,7 @@ const COPILOT_HEADERS = {
 
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
+const COPILOT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 const COPILOT_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -182,11 +184,22 @@ async function fetchJson(
   options: CopilotRequestOptions = {},
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
+
+  const buffer = await readResponseWithLimit(response, COPILOT_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size }) =>
+      new Error(`GitHub Copilot ${operation} response too large: ${size} bytes`),
+  });
+  const text = new TextDecoder().decode(buffer);
+
   if (!response.ok) {
-    const text = await response.text();
     throw new Error(`${response.status} ${response.statusText}: ${text}`);
   }
-  return response.json();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${response.status} ${response.statusText}: invalid JSON`);
+  }
 }
 
 async function startDeviceFlow(
