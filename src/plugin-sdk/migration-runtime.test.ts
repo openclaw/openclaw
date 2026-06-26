@@ -10,7 +10,7 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "./migration-runtime.js";
-import { createMigrationItem } from "./migration.js";
+import { createMigrationItem, summarizeMigrationItems } from "./migration.js";
 import type { MigrationProviderContext } from "./plugin-entry.js";
 
 async function writeFile(filePath: string, contents: string): Promise<void> {
@@ -154,6 +154,60 @@ describe("copyMigrationFileItem", () => {
     expect(firstBackup).not.toBe(secondBackup);
     await expect(fs.readFile(firstBackup, "utf8")).resolves.toBe("old one");
     await expect(fs.readFile(secondBackup, "utf8")).resolves.toBe("old two");
+  });
+});
+
+describe("summarizeMigrationItems", () => {
+  it("counts statuses and sensitive items in one summary", () => {
+    const items = [
+      createMigrationItem({
+        id: "planned",
+        kind: "file",
+        action: "copy",
+        source: "/source/planned",
+        target: "/target/planned",
+      }),
+      createMigrationItem({
+        id: "migrated-sensitive",
+        kind: "config",
+        action: "merge",
+        status: "migrated",
+        sensitive: true,
+      }),
+      createMigrationItem({
+        id: "skipped",
+        kind: "file",
+        action: "copy",
+        source: "/source/skipped",
+        target: "/target/skipped",
+        status: "skipped",
+      }),
+      createMigrationItem({
+        id: "conflict-sensitive",
+        kind: "config",
+        action: "merge",
+        status: "conflict",
+        sensitive: true,
+      }),
+      createMigrationItem({
+        id: "error",
+        kind: "file",
+        action: "copy",
+        source: "/source/error",
+        target: "/target/error",
+        status: "error",
+      }),
+    ];
+
+    expect(summarizeMigrationItems(items)).toEqual({
+      total: 5,
+      planned: 1,
+      migrated: 1,
+      skipped: 1,
+      conflicts: 1,
+      errors: 1,
+      sensitive: 2,
+    });
   });
 });
 

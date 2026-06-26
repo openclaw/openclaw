@@ -51,15 +51,34 @@ export function markMigrationItemSkipped(item: MigrationItem, reason: string): M
 
 /** Counts migration item statuses for provider plans, apply results, and CLI reports. */
 export function summarizeMigrationItems(items: readonly MigrationItem[]): MigrationSummary {
-  return {
+  const summary: MigrationSummary = {
     total: items.length,
-    planned: items.filter((item) => item.status === "planned").length,
-    migrated: items.filter((item) => item.status === "migrated").length,
-    skipped: items.filter((item) => item.status === "skipped").length,
-    conflicts: items.filter((item) => item.status === "conflict").length,
-    errors: items.filter((item) => item.status === "error").length,
-    sensitive: items.filter((item) => item.sensitive).length,
+    planned: 0,
+    migrated: 0,
+    skipped: 0,
+    conflicts: 0,
+    errors: 0,
+    sensitive: 0,
   };
+
+  for (const item of items) {
+    if (item.status === "planned") {
+      summary.planned += 1;
+    } else if (item.status === "migrated") {
+      summary.migrated += 1;
+    } else if (item.status === "skipped") {
+      summary.skipped += 1;
+    } else if (item.status === "conflict") {
+      summary.conflicts += 1;
+    } else if (item.status === "error") {
+      summary.errors += 1;
+    }
+    if (item.sensitive) {
+      summary.sensitive += 1;
+    }
+  }
+
+  return summary;
 }
 
 const REDACTED_MIGRATION_VALUE = "[redacted]";
