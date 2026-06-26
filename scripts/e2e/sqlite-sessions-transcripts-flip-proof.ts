@@ -32,7 +32,7 @@ import {
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
-type DoctorMode = "fix" | "inspect" | "validate";
+type DoctorMode = "inspect" | "validate";
 
 type DoctorCommandEvidence = {
   code: number | null;
@@ -179,6 +179,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
       OPENAI_API_KEY: "sk-openclaw-e2e-mock",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_SKIP_PROVIDERS: undefined,
     },
     startTimeoutMs: 90_000,
@@ -219,17 +220,14 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
-    const fixDoctor = await runDoctorFix(inst);
-    await record("after-doctor-fix", fixDoctor);
+    await inst.startGateway();
+    await record("after-startup-import");
 
     const inspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-doctor-inspect", inspectDoctor);
 
     const validateDoctor = await runDoctor(inst, "validate", context.storePath);
     await record("after-doctor-validate", validateDoctor);
-
-    await inst.startGateway();
-    await record("gateway-started");
 
     const client = await connectGatewayClient({
       url: inst.url,
@@ -702,7 +700,7 @@ async function writeTranscript(
 
 async function runDoctor(
   inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-  mode: Exclude<DoctorMode, "fix">,
+  mode: DoctorMode,
   storePath: string,
 ): Promise<DoctorCommandEvidence> {
   const result = await inst.cli(
@@ -718,20 +716,6 @@ async function runDoctor(
     ...(parsed && typeof parsed.totals === "object"
       ? { totals: parsed.totals as Record<string, unknown> }
       : {}),
-  };
-}
-
-async function runDoctorFix(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-): Promise<DoctorCommandEvidence> {
-  const result = await inst.cli(["doctor", "--fix", "--yes", "--non-interactive"], {
-    timeoutMs: 90_000,
-  });
-  return {
-    code: result.code,
-    mode: "fix",
-    stderrTail: tail(result.stderr),
-    stdoutTail: tail(result.stdout),
   };
 }
 
@@ -1457,10 +1441,10 @@ function validateCheckpointInvariants(
     failures.push(`${checkpoint.label}: doctor ${checkpoint.doctor.mode} exited non-zero`);
   }
   if (
-    checkpoint.label === "after-doctor-fix" &&
+    checkpoint.label === "after-startup-import" &&
     (checkpoint.sqlite.sessionEntries === 0 || checkpoint.sqlite.transcriptEvents === 0)
   ) {
-    failures.push(`${checkpoint.label}: doctor --fix did not import sessions into SQLite`);
+    failures.push(`${checkpoint.label}: startup did not import sessions into SQLite`);
   }
   if (
     checkpoint.label.startsWith("after-doctor") &&
@@ -1478,7 +1462,7 @@ function validateCheckpointInvariants(
   ) {
     failures.push(`${checkpoint.label}: shared sibling entry was deleted too early`);
   }
-  if (checkpoint.label === "after-doctor-fix") {
+  if (checkpoint.label === "after-startup-import") {
     requireArchiveText(checkpoint, failures, {
       description: "legacy trajectory sidecar",
       includes: ["trajectory", context.legacySessionId],
