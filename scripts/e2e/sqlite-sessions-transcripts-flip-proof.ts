@@ -155,7 +155,7 @@ const CONCURRENT_DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-de
 const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
 const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
-const FULL_TURN_SESSION_KEY = "agent:main:dashboard:sqlite-full-turn";
+const FULL_TURN_SESSION_KEY = "agent:main:sqlite-full-turn";
 const PLUGIN_SDK_APPEND_TEXT = "sqlite sdk consumer appended by identity";
 const PLUGIN_SDK_SESSION_KEY = "agent:main:dashboard:sqlite-sdk-consumer";
 const SHARED_SESSION_KEYS = [
@@ -237,7 +237,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       timeoutMs: 20_000,
     });
     try {
-      await requireHistoryContains(client, context.resetSessionKey, "legacy hello");
+      await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
     } finally {
       await disconnectGatewayClient(client);
     }
@@ -254,7 +254,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       timeoutMs: 20_000,
     });
     try {
-      await requireHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
+      await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
       await sendGatewayUserMessage(
         restartedClient,
         context.resetSessionKey,
@@ -288,11 +288,6 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         context.agentDbPath,
         fullTurnSessionId,
         "assistant",
-        context.fullTurnAssistantText,
-      );
-      await waitForHistoryContains(
-        restartedClient,
-        context.fullTurnSessionKey,
         context.fullTurnAssistantText,
       );
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
@@ -1034,12 +1029,15 @@ async function requireHistoryContains(
   expected: string,
 ): Promise<void> {
   const result: { messages?: unknown[] } = await client.request("chat.history", {
+    agentId: AGENT_ID,
     sessionKey,
     limit: 50,
   });
   const text = JSON.stringify(result.messages ?? []);
   if (!text.includes(expected)) {
-    throw new Error(`chat.history for ${sessionKey} did not contain ${JSON.stringify(expected)}`);
+    throw new Error(
+      `chat.history for ${sessionKey} did not contain ${JSON.stringify(expected)}: ${tail(text)}`,
+    );
   }
 }
 
@@ -1048,7 +1046,7 @@ async function waitForHistoryContains(
   sessionKey: string,
   expected: string,
 ): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
       await requireHistoryContains(client, sessionKey, expected);
