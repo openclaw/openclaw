@@ -191,6 +191,10 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
+  prepStages?: {
+    totalMs: number;
+    stages: { name: string; durationMs: number; elapsedMs: number }[];
+  };
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   beforeAgentFinalizeRevisionReason?: string;

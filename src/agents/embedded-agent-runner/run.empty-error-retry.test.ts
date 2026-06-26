@@ -390,4 +390,32 @@ describe("runEmbeddedAgent silent-error retry", () => {
       fallbackSafe: false,
     });
   });
+  it("propagates attempt prep stages to the run meta", async () => {
+    const prepStages = {
+      totalMs: 12,
+      stages: [{ name: "system-prompt", durationMs: 12, elapsedMs: 12 }],
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        prepStages,
+        assistantTexts: ["Done."],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "plain-provider",
+          model: "plain-model",
+          content: [{ type: "text", text: "Done." }],
+          usage: { input: 100, output: 5, totalTokens: 105 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "plain-provider",
+      model: "plain-model",
+      runId: "run-prep-stages-meta",
+    });
+
+    expect(result.meta.prepStages).toBe(prepStages);
+  });
 });
