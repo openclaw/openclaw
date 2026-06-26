@@ -71,7 +71,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
-  const runEmbeddedAgent = vi.fn(async () => ({
+  const runEmbeddedAgent = vi.fn(async (_args: EmbeddedAgentArgs) => ({
     payloads,
     meta: { durationMs: 12, aborted: false },
   }));
@@ -366,9 +366,7 @@ describe("generateVoiceResponse", () => {
       sessionStore["agent:voice:agent:other:matrix:channel:!Roomabc:example.org"]?.sessionId,
     ).toBeTypeOf("string");
     expect(Object.keys(sessionStore)).toHaveLength(2);
-    const sessionKeys = runEmbeddedAgent.mock.calls.map(
-      (call) => (call[0] as EmbeddedAgentArgs).sessionKey,
-    );
+    const sessionKeys = runEmbeddedAgent.mock.calls.map(([args]) => args.sessionKey);
     expect(sessionKeys).toEqual([
       canonical,
       canonical,

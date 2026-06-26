@@ -2,9 +2,9 @@
  * Gateway startup session migration tests.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
 function makeLog() {
@@ -30,8 +30,7 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
 
 describe("runStartupSessionMigration", () => {
   it("discovers plugin-owned agents during direct gateway startup", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-migration-"));
-    try {
+    await withTempDir({ prefix: "openclaw-startup-migration-" }, async (tempDir) => {
       const storeTemplate = path.join(tempDir, "stores", "{agentId}", "sessions.json");
       const voiceStorePath = path.join(tempDir, "stores", "voice", "sessions.json");
       fs.mkdirSync(path.dirname(voiceStorePath), { recursive: true });
@@ -68,9 +67,7 @@ describe("runStartupSessionMigration", () => {
       expect(store["agent:voice:voice:15550001111"]?.sessionId).toBe("legacy-voice");
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(log.info).toHaveBeenCalledOnce();
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("logs changes when orphaned keys are canonicalized", async () => {
