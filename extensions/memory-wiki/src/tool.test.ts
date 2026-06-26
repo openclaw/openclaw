@@ -88,6 +88,7 @@ describe("memory-wiki tools", () => {
     const details = asSchemaObject(result.details);
 
     expect(text).toContain("Report: reports/lint.md");
+    expect(text).toContain("Issues: 3 total (0 errors, 3 warnings)");
     expect(text).not.toContain(rootDir);
     expect(details.reportPath).toBe("reports/lint.md");
     expect(details).not.toHaveProperty("vaultRoot");

@@ -202,8 +202,15 @@ export function createWikiLintTool(
       const contradictions = result.issuesByCategory.contradictions.length;
       const openQuestions = result.issuesByCategory["open-questions"].length;
       const provenance = result.issuesByCategory.provenance.length;
-      const errors = result.issues.filter((issue) => issue.severity === "error").length;
-      const warnings = result.issues.filter((issue) => issue.severity === "warning").length;
+      let errors = 0;
+      let warnings = 0;
+      for (const issue of result.issues) {
+        if (issue.severity === "error") {
+          errors += 1;
+        } else if (issue.severity === "warning") {
+          warnings += 1;
+        }
+      }
       const reportPath = formatWikiToolReportPath(config, result.reportPath);
       const summary =
         result.issueCount === 0
