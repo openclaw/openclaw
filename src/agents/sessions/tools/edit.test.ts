@@ -37,7 +37,10 @@ describe("edit tool", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, edits: [{ oldText: "missing", newText: "replacement" }] },
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement" }],
+        },
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
@@ -173,5 +176,40 @@ describe("edit tool", () => {
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
+  });
+
+  it("returns terminal no-op when edit produces identical content", async () => {
+    const filePath = await createTempFile("unchanged content\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "unchanged", newText: "unchanged" }],
+      },
+      undefined,
+    );
+
+    expect(result.content[0].text).toContain("No changes made");
+    // File must not be rewritten
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
+  });
+
+  it("applies real changes normally (no false positive for no-op)", async () => {
+    const filePath = await createTempFile("old content\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "old", newText: "new" }],
+      },
+      undefined,
+    );
+
+    expect(result.content[0].text).toContain("Successfully replaced");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
 });

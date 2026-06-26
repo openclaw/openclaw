@@ -45,14 +45,18 @@ const replaceEditSchema = Type.Object(
       description:
         "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
     }),
-    newText: Type.String({ description: "Replacement text for this targeted edit." }),
+    newText: Type.String({
+      description: "Replacement text for this targeted edit.",
+    }),
   },
   { additionalProperties: false },
 );
 
 const editSchema = Type.Object(
   {
-    path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+    path: Type.String({
+      description: "Path to the file to edit (relative or absolute)",
+    }),
     edits: Type.Array(replaceEditSchema, {
       description:
         "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
@@ -123,7 +127,10 @@ function prepareEditArguments(input: unknown): EditToolInput {
   return { ...rest, edits } as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+function validateEditInput(input: EditToolInput): {
+  path: string;
+  edits: Edit[];
+} {
   if (!Array.isArray(input.edits) || input.edits.length === 0) {
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
@@ -183,7 +190,12 @@ type RenderableEditArgs = {
 };
 
 type EditToolResultLike = {
-  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  content: Array<{
+    type: string;
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
   details?: EditToolDetails;
 };
 
@@ -441,7 +453,13 @@ export function createEditToolDefinition(
             .readFile(absolutePath)
             .then((current) => current.toString("utf-8"))
             .catch(() => rawContent);
-          if (didEditLikelyApply({ originalContent: rawContent, currentContent, edits })) {
+          if (
+            didEditLikelyApply({
+              originalContent: rawContent,
+              currentContent,
+              edits,
+            })
+          ) {
             return {
               content: [
                 {
@@ -454,6 +472,22 @@ export function createEditToolDefinition(
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
+          }
+          // Terminal no-op: the edit produced identical content.  Return a
+          // structured result instead of throwing so the tool-loop treats it
+          // as terminal rather than retrying the same edit.
+          if (
+            normalizedError.message.includes("No changes made to") &&
+            normalizedError.message.includes("identical content")
+          ) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No changes made to ${path}. The replacement produced identical content.`,
+                },
+              ],
+            };
           }
           throw normalizedError;
         }
@@ -505,7 +539,10 @@ export function createEditToolDefinition(
           changed =
             setEditPreview(
               callComponent,
-              { diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+              {
+                diff: resultDiff,
+                firstChangedLine: typedResult.details?.firstChangedLine,
+              },
               argsKey,
             ) || changed;
         }
