@@ -5,6 +5,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -479,11 +480,7 @@ async function fetchFalJson(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
-    try {
-      return await response.json();
-    } catch {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-    }
+    return await readProviderJsonResponse(response, params.errorContext);
   } finally {
     await release();
   }
