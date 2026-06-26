@@ -1,10 +1,6 @@
 // Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
-import {
-  normalizeAgentId,
-  normalizeSessionKeyPreservingOpaquePeerIds,
-  parseAgentSessionKey,
-} from "openclaw/plugin-sdk/routing";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
@@ -764,17 +760,23 @@ export function resolveVoiceCallAgentSessionKey(params: {
   if (lower === "global" || lower === "unknown") {
     return lower;
   }
-  const normalizedInput = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  const scopedAgentId = parseAgentSessionKey(normalizedInput)?.agentId;
-  const isConfiguredAgentKey =
-    scopedAgentId !== undefined &&
-    normalizeAgentId(scopedAgentId) === scopedAgentId &&
-    scopedAgentId === agentId;
-  // Voice Call's configured agent owns both the store and runtime. Foreign or
-  // malformed agent-shaped input is an opaque integration key, not a route.
-  const normalizedScopedKey = isConfiguredAgentKey
-    ? normalizedInput
-    : `agent:${agentId}:${normalizedInput}`;
+  const parsedInput = parseAgentSessionKey(sessionKey);
+  let normalizedScopedKey: string;
+  if (
+    parsedInput &&
+    normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
+    parsedInput.agentId === agentId
+  ) {
+    normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
+  } else {
+    // Voice Call's configured agent owns both the store and runtime. Foreign or
+    // malformed agent-shaped input is an opaque integration key, not a route.
+    const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
+    if (!wrappedInput) {
+      throw new Error("Voice Call session key could not be normalized");
+    }
+    normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
+  }
   const canonicalMain = canonicalizeMainSessionAlias({
     cfg: { session: params.coreSession },
     agentId,

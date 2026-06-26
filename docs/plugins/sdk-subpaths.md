@@ -253,7 +253,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma and WAL maintenance setup for plugin-owned databases |
-    | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, opaque-ID-preserving session-key normalization, and `resolveDefaultAgentBoundAccountId` |
+    | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
     | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
