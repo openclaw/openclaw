@@ -255,6 +255,25 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+}): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFilesForRunWithTiming(params);
+}
+
+/**
+ * Timing-aware variant used only by the embedded runner to record bootstrap
+ * substage durations. Kept off the plugin SDK surface (not re-exported by
+ * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
+ * `resolveBootstrapFilesForRun` signature stays callback-free.
+ */
+export async function resolveBootstrapFilesForRunWithTiming(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  warn?: (message: string) => void;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
   onBootstrapSubstageTiming?: (
     name: "workspace-file-load" | "hook-overrides",
     durationMs: number,

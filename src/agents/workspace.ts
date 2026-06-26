@@ -1183,10 +1183,10 @@ async function resolveExtraBootstrapPatternPaths(
       matches.push(candidate);
     }
   }
-  if (matches.length > 0) {
-    return matches;
-  }
-  return [pattern];
+  // A glob that matched nothing resolves to an empty set, matching fs.glob's
+  // no-match behavior. Returning [pattern] is reserved for the no-glob-support
+  // fallback above, where the literal is the only thing we can hand back.
+  return matches;
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(
