@@ -1127,6 +1127,7 @@ export async function runCopilotAttempt(
       sessionId: openClawSessionIdForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
       agentId: readString(input.agentId),
+      storePath: readString(input.sessionTarget?.storePath),
       messages: taggedMessages,
       idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
       config: (input as { config?: unknown }).config as never,

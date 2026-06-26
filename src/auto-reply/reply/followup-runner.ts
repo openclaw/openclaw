@@ -1131,6 +1131,15 @@ export function createFollowupRunner(params: {
               });
               pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
+              const runSessionTarget =
+                storePath && run.sessionKey
+                  ? {
+                      ...(run.agentId ? { agentId: run.agentId } : {}),
+                      ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+                      sessionKey: run.sessionKey,
+                      storePath,
+                    }
+                  : undefined;
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 lifecycleGeneration,
@@ -1138,6 +1147,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
+                sessionTarget: runSessionTarget,
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
