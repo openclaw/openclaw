@@ -21,7 +21,15 @@ export interface EditToolInput {
   edits: Edit[];
 }
 
-export interface EditToolDetails {
+export type FileMutationNoOpReason = "no-op-write" | "no-op-edit" | "no-op-patch";
+
+export interface FileMutationNoOpDetails {
+  ok: false;
+  status: "blocked";
+  reason: FileMutationNoOpReason;
+}
+
+export interface EditToolSuccessDetails {
   /** Display-oriented diff of the changes made */
   diff: string;
   /** Standard unified patch of the changes made */
@@ -29,6 +37,8 @@ export interface EditToolDetails {
   /** Line number of the first change in the new file (for editor navigation) */
   firstChangedLine?: number;
 }
+
+export type EditToolDetails = EditToolSuccessDetails | FileMutationNoOpDetails;
 
 export interface FindToolInput {
   pattern: string;
@@ -81,3 +91,5 @@ export interface WriteToolInput {
   path: string;
   content: string;
 }
+
+export type WriteToolDetails = FileMutationNoOpDetails;

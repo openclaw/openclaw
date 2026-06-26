@@ -30,6 +30,42 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  it("reports identical replacements as terminal no-op failures", async () => {
+    const filePath = await createTempFile("const value = 1;\n");
+    const writeFile = vi.fn(async (absolutePath: string, content: string) => {
+      await fs.writeFile(absolutePath, content, "utf-8");
+    });
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      writeFile,
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "const value = 1;", newText: "const value = 1;" }],
+      },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `No changes made to ${filePath}. The replacement produced identical content.`,
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      status: "blocked",
+      reason: "no-op-edit",
+    });
+    expect(result.terminate).toBe(true);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     const filePath = await createTempFile("actual current content");
     const tool = createEditTool(tmpDir);

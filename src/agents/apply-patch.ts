@@ -62,11 +62,23 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
+  noOpReason?: "no-op-patch";
 };
 
 type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
-};
+} & (
+  | {
+      ok: false;
+      status: "blocked";
+      reason: "no-op-patch";
+    }
+  | {
+      ok?: true;
+      status?: "ok";
+      reason?: undefined;
+    }
+);
 
 type SandboxApplyPatchConfig = {
   root: string;
@@ -122,7 +134,15 @@ export function createApplyPatchTool(
 
       return {
         content: [{ type: "text", text: result.text }],
-        details: { summary: result.summary },
+        details: result.noOpReason
+          ? {
+              ok: false,
+              status: "blocked",
+              reason: result.noOpReason,
+              summary: result.summary,
+            }
+          : { summary: result.summary },
+        ...(result.noOpReason ? { terminate: true } : {}),
       };
     },
   };
@@ -149,6 +169,7 @@ export async function applyPatch(
     deleted: new Set<string>(),
   };
   const fileOps = resolvePatchFileOps(options);
+  let firstNoOpDisplay: string | undefined;
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
@@ -174,8 +195,12 @@ export async function applyPatch(
     }
 
     const target = await resolvePatchPath(hunk.path, options);
+    let originalContents = "";
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-      readFile: (pathLocal) => fileOps.readFile(pathLocal),
+      readFile: async (pathLocal) => {
+        originalContents = await fileOps.readFile(pathLocal);
+        return originalContents;
+      },
     });
 
     if (hunk.movePath) {
@@ -184,6 +209,10 @@ export async function applyPatch(
       await ensureDir(moveTarget.resolved, fileOps);
       const moveResolvesToSource =
         path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+      if (moveResolvesToSource && originalContents === applied) {
+        firstNoOpDisplay ??= target.display;
+        continue;
+      }
       await fileOps.writeFile(
         moveResolvesToSource ? target.resolved : moveTarget.resolved,
         applied,
@@ -198,15 +227,33 @@ export async function applyPatch(
         moveResolvesToSource ? target.display : moveTarget.display,
       );
     } else {
+      if (originalContents === applied) {
+        firstNoOpDisplay ??= target.display;
+        continue;
+      }
       await fileOps.writeFile(target.resolved, applied);
       recordSummary(summary, seen, "modified", target.display);
     }
+  }
+
+  if (isEmptySummary(summary) && firstNoOpDisplay) {
+    return {
+      summary,
+      text: `No changes made to ${firstNoOpDisplay}. The patch produced identical content.`,
+      noOpReason: "no-op-patch",
+    };
   }
 
   return {
     summary,
     text: formatSummary(summary),
   };
+}
+
+function isEmptySummary(summary: ApplyPatchSummary): boolean {
+  return (
+    summary.added.length === 0 && summary.modified.length === 0 && summary.deleted.length === 0
+  );
 }
 
 function recordSummary(

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWriteTool, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
@@ -49,6 +49,35 @@ describe("write tool", () => {
       },
     };
   }
+
+  it("reports same-content writes as terminal no-op failures", async () => {
+    const filePath = await createTempPath();
+    await fs.writeFile(filePath, "finished\n", "utf-8");
+    const writeFile = vi.fn(async (absolutePath: string, content: string) => {
+      await fs.writeFile(absolutePath, content, "utf-8");
+    });
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(writeFile),
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "finished\n" },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `No changes made to ${filePath}. The file already has identical content.`,
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      status: "blocked",
+      reason: "no-op-write",
+    });
+    expect(result.terminate).toBe(true);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
 
   it("recovers success after a post-write abort when readback matches requested content", async () => {
     // Remote transports can report cancellation after the write landed; verify

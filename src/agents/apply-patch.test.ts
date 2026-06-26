@@ -11,7 +11,7 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
-import { applyPatch } from "./apply-patch.js";
+import { applyPatch, createApplyPatchTool } from "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -134,6 +134,38 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
     expect(memory.files.has("/sandbox/source.txt")).toBe(false);
     expect(result.summary.modified).toEqual(["dest.txt"]);
+  });
+
+  it("reports no-op update hunks as terminal failures", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++bar
+*** End Patch`;
+
+    const result = await createApplyPatchTool(memory.options).execute(
+      "call-1",
+      { input: patch },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "No changes made to source.txt. The patch produced identical content.",
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      status: "blocked",
+      reason: "no-op-patch",
+      summary: { added: [], modified: [], deleted: [] },
+    });
+    expect(result.terminate).toBe(true);
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
   });
 
   it("updates in place when move target resolves to the source file", async () => {

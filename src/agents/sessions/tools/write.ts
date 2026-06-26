@@ -25,6 +25,7 @@ import {
   shortenPath,
   str,
 } from "./render-utils.js";
+import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
@@ -366,10 +367,27 @@ async function recoverSuccessfulWrite(params: {
   };
 }
 
+function createNoOpWriteResult(path: string) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `No changes made to ${path}. The file already has identical content.`,
+      },
+    ],
+    details: {
+      ok: false,
+      status: "blocked",
+      reason: "no-op-write",
+    } satisfies WriteToolDetails,
+    terminate: true,
+  };
+}
+
 export function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
-): ToolDefinition<typeof writeSchema, undefined> {
+): ToolDefinition<typeof writeSchema, WriteToolDetails | undefined> {
   const ops = options?.operations ?? defaultWriteOperations;
   return {
     name: "write",
@@ -393,10 +411,13 @@ export function createWriteToolDefinition(
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        if (signal?.aborted) {
+          throw new Error("Operation aborted");
+        }
+        if (precheck.state === "same") {
+          return createNoOpWriteResult(path);
+        }
         try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -475,6 +496,6 @@ export function createWriteToolDefinition(
 export function createWriteTool(
   cwd: string,
   options?: WriteToolOptions,
-): AgentTool<typeof writeSchema> {
+): AgentTool<typeof writeSchema, WriteToolDetails | undefined> {
   return wrapToolDefinition(createWriteToolDefinition(cwd, options));
 }

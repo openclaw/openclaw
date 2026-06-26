@@ -179,13 +179,19 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
+export class NoChangeEditError extends Error {
+  override name = "NoChangeEditError";
+}
+
 function getNoChangeError(path: string, totalEdits: number): Error {
   if (totalEdits === 1) {
-    return new Error(
+    return new NoChangeEditError(
       `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
     );
   }
-  return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+  return new NoChangeEditError(
+    `No changes made to ${path}. The replacements produced identical content.`,
+  );
 }
 
 /**

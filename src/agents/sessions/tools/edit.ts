@@ -23,6 +23,7 @@ import {
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
+  NoChangeEditError,
   normalizeToLF,
   restoreLineEndings,
   stripBom,
@@ -30,7 +31,12 @@ import {
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
-import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
+import type {
+  EditToolDetails,
+  EditToolInput,
+  EditToolSuccessDetails,
+  FileMutationNoOpDetails,
+} from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -174,6 +180,28 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   return enhanced;
 }
 
+function createNoOpEditResult(message: string) {
+  const terminalMessage = message.replace(
+    " This might indicate an issue with special characters or the text not existing as expected.",
+    "",
+  );
+  return {
+    content: [{ type: "text" as const, text: terminalMessage }],
+    details: {
+      ok: false,
+      status: "blocked",
+      reason: "no-op-edit",
+    } satisfies FileMutationNoOpDetails,
+    terminate: true,
+  };
+}
+
+function isEditToolSuccessDetails(
+  details: EditToolDetails | undefined,
+): details is EditToolSuccessDetails {
+  return Boolean(details && "diff" in details && "patch" in details);
+}
+
 type RenderableEditArgs = {
   path?: string;
   file_path?: string;
@@ -287,7 +315,8 @@ function formatEditResult(
     return theme.fg("error", errorText);
   }
 
-  const resultDiff = result.details?.diff;
+  const successDetails = isEditToolSuccessDetails(result.details) ? result.details : undefined;
+  const resultDiff = successDetails?.diff;
   if (resultDiff && resultDiff !== previewDiff) {
     return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
   }
@@ -455,6 +484,9 @@ export function createEditToolDefinition(
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
           }
+          if (normalizedError instanceof NoChangeEditError) {
+            return createNoOpEditResult(normalizedError.message);
+          }
           throw normalizedError;
         }
       });
@@ -498,14 +530,18 @@ export function createEditToolDefinition(
         ? JSON.stringify({ path: previewInput.path, edits: previewInput.edits })
         : undefined;
       const typedResult = result as EditToolResultLike;
-      const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
+      const successDetails =
+        !context.isError && isEditToolSuccessDetails(typedResult.details)
+          ? typedResult.details
+          : undefined;
+      const resultDiff = successDetails?.diff;
       let changed = false;
       if (callComponent) {
         if (typeof resultDiff === "string") {
           changed =
             setEditPreview(
               callComponent,
-              { diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+              { diff: resultDiff, firstChangedLine: successDetails?.firstChangedLine },
               argsKey,
             ) || changed;
         }
