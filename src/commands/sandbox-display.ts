@@ -87,10 +87,24 @@ export function displaySummary(
   runtime: RuntimeEnv,
 ): void {
   const totalCount = containers.length + browsers.length;
-  const runningCount =
-    containers.filter((c) => c.running).length + browsers.filter((b) => b.running).length;
-  const mismatchCount =
-    containers.filter((c) => !c.imageMatch).length + browsers.filter((b) => !b.imageMatch).length;
+  let runningCount = 0;
+  let mismatchCount = 0;
+  for (const container of containers) {
+    if (container.running) {
+      runningCount += 1;
+    }
+    if (!container.imageMatch) {
+      mismatchCount += 1;
+    }
+  }
+  for (const browser of browsers) {
+    if (browser.running) {
+      runningCount += 1;
+    }
+    if (!browser.imageMatch) {
+      mismatchCount += 1;
+    }
+  }
 
   runtime.log(`Total: ${totalCount} (${runningCount} running)`);
 

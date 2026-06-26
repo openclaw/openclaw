@@ -23,6 +23,7 @@ vi.mock("@clack/prompts", () => ({
   confirm: mocks.clackConfirm,
 }));
 
+import { displaySummary } from "./sandbox-display.js";
 import { sandboxListCommand, sandboxRecreateCommand } from "./sandbox.js";
 
 // --- Test Factories ---
@@ -137,6 +138,23 @@ describe("sandboxListCommand", () => {
       expectLogContains(runtime, "⚠️");
       expectLogContains(runtime, "config mismatch");
       expectLogContains(runtime, "sandbox recreate --all");
+    });
+
+    it("should summarize mixed runtime counts", () => {
+      displaySummary(
+        [
+          createContainer({ running: true, imageMatch: true }),
+          createContainer({ running: false, imageMatch: false }),
+        ],
+        [
+          createBrowser({ running: true, imageMatch: false }),
+          createBrowser({ running: false, imageMatch: true }),
+        ],
+        runtime as never,
+      );
+
+      expectLogContains(runtime, "Total: 4 (2 running)");
+      expectLogContains(runtime, "2 runtime(s) with config mismatch detected.");
     });
 
     it("should display message when no containers found", async () => {
