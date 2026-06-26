@@ -5,6 +5,14 @@ export type GeeRuntimeToolPolicy = {
   endpointIds: string[];
 };
 
+export type GeeRuntimeCompactionOwner = "openclaw" | "gee" | "provider" | "disabled";
+
+export type GeeRuntimeCompactionPolicy = {
+  owner: GeeRuntimeCompactionOwner;
+  endpointIds: string[];
+  hostCompactionIds: string[];
+};
+
 export function resolveGeeRuntimeToolPolicy(
   preparedFacts?: Record<string, unknown>,
 ): GeeRuntimeToolPolicy | undefined {
@@ -15,11 +23,7 @@ export function resolveGeeRuntimeToolPolicy(
   const endpointIds: string[] = [];
   const allowedToolIds = new Set<string>();
   for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
-    const fact = readRequiredRecord(rawFact, endpointId, "preparedFacts");
-    readLiteral(fact.kind, "gee-runtime-prepared-facts", endpointId, "kind");
-    readLiteral(fact.version, 1, endpointId, "version");
-    readLiteral(fact.hostMode, "gee-hosted", endpointId, "hostMode");
-
+    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
     const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
     const tools = readRequiredRecord(envelope.tools, endpointId, "envelope.tools");
     readLiteral(tools.policy, "gee-authorized", endpointId, "envelope.tools.policy");
@@ -36,6 +40,58 @@ export function resolveGeeRuntimeToolPolicy(
   return {
     allowedToolIds: Array.from(allowedToolIds).toSorted((left, right) => left.localeCompare(right)),
     endpointIds: endpointIds.toSorted((left, right) => left.localeCompare(right)),
+  };
+}
+
+export function resolveGeeRuntimeCompactionPolicy(
+  preparedFacts?: Record<string, unknown>,
+): GeeRuntimeCompactionPolicy | undefined {
+  if (!preparedFacts || Object.keys(preparedFacts).length === 0) {
+    return undefined;
+  }
+
+  const endpointIds: string[] = [];
+  const hostCompactionIds = new Set<string>();
+  const owners = new Set<GeeRuntimeCompactionOwner>();
+  for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
+    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
+    const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
+    const compaction = readRequiredRecord(envelope.compaction, endpointId, "envelope.compaction");
+    const owner = readEnum(
+      compaction.owner,
+      ["openclaw", "gee", "provider", "disabled"],
+      endpointId,
+      "envelope.compaction.owner",
+    );
+    owners.add(owner);
+    const hostCompactionId = readOptionalString(
+      compaction.hostCompactionId,
+      endpointId,
+      "envelope.compaction.hostCompactionId",
+    );
+    if (hostCompactionId) {
+      hostCompactionIds.add(hostCompactionId);
+    }
+    endpointIds.push(endpointId);
+  }
+
+  if (owners.size > 1) {
+    throw new Error(
+      `Gee-hosted OpenClaw prepared runtime facts have conflicting compaction owners for endpoints "${endpointIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join('", "')}".`,
+    );
+  }
+  const [owner] = owners;
+  if (!owner) {
+    return undefined;
+  }
+  return {
+    owner,
+    endpointIds: endpointIds.toSorted((left, right) => left.localeCompare(right)),
+    hostCompactionIds: Array.from(hostCompactionIds).toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
   };
 }
 
@@ -59,6 +115,14 @@ export function isGeeRuntimeToolAllowed(
   return isToolAllowedByPolicyName(toolName, { allow: policy.allowedToolIds });
 }
 
+function readGeeRuntimePreparedFact(value: unknown, endpointId: string): Record<string, unknown> {
+  const fact = readRequiredRecord(value, endpointId, "preparedFacts");
+  readLiteral(fact.kind, "gee-runtime-prepared-facts", endpointId, "kind");
+  readLiteral(fact.version, 1, endpointId, "version");
+  readLiteral(fact.hostMode, "gee-hosted", endpointId, "hostMode");
+  return fact;
+}
+
 function readRequiredRecord(
   value: unknown,
   endpointId: string,
@@ -78,6 +142,21 @@ function readStringArray(value: unknown, endpointId: string, fieldName: string):
 }
 
 function readRequiredString(value: unknown, endpointId: string, fieldName: string): string {
+  const result = readOptionalString(value, endpointId, fieldName);
+  if (result) {
+    return result;
+  }
+  throwInvalidPreparedFact(endpointId, fieldName);
+}
+
+function readOptionalString(
+  value: unknown,
+  endpointId: string,
+  fieldName: string,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
   if (typeof value === "string" && value.trim()) {
     return value.trim();
   }
@@ -92,6 +171,18 @@ function readLiteral<T extends string | number>(
 ): T {
   if (value === expected) {
     return expected;
+  }
+  throwInvalidPreparedFact(endpointId, fieldName);
+}
+
+function readEnum<T extends string>(
+  value: unknown,
+  options: readonly T[],
+  endpointId: string,
+  fieldName: string,
+): T {
+  if (typeof value === "string" && options.includes(value as T)) {
+    return value as T;
   }
   throwInvalidPreparedFact(endpointId, fieldName);
 }

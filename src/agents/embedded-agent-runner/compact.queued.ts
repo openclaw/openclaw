@@ -42,6 +42,7 @@ import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compacti
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
+  resolveGeeRuntimeHostOwnedCompactionPolicy,
 } from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
@@ -191,6 +192,21 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
+  const hostOwnedCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
+    params.geeRuntimePreparedFacts,
+  );
+  if (hostOwnedCompactionPolicy) {
+    log.info(
+      `[compaction-diag] skipping queued OpenClaw compaction for ${params.sessionKey ?? params.sessionId}; ` +
+        `owner=${hostOwnedCompactionPolicy.owner}`,
+    );
+    return {
+      ok: true,
+      compacted: false,
+      reason: `gee-runtime-compaction-${hostOwnedCompactionPolicy.owner}`,
+    };
+  }
+
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -218,6 +234,7 @@ export async function compactEmbeddedAgentSession(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -243,6 +260,7 @@ export async function compactEmbeddedAgentSession(
     modelId: params.model,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

@@ -14,6 +14,10 @@ import {
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  resolveGeeRuntimeCompactionPolicy,
+  type GeeRuntimeCompactionPolicy,
+} from "../gee-runtime-prepared-facts.js";
+import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   resolveModelRefFromString,
@@ -36,6 +40,8 @@ type EmbeddedCompactionRuntimeContext = {
   authProfileId?: string;
   agentHarnessId?: string;
   geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
+  geeRuntimeCompactionOwner?: GeeRuntimeCompactionPolicy["owner"];
+  geeRuntimeHostCompactionId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -60,12 +66,20 @@ type EmbeddedCompactionRuntimeContext = {
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
  */
+export function resolveGeeRuntimeHostOwnedCompactionPolicy(
+  preparedFacts?: EmbeddedRunGeeRuntimePreparedFacts,
+): GeeRuntimeCompactionPolicy | undefined {
+  const policy = resolveGeeRuntimeCompactionPolicy(preparedFacts);
+  return policy && policy.owner !== "openclaw" ? policy : undefined;
+}
+
 export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
   harnessRuntime?: string | null;
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
@@ -76,6 +90,13 @@ export function resolveEmbeddedCompactionTarget(params: {
   model: string | undefined;
   authProfileId: string | undefined;
 } {
+  const geeCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
+    params.geeRuntimePreparedFacts,
+  );
+  if (geeCompactionPolicy) {
+    return { provider: undefined, model: undefined, authProfileId: undefined };
+  }
+
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
@@ -271,12 +292,14 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 }): EmbeddedCompactionRuntimeContext {
+  const geeCompactionPolicy = resolveGeeRuntimeCompactionPolicy(params.geeRuntimePreparedFacts);
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
@@ -297,6 +320,8 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     authProfileId: resolved.authProfileId,
     agentHarnessId,
     geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+    geeRuntimeCompactionOwner: geeCompactionPolicy?.owner,
+    geeRuntimeHostCompactionId: geeCompactionPolicy?.hostCompactionIds[0],
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,
