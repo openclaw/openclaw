@@ -11,6 +11,7 @@ const {
   postMultipartRequestMock,
   fetchWithTimeoutMock,
   pollProviderOperationJsonMock,
+  readProviderJsonResponseMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();

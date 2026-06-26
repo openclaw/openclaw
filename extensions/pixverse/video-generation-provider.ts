@@ -9,6 +9,7 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -183,13 +184,8 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-async function readPixVerseJson<T>(response: Pick<Response, "json">, label: string): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
+  const payload = await readProviderJsonResponse(response, label);
   return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
 }
 

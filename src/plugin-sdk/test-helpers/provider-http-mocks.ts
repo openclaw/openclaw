@@ -36,6 +36,7 @@ type AnyMock = Mock<(...args: unknown[]) => unknown>;
 interface ProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
   executeProviderOperationWithRetryMock: AnyMock;
+  readProviderJsonResponseMock: AnyMock;
   postJsonRequestMock: AnyMock;
   postMultipartRequestMock: AnyMock;
   fetchWithTimeoutMock: AnyMock;
@@ -56,6 +57,10 @@ interface ProviderHttpMocks {
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   executeProviderOperationWithRetryMock: vi.fn(),
+  readProviderJsonResponseMock: vi.fn(async (...args: unknown[]) => {
+    const response = args[0] as { json: () => Promise<unknown> };
+    return response.json();
+  }),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
@@ -210,6 +215,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
   createProviderOperationDeadline: ({
     label,
