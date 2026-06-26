@@ -242,11 +242,11 @@ export async function buildCodexPluginThreadConfig(
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
-      if (!app.accessible || !app.enabled) {
+      if (!isPluginAppReadyForThreadStart(app)) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
-          message: `${app.id} is not accessible or enabled for ${record.policy.pluginName}.`,
+          message: `${app.id} is not accessible for ${record.policy.pluginName}.`,
         });
         continue;
       }
@@ -438,6 +438,13 @@ function resolveThreadConfigAppsForRecord(params: {
   return params.record.apps;
 }
 
+function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
+  // `app/list` is the source of truth for inventory and access posture, but
+  // OpenClaw owns the per-thread enablement decision. A listed app that is
+  // accessible can be re-enabled for this thread via `config.apps[app.id]`.
+  return app.accessible;
+}
+
 function shouldForceRefreshForNotReadyPluginApps(
   params: BuildCodexPluginThreadConfigParams,
   policy: ResolvedCodexPluginsPolicy,
@@ -453,7 +460,7 @@ function shouldForceRefreshForNotReadyPluginApps(
     (record) =>
       record.appOwnership === "proven" &&
       record.ownedAppIds.length > 0 &&
-      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible)),
   );
 }
 
