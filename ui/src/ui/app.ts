@@ -78,15 +78,15 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -113,6 +113,16 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import {
+  emptyProjectContextDraft,
+  emptyProjectDocumentDraft,
+  emptyProjectDocumentImportDraft,
+  emptyProjectRoleDraft,
+  type ProjectContextDraft,
+  type ProjectDocumentDraft,
+  type ProjectDocumentImportDraft,
+  type ProjectRoleDraft,
+} from "./controllers/projects.ts";
 import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
@@ -154,6 +164,11 @@ import type {
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
+  ProjectChatSummary,
+  ProjectDetail,
+  ProjectDocumentSummary,
+  ProjectRoleSummary,
+  ProjectsListResult,
   SessionCompactionCheckpoint,
   SessionsListResult,
   SkillStatusReport,
@@ -510,6 +525,38 @@ export class OpenClawApp extends LitElement {
   @state() sessionsCheckpointLoadingKey: string | null = null;
   @state() sessionsCheckpointBusyKey: string | null = null;
   @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
+
+  @state() projectsLoading = false;
+  @state() projectsSaving = false;
+  @state() projectsError: string | null = null;
+  @state() projectsResult: ProjectsListResult | null = null;
+  @state() projectsIncludeArchived = false;
+  @state() projectsSelectedId: string | null = null;
+  @state() projectDetailLoading = false;
+  @state() projectDetail: ProjectDetail | null = null;
+  @state() projectChatsLoading = false;
+  @state() projectChats: ProjectChatSummary[] = [];
+  @state() projectActiveChat: ProjectChatSummary | null = null;
+  @state() projectRolesLoading = false;
+  @state() projectRoles: ProjectRoleSummary[] = [];
+  @state() projectDocumentsLoading = false;
+  @state() projectDocuments: ProjectDocumentSummary[] = [];
+  @state() projectContextDraft: ProjectContextDraft = emptyProjectContextDraft();
+  @state() projectRoleDraft: ProjectRoleDraft = emptyProjectRoleDraft();
+  @state() projectDocumentDraft: ProjectDocumentDraft = emptyProjectDocumentDraft();
+  @state() projectDocumentImportDraft: ProjectDocumentImportDraft =
+    emptyProjectDocumentImportDraft();
+  @state() projectCreateName = "";
+  @state() projectCreateDescription = "";
+  @state() projectAttachSessionKey = "";
+  @state() projectAttachTitle = "";
+  @state() projectAttachRole = "";
+  @state() projectNewChatRole = "";
+  @state() projectNewChatDocumentIds: string[] = [];
+  @state() projectChatDraftTitle = "";
+  @state() projectChatDraftRole = "";
+  @state() projectChatDraftDocumentIds: string[] = [];
+  @state() projectChatRoleFilter = "";
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

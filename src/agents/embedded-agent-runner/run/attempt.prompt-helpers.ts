@@ -15,6 +15,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import { buildProjectPromptContextForSession } from "../../../projects/project-prompt-context.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
@@ -123,6 +124,9 @@ export async function resolvePromptBuildHookResult(params: {
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
+  const projectContext = buildProjectPromptContextForSession({
+    sessionKey: params.hookCtx.sessionKey,
+  });
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build and legacy start hooks.
   const turnPrepareResult =
@@ -194,6 +198,7 @@ export async function resolvePromptBuildHookResult(params: {
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? beforeAgentStartResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
+      projectContext,
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
       heartbeatContribution?.prependContext,

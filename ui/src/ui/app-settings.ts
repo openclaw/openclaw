@@ -52,6 +52,7 @@ import {
 } from "./controllers/model-auth-status.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
+import { loadProjects, type ProjectsState } from "./controllers/projects.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   loadSkillWorkshopProposals,
@@ -159,6 +160,7 @@ type SettingsAppHost = SettingsHost &
   LogsState &
   NodesState &
   PresenceState &
+  ProjectsState &
   SessionsState &
   SkillsState &
   SkillWorkshopState &
@@ -467,6 +469,9 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
       case "usage":
         await loadUsage(app);
         break;
+      case "projects":
+        await Promise.all([loadProjects(app, { preserveSelection: true }), loadSessions(app)]);
+        break;
       case "sessions":
         await Promise.all([loadConfig(app), loadSessions(app)]);
         break;
@@ -509,6 +514,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             !host.chatHasAutoScrolled,
           );
         } finally {
+          void loadProjects(app, { preserveSelection: true }).catch(() => undefined);
           void loadModelAuthStatusState(app).catch(() => undefined);
         }
         break;

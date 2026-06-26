@@ -20,6 +20,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
+  renderTopbarLanguageSelect,
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
@@ -122,6 +123,29 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import {
+  archiveProjectChat,
+  archiveProjectDocument,
+  archiveProjectRole,
+  archiveSelectedProject,
+  attachChatToSelectedProject,
+  createProject,
+  createSelectedProjectDocument,
+  createSelectedProjectRole,
+  detachProjectChat,
+  importSelectedProjectDocuments,
+  loadProjects,
+  patchProjectChat,
+  patchProjectDocument,
+  patchProjectRole,
+  patchSelectedProject,
+  restoreProjectChat,
+  restoreProjectDocument,
+  restoreProjectRole,
+  restoreSelectedProject,
+  saveSelectedProjectContext,
+  selectProject,
+} from "./controllers/projects.ts";
 import {
   branchSessionFromCheckpoint,
   createSessionAndRefresh,
@@ -678,6 +702,7 @@ const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyVie
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
 const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
+const lazyProjects = createLazyView(() => import("./views/projects.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkillWorkshop = createLazyView(
   () => import("./views/skill-workshop.ts"),
@@ -2525,7 +2550,9 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
+            <div class="topbar-status">
+              ${renderTopbarLanguageSelect(state)} ${renderTopbarThemeModeToggle(state)}
+            </div>
           </div>
         </div>
       </header>
@@ -2836,6 +2863,161 @@ export function renderApp(state: AppViewState) {
                 lastError: state.presenceError,
                 statusMessage: state.presenceStatus,
                 onRefresh: () => void loadPresence(state),
+              }),
+            )
+          : nothing}
+        ${state.tab === "projects"
+          ? renderLazyView(lazyProjects, (m) =>
+              m.renderProjects({
+                loading: state.projectsLoading,
+                saving: state.projectsSaving,
+                error: state.projectsError,
+                projects: state.projectsResult?.projects ?? [],
+                includeArchived: state.projectsIncludeArchived,
+                selectedId: state.projectsSelectedId,
+                detailLoading: state.projectDetailLoading,
+                detail: state.projectDetail,
+                chatsLoading: state.projectChatsLoading,
+                chats: state.projectChats,
+                rolesLoading: state.projectRolesLoading,
+                roles: state.projectRoles,
+                documentsLoading: state.projectDocumentsLoading,
+                documents: state.projectDocuments,
+                sessions: state.sessionsResult?.sessions ?? [],
+                contextDraft: state.projectContextDraft,
+                roleDraft: state.projectRoleDraft,
+                documentDraft: state.projectDocumentDraft,
+                documentImportDraft: state.projectDocumentImportDraft,
+                createName: state.projectCreateName,
+                createDescription: state.projectCreateDescription,
+                attachSessionKey: state.projectAttachSessionKey,
+                attachTitle: state.projectAttachTitle,
+                attachRole: state.projectAttachRole,
+                chatRoleFilter: state.projectChatRoleFilter,
+                newChatDocumentIds: state.projectNewChatDocumentIds,
+                onRefresh: () => void loadProjects(state, { preserveSelection: true }),
+                onToggleArchived: (includeArchived) => {
+                  state.projectsIncludeArchived = includeArchived;
+                  void loadProjects(state, { preserveSelection: true });
+                },
+                onSelectProject: (projectId) => void selectProject(state, projectId),
+                onCreateDraftChange: (patch) => {
+                  if (patch.name !== undefined) {
+                    state.projectCreateName = patch.name;
+                  }
+                  if (patch.description !== undefined) {
+                    state.projectCreateDescription = patch.description;
+                  }
+                },
+                onCreateProject: () => void createProject(state),
+                onNewProjectChat: () => {
+                  void (async () => {
+                    if (await createChatSession(state, { source: "user" })) {
+                      state.setTab("chat");
+                    }
+                  })();
+                },
+                onNewProjectRoleChat: (role, title) => {
+                  void (async () => {
+                    if (
+                      await createChatSession(state, {
+                        source: "user",
+                        projectChatRole: role,
+                        projectChatTitle: title,
+                      })
+                    ) {
+                      state.setTab("chat");
+                    }
+                  })();
+                },
+                onPatchProject: (patch) => void patchSelectedProject(state, patch),
+                onArchiveProject: () => {
+                  if (
+                    !window.confirm(
+                      "Archive this project? Linked chats and transcripts remain intact.",
+                    )
+                  ) {
+                    return;
+                  }
+                  void archiveSelectedProject(state);
+                },
+                onRestoreProject: () => void restoreSelectedProject(state),
+                onContextDraftChange: (patch) => {
+                  state.projectContextDraft = { ...state.projectContextDraft, ...patch };
+                },
+                onSaveContext: () => void saveSelectedProjectContext(state),
+                onRoleDraftChange: (patch) => {
+                  state.projectRoleDraft = { ...state.projectRoleDraft, ...patch };
+                },
+                onApplyRoleTemplate: (template) => {
+                  state.projectRoleDraft = template;
+                },
+                onCreateRole: () => void createSelectedProjectRole(state),
+                onPatchRole: (roleKey, patch) => void patchProjectRole(state, roleKey, patch),
+                onSetDefaultRole: (roleKey) =>
+                  void patchSelectedProject(state, { defaultRoleKey: roleKey }),
+                onArchiveRole: (roleKey) => {
+                  if (!window.confirm("Archive this role? Existing chat links remain intact.")) {
+                    return;
+                  }
+                  void archiveProjectRole(state, roleKey);
+                },
+                onRestoreRole: (roleKey) => void restoreProjectRole(state, roleKey),
+                onDocumentDraftChange: (patch) => {
+                  state.projectDocumentDraft = { ...state.projectDocumentDraft, ...patch };
+                },
+                onDocumentImportDraftChange: (patch) => {
+                  state.projectDocumentImportDraft = {
+                    ...state.projectDocumentImportDraft,
+                    ...patch,
+                  };
+                },
+                onCreateDocument: () => void createSelectedProjectDocument(state),
+                onImportDocuments: () => void importSelectedProjectDocuments(state),
+                onPatchDocument: (documentId, patch) =>
+                  void patchProjectDocument(state, documentId, patch),
+                onArchiveDocument: (documentId) => {
+                  if (!window.confirm("Archive this project document?")) {
+                    return;
+                  }
+                  void archiveProjectDocument(state, documentId);
+                },
+                onRestoreDocument: (documentId) => void restoreProjectDocument(state, documentId),
+                onChatRoleFilterChange: (roleKey) => {
+                  state.projectChatRoleFilter = roleKey;
+                },
+                onNewChatDocumentIdsChange: (documentIds) => {
+                  state.projectNewChatDocumentIds = documentIds;
+                },
+                onAttachDraftChange: (patch) => {
+                  if (patch.sessionKey !== undefined) {
+                    state.projectAttachSessionKey = patch.sessionKey;
+                  }
+                  if (patch.title !== undefined) {
+                    state.projectAttachTitle = patch.title;
+                  }
+                  if (patch.role !== undefined) {
+                    state.projectAttachRole = patch.role;
+                  }
+                },
+                onAttachChat: () => void attachChatToSelectedProject(state),
+                onPatchChat: (sessionKey, patch) => void patchProjectChat(state, sessionKey, patch),
+                onArchiveChat: (sessionKey) => void archiveProjectChat(state, sessionKey),
+                onRestoreChat: (sessionKey) => void restoreProjectChat(state, sessionKey),
+                onDetachChat: (sessionKey) => {
+                  if (
+                    !window.confirm(
+                      "Remove this chat from the project? The chat transcript will remain intact.",
+                    )
+                  ) {
+                    return;
+                  }
+                  void detachProjectChat(state, sessionKey);
+                },
+                onOpenChat: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat");
+                },
               }),
             )
           : nothing}

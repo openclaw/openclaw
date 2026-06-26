@@ -1,5 +1,5 @@
 // Coverage for prompt helper decisions used before embedded attempts.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
   // Media task modules are mocked so prompt helper tests can assert trigger and
@@ -31,10 +31,15 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
+const projectPromptContextMocks = vi.hoisted(() => ({
+  buildProjectPromptContextForSession: vi.fn(),
+}));
+
 vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
 vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
+vi.mock("../../../projects/project-prompt-context.js", () => projectPromptContextMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
@@ -194,6 +199,45 @@ describe("resolvePromptSubmissionSkipReason", () => {
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  beforeEach(() => {
+    projectPromptContextMocks.buildProjectPromptContextForSession.mockReset();
+    projectPromptContextMocks.buildProjectPromptContextForSession.mockReturnValue(undefined);
+  });
+
+  it("prepends project context before plugin and hook context", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    projectPromptContextMocks.buildProjectPromptContextForSession.mockReturnValue(
+      "<project_context>Project notes</project_context>",
+    );
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+      prependContext: "queued context",
+    });
+
+    const hookRunner = {
+      hasHooks: (name: string) => name === "before_prompt_build",
+      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "prompt hook context" })),
+      runBeforeAgentStart: vi.fn(),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId: "run-project-context", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(projectPromptContextMocks.buildProjectPromptContextForSession).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+    });
+    expect(result.prependContext).toBe(
+      "<project_context>Project notes</project_context>\n\nqueued context\n\nprompt hook context",
+    );
+
+    forgetPromptBuildDrainCacheForRun("run-project-context");
+  });
+
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
     // Retry attempts reuse the first drain result so plugin-provided next-turn
     // context is not consumed or duplicated multiple times.

@@ -7,7 +7,16 @@ export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
   {
     label: "control",
-    tabs: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
+    tabs: [
+      "overview",
+      "activity",
+      "projects",
+      "workboard",
+      "instances",
+      "sessions",
+      "usage",
+      "cron",
+    ],
   },
   { label: "agent", tabs: ["agents", "skills", "skillWorkshop", "nodes", "dreams"] },
   {
@@ -20,6 +29,7 @@ export type Tab =
   | "agents"
   | "activity"
   | "overview"
+  | "projects"
   | "workboard"
   | "channels"
   | "instances"
@@ -58,6 +68,7 @@ const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   activity: "/activity",
   overview: "/overview",
+  projects: "/projects",
   workboard: "/workboard",
   channels: "/channels",
   instances: "/instances",
@@ -187,6 +198,8 @@ export function iconForTab(tab: Tab): IconName {
       return "messageSquare";
     case "overview":
       return "barChart";
+    case "projects":
+      return "folder";
     case "activity":
       return "activity";
     case "workboard":
@@ -233,6 +246,9 @@ export function iconForTab(tab: Tab): IconName {
 }
 
 export function titleForTab(tab: Tab) {
+  if (tab === "projects") {
+    return "Projects";
+  }
   if (tab === "config") {
     return t("nav.settings");
   }
@@ -240,5 +256,8 @@ export function titleForTab(tab: Tab) {
 }
 
 export function subtitleForTab(tab: Tab) {
+  if (tab === "projects") {
+    return "Project workspaces, shared context, and linked chats.";
+  }
   return t(`subtitles.${tab}`);
 }

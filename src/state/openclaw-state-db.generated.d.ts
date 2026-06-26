@@ -726,6 +726,85 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface ProjectChats {
+  agent_id: string | null;
+  archived_at_ms: number | null;
+  created_at_ms: number;
+  metadata_json: string | null;
+  project_id: string;
+  role: string | null;
+  session_key: string;
+  sort_order: Generated<number>;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+}
+
+export interface ProjectContexts {
+  decisions_json: string | null;
+  documents_json: string | null;
+  instructions: string | null;
+  project_id: string;
+  summary: string | null;
+  updated_at_ms: number;
+}
+
+export interface ProjectDocumentSummaryCache {
+  created_at_ms: number;
+  document_id: string;
+  project_id: string;
+  source_mtime_ms: number;
+  source_size_bytes: number;
+  summary: string;
+  updated_at_ms: number;
+  uri: string;
+}
+
+export interface ProjectDocuments {
+  archived_at_ms: number | null;
+  created_at_ms: number;
+  document_id: string;
+  include_in_context: Generated<number>;
+  kind: string | null;
+  metadata_json: string | null;
+  notes: string | null;
+  project_id: string;
+  sort_order: Generated<number>;
+  status: string;
+  title: string;
+  updated_at_ms: number;
+  uri: string | null;
+}
+
+export interface ProjectRoles {
+  archived_at_ms: number | null;
+  created_at_ms: number;
+  description: string | null;
+  instructions: string | null;
+  metadata_json: string | null;
+  name: string;
+  project_id: string;
+  role_key: string;
+  sort_order: Generated<number>;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface Projects {
+  archived_at_ms: number | null;
+  color: string | null;
+  created_at_ms: number;
+  default_role_key: string | null;
+  description: string | null;
+  icon: string | null;
+  metadata_json: string | null;
+  name: string;
+  project_id: string;
+  sort_order: Generated<number>;
+  status: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -992,6 +1071,12 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  project_chats: ProjectChats;
+  project_contexts: ProjectContexts;
+  project_document_summary_cache: ProjectDocumentSummaryCache;
+  project_documents: ProjectDocuments;
+  project_roles: ProjectRoles;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   skill_uploads: SkillUploads;

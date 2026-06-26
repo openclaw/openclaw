@@ -140,6 +140,26 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): b
   return true;
 }
 
+function ensureProjectDocumentSummaryCacheTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_document_summary_cache (
+      project_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      uri TEXT NOT NULL,
+      source_mtime_ms INTEGER NOT NULL,
+      source_size_bytes INTEGER NOT NULL,
+      summary TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (project_id, document_id),
+      FOREIGN KEY (project_id, document_id) REFERENCES project_documents(project_id, document_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_project_document_summary_cache_uri
+      ON project_document_summary_cache(uri, source_mtime_ms, source_size_bytes);
+  `);
+}
+
 function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
   if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
     return;
@@ -663,6 +683,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 }
 
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureProjectDocumentSummaryCacheTable(db);
   ensureColumn(db, "node_pairing_pending", "client_id TEXT");
   ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
   ensureColumn(db, "node_pairing_paired", "client_id TEXT");

@@ -154,6 +154,10 @@ const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
 );
+const loadProjectsHandlers = lazyHandlerModule(
+  () => import("./server-methods/projects.js"),
+  (module) => module.projectsHandlers,
+);
 const loadRestartHandlers = lazyHandlerModule(
   () => import("./server-methods/restart.js"),
   (module) => module.restartHandlers,
@@ -549,6 +553,37 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "push.web.test",
     ],
     loadHandlers: loadPushHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "projects.list",
+      "projects.get",
+      "projects.create",
+      "projects.patch",
+      "projects.archive",
+      "projects.restore",
+      "projects.roles.list",
+      "projects.roles.create",
+      "projects.roles.patch",
+      "projects.roles.archive",
+      "projects.roles.restore",
+      "projects.documents.list",
+      "projects.documents.create",
+      "projects.documents.import",
+      "projects.documents.patch",
+      "projects.documents.archive",
+      "projects.documents.restore",
+      "projects.chats.list",
+      "projects.chats.resolve",
+      "projects.chats.attach",
+      "projects.chats.patch",
+      "projects.chats.archive",
+      "projects.chats.restore",
+      "projects.chats.detach",
+      "projects.context.get",
+      "projects.context.patch",
+    ],
+    loadHandlers: loadProjectsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["gateway.restart.request", "gateway.restart.preflight"],

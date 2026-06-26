@@ -368,6 +368,102 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type ProjectChatStatus,
+  ProjectChatStatusSchema,
+  type ProjectChatSummary,
+  ProjectChatSummarySchema,
+  type ProjectContext,
+  ProjectContextSchema,
+  type ProjectDetail,
+  ProjectDetailSchema,
+  type ProjectDocumentStatus,
+  ProjectDocumentStatusSchema,
+  type ProjectDocumentSummary,
+  ProjectDocumentSummarySchema,
+  type ProjectsArchiveParams,
+  ProjectsArchiveParamsSchema,
+  type ProjectsChatsArchiveParams,
+  ProjectsChatsArchiveParamsSchema,
+  type ProjectsChatsAttachParams,
+  ProjectsChatsAttachParamsSchema,
+  type ProjectsChatsDetachParams,
+  ProjectsChatsDetachParamsSchema,
+  type ProjectsChatMutationResult,
+  ProjectsChatMutationResultSchema,
+  type ProjectsChatsListParams,
+  ProjectsChatsListParamsSchema,
+  type ProjectsChatsListResult,
+  ProjectsChatsListResultSchema,
+  type ProjectsChatsPatchParams,
+  ProjectsChatsPatchParamsSchema,
+  type ProjectsChatsResolveParams,
+  ProjectsChatsResolveParamsSchema,
+  type ProjectsChatsResolveResult,
+  ProjectsChatsResolveResultSchema,
+  type ProjectsChatsRestoreParams,
+  ProjectsChatsRestoreParamsSchema,
+  type ProjectsContextGetParams,
+  ProjectsContextGetParamsSchema,
+  type ProjectsContextPatchParams,
+  ProjectsContextPatchParamsSchema,
+  type ProjectsContextResult,
+  ProjectsContextResultSchema,
+  type ProjectsCreateParams,
+  ProjectsCreateParamsSchema,
+  type ProjectsDocumentMutationResult,
+  ProjectsDocumentMutationResultSchema,
+  type ProjectsDocumentsArchiveParams,
+  ProjectsDocumentsArchiveParamsSchema,
+  type ProjectsDocumentsCreateParams,
+  ProjectsDocumentsCreateParamsSchema,
+  type ProjectsDocumentsImportParams,
+  ProjectsDocumentsImportParamsSchema,
+  type ProjectsDocumentsImportResult,
+  ProjectsDocumentsImportResultSchema,
+  type ProjectsDocumentsListParams,
+  ProjectsDocumentsListParamsSchema,
+  type ProjectsDocumentsListResult,
+  ProjectsDocumentsListResultSchema,
+  type ProjectsDocumentsPatchParams,
+  ProjectsDocumentsPatchParamsSchema,
+  type ProjectsDocumentsRestoreParams,
+  ProjectsDocumentsRestoreParamsSchema,
+  type ProjectsGetParams,
+  ProjectsGetParamsSchema,
+  type ProjectsGetResult,
+  ProjectsGetResultSchema,
+  type ProjectsListParams,
+  ProjectsListParamsSchema,
+  type ProjectsListResult,
+  ProjectsListResultSchema,
+  type ProjectsMutationResult,
+  ProjectsMutationResultSchema,
+  type ProjectsPatchParams,
+  ProjectsPatchParamsSchema,
+  type ProjectsRoleMutationResult,
+  ProjectsRoleMutationResultSchema,
+  type ProjectsRolesArchiveParams,
+  ProjectsRolesArchiveParamsSchema,
+  type ProjectsRolesCreateParams,
+  ProjectsRolesCreateParamsSchema,
+  type ProjectsRolesListParams,
+  ProjectsRolesListParamsSchema,
+  type ProjectsRolesListResult,
+  ProjectsRolesListResultSchema,
+  type ProjectsRolesPatchParams,
+  ProjectsRolesPatchParamsSchema,
+  type ProjectsRolesRestoreParams,
+  ProjectsRolesRestoreParamsSchema,
+  type ProjectsRestoreParams,
+  ProjectsRestoreParamsSchema,
+  type ProjectRoleStatus,
+  ProjectRoleStatusSchema,
+  type ProjectRoleSummary,
+  ProjectRoleSummarySchema,
+  type ProjectStatus,
+  ProjectStatusSchema,
+  type ProjectSummary,
+  ProjectSummarySchema,
   type TaskSummary,
   TaskSummarySchema,
   type TasksCancelParams,
@@ -694,6 +790,79 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateProjectsListParams = lazyCompile<ProjectsListParams>(ProjectsListParamsSchema);
+export const validateProjectsGetParams = lazyCompile<ProjectsGetParams>(ProjectsGetParamsSchema);
+export const validateProjectsCreateParams = lazyCompile<ProjectsCreateParams>(
+  ProjectsCreateParamsSchema,
+);
+export const validateProjectsPatchParams =
+  lazyCompile<ProjectsPatchParams>(ProjectsPatchParamsSchema);
+export const validateProjectsArchiveParams = lazyCompile<ProjectsArchiveParams>(
+  ProjectsArchiveParamsSchema,
+);
+export const validateProjectsRestoreParams = lazyCompile<ProjectsRestoreParams>(
+  ProjectsRestoreParamsSchema,
+);
+export const validateProjectsRolesListParams = lazyCompile<ProjectsRolesListParams>(
+  ProjectsRolesListParamsSchema,
+);
+export const validateProjectsRolesCreateParams = lazyCompile<ProjectsRolesCreateParams>(
+  ProjectsRolesCreateParamsSchema,
+);
+export const validateProjectsRolesPatchParams = lazyCompile<ProjectsRolesPatchParams>(
+  ProjectsRolesPatchParamsSchema,
+);
+export const validateProjectsRolesArchiveParams = lazyCompile<ProjectsRolesArchiveParams>(
+  ProjectsRolesArchiveParamsSchema,
+);
+export const validateProjectsRolesRestoreParams = lazyCompile<ProjectsRolesRestoreParams>(
+  ProjectsRolesRestoreParamsSchema,
+);
+export const validateProjectsDocumentsListParams = lazyCompile<ProjectsDocumentsListParams>(
+  ProjectsDocumentsListParamsSchema,
+);
+export const validateProjectsDocumentsCreateParams = lazyCompile<ProjectsDocumentsCreateParams>(
+  ProjectsDocumentsCreateParamsSchema,
+);
+export const validateProjectsDocumentsImportParams = lazyCompile<ProjectsDocumentsImportParams>(
+  ProjectsDocumentsImportParamsSchema,
+);
+export const validateProjectsDocumentsPatchParams = lazyCompile<ProjectsDocumentsPatchParams>(
+  ProjectsDocumentsPatchParamsSchema,
+);
+export const validateProjectsDocumentsArchiveParams = lazyCompile<ProjectsDocumentsArchiveParams>(
+  ProjectsDocumentsArchiveParamsSchema,
+);
+export const validateProjectsDocumentsRestoreParams = lazyCompile<ProjectsDocumentsRestoreParams>(
+  ProjectsDocumentsRestoreParamsSchema,
+);
+export const validateProjectsChatsListParams = lazyCompile<ProjectsChatsListParams>(
+  ProjectsChatsListParamsSchema,
+);
+export const validateProjectsChatsResolveParams = lazyCompile<ProjectsChatsResolveParams>(
+  ProjectsChatsResolveParamsSchema,
+);
+export const validateProjectsChatsAttachParams = lazyCompile<ProjectsChatsAttachParams>(
+  ProjectsChatsAttachParamsSchema,
+);
+export const validateProjectsChatsPatchParams = lazyCompile<ProjectsChatsPatchParams>(
+  ProjectsChatsPatchParamsSchema,
+);
+export const validateProjectsChatsArchiveParams = lazyCompile<ProjectsChatsArchiveParams>(
+  ProjectsChatsArchiveParamsSchema,
+);
+export const validateProjectsChatsRestoreParams = lazyCompile<ProjectsChatsRestoreParams>(
+  ProjectsChatsRestoreParamsSchema,
+);
+export const validateProjectsChatsDetachParams = lazyCompile<ProjectsChatsDetachParams>(
+  ProjectsChatsDetachParamsSchema,
+);
+export const validateProjectsContextGetParams = lazyCompile<ProjectsContextGetParams>(
+  ProjectsContextGetParamsSchema,
+);
+export const validateProjectsContextPatchParams = lazyCompile<ProjectsContextPatchParams>(
+  ProjectsContextPatchParamsSchema,
+);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -1056,6 +1225,54 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  ProjectStatusSchema,
+  ProjectChatStatusSchema,
+  ProjectSummarySchema,
+  ProjectDetailSchema,
+  ProjectChatSummarySchema,
+  ProjectContextSchema,
+  ProjectRoleStatusSchema,
+  ProjectRoleSummarySchema,
+  ProjectDocumentStatusSchema,
+  ProjectDocumentSummarySchema,
+  ProjectsListParamsSchema,
+  ProjectsListResultSchema,
+  ProjectsGetParamsSchema,
+  ProjectsGetResultSchema,
+  ProjectsMutationResultSchema,
+  ProjectsCreateParamsSchema,
+  ProjectsPatchParamsSchema,
+  ProjectsArchiveParamsSchema,
+  ProjectsRestoreParamsSchema,
+  ProjectsRolesListParamsSchema,
+  ProjectsRolesListResultSchema,
+  ProjectsRoleMutationResultSchema,
+  ProjectsRolesCreateParamsSchema,
+  ProjectsRolesPatchParamsSchema,
+  ProjectsRolesArchiveParamsSchema,
+  ProjectsRolesRestoreParamsSchema,
+  ProjectsDocumentsListParamsSchema,
+  ProjectsDocumentsListResultSchema,
+  ProjectsDocumentMutationResultSchema,
+  ProjectsDocumentsCreateParamsSchema,
+  ProjectsDocumentsImportParamsSchema,
+  ProjectsDocumentsImportResultSchema,
+  ProjectsDocumentsPatchParamsSchema,
+  ProjectsDocumentsArchiveParamsSchema,
+  ProjectsDocumentsRestoreParamsSchema,
+  ProjectsChatsListParamsSchema,
+  ProjectsChatsListResultSchema,
+  ProjectsChatsResolveParamsSchema,
+  ProjectsChatsResolveResultSchema,
+  ProjectsChatMutationResultSchema,
+  ProjectsChatsAttachParamsSchema,
+  ProjectsChatsPatchParamsSchema,
+  ProjectsChatsArchiveParamsSchema,
+  ProjectsChatsRestoreParamsSchema,
+  ProjectsChatsDetachParamsSchema,
+  ProjectsContextGetParamsSchema,
+  ProjectsContextPatchParamsSchema,
+  ProjectsContextResultSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
@@ -1377,6 +1594,54 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  ProjectStatus,
+  ProjectChatStatus,
+  ProjectSummary,
+  ProjectDetail,
+  ProjectChatSummary,
+  ProjectContext,
+  ProjectRoleStatus,
+  ProjectRoleSummary,
+  ProjectDocumentStatus,
+  ProjectDocumentSummary,
+  ProjectsListParams,
+  ProjectsListResult,
+  ProjectsGetParams,
+  ProjectsGetResult,
+  ProjectsMutationResult,
+  ProjectsCreateParams,
+  ProjectsPatchParams,
+  ProjectsArchiveParams,
+  ProjectsRestoreParams,
+  ProjectsRolesListParams,
+  ProjectsRolesListResult,
+  ProjectsRoleMutationResult,
+  ProjectsRolesCreateParams,
+  ProjectsRolesPatchParams,
+  ProjectsRolesArchiveParams,
+  ProjectsRolesRestoreParams,
+  ProjectsDocumentsListParams,
+  ProjectsDocumentsListResult,
+  ProjectsDocumentMutationResult,
+  ProjectsDocumentsCreateParams,
+  ProjectsDocumentsImportParams,
+  ProjectsDocumentsImportResult,
+  ProjectsDocumentsPatchParams,
+  ProjectsDocumentsArchiveParams,
+  ProjectsDocumentsRestoreParams,
+  ProjectsChatsListParams,
+  ProjectsChatsListResult,
+  ProjectsChatsResolveParams,
+  ProjectsChatsResolveResult,
+  ProjectsChatMutationResult,
+  ProjectsChatsAttachParams,
+  ProjectsChatsPatchParams,
+  ProjectsChatsArchiveParams,
+  ProjectsChatsRestoreParams,
+  ProjectsChatsDetachParams,
+  ProjectsContextGetParams,
+  ProjectsContextPatchParams,
+  ProjectsContextResult,
   TaskSummary,
   TasksListParams,
   TasksListResult,

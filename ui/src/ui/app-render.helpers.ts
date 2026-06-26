@@ -1,6 +1,6 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
-import { t } from "../i18n/index.ts";
+import { SUPPORTED_LOCALES, i18n, isSupportedLocale, t, type Locale } from "../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,
   flushChatQueueAfterIdleSessionReconciliation,
@@ -26,12 +26,23 @@ import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import type { ChatState } from "./controllers/chat.ts";
 import {
+  attachSessionToProject,
+  loadProjects,
+  projectDocumentIdsFromMetadata,
+  projectMetadataWithDocumentIds,
+  resetCurrentSessionProjectChatDraft,
+  saveCurrentSessionProjectChat,
+  selectProject,
+  syncProjectSelectionForSession,
+} from "./controllers/projects.ts";
+import {
   createSessionAndRefresh,
   loadSessions,
   syncSelectedSessionMessageSubscription,
 } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { projectUiText as p } from "./project-i18n.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   isSessionKeyTiedToAgent,
@@ -221,6 +232,8 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
+const NEW_CHAT_PROJECT_ATTACH_FAILED_MESSAGE =
+  "New session was created, but it could not be linked to the active project.";
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
@@ -412,7 +425,9 @@ export function renderChatControls(state: AppViewState) {
     >
       ${renderChatModelSelect(state)}
     </div>
-    ${renderChatQuotaPill(state)}
+    ${renderChatProjectSelect(state)} ${renderChatProjectRoleSelect(state)}
+    ${renderChatProjectDocumentSelect(state)} ${renderActiveProjectChatTitleEdit(state)}
+    ${renderSaveCurrentProjectChatButton(state)} ${renderChatQuotaPill(state)}
     <div class="chat-settings-popover-wrapper">
       <button
         class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
@@ -518,6 +533,263 @@ export function renderChatControls(state: AppViewState) {
         </div>
       </div>
     </div>
+  `;
+}
+
+function renderChatProjectSelect(state: AppViewState) {
+  const projects = (state.projectsResult?.projects ?? []).filter(
+    (project) => project.status === "active",
+  );
+  const selectedProject = projects.find(
+    (project) => project.projectId === state.projectsSelectedId,
+  );
+  const disabled = !state.connected || !state.client || state.projectsLoading;
+  const title = selectedProject ? `${p("projects")}: ${selectedProject.name}` : p("noProject");
+  return html`
+    <label class="chat-project-select" title=${title}>
+      <span class="chat-project-select__icon" aria-hidden="true">${icons.folder}</span>
+      <select
+        class="chat-project-select__control"
+        aria-label=${p("projects")}
+        .value=${state.projectsSelectedId ?? ""}
+        ?disabled=${disabled}
+        @focus=${() => {
+          if (!state.projectsResult && !state.projectsLoading) {
+            void loadProjects(state, { preserveSelection: true });
+          }
+        }}
+        @change=${(event: Event) => {
+          const projectId = (event.target as HTMLSelectElement).value.trim();
+          if (!projectId) {
+            state.projectsSelectedId = null;
+            state.projectActiveChat = null;
+            state.projectChatDraftTitle = "";
+            state.projectChatDraftRole = "";
+            state.projectChatDraftDocumentIds = [];
+            return;
+          }
+          void selectProject(state, projectId);
+        }}
+      >
+        <option value="">${projects.length > 0 ? p("noProject") : p("noProjects")}</option>
+        ${projects.map(
+          (project) => html`<option value=${project.projectId}>${project.name}</option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+function activeProjectRoles(state: AppViewState) {
+  return state.projectRoles.filter((role) => role.status === "active");
+}
+
+function renderChatProjectRoleSelect(state: AppViewState) {
+  const selectedProjectId = normalizeOptionalString(state.projectsSelectedId);
+  if (!selectedProjectId) {
+    return nothing;
+  }
+  const roles = activeProjectRoles(state);
+  const activeChat = state.projectActiveChat;
+  const selectedProject =
+    state.projectDetail?.projectId === selectedProjectId
+      ? state.projectDetail
+      : state.projectsResult?.projects.find((project) => project.projectId === selectedProjectId);
+  const defaultRoleKey = selectedProject?.defaultRoleKey ?? "";
+  const selectedRole = activeChat
+    ? state.projectChatDraftRole
+    : state.projectChatDraftRole || state.projectNewChatRole || defaultRoleKey;
+  const selectedRoleName =
+    roles.find((role) => role.roleKey === selectedRole)?.name ?? selectedRole;
+  const title = activeChat
+    ? selectedRoleName
+      ? p("currentChatRole", { role: selectedRoleName })
+      : p("currentChatNoRole")
+    : selectedRoleName
+      ? `New chat role: ${selectedRoleName}`
+      : p("noRole");
+  return html`
+    <label class="chat-project-role-select" title=${title}>
+      <span class="chat-project-role-select__label">${activeChat ? p("role") : p("newChat")}</span>
+      <select
+        class="chat-project-role-select__control"
+        aria-label=${activeChat ? p("role") : p("newChat")}
+        .value=${selectedRole}
+        ?disabled=${!state.connected || !state.client || state.projectRolesLoading}
+        @change=${(event: Event) => {
+          const role = (event.target as HTMLSelectElement).value.trim();
+          if (activeChat) {
+            state.projectChatDraftRole = role;
+            return;
+          }
+          state.projectChatDraftRole = role;
+          state.projectNewChatRole = role;
+        }}
+      >
+        <option value="">
+          ${activeChat || !defaultRoleKey ? p("noRole") : p("projectDefault")}
+        </option>
+        ${roles.map((role) => html`<option value=${role.roleKey}>${role.name}</option>`)}
+      </select>
+    </label>
+  `;
+}
+
+function renderChatProjectDocumentSelect(state: AppViewState) {
+  const selectedProjectId = normalizeOptionalString(state.projectsSelectedId);
+  if (!selectedProjectId) {
+    return nothing;
+  }
+  const documents = state.projectDocuments.filter(
+    (document) => document.status === "active" && document.includeInContext !== true,
+  );
+  if (documents.length === 0) {
+    return nothing;
+  }
+  const activeChat = state.projectActiveChat;
+  const selectedDocumentIds = activeChat
+    ? state.projectChatDraftDocumentIds
+    : state.projectChatDraftDocumentIds.length > 0
+      ? state.projectChatDraftDocumentIds
+      : state.projectNewChatDocumentIds;
+  const selectedNames = documents
+    .filter((document) => selectedDocumentIds.includes(document.documentId))
+    .map((document) => document.title);
+  const title =
+    selectedNames.length > 0
+      ? `${activeChat ? p("projectChats") : p("newChat")} ${p("documents")}: ${selectedNames.join(
+          ", ",
+        )}`
+      : `${activeChat ? p("projectChats") : p("newChat")}: ${p("extraDocs")}`;
+  return html`
+    <label class="chat-project-doc-select" title=${title}>
+      <span class="chat-project-doc-select__label"
+        >${activeChat ? p("documents") : p("newChatDocs")}</span
+      >
+      <select
+        class="chat-project-doc-select__control"
+        aria-label=${activeChat ? p("documents") : p("newChatDocs")}
+        multiple
+        .value=${selectedDocumentIds[0] ?? ""}
+        ?disabled=${!state.connected || !state.client || state.projectDocumentsLoading}
+        @change=${(event: Event) => {
+          const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map(
+            (option) => option.value,
+          );
+          if (activeChat) {
+            state.projectChatDraftDocumentIds = selected;
+            return;
+          }
+          state.projectChatDraftDocumentIds = selected;
+          state.projectNewChatDocumentIds = selected;
+        }}
+      >
+        ${documents.map(
+          (document) => html`
+            <option
+              value=${document.documentId}
+              ?selected=${selectedDocumentIds.includes(document.documentId)}
+            >
+              ${document.title}
+            </option>
+          `,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+function renderActiveProjectChatTitleEdit(state: AppViewState) {
+  const activeChat = state.projectActiveChat;
+  if (!state.projectsSelectedId) {
+    return nothing;
+  }
+  return html`
+    <label
+      class="chat-project-title-edit"
+      title=${activeChat ? p("currentProjectChatTitle") : p("projectChatTitle")}
+    >
+      <span class="chat-project-title-edit__label">${p("title")}</span>
+      <input
+        class="chat-project-title-edit__control"
+        aria-label=${p("currentProjectChatTitle")}
+        type="text"
+        .value=${state.projectChatDraftTitle}
+        placeholder=${p("sessionTitle")}
+        ?disabled=${!state.connected || !state.client || state.projectsSaving}
+        @input=${(event: Event) => {
+          state.projectChatDraftTitle = (event.target as HTMLInputElement).value;
+        }}
+      />
+    </label>
+  `;
+}
+
+function projectChatDraftIsDirty(state: AppViewState): boolean {
+  const selectedProjectId = normalizeOptionalString(state.projectsSelectedId);
+  if (!selectedProjectId) {
+    return false;
+  }
+  const activeChat = state.projectActiveChat;
+  if (!activeChat) {
+    return true;
+  }
+  const title = normalizeOptionalString(state.projectChatDraftTitle) ?? "";
+  const role = normalizeOptionalString(state.projectChatDraftRole) ?? "";
+  const currentTitle = activeChat.title ?? "";
+  const currentRole = activeChat.role ?? "";
+  const currentDocumentIds = projectDocumentIdsFromMetadata(activeChat.metadata);
+  const nextDocumentIds = state.projectChatDraftDocumentIds;
+  return (
+    title !== currentTitle ||
+    role !== currentRole ||
+    currentDocumentIds.join("\u0000") !== nextDocumentIds.join("\u0000")
+  );
+}
+
+function renderSaveCurrentProjectChatButton(state: AppViewState) {
+  if (!normalizeOptionalString(state.projectsSelectedId)) {
+    return nothing;
+  }
+  const dirty = projectChatDraftIsDirty(state);
+  const label = state.projectsSaving
+    ? p("saving")
+    : state.projectActiveChat
+      ? p("save")
+      : p("attach");
+  const title = state.projectActiveChat
+    ? dirty
+      ? p("saveProjectChatChanges")
+      : p("projectChatChangesSaved")
+    : p("attach");
+  return html`
+    ${dirty
+      ? html`<span class="chat-project-unsaved" role="status">${p("unsaved")}</span>`
+      : nothing}
+    ${dirty && state.projectActiveChat
+      ? html`
+          <button
+            class="btn btn--sm chat-project-discard"
+            type="button"
+            title=${p("discard")}
+            aria-label=${p("discard")}
+            ?disabled=${!state.connected || !state.client || state.projectsSaving}
+            @click=${() => resetCurrentSessionProjectChatDraft(state)}
+          >
+            ${icons.x}<span>${p("discard")}</span>
+          </button>
+        `
+      : nothing}
+    <button
+      class="btn btn--sm chat-project-save ${dirty ? "chat-project-save--dirty" : ""}"
+      type="button"
+      title=${title}
+      aria-label=${title}
+      ?disabled=${!state.connected || !state.client || state.projectsSaving || !dirty}
+      @click=${() => void saveCurrentSessionProjectChat(state)}
+    >
+      ${icons.check}<span>${label}</span>
+    </button>
   `;
 }
 
@@ -663,6 +935,7 @@ function switchChatSessionInternal(
   }
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
+  void syncProjectSelectionForSession(state, nextSessionKey);
   void refreshSlashCommands({
     client: state.client,
     agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
@@ -730,7 +1003,11 @@ export function dismissChatError(state: AppViewState) {
   state.chatError = null;
 }
 
-export type CreateChatSessionIntent = { source: "user" };
+export type CreateChatSessionIntent = {
+  source: "user";
+  projectChatRole?: string;
+  projectChatTitle?: string;
+};
 
 export async function createChatSession(
   state: AppViewState,
@@ -793,6 +1070,45 @@ export async function createChatSession(
 
   const preservedDraft = state.chatMessage;
   const preservedAttachments = state.chatAttachments;
+  const activeProjectId = normalizeOptionalString(state.projectsSelectedId);
+  if (activeProjectId) {
+    const selectedProject =
+      state.projectDetail?.projectId === activeProjectId
+        ? state.projectDetail
+        : state.projectsResult?.projects.find((project) => project.projectId === activeProjectId);
+    const selectedRole =
+      normalizeOptionalString(intent.projectChatRole) ??
+      normalizeOptionalString(state.projectNewChatRole) ??
+      normalizeOptionalString(selectedProject?.defaultRoleKey);
+    const projectChatRole = normalizeOptionalString(selectedRole);
+    const roleTitle = projectChatRole
+      ? state.projectRoles.find((role) => role.roleKey === projectChatRole)?.name
+      : undefined;
+    const roleDocumentIds = projectChatRole
+      ? projectDocumentIdsFromMetadata(
+          state.projectRoles.find((role) => role.roleKey === projectChatRole)?.metadata,
+        )
+      : [];
+    const selectedDocumentIds =
+      state.projectNewChatDocumentIds.length > 0
+        ? state.projectNewChatDocumentIds
+        : roleDocumentIds;
+    const metadata = projectMetadataWithDocumentIds(undefined, selectedDocumentIds) ?? undefined;
+    try {
+      await attachSessionToProject(state, {
+        projectId: activeProjectId,
+        sessionKey: nextSessionKey,
+        title: intent.projectChatTitle ?? roleTitle,
+        role: projectChatRole,
+        metadata,
+      });
+      state.projectNewChatDocumentIds = [];
+      void loadProjects(state, { preserveSelection: true });
+    } catch {
+      state.lastError = NEW_CHAT_PROJECT_ATTACH_FAILED_MESSAGE;
+      state.chatError = state.lastError;
+    }
+  }
   switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
@@ -872,6 +1188,39 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
         `;
       })}
     </div>
+  `;
+}
+
+function languageKey(locale: Locale): string {
+  return locale.replace(/-([a-zA-Z])/g, (_, c: string) => c.toUpperCase());
+}
+
+export function renderTopbarLanguageSelect(state: AppViewState) {
+  const currentLocale = isSupportedLocale(state.settings.locale)
+    ? state.settings.locale
+    : i18n.getLocale();
+  return html`
+    <label class="topbar-language" title=${t("overview.access.language")}>
+      <span class="topbar-language__icon" aria-hidden="true">${icons.globe}</span>
+      <select
+        class="topbar-language__control"
+        aria-label=${t("overview.access.language")}
+        .value=${currentLocale}
+        @change=${(event: Event) => {
+          const locale = (event.target as HTMLSelectElement).value as Locale;
+          void i18n.setLocale(locale);
+          state.applySettings({ ...state.settings, locale });
+        }}
+      >
+        ${SUPPORTED_LOCALES.map(
+          (locale) => html`
+            <option value=${locale} ?selected=${currentLocale === locale}>
+              ${t(`languages.${languageKey(locale)}`)}
+            </option>
+          `,
+        )}
+      </select>
+    </label>
   `;
 }
 

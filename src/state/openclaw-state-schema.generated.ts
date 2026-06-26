@@ -1139,6 +1139,112 @@ CREATE TABLE IF NOT EXISTS tui_last_sessions (
 CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
   ON tui_last_sessions(session_key, updated_at DESC, scope_key);
 
+CREATE TABLE IF NOT EXISTS projects (
+  project_id TEXT NOT NULL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  archived_at_ms INTEGER,
+  color TEXT,
+  icon TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  default_role_key TEXT,
+  metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_status_updated
+  ON projects(status, updated_at_ms DESC, project_id);
+
+CREATE TABLE IF NOT EXISTS project_chats (
+  project_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT,
+  title TEXT,
+  role TEXT,
+  status TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  archived_at_ms INTEGER,
+  metadata_json TEXT,
+  PRIMARY KEY (project_id, session_key),
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_chats_project_status_sort
+  ON project_chats(project_id, status, sort_order, updated_at_ms DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_chats_session
+  ON project_chats(session_key);
+
+CREATE TABLE IF NOT EXISTS project_roles (
+  project_id TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  instructions TEXT,
+  status TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  archived_at_ms INTEGER,
+  metadata_json TEXT,
+  PRIMARY KEY (project_id, role_key),
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_roles_project_status_sort
+  ON project_roles(project_id, status, sort_order, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS project_contexts (
+  project_id TEXT NOT NULL PRIMARY KEY,
+  summary TEXT,
+  instructions TEXT,
+  decisions_json TEXT,
+  documents_json TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS project_documents (
+  project_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  uri TEXT,
+  kind TEXT,
+  notes TEXT,
+  include_in_context INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  archived_at_ms INTEGER,
+  metadata_json TEXT,
+  PRIMARY KEY (project_id, document_id),
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_documents_project_status_sort
+  ON project_documents(project_id, status, sort_order, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS project_document_summary_cache (
+  project_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  uri TEXT NOT NULL,
+  source_mtime_ms INTEGER NOT NULL,
+  source_size_bytes INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (project_id, document_id),
+  FOREIGN KEY (project_id, document_id) REFERENCES project_documents(project_id, document_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_document_summary_cache_uri
+  ON project_document_summary_cache(uri, source_mtime_ms, source_size_bytes);
+
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,

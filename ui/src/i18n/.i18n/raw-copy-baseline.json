@@ -528,6 +528,34 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/project-i18n.ts",
+      "text": "Descripción"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/project-i18n.ts",
+      "text": "Description"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/project-i18n.ts",
+      "text": "Title"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/project-i18n.ts",
+      "text": "Título"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/agents-panels-overview.ts",
@@ -4599,6 +4627,153 @@
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
       "text": "openclaw doctor --generate-gateway-token"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "/home/me/Documentos/Obsidian/10-Proyectos/MyProject"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "/path/to/file.md or https://..."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Design, QA, PM..."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Imported from project folder"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "obsidian, spec, repo"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "One compact operating brief for this role"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "One decision per line"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "One path, URL, or note per line"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Optional"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Paste one path, URL, Markdown link, Obsidian [[note]], or title | path per line"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "spec, obsidian, repo, url"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Spec, runbook, decision log..."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "What this role is for"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Why this document matters, what to read first, constraints..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "active chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "context summary"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "linked chats"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Design verification and regression coverage."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Runbooks, reliability, and release readiness."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Scope, UX, priorities, and tradeoffs."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Turn project work into clear durable docs."
     },
     {
       "count": 1,

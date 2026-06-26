@@ -172,6 +172,11 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     chatStreamStartedAt: null,
     connected: true,
     client: { request: vi.fn() },
+    projectsSelectedId: null,
+    projectNewChatRole: "",
+    projectNewChatDocumentIds: [],
+    projectRoles: [],
+    projectActiveChat: null,
     sessionsLoading: false,
     sessionsError: null,
     sessionsShowArchived: false,
@@ -909,6 +914,264 @@ describe("createChatSession", () => {
       },
     );
     expect(state.sessionKey).toBe("agent:work:dashboard:new-chat");
+  });
+
+  it("links a new session to the active project before switching to it", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return {
+          chat: {
+            projectId: "proj-1",
+            sessionKey: "agent:ops:dashboard:new-chat",
+            status: "active",
+            sortOrder: 0,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+      projectsResult: {
+        projects: [
+          {
+            projectId: "proj-1",
+            name: "Project One",
+            status: "active",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            sortOrder: 0,
+          },
+        ],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:new-chat",
+      title: undefined,
+      role: undefined,
+    });
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+  });
+
+  it("links a new role session to the active project with role metadata", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return { chat: {} };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:implementation");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, {
+      source: "user",
+      projectChatRole: "implementation",
+      projectChatTitle: "Implementation",
+    });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:implementation",
+      title: "Implementation",
+      role: "implementation",
+    });
+  });
+
+  it("uses the selected project role for a plain new chat", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return { chat: {} };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+      projectNewChatRole: "review",
+      projectRoles: [
+        {
+          projectId: "proj-1",
+          roleKey: "review",
+          name: "Review",
+          status: "active",
+          sortOrder: 0,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+        },
+      ],
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:review");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:review",
+      title: "Review",
+      role: "review",
+    });
+  });
+
+  it("links selected project documents when creating a new chat", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return { chat: {} };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+      projectNewChatDocumentIds: ["doc-1", "doc-2"],
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:docs");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:docs",
+      title: undefined,
+      role: undefined,
+      metadata: { projectDocumentIds: ["doc-1", "doc-2"] },
+    });
+    expect(state.projectNewChatDocumentIds).toEqual([]);
+  });
+
+  it("inherits role documents when creating a new role chat", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return { chat: {} };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+      projectRoles: [
+        {
+          projectId: "proj-1",
+          roleKey: "review",
+          name: "Review",
+          status: "active",
+          sortOrder: 0,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          metadata: { projectDocumentIds: ["doc-review"] },
+        },
+      ],
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:role-docs");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, {
+      source: "user",
+      projectChatRole: "review",
+      projectChatTitle: "Review",
+    });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:role-docs",
+      title: "Review",
+      role: "review",
+      metadata: { projectDocumentIds: ["doc-review"] },
+    });
+  });
+
+  it("uses the project default role when no new-chat role is selected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.chats.attach") {
+        return { chat: {} };
+      }
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      return {};
+    });
+    const state = createChatSessionState({
+      client: { request } as unknown as AppViewState["client"],
+      projectsSelectedId: "proj-1",
+      projectDetail: {
+        projectId: "proj-1",
+        name: "Project One",
+        status: "active",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        sortOrder: 0,
+        defaultRoleKey: "planning",
+      },
+      projectRoles: [
+        {
+          projectId: "proj-1",
+          roleKey: "planning",
+          name: "Planning",
+          status: "active",
+          sortOrder: 0,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+        },
+      ],
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:planning");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(request).toHaveBeenCalledWith("projects.chats.attach", {
+      projectId: "proj-1",
+      sessionKey: "agent:ops:dashboard:planning",
+      title: "Planning",
+      role: "planning",
+    });
   });
 
   it("does not use the synthetic unknown session as a parent", async () => {

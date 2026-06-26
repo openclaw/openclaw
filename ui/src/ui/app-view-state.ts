@@ -4,8 +4,8 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
-import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
@@ -14,6 +14,12 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  ProjectContextDraft,
+  ProjectDocumentDraft,
+  ProjectDocumentImportDraft,
+  ProjectRoleDraft,
+} from "./controllers/projects.ts";
 import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
@@ -48,6 +54,11 @@ import type {
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  ProjectChatSummary,
+  ProjectDetail,
+  ProjectDocumentSummary,
+  ProjectRoleSummary,
+  ProjectsListResult,
   SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
@@ -327,6 +338,36 @@ export type AppViewState = {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
+  projectsLoading: boolean;
+  projectsSaving: boolean;
+  projectsError: string | null;
+  projectsResult: ProjectsListResult | null;
+  projectsIncludeArchived: boolean;
+  projectsSelectedId: string | null;
+  projectDetailLoading: boolean;
+  projectDetail: ProjectDetail | null;
+  projectChatsLoading: boolean;
+  projectChats: ProjectChatSummary[];
+  projectActiveChat: ProjectChatSummary | null;
+  projectRolesLoading: boolean;
+  projectRoles: ProjectRoleSummary[];
+  projectDocumentsLoading: boolean;
+  projectDocuments: ProjectDocumentSummary[];
+  projectContextDraft: ProjectContextDraft;
+  projectRoleDraft: ProjectRoleDraft;
+  projectDocumentDraft: ProjectDocumentDraft;
+  projectDocumentImportDraft: ProjectDocumentImportDraft;
+  projectCreateName: string;
+  projectCreateDescription: string;
+  projectAttachSessionKey: string;
+  projectAttachTitle: string;
+  projectAttachRole: string;
+  projectNewChatRole: string;
+  projectNewChatDocumentIds: string[];
+  projectChatDraftTitle: string;
+  projectChatDraftRole: string;
+  projectChatDraftDocumentIds: string[];
+  projectChatRoleFilter: string;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
