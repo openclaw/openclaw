@@ -910,6 +910,22 @@ export async function appendSqliteTranscriptEvent(
   });
 }
 
+/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
+export function appendSqliteTranscriptEventSync(
+  scope: SessionTranscriptAccessScope,
+  event: TranscriptEvent,
+): void {
+  assertNonMessageTranscriptEvent(event);
+  const resolved = resolveSqliteTranscriptScope(scope);
+  runOpenClawAgentWriteTransaction((database) => {
+    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
+      return;
+    }
+    appendTranscriptEventInTransaction(database, resolved, event);
+  }, toDatabaseOptions(resolved));
+}
+
 /** Appends raw transcript events to the additive SQLite transcript store in one transaction. */
 export async function appendSqliteTranscriptEvents(
   scope: SessionTranscriptAccessScope,

@@ -70,6 +70,9 @@ describe("SessionManager.open", () => {
     ]);
 
     sessionManager.appendMessage({ role: "assistant", content: "answer", timestamp: Date.now() });
+    const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
+    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
 
     await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
       code: "ENOENT",
@@ -86,7 +89,32 @@ describe("SessionManager.open", () => {
         message: expect.objectContaining({ content: "answer", role: "assistant" }),
         type: "message",
       }),
+      expect.objectContaining({
+        id: thinkingChangeId,
+        thinkingLevel: "high",
+        type: "thinking_level_change",
+      }),
+      expect.objectContaining({
+        id: modelChangeId,
+        modelId: "gpt-5.5",
+        provider: "openai",
+        type: "model_change",
+      }),
+      expect.objectContaining({
+        firstKeptEntryId: "assistant-1",
+        id: compactionId,
+        summary: "summary",
+        type: "compaction",
+      }),
     ]);
+    const reopened = SessionManager.open(marker, dir, dir);
+    expect(reopened.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: thinkingChangeId, type: "thinking_level_change" }),
+        expect.objectContaining({ id: modelChangeId, type: "model_change" }),
+        expect.objectContaining({ id: compactionId, type: "compaction" }),
+      ]),
+    );
   });
 
   it("recovers a corrupted first-line header without truncating later messages", async () => {

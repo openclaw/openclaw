@@ -20,6 +20,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
 import {
+  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
   resolveTranscriptSessionKeyBySessionId,
@@ -2208,7 +2209,21 @@ export class SessionManager {
   }
 
   private persistSqliteRecord(entry: unknown): void {
-    if (!isIndexedSessionEntry(entry) || entry.type !== "message") {
+    if (!isIndexedSessionEntry(entry)) {
+      return;
+    }
+    const persistence = this.sqlitePersistence;
+    if (!persistence) {
+      return;
+    }
+    const scope = {
+      agentId: persistence.agentId,
+      sessionId: persistence.sessionId,
+      sessionKey: persistence.sessionKey,
+      storePath: persistence.storePath,
+    };
+    if (entry.type !== "message") {
+      appendTranscriptEventSync(scope, entry);
       return;
     }
     const role = (entry.message as { role?: unknown }).role;
@@ -2218,23 +2233,11 @@ export class SessionManager {
       // duplicate the model-visible user turn in chat.history.
       return;
     }
-    const persistence = this.sqlitePersistence;
-    if (!persistence) {
-      return;
-    }
-    appendTranscriptMessageSync(
-      {
-        agentId: persistence.agentId,
-        sessionId: persistence.sessionId,
-        sessionKey: persistence.sessionKey,
-        storePath: persistence.storePath,
-      },
-      {
-        cwd: this.cwd,
-        message: entry.message,
-        now: Date.parse(entry.timestamp),
-      },
-    );
+    appendTranscriptMessageSync(scope, {
+      cwd: this.cwd,
+      message: entry.message,
+      now: Date.parse(entry.timestamp),
+    });
   }
 
   /**

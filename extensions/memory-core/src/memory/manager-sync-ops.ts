@@ -1835,6 +1835,11 @@ export abstract class MemoryManagerSyncOps {
       return null;
     }
     const normalized = new Set<string>();
+    const corpusMarkers = new Set(
+      corpusEntries
+        .filter((entry) => entry.transcriptSource === "sqlite")
+        .map((entry) => entry.sessionFile),
+    );
     const corpusPaths = new Set(
       corpusEntries
         .filter((entry) => entry.transcriptSource !== "sqlite")
@@ -1843,6 +1848,10 @@ export abstract class MemoryManagerSyncOps {
     for (const sessionFile of archiveFiles) {
       const trimmed = sessionFile.trim();
       if (!trimmed) {
+        continue;
+      }
+      if (corpusMarkers.has(trimmed)) {
+        normalized.add(trimmed);
         continue;
       }
       const resolved = path.resolve(trimmed);
