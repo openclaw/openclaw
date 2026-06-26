@@ -8,6 +8,22 @@ import {
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
 
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("stripInlineDirectiveTagsForDisplay", () => {
   test("removes reply and audio directives", () => {
     const input = "hello [[reply_to_current]] world [[reply_to:abc-123]] [[audio_as_voice]]";
@@ -223,6 +239,14 @@ describe("parseInlineDirectives", () => {
 describe("sanitizeReplyDirectiveId", () => {
   test("strips bracket and control characters from explicit reply ids", () => {
     expect(sanitizeReplyDirectiveId(" [abc]\u0000\r\u0085def ")).toBe("abcdef");
+  });
+
+  test("truncates long ids without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(255);
+    const result = sanitizeReplyDirectiveId(`${prefix}😊tail`);
+
+    expect(result).toBe(`${prefix}😊`);
+    expect(hasUnpairedSurrogate(result ?? "")).toBe(false);
   });
 });
 
