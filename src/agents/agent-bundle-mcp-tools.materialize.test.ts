@@ -26,6 +26,7 @@ function makeToolRuntime(
     resultText?: string;
     diagnostics?: readonly McpToolCatalogDiagnostic[];
     supportsParallelToolCalls?: boolean;
+    callTool?: SessionMcpRuntime["callTool"];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -74,11 +75,13 @@ function makeToolRuntime(
       tools,
       ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
-    callTool: async () =>
-      params.result ?? {
-        content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
-        isError: false,
-      },
+    callTool:
+      params.callTool ??
+      (async () =>
+        params.result ?? {
+          content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
+          isError: false,
+        }),
     dispose: async () => {},
   };
 }
@@ -182,7 +185,11 @@ describe("createBundleMcpToolRuntime", () => {
             },
             {
               type: "resource",
-              resource: { uri: "blob://two", blob: "AAAA", mimeType: "application/pdf" },
+              resource: {
+                uri: "blob://two",
+                blob: "AAAA",
+                mimeType: "application/pdf",
+              },
             },
             { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
             { type: "image", data: "iVBOR", mimeType: "image/png" },
@@ -219,7 +226,10 @@ describe("createBundleMcpToolRuntime", () => {
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
 
     expect(result.content).toHaveLength(1);
-    expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify({ type: "image" }) });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: JSON.stringify({ type: "image" }),
+    });
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
@@ -322,7 +332,10 @@ describe("createBundleMcpToolRuntime", () => {
               toolCount: 0,
               resources: { listChanged: false },
               prompts: { listChanged: false },
-              toolFilter: { include: ["resources_*"], exclude: ["resources_read"] },
+              toolFilter: {
+                include: ["resources_*"],
+                exclude: ["resources_read"],
+              },
             },
           },
           tools: [],
@@ -520,5 +533,69 @@ describe("createBundleMcpToolRuntime", () => {
         arguments: { parent: { page_id: "page-id" } },
       }),
     ).toEqual({ parent: { page_id: "page-id" } });
+  });
+
+  it("strips null for non-nullable fields, preserves null for nullable fields", async () => {
+    const callToolArgs: unknown[] = [];
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "eks",
+            safeServerName: "eks",
+            toolName: "describe_cluster",
+            description: "Describe cluster",
+            inputSchema: {
+              type: "object",
+              properties: {
+                insight_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+                cluster_name: { type: "string" },
+                extra: { type: "string" },
+              },
+              required: ["cluster_name"],
+            },
+            fallbackDescription: "Describe cluster",
+          },
+        ],
+        callTool: async (_server: string, _tool: string, args: unknown) => {
+          callToolArgs.push(args);
+          return { content: [{ type: "text", text: "ok" }], isError: false };
+        },
+      }),
+    });
+
+    // Null for nullable field → preserved
+    await runtime.tools[0].execute(
+      "c1",
+      { insight_id: null, cluster_name: "test" },
+      undefined,
+      undefined,
+    );
+    expect(callToolArgs[0]).toEqual({ insight_id: null, cluster_name: "test" });
+
+    // Null for non-nullable field → stripped
+    await runtime.tools[0].execute(
+      "c2",
+      { cluster_name: "test", extra: null },
+      undefined,
+      undefined,
+    );
+    expect(callToolArgs[1]).toEqual({ cluster_name: "test" });
+
+    // Non-null values pass through
+    await runtime.tools[0].execute(
+      "c3",
+      { insight_id: "eks-123", cluster_name: "test" },
+      undefined,
+      undefined,
+    );
+    expect(callToolArgs[2]).toEqual({
+      insight_id: "eks-123",
+      cluster_name: "test",
+    });
+
+    // All-null non-nullable becomes empty object
+    await runtime.tools[0].execute("c4", { a: null, b: null }, undefined, undefined);
+    expect(callToolArgs[3]).toEqual({});
   });
 });

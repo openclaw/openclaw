@@ -42,7 +42,10 @@ function mcpContentBlockToToolResult(block: ContentBlock): ToolResultContentBloc
       return { type: "text", text: `[audio ${block.mimeType}]` };
     case "resource_link": {
       const label = block.title ?? block.name;
-      return { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri };
+      return {
+        type: "text",
+        text: label ? `[${label}] ${block.uri}` : block.uri,
+      };
     }
     case "resource": {
       const resource = block.resource;
@@ -225,6 +228,58 @@ function addMcpUtilityTool(params: {
 }
 
 /**
+ * Checks whether a field declared in a JSON Schema object explicitly allows null.
+ * Handles type: "null", type: ["string", "null"], and anyOf/oneOf with {type: "null"}.
+ */
+function isFieldNullableInSchema(schema: unknown, key: string): boolean {
+  if (!schema || typeof schema !== "object") {
+    return false;
+  }
+  const root = schema as Record<string, unknown>;
+  const properties = root.properties as Record<string, unknown> | undefined;
+  if (!properties) {
+    return false;
+  }
+  const propertySchema = properties[key];
+  if (!propertySchema || typeof propertySchema !== "object") {
+    return false;
+  }
+  const ps = propertySchema as Record<string, unknown>;
+
+  // Direct type: null or ["...", "null"]
+  if (ps.type === "null") {
+    return true;
+  }
+  if (Array.isArray(ps.type) && ps.type.includes("null")) {
+    return true;
+  }
+
+  // nullable: true (OpenAPI extension)
+  if (ps.nullable === true) {
+    return true;
+  }
+
+  // anyOf/oneOf with a null variant
+  for (const unionKey of ["anyOf", "oneOf"] as const) {
+    const union = ps[unionKey];
+    if (!Array.isArray(union)) {
+      continue;
+    }
+    if (
+      union.some((v: unknown) => {
+        if (!v || typeof v !== "object") return false;
+        const entry = v as Record<string, unknown>;
+        return entry.type === "null" || (Array.isArray(entry.type) && entry.type.includes("null"));
+      })
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Projects an already-listed MCP catalog into agent tools. Without `createExecute`,
  * the projected tools are inventory-only and throw if execution is attempted.
  */
@@ -403,12 +458,18 @@ export async function materializeBundleMcpToolsForRun(params: {
     reservedToolNames: params.reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
-      // Strip null values from optional arguments — MCP servers may reject null
-      // where they accept the same argument as absent or undefined.
+      // Strip null-valued optional arguments before calling MCP.  The LLM
+      // often sends null for unset optional params, but some MCP servers
+      // treat JSON null differently from an absent key (e.g. coercing null
+      // to "").  Only strip nulls for fields NOT declared as nullable in the
+      // tool's input schema, so schema-meaningful nulls (anyOf [string, null])
+      // are preserved at the boundary.
       const cleaned =
         input && typeof input === "object" && !Array.isArray(input)
           ? Object.fromEntries(
-              Object.entries(input as Record<string, unknown>).filter(([, v]) => v !== null),
+              Object.entries(input as Record<string, unknown>).filter(
+                ([k, v]) => v !== null || isFieldNullableInSchema(tool.inputSchema, k),
+              ),
             )
           : input;
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, cleaned);
