@@ -30,15 +30,23 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
+import { gatewayProbeResultSawGateway } from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getSystemdCgroupHygieneSummary,
+  type GatewayServiceRuntime,
+} from "../daemon/service-runtime.js";
+import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
+import { buildGatewayProbeConnectionDetails } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
-import type { HealthFinding } from "./health-checks.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
@@ -52,6 +60,136 @@ export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[]
     agentId,
   });
   return collectUnavailableAgentSkills(report);
+}
+
+export async function collectGatewayHealthFindings(
+  ctx: Pick<HealthCheckContext, "cfg" | "configPath">,
+): Promise<readonly HealthFinding[]> {
+  let probeDetails: Awaited<ReturnType<typeof buildGatewayProbeConnectionDetails>>;
+  try {
+    probeDetails = await buildGatewayProbeConnectionDetails({
+      config: ctx.cfg,
+      ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    });
+  } catch (error) {
+    return [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: `Gateway health probe could not be prepared: ${formatErrorMessage(error)}`,
+        path: ctx.cfg.gateway?.mode === "remote" ? "gateway.url" : "gateway",
+        fixHint:
+          "Fix Gateway connection configuration, then rerun `openclaw doctor --lint --only core/doctor/gateway-health`.",
+      },
+    ];
+  }
+
+  const probe = await probeGatewayStatus({
+    url: probeDetails.url,
+    timeoutMs: 3000,
+    tlsFingerprint: probeDetails.tlsFingerprint,
+    preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+    config: ctx.cfg,
+    json: true,
+  });
+  if (gatewayProbeResultSawGateway(probe)) {
+    return [];
+  }
+  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  return [
+    {
+      checkId: "core/doctor/gateway-health",
+      severity: "warning",
+      message: `Gateway is not reachable: ${probe.error ?? "status probe failed"}`,
+      path: mode === "remote" ? "gateway.url" : "gateway.mode",
+      target: probeDetails.url,
+      fixHint:
+        mode === "remote"
+          ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
+          : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+    },
+  ];
+}
+
+function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {
+  return runtime?.status ?? runtime?.state ?? runtime?.subState;
+}
+
+export async function collectGatewayDaemonFindings(
+  ctx: Pick<HealthCheckContext, "cfg">,
+): Promise<readonly HealthFinding[]> {
+  if (ctx.cfg.gateway?.mode === "remote") {
+    return [];
+  }
+  const service = resolveGatewayService();
+  const state = await readGatewayServiceState(service, { env: process.env });
+  const findings: HealthFinding[] = [];
+  if (!state.installed) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: "Gateway service is not installed.",
+      path: "gateway.mode",
+      target: service.label,
+      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
+    });
+    return findings;
+  }
+  if (!state.loaded) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: "Gateway service is installed but not loaded.",
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway start` to load it.",
+    });
+  }
+  const status = gatewayRuntimeStatus(state.runtime);
+  if (state.loaded && !state.running) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: status
+        ? `Gateway service runtime is ${status}, not running.`
+        : "Gateway service is loaded but runtime status could not confirm it is running.",
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: "Run `openclaw gateway status --deep` or `openclaw doctor --fix` for repair hints.",
+    });
+  }
+  if (state.runtime?.missingGuiSession) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: "Gateway service cannot attach to the user GUI session.",
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
+    });
+  }
+  if (state.runtime?.missingSupervision || state.runtime?.missingUnit) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: "Gateway service supervision metadata is missing.",
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: state.runtime.detail ?? "Reinstall or reload the Gateway service.",
+    });
+  }
+  const hygiene = getSystemdCgroupHygieneSummary(state.runtime?.systemd);
+  if (hygiene) {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: `Gateway systemd service has risky ${hygiene}.`,
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: "Repair the systemd unit so stale child processes are cleaned up reliably.",
+    });
+  }
+  return findings;
 }
 
 function providerCatalogPath(pluginId: string | undefined): string | undefined {
