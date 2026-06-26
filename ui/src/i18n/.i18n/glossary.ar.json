@@ -13,7 +13,11 @@
   },
   {
     "source": "Skills",
-    "target": "Skills"
+    "target": "المهارات"
+  },
+  {
+    "source": "Workboard",
+    "target": "لوحة العمل"
   },
   {
     "source": "Tailscale",
