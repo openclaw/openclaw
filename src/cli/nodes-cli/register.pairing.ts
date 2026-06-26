@@ -74,7 +74,9 @@ async function resolveApproveScopesForRequest(
   };
 }
 
-function isUnknownNodePairRequestIdError(error: unknown): boolean {
+function isUnknownNodePairRequestIdError(
+  error: unknown,
+): error is Error & { gatewayCode: "INVALID_REQUEST" } {
   const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
   return (
     requestError instanceof Error &&
@@ -163,7 +165,10 @@ export function registerNodesPairingCommands(nodes: Command) {
             if (!isUnknownNodePairRequestIdError(error)) {
               throw error;
             }
-            throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts));
+            // Reuse the gateway error so generic formatting does not append its raw cause.
+            error.name = "Error";
+            error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+            throw error;
           }
           defaultRuntime.writeJson(result);
         });
