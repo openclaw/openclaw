@@ -123,6 +123,9 @@ async function listCodexAppServerRolloutFilesForThread(
 async function readCodexSessionRecordForSessionFile(
   sessionFile: string,
 ): Promise<(Record<string, unknown> & { sessionKey: string }) | undefined> {
+  if (isSqliteSessionFileMarker(sessionFile)) {
+    return undefined;
+  }
   const sessionsFile = path.join(path.dirname(sessionFile), "sessions.json");
   const resolvedSessionFile = path.resolve(sessionFile);
   let stat: Awaited<ReturnType<typeof fs.stat>>;
@@ -169,6 +172,10 @@ async function readCodexSessionRecordForSessionFile(
     record: found,
   });
   return found;
+}
+
+function isSqliteSessionFileMarker(sessionFile: string | undefined): boolean {
+  return /^sqlite:[^:]+:[^:]+:./u.test(sessionFile?.trim() ?? "");
 }
 
 type CodexAppServerRolloutTokenSnapshot = {
