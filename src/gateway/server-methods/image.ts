@@ -38,7 +38,9 @@ function providerHasGenericConfig(cfg: OpenClawConfig, providerId: string): bool
  */
 function resolveActiveImageProvider(cfg: OpenClawConfig): string | null {
   const imageConfig = cfg.agents?.defaults?.imageGenerationModel;
-  if (!imageConfig) return null;
+  if (!imageConfig) {
+    return null;
+  }
 
   // Handle string format like "openai" or "openai/dall-e-3"
   if (typeof imageConfig === "string") {
