@@ -31,6 +31,11 @@ export default definePluginEntry({
   register(api) {
     const poolOptions = readPoolOptions(api.pluginConfig);
     const openSyncKeyedStore = api.runtime.state?.openSyncKeyedStore;
+    if (typeof openSyncKeyedStore !== "function") {
+      console.warn(
+        "[copilot] runtime state API not available — session store disabled, SDK binding persistence may be limited",
+      );
+    }
     const sessionStore =
       typeof openSyncKeyedStore === "function"
         ? openSyncKeyedStore<CopilotSessionBinding>({
