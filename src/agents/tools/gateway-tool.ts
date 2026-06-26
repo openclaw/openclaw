@@ -57,12 +57,16 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
+  "agents.defaults.bootstrapMaxChars",
+  "agents.defaults.bootstrapTotalMaxChars",
   "agents.list[].id",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
   "agents.list[].subagents.thinking",
   "agents.list[].reasoningDefault",
   "agents.list[].fastModeDefault",
+  "agents.list[].bootstrapMaxChars",
+  "agents.list[].bootstrapTotalMaxChars",
   // Mention gating is an agent-facing scope knob across channel adapters.
   // Depths here must cover the deepest `requireMention` path the channel
   // adapters use today — Telegram topic overrides live at
