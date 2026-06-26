@@ -133,13 +133,13 @@ directory (default `~/.openclaw`):
 
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-Transcript JSONL files can still live under
-`~/.openclaw/agents/<agentId>/sessions/` for active agent history and legacy
-migration. Older installs may also have a legacy `sessions.json` row store in
-that directory. Start with
-`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`, then
-follow the [Doctor](/cli/doctor#session-sqlite-migration) import and validation
-sequence.
+Older installs may have legacy transcript JSONL files and a `sessions.json` row
+store under `~/.openclaw/agents/<agentId>/sessions/`. Gateway startup and
+`openclaw doctor --fix` import hot legacy rows/history into SQLite
+automatically. Use `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents` and the
+[Doctor](/cli/doctor#session-sqlite-migration) validation sequence when you need
+explicit migration evidence.
 You can still select a legacy store path via `session.store` and `{agentId}`
 templating for migration and offline-maintenance workflows.
 

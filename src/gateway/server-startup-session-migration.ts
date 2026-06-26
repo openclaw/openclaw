@@ -1,18 +1,29 @@
+import type {
+  DoctorSessionSqliteIssue,
+  DoctorSessionSqliteReport,
+} from "../commands/doctor-session-sqlite.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"];
+type SessionSqliteStartupImportRunner = (params: {
+  allAgents: true;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  mode: "import";
+}) => Promise<DoctorSessionSqliteReport>;
+
+type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+  runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
+};
 
 /**
- * Run orphan-key session migration at gateway startup.
+ * Run session migrations at gateway startup before runtime session access.
  *
- * Idempotent and best-effort: if the migration fails, gateway startup
- * continues normally. This ensures accumulated orphaned session keys
- * (from the write-path bug #29683) are cleaned up automatically on
- * upgrade rather than requiring a manual `openclaw doctor` run.
+ * Orphan-key cleanup remains best-effort. Full SQLite import is blocking
+ * for hot legacy session issues because runtime no longer falls back to JSONL.
  */
 export async function runStartupSessionMigration(params: {
   cfg: OpenClawConfig;
@@ -21,4 +32,87 @@ export async function runStartupSessionMigration(params: {
   deps?: SessionMigrationDeps;
 }): Promise<void> {
   await runSessionStartupMigration(params);
+  await runStartupSessionSqliteImport(params);
+}
+
+async function runStartupSessionSqliteImport(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: SessionStartupMigrationLogger;
+  deps?: SessionMigrationDeps;
+}): Promise<void> {
+  const env = params.env ?? process.env;
+  const runDoctorSessionSqlite =
+    params.deps?.runDoctorSessionSqlite ??
+    (await import("../commands/doctor-session-sqlite.js")).runDoctorSessionSqlite;
+  const report = await runDoctorSessionSqlite({
+    allAgents: true,
+    cfg: params.cfg,
+    env,
+    mode: "import",
+  });
+  const warningIssues = collectStartupWarningIssues(report);
+  const blockingIssues = collectStartupBlockingIssues(report);
+  if (blockingIssues.length > 0) {
+    throw new Error(
+      [
+        `session SQLite migration failed during startup with ${blockingIssues.length} blocking issue(s).`,
+        ...formatStartupIssueLines(blockingIssues).map((line) => `- ${line}`),
+        'Run "openclaw doctor --session-sqlite inspect --session-sqlite-all-agents" for details.',
+      ].join("\n"),
+    );
+  }
+  if (sessionSqliteReportHasChanges(report)) {
+    params.log.info(formatSessionSqliteStartupImportSummary(report));
+  }
+  if (warningIssues.length > 0) {
+    params.log.warn(
+      [
+        `session: session SQLite migration warnings:\n${formatStartupIssueLines(warningIssues)
+          .map((line) => `- ${line}`)
+          .join("\n")}`,
+      ].join("\n"),
+    );
+  }
+}
+
+function collectStartupBlockingIssues(
+  report: DoctorSessionSqliteReport,
+): DoctorSessionSqliteIssue[] {
+  return report.targets.flatMap((target) =>
+    target.issues.filter((issue) => issue.code !== "unreferenced_jsonl_archive_failed"),
+  );
+}
+
+function collectStartupWarningIssues(
+  report: DoctorSessionSqliteReport,
+): DoctorSessionSqliteIssue[] {
+  return report.targets.flatMap((target) =>
+    target.issues.filter((issue) => issue.code === "unreferenced_jsonl_archive_failed"),
+  );
+}
+
+function formatStartupIssueLines(issues: readonly DoctorSessionSqliteIssue[]): readonly string[] {
+  return issues.slice(0, 10).map((issue) => {
+    const key = issue.sessionKey ? `${issue.sessionKey}: ` : "";
+    return `[${issue.code}] ${key}${issue.message}`;
+  });
+}
+
+function sessionSqliteReportHasChanges(report: DoctorSessionSqliteReport): boolean {
+  return (
+    report.totals.importedEntries > 0 ||
+    report.totals.importedTranscriptEvents > 0 ||
+    report.totals.archivedTranscriptFiles > 0 ||
+    report.totals.archivedUnreferencedJsonlFiles > 0
+  );
+}
+
+function formatSessionSqliteStartupImportSummary(report: DoctorSessionSqliteReport): string {
+  return [
+    "session: imported legacy session metadata/transcripts into SQLite:",
+    `- targets=${report.totals.targets} legacyEntries=${report.totals.legacyEntries} sqliteEntries=${report.totals.sqliteEntries}`,
+    `- importedEntries=${report.totals.importedEntries} importedTranscriptEvents=${report.totals.importedTranscriptEvents}`,
+    `- archivedTranscriptArtifacts=${report.totals.archivedTranscriptFiles} archivedUnreferencedJsonl=${report.totals.archivedUnreferencedJsonlFiles}`,
+  ].join("\n");
 }

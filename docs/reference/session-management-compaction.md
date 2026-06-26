@@ -56,12 +56,12 @@ OpenClaw persists sessions in two layers:
 
 Older installs may still have `sessions.json` files under the agent `sessions/`
 directory. Treat those files as legacy session-row migration inputs or explicit
-offline-maintenance targets. Transcript JSONL files in that directory may still
-be active SessionManager history as well as migration input. Run
-`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents` first,
-then follow the [Doctor migration sequence](/cli/doctor#session-sqlite-migration)
-to migrate and verify legacy rows and transcript history against the per-agent
-SQLite store.
+offline-maintenance targets. Gateway startup and `openclaw doctor --fix` import
+hot legacy rows and transcript history into the per-agent SQLite store
+automatically. Run `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents`, then follow the [Doctor migration
+sequence](/cli/doctor#session-sqlite-migration), when you need explicit
+inspection or validation evidence.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
