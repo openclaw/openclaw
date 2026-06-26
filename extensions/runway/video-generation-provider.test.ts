@@ -76,7 +76,7 @@ function oversizedJsonResponse(onCancel: () => void): Response {
     json: async () => {
       throw new Error("unbounded json reader was used");
     },
-  } as Response;
+  } as unknown as Response;
 }
 
 describe("runway video generation provider", () => {
