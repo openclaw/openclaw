@@ -253,13 +253,18 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   if (result.kind === "broadcast") {
     const results = result.payload.results ?? [];
-    const rows = results.map((entry) => ({
-      Channel: resolveChannelLabel(entry.channel),
-      Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
-      Status: entry.ok ? "ok" : "error",
-      Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
-    }));
-    const okCount = results.filter((entry) => entry.ok).length;
+    let okCount = 0;
+    const rows = results.map((entry) => {
+      if (entry.ok) {
+        okCount += 1;
+      }
+      return {
+        Channel: resolveChannelLabel(entry.channel),
+        Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
+        Status: entry.ok ? "ok" : "error",
+        Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
+      };
+    });
     const total = results.length;
     const headingLine = ok(
       `✅ Broadcast complete (${okCount}/${total} succeeded, ${total - okCount} failed)`,
