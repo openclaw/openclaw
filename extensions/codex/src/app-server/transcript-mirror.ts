@@ -9,10 +9,7 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  publishSessionTranscriptFileUpdate,
-  withSessionTranscriptFileWriteLock,
   withSessionTranscriptWriteLock,
-  type SessionTranscriptFileTargetParams,
   type SessionTranscriptTargetParams,
   type SessionTranscriptWriteLockContext,
   type SessionTranscriptWriteLockParams,
@@ -118,7 +115,6 @@ export async function mirrorTranscriptBestEffort(params: {
       turnId: params.turnId,
     });
     const mirrorResult = await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
@@ -204,7 +200,6 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         `${params.turnId}:prompt`,
       );
       const mirrorResult = await mirrorCodexAppServerTranscript({
-        sessionFile: params.params.sessionFile,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,
@@ -277,7 +272,6 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export async function mirrorCodexAppServerTranscript(params: {
-  sessionFile: string;
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
@@ -296,7 +290,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   }
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const { appendedUpdates, userMessagesPresent } = await withCodexMirrorTranscriptWriteLock(
+  const { userMessagesPresent } = await withCodexMirrorTranscriptWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{
@@ -364,78 +358,46 @@ export async function mirrorCodexAppServerTranscript(params: {
           mirrorState.idempotencyKeys.add(idempotencyKey);
         }
       }
-      if (transcriptTarget.targetKind === "runtime-session") {
-        for (const update of nextAppendedUpdates) {
-          await transcript.publishUpdate({
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-            message: update.message,
-            messageId: update.messageId,
-            messageSeq: update.messageSeq,
-          });
-        }
+      for (const update of nextAppendedUpdates) {
+        await transcript.publishUpdate({
+          sessionKey: transcriptTarget.sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          message: update.message,
+          messageId: update.messageId,
+          messageSeq: update.messageSeq,
+        });
       }
       return { appendedUpdates: nextAppendedUpdates, userMessagesPresent: nextUserMessagesPresent };
     },
   );
 
-  if (transcriptTarget.targetKind === "transcript-file") {
-    for (const update of appendedUpdates) {
-      publishSessionTranscriptFileUpdate({
-        ...transcriptTarget,
-        update: {
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        },
-      });
-    }
-  }
-
   return { userMessagesPresent };
 }
 
-type CodexMirrorTranscriptTarget =
-  | ({ targetKind: "runtime-session" } & SessionTranscriptTargetParams)
-  | ({ targetKind: "transcript-file" } & SessionTranscriptFileTargetParams);
-
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): CodexMirrorTranscriptTarget {
-  if (params.sessionKey && params.storePath) {
-    return {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      targetKind: "runtime-session",
-    };
+}): SessionTranscriptTargetParams {
+  const sessionKey = params.sessionKey?.trim();
+  const storePath = params.storePath?.trim();
+  if (!sessionKey || !storePath) {
+    throw new Error("Codex transcript mirror requires a runtime session identity");
   }
   return {
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? "",
-    targetKind: "transcript-file",
+    sessionKey,
+    storePath,
   };
 }
 
 function withCodexMirrorTranscriptWriteLock<T>(
-  params: CodexMirrorTranscriptTarget & { config?: SessionTranscriptWriteLockParams["config"] },
+  params: SessionTranscriptTargetParams & { config?: SessionTranscriptWriteLockParams["config"] },
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  if (params.targetKind === "runtime-session") {
-    const { targetKind: _targetKind, ...target } = params;
-    return withSessionTranscriptWriteLock(target, run);
-  }
-  const { targetKind: _targetKind, ...target } = params;
-  return withSessionTranscriptFileWriteLock(target, run);
+  return withSessionTranscriptWriteLock(params, run);
 }
 
 function readTranscriptMirrorState(events: unknown[]): {
