@@ -617,7 +617,28 @@ export function repairToolUseResultPairing(
       if (toolCalls.length > 0 && toolCalls.every((tc) => seenToolCallIds.has(tc.id))) {
         // Every tool_call_id in this turn has already been produced by an
         // earlier assistant message (legacy null-transcript duplication).
+        // Preserve non-tool content (text/thinking) while removing duplicate
+        // tool_use blocks to avoid silent content loss.
         changed = true;
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        const nonToolBlocks = content.filter(
+          (block) =>
+            !(
+              block &&
+              typeof block === "object" &&
+              typeof (block as Record<string, unknown>).id === "string" &&
+              typeof (block as Record<string, unknown>).type === "string" &&
+              ((block as Record<string, unknown>).type === "toolCall" ||
+                (block as Record<string, unknown>).type === "toolUse" ||
+                (block as Record<string, unknown>).type === "functionCall")
+            ),
+        );
+        if (nonToolBlocks.length > 0) {
+          deduped.push({
+            ...(msg as Record<string, unknown>),
+            content: nonToolBlocks,
+          } as AgentMessage);
+        }
         continue;
       }
       for (const tc of toolCalls) {
@@ -626,7 +647,7 @@ export function repairToolUseResultPairing(
     }
     deduped.push(msg);
   }
-  const msgs = deduped.length !== messages.length ? deduped : messages;
+  const msgs = changed ? deduped : messages;
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);

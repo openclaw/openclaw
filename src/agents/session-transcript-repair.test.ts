@@ -738,6 +738,36 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(result.messages.filter((m) => m.role === "toolResult")).toHaveLength(2);
     expect(result.added).toHaveLength(0);
   });
+
+  // #94829 regression: duplicate tool_call_ids with distinct text content
+  // must preserve the text while removing duplicate tool_use blocks.
+  it("preserves text content when deduplicating duplicate tool_call_ids", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      // Duplicate tool_call_id but with new text content
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I have additional context about this result." },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // The duplicate tool_use should be removed, but text content preserved
+    const assistantMsgs = result.messages.filter((m) => m.role === "assistant");
+    expect(assistantMsgs).toHaveLength(2);
+    expect(assistantMsgs[1]?.content).toEqual([
+      { type: "text", text: "I have additional context about this result." },
+    ]);
+  });
 });
 
 describe("sanitizeToolCallInputs legacy block filtering", () => {
