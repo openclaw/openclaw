@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectNativeI18nEntries } from "../../scripts/native-app-i18n.ts";
+import { collectNativeI18nEntries, NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
 describe("native app i18n inventory", () => {
   it("collects stable Android and Apple UI entries", async () => {
@@ -10,5 +10,6 @@ describe("native app i18n inventory", () => {
     expect(surfaces).toEqual(new Set(["android", "apple"]));
     expect(entries.every((entry) => entry.id.startsWith(`native.${entry.surface}.`))).toBe(true);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
+    expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
 });
