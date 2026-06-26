@@ -400,7 +400,9 @@ describe("isSilentOverflowProneModel", () => {
   // identity, so `provider` here can be anything from `openai` to a custom
   // string. False positives only disable OpenClaw runtime's secondary compaction path;
   // OpenClaw's preemptive compaction continues to handle real overflow.
-  it("flags bare glm- model ids without a namespace prefix, regardless of provider", () => {
+  // Exception: the official `zhipu` provider uses the standard first-party
+  // Zhipu REST API with proper overflow errors (tested separately below).
+  it("flags bare glm- model ids without a namespace prefix for non-zhipu providers", () => {
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-5.1" })).toBe(true);
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-4.7" })).toBe(true);
     expect(isSilentOverflowProneModel({ provider: "openai", modelId: "glm-5.1" })).toBe(true);
@@ -419,6 +421,20 @@ describe("isSilentOverflowProneModel", () => {
     expect(
       isSilentOverflowProneModel({ provider: "opencode-go", modelId: "opencode-go/glm-5.1" }),
     ).toBe(false);
+  });
+
+  // The official `zhipu` provider uses the standard first-party Zhipu REST API
+  // that returns proper overflow errors — unlike the z.ai gateway that
+  // silently truncates. GLM models accessed via the zhipu provider must not
+  // have their SDK auto-compaction disabled.
+  it("does not flag zhipu provider with bare glm- model ids", () => {
+    expect(isSilentOverflowProneModel({ provider: "zhipu", modelId: "glm-5.2" })).toBe(false);
+    expect(isSilentOverflowProneModel({ provider: "zhipu", modelId: "glm-5.1" })).toBe(false);
+    expect(isSilentOverflowProneModel({ provider: "zhipu", modelId: "glm-4-flash" })).toBe(false);
+  });
+
+  it("does not flag zhipu provider even with z-ai/ model id prefix", () => {
+    expect(isSilentOverflowProneModel({ provider: "zhipu", modelId: "z-ai/glm-5.1" })).toBe(false);
   });
 
   // shared model runtime's overflow.ts only documents z.ai as the silent-overflow style. We
