@@ -225,14 +225,26 @@ function resolveTelegramCommandSessionFile(params: {
   sessionId: string;
   storePath: string;
 }): string {
+  const sqliteMarker = `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
   const explicitSessionFile = params.sessionFile?.trim();
-  if (!explicitSessionFile) {
-    return `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
-  }
-  if (explicitSessionFile.startsWith("sqlite:")) {
+  if (explicitSessionFile && telegramSessionFileMarkerMatchesCurrentSession(params)) {
     return explicitSessionFile;
   }
-  return path.resolve(path.dirname(params.storePath), explicitSessionFile);
+  return sqliteMarker;
+}
+
+function telegramSessionFileMarkerMatchesCurrentSession(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath: string;
+}): boolean {
+  const marker = params.sessionFile?.trim();
+  const prefix = `sqlite:${params.agentId}:${params.sessionId}:`;
+  if (!marker?.startsWith(prefix)) {
+    return false;
+  }
+  return path.resolve(marker.slice(prefix.length)) === path.resolve(params.storePath);
 }
 
 function resolveTelegramProgressPlaceholder(command: {

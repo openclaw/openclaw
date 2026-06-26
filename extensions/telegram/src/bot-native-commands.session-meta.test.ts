@@ -1594,6 +1594,53 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
   });
 
+  it("replaces stale legacy transcript paths for plugin commands", async () => {
+    const storePath = "/tmp/openclaw-sessions/sessions.json";
+    const marker = `sqlite:main:sess-main:${storePath}`;
+    sessionMocks.resolveStorePath.mockReturnValue(storePath);
+    sessionMocks.getSessionEntry.mockReturnValue({
+      sessionId: "sess-main",
+      sessionFile: "sess-main.jsonl",
+      updatedAt: 1,
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
+    expectRecordFields(
+      (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
+      {
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        sessionFile: marker,
+      },
+      "plugin command params",
+    );
+  });
+
   it("sends an empty-response fallback when a plugin command returns undefined", async () => {
     pluginRuntimeMocks.executePluginCommand.mockResolvedValue(undefined as never);
 
