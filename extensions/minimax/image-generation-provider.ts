@@ -6,7 +6,6 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 
@@ -164,10 +163,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       try {
         await assertOkOrThrowHttpError(response, "MiniMax image generation failed");
 
-        const data = await readProviderJsonResponse<MinimaxImageApiResponse>(
-          response,
-          "MiniMax image generation failed",
-        );
+        const data = (await response.json()) as MinimaxImageApiResponse;
 
         const baseResp = data.base_resp;
         if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
