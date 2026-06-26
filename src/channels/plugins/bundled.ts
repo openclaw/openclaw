@@ -3,6 +3,7 @@
  *
  * Loads generated bundled channel entries, setup metadata, secrets, and legacy migration hooks.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -241,12 +242,72 @@ function resolveGeneratedBundledChannelModulePath(params: {
   if (!params.entry) {
     return null;
   }
-  return resolveBundledChannelGeneratedPath(
+  const generatedPath = resolveBundledChannelGeneratedPath(
     params.rootScope.packageRoot,
     params.entry,
     params.metadata.dirName,
     resolveBundledChannelScanDir(params.rootScope),
   );
+  if (generatedPath) {
+    return generatedPath;
+  }
+  for (const entryPath of [params.entry.built, params.entry.source]) {
+    if (!entryPath) {
+      continue;
+    }
+    const basename = path.basename(entryPath);
+    const builtBasename = basename.replace(/\.[^.]+$/u, ".js");
+    const trustedRoots = [
+      path.resolve(params.metadata.rootDir),
+      ...(params.rootScope.pluginsDir
+        ? [path.resolve(params.rootScope.pluginsDir, params.metadata.dirName)]
+        : []),
+      path.resolve(params.rootScope.packageRoot, "dist", "extensions", params.metadata.dirName),
+      path.resolve(
+        params.rootScope.packageRoot,
+        "dist-runtime",
+        "extensions",
+        params.metadata.dirName,
+      ),
+    ];
+    const pluginDistCandidates = [
+      ...(params.rootScope.pluginsDir
+        ? [path.resolve(params.rootScope.pluginsDir, params.metadata.dirName, builtBasename)]
+        : []),
+      path.resolve(
+        params.rootScope.packageRoot,
+        "dist",
+        "extensions",
+        params.metadata.dirName,
+        builtBasename,
+      ),
+      path.resolve(
+        params.rootScope.packageRoot,
+        "dist-runtime",
+        "extensions",
+        params.metadata.dirName,
+        builtBasename,
+      ),
+    ];
+    const candidates = path.isAbsolute(entryPath)
+      ? [
+          ...pluginDistCandidates,
+          path.resolve(params.metadata.rootDir, builtBasename),
+          path.resolve(params.metadata.rootDir, basename),
+          path.normalize(entryPath),
+        ]
+      : [...pluginDistCandidates, path.resolve(params.metadata.rootDir, entryPath)];
+    for (const candidate of candidates) {
+      if (
+        fs.existsSync(candidate) &&
+        (trustedRoots.some((root) => isPathInside(root, candidate)) ||
+          path.normalize(candidate) === path.normalize(entryPath))
+      ) {
+        return candidate;
+      }
+    }
+  }
+  return null;
 }
 
 function loadGeneratedBundledChannelModule(params: {
