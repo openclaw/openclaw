@@ -5,6 +5,7 @@
 import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import {
+  formatCodexSupervisorEndpointHealthSummary,
   redactCodexSupervisorEndpoint,
   redactCodexSupervisorValue,
   sanitizeCodexSupervisorSessionListResult,
@@ -132,7 +133,7 @@ export function createCodexSupervisorTools({
           ok,
         }));
         return jsonResult({
-          summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
+          summary: formatCodexSupervisorEndpointHealthSummary(health),
           endpoints,
           health,
         });

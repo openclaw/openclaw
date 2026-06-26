@@ -36,6 +36,18 @@ function errorResult(message: string) {
   };
 }
 
+export function formatCodexSupervisorEndpointHealthSummary(
+  health: readonly { ok: boolean }[],
+): string {
+  let okCount = 0;
+  for (const entry of health) {
+    if (entry.ok) {
+      okCount += 1;
+    }
+  }
+  return `codex endpoints: ${okCount}/${health.length} ok`;
+}
+
 function redactString(value: string): string {
   return value
     .replace(/\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
@@ -164,13 +176,10 @@ export function registerCodexSupervisorMcpTools(
         endpointId,
         ok,
       }));
-      return textResult(
-        `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
-        {
-          endpoints,
-          health,
-        },
-      );
+      return textResult(formatCodexSupervisorEndpointHealthSummary(health), {
+        endpoints,
+        health,
+      });
     },
   );
 
