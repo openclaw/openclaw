@@ -13,6 +13,18 @@ export type GeeRuntimeCompactionPolicy = {
   hostCompactionIds: string[];
 };
 
+export type GeeRuntimeAuthEligibility = "ok" | "expired" | "missing" | "unresolved";
+
+export type GeeRuntimeProviderAuthPolicy = {
+  endpointIds: string[];
+  modelRefs: string[];
+  routingPolicyIds: string[];
+  fallbackPolicyIds: string[];
+  cooldownPolicyIds: string[];
+  credentialRefs: string[];
+  authEligibility: GeeRuntimeAuthEligibility;
+};
+
 export function resolveGeeRuntimeToolPolicy(
   preparedFacts?: Record<string, unknown>,
 ): GeeRuntimeToolPolicy | undefined {
@@ -92,6 +104,83 @@ export function resolveGeeRuntimeCompactionPolicy(
     hostCompactionIds: Array.from(hostCompactionIds).toSorted((left, right) =>
       left.localeCompare(right),
     ),
+  };
+}
+
+export function resolveGeeRuntimeProviderAuthPolicy(
+  preparedFacts?: Record<string, unknown>,
+): GeeRuntimeProviderAuthPolicy | undefined {
+  if (!preparedFacts || Object.keys(preparedFacts).length === 0) {
+    return undefined;
+  }
+
+  const endpointIds: string[] = [];
+  const modelRefs = new Set<string>();
+  const routingPolicyIds = new Set<string>();
+  const fallbackPolicyIds = new Set<string>();
+  const cooldownPolicyIds = new Set<string>();
+  const credentialRefs = new Set<string>();
+  const authEligibilities = new Set<GeeRuntimeAuthEligibility>();
+  for (const [endpointId, rawFact] of Object.entries(preparedFacts)) {
+    const fact = readGeeRuntimePreparedFact(rawFact, endpointId);
+    const envelope = readRequiredRecord(fact.envelope, endpointId, "envelope");
+    const provider = readRequiredRecord(envelope.provider, endpointId, "envelope.provider");
+    const auth = readRequiredRecord(envelope.auth, endpointId, "envelope.auth");
+    modelRefs.add(readRequiredString(provider.modelRef, endpointId, "envelope.provider.modelRef"));
+    routingPolicyIds.add(
+      readRequiredString(provider.routingPolicyId, endpointId, "envelope.provider.routingPolicyId"),
+    );
+    const fallbackPolicyId = readOptionalString(
+      provider.fallbackPolicyId,
+      endpointId,
+      "envelope.provider.fallbackPolicyId",
+    );
+    if (fallbackPolicyId) {
+      fallbackPolicyIds.add(fallbackPolicyId);
+    }
+    const cooldownPolicyId = readOptionalString(
+      provider.cooldownPolicyId,
+      endpointId,
+      "envelope.provider.cooldownPolicyId",
+    );
+    if (cooldownPolicyId) {
+      cooldownPolicyIds.add(cooldownPolicyId);
+    }
+    credentialRefs.add(
+      readRequiredString(auth.credentialRef, endpointId, "envelope.auth.credentialRef"),
+    );
+    authEligibilities.add(
+      readEnum(
+        auth.eligibility,
+        ["ok", "expired", "missing", "unresolved"],
+        endpointId,
+        "envelope.auth.eligibility",
+      ),
+    );
+    endpointIds.push(endpointId);
+  }
+
+  if (authEligibilities.size > 1) {
+    throw new Error(
+      `Gee-hosted OpenClaw prepared runtime facts have conflicting auth eligibility states for endpoints "${endpointIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join('", "')}".`,
+    );
+  }
+  const [authEligibility] = authEligibilities;
+  if (!authEligibility) {
+    return undefined;
+  }
+  const sortStrings = (values: Iterable<string>) =>
+    Array.from(values).toSorted((left, right) => left.localeCompare(right));
+  return {
+    endpointIds: sortStrings(endpointIds),
+    modelRefs: sortStrings(modelRefs),
+    routingPolicyIds: sortStrings(routingPolicyIds),
+    fallbackPolicyIds: sortStrings(fallbackPolicyIds),
+    cooldownPolicyIds: sortStrings(cooldownPolicyIds),
+    credentialRefs: sortStrings(credentialRefs),
+    authEligibility,
   };
 }
 

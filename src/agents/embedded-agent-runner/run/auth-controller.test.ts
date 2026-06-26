@@ -3,6 +3,8 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError } from "../../failover-error.js";
+import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
+import { GEE_RUNTIME_CREDENTIAL_REF_MARKER } from "../../model-auth-markers.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -68,6 +70,21 @@ function getRuntimeAuthSnapshot(
   return state ? { profileId: state.profileId, refreshInFlight: state.refreshInFlight } : null;
 }
 
+function createGeeRuntimeProviderAuthPolicy(
+  overrides: Partial<GeeRuntimeProviderAuthPolicy> = {},
+): GeeRuntimeProviderAuthPolicy {
+  return {
+    endpointIds: ["telegram:geeclaw"],
+    modelRefs: ["custom-openai/test-model"],
+    routingPolicyIds: ["gee-routing-main"],
+    fallbackPolicyIds: [],
+    cooldownPolicyIds: ["gee-cooldown-main"],
+    credentialRefs: ["gee-credential-main"],
+    authEligibility: "ok",
+    ...overrides,
+  };
+}
+
 type MutableAuthControllerHarness = {
   runtimeModel: Model;
   effectiveModel: Model;
@@ -99,6 +116,7 @@ function createMutableEmbeddedRunAuthController(params: {
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
   warn?: (message: string) => void;
+  geeRuntimeProviderAuthPolicy?: GeeRuntimeProviderAuthPolicy;
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
@@ -116,6 +134,7 @@ function createMutableEmbeddedRunAuthController(params: {
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
     allowTransientCooldownProbe: false,
+    geeRuntimeProviderAuthPolicy: params.geeRuntimeProviderAuthPolicy,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
     getRuntimeModel: () => params.harness.runtimeModel,
@@ -157,6 +176,82 @@ describe("createEmbeddedRunAuthController", () => {
   beforeEach(() => {
     mocks.prepareProviderRuntimeAuth.mockReset();
     mocks.getApiKeyForModel.mockReset();
+  });
+
+  it("uses Gee-owned auth policy without resolving standalone profiles", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+    mocks.getApiKeyForModel.mockRejectedValue(new Error("standalone auth should not run"));
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+      profileCandidates: ["custom-openai:stale-profile"],
+      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
+    });
+
+    await controller.initializeAuthProfile();
+
+    expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
+    expect(setRuntimeApiKey).toHaveBeenCalledWith(
+      "custom-openai",
+      GEE_RUNTIME_CREDENTIAL_REF_MARKER,
+    );
+    expect(harness.apiKeyInfo).toEqual({
+      apiKey: GEE_RUNTIME_CREDENTIAL_REF_MARKER,
+      mode: "api-key",
+      source: "gee-runtime-credential-ref:gee-credential-main",
+    });
+    expect(harness.lastProfileId).toBeUndefined();
+    expect(harness.runtimeAuthState).toBeNull();
+  });
+
+  it("fails closed when Gee-owned auth policy is not eligible", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy({
+        authEligibility: "expired",
+      }),
+    });
+
+    await expect(controller.initializeAuthProfile()).rejects.toThrow(
+      'Gee-owned runtime auth for endpoints "telegram:geeclaw" is expired',
+    );
+    expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate or refresh standalone auth under Gee-owned auth policy", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+      profileCandidates: ["custom-openai:default", "custom-openai:backup"],
+      geeRuntimeProviderAuthPolicy: createGeeRuntimeProviderAuthPolicy(),
+    });
+
+    await controller.initializeAuthProfile();
+    harness.runtimeAuthState = {
+      generation: 1,
+      sourceApiKey: "standalone-source-key",
+      authMode: "api-key",
+      profileId: "custom-openai:default",
+    };
+
+    await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+    await expect(
+      controller.maybeRefreshRuntimeAuthForAuthError("401 unauthorized", false),
+    ).resolves.toBe(false);
+    expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
   });
 
   it("applies runtime request overrides on the first auth exchange", async () => {

@@ -65,6 +65,7 @@ import {
   resolveStoredSessionKeyForSessionId,
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { resolveGeeRuntimeProviderAuthPolicy } from "../gee-runtime-prepared-facts.js";
 import {
   classifyAssistantFailoverReason,
   classifyFailoverReason,
@@ -231,7 +232,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
-import type { EmbeddedRunFastModeParam } from "./run/types.js";
+import type { EmbeddedRunFastModeParam, EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -983,12 +984,19 @@ async function runEmbeddedAgentInternal(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: normalizedSessionKey,
-        modelFallbacksOverride: params.modelFallbacksOverride,
-      });
+      const geeRuntimePreparedFacts = params.geeRuntimePreparedFacts as
+        | EmbeddedRunGeeRuntimePreparedFacts
+        | undefined;
+      const geeRuntimeProviderAuthPolicy =
+        resolveGeeRuntimeProviderAuthPolicy(geeRuntimePreparedFacts);
+      const fallbackConfigured = geeRuntimeProviderAuthPolicy
+        ? false
+        : hasEmbeddedRunConfiguredModelFallbacks({
+            cfg: params.config,
+            agentId: params.agentId,
+            sessionKey: normalizedSessionKey,
+            modelFallbacksOverride: params.modelFallbacksOverride,
+          });
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
@@ -1171,24 +1179,29 @@ async function runEmbeddedAgentInternal(
         !pluginHarnessOwnsTransport &&
         provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-chatgpt-responses";
-      let piExternalCliAuthScope = pluginHarnessOwnsTransport
-        ? { ignoreAutoPreferredProfile: false }
-        : openClawNativeCodexResponsesNeedsAuthBootstrap
-          ? {
-              providerIds: [OPENAI_PROVIDER_ID],
-              ignoreAutoPreferredProfile: false,
-            }
-          : resolveExternalCliAuthOverlayScopeFromSelection({
-              provider,
-              cfg: params.config,
-              agentId: params.agentId,
-              modelId,
-              workspaceDir: resolvedWorkspace,
-              userLockedAuthProfileId:
-                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-            });
+      let piExternalCliAuthScope = geeRuntimeProviderAuthPolicy
+        ? { ignoreAutoPreferredProfile: true }
+        : pluginHarnessOwnsTransport
+          ? { ignoreAutoPreferredProfile: false }
+          : openClawNativeCodexResponsesNeedsAuthBootstrap
+            ? {
+                providerIds: [OPENAI_PROVIDER_ID],
+                ignoreAutoPreferredProfile: false,
+              }
+            : resolveExternalCliAuthOverlayScopeFromSelection({
+                provider,
+                cfg: params.config,
+                agentId: params.agentId,
+                modelId,
+                workspaceDir: resolvedWorkspace,
+                userLockedAuthProfileId:
+                  !geeRuntimeProviderAuthPolicy && params.authProfileIdSource === "user"
+                    ? params.authProfileId
+                    : undefined,
+              });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
+        !geeRuntimeProviderAuthPolicy &&
         !pluginHarnessOwnsTransport &&
         !pluginHarnessNeedsOpenClawAuthBootstrap &&
         !piExternalCliAuthScope.providerIds
@@ -1207,8 +1220,9 @@ async function runEmbeddedAgentInternal(
             params.authProfileIdSource === "user" ? params.authProfileId : undefined,
         });
       }
-      const authStore =
-        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+      const authStore = geeRuntimeProviderAuthPolicy
+        ? createEmptyAuthProfileStore()
+        : pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
           : pluginHarnessNeedsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
@@ -1224,14 +1238,18 @@ async function runEmbeddedAgentInternal(
                 ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
                   allowKeychainPrompt: false,
                 }));
-      const attemptAuthProfileStore =
-        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+      const attemptAuthProfileStore = geeRuntimeProviderAuthPolicy
+        ? authStore
+        : pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
               allowKeychainPrompt: false,
             })
           : authStore;
-      const requestedProfileId = params.authProfileId?.trim();
-      const requestedProfileIsUserLocked = params.authProfileIdSource === "user";
+      const requestedProfileId = geeRuntimeProviderAuthPolicy
+        ? undefined
+        : params.authProfileId?.trim();
+      const requestedProfileIsUserLocked =
+        !geeRuntimeProviderAuthPolicy && params.authProfileIdSource === "user";
       const isForwardablePluginHarnessAuthProfile = (
         profileId: string | undefined,
       ): profileId is string => {
@@ -1286,17 +1304,23 @@ async function runEmbeddedAgentInternal(
         }
         return [];
       };
-      const pluginHarnessProfileOrder = pluginHarnessOwnsTransport
-        ? resolvePluginHarnessProfileOrder()
-        : [];
+      const pluginHarnessProfileOrder =
+        pluginHarnessOwnsTransport && !geeRuntimeProviderAuthPolicy
+          ? resolvePluginHarnessProfileOrder()
+          : [];
       const resolvePluginHarnessPreferredProfileId = (): string | undefined =>
         pluginHarnessProfileOrder[0];
-      const preferredProfileId = pluginHarnessOwnsTransport
-        ? resolvePluginHarnessPreferredProfileId()
-        : piExternalCliAuthScope.ignoreAutoPreferredProfile && !requestedProfileIsUserLocked
-          ? undefined
-          : requestedProfileId;
-      let lockedProfileId = requestedProfileIsUserLocked ? preferredProfileId : undefined;
+      const preferredProfileId = geeRuntimeProviderAuthPolicy
+        ? undefined
+        : pluginHarnessOwnsTransport
+          ? resolvePluginHarnessPreferredProfileId()
+          : piExternalCliAuthScope.ignoreAutoPreferredProfile && !requestedProfileIsUserLocked
+            ? undefined
+            : requestedProfileId;
+      let lockedProfileId =
+        !geeRuntimeProviderAuthPolicy && requestedProfileIsUserLocked
+          ? preferredProfileId
+          : undefined;
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
           if (!isForwardablePluginHarnessAuthProfile(lockedProfileId)) {
@@ -1336,43 +1360,45 @@ async function runEmbeddedAgentInternal(
           throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
         }
       }
-      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
-        ? []
-        : [
-            ...new Set(
-              listOpenAIAuthProfileProvidersForAgentRuntime({
-                provider,
-                harnessRuntime: agentHarness.id,
-                agentHarnessId: agentHarness.id,
-                config: params.config,
-              }).flatMap((authProvider) =>
-                resolveAuthProfileOrder({
-                  cfg: params.config,
-                  store: authStore,
-                  provider: authProvider,
-                  preferredProfile: preferredProfileId,
-                }),
+      const profileOrder =
+        geeRuntimeProviderAuthPolicy || shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
+          ? []
+          : [
+              ...new Set(
+                listOpenAIAuthProfileProvidersForAgentRuntime({
+                  provider,
+                  harnessRuntime: agentHarness.id,
+                  agentHarnessId: agentHarness.id,
+                  config: params.config,
+                }).flatMap((authProvider) =>
+                  resolveAuthProfileOrder({
+                    cfg: params.config,
+                    store: authStore,
+                    provider: authProvider,
+                    preferredProfile: preferredProfileId,
+                  }),
+                ),
               ),
-            ),
-          ];
-      const providerPreferredProfileId = lockedProfileId
-        ? undefined
-        : resolveProviderAuthProfileId({
-            provider,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            context: {
-              config: params.config,
-              agentDir,
-              workspaceDir: resolvedWorkspace,
+            ];
+      const providerPreferredProfileId =
+        lockedProfileId || geeRuntimeProviderAuthPolicy
+          ? undefined
+          : resolveProviderAuthProfileId({
               provider,
-              modelId,
-              preferredProfileId,
-              lockedProfileId,
-              profileOrder,
-              authStore,
-            },
-          });
+              config: params.config,
+              workspaceDir: resolvedWorkspace,
+              context: {
+                config: params.config,
+                agentDir,
+                workspaceDir: resolvedWorkspace,
+                provider,
+                modelId,
+                preferredProfileId,
+                lockedProfileId,
+                profileOrder,
+                authStore,
+              },
+            });
       const providerOrderedProfiles =
         providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
           ? [
@@ -1380,17 +1406,19 @@ async function runEmbeddedAgentInternal(
               ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
             ]
           : profileOrder;
-      const profileCandidates = pluginHarnessOwnsTransport
-        ? lockedProfileId
-          ? [lockedProfileId]
-          : pluginHarnessProfileOrder.length > 0
-            ? pluginHarnessProfileOrder
-            : [undefined]
-        : lockedProfileId
-          ? [lockedProfileId]
-          : providerOrderedProfiles.length > 0
-            ? providerOrderedProfiles
-            : [undefined];
+      const profileCandidates = geeRuntimeProviderAuthPolicy
+        ? [undefined]
+        : pluginHarnessOwnsTransport
+          ? lockedProfileId
+            ? [lockedProfileId]
+            : pluginHarnessProfileOrder.length > 0
+              ? pluginHarnessProfileOrder
+              : [undefined]
+          : lockedProfileId
+            ? [lockedProfileId]
+            : providerOrderedProfiles.length > 0
+              ? providerOrderedProfiles
+              : [undefined];
       const pluginHarnessForwardedProfileCandidates = pluginHarnessOwnsTransport
         ? profileCandidates.filter(isForwardablePluginHarnessAuthProfile)
         : [];
@@ -1455,7 +1483,9 @@ async function runEmbeddedAgentInternal(
         initialThinkLevel,
         attemptedThinking,
         fallbackConfigured,
-        allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
+        allowTransientCooldownProbe:
+          !geeRuntimeProviderAuthPolicy && params.allowTransientCooldownProbe === true,
+        geeRuntimeProviderAuthPolicy,
         getProvider: () => provider,
         getModelId: () => modelId,
         getRuntimeModel: () => runtimeModel,
@@ -2458,7 +2488,7 @@ async function runEmbeddedAgentInternal(
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
                     authProfileId: lastProfileId,
-                    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+                    geeRuntimePreparedFacts,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
@@ -2655,7 +2685,7 @@ async function runEmbeddedAgentInternal(
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
                     authProfileId: lastProfileId,
-                    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
+                    geeRuntimePreparedFacts,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,

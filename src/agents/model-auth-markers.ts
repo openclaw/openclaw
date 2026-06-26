@@ -25,6 +25,8 @@ export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 /** Marker for a secret-ref-managed credential that is not stored as an env var. */
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
+/** Marker for Gee-owned credential refs passed through without raw secret material. */
+export const GEE_RUNTIME_CREDENTIAL_REF_MARKER = "gee-runtime-credential-ref";
 /** Prefix for secret-ref header markers that name an env-backed source. */
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -39,6 +41,7 @@ const CORE_NON_SECRET_API_KEY_MARKERS = [
   GCP_VERTEX_CREDENTIALS_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
+  GEE_RUNTIME_CREDENTIAL_REF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
 let knownNonSecretApiKeyMarkersCache: string[] | undefined;
