@@ -61,18 +61,23 @@ their own docs.
 
 ## macOS detail pages
 
-| Task                                     | Read                                               |
-| ---------------------------------------- | -------------------------------------------------- |
-| Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway) |
-| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)  |
-| Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)    |
-| Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)            |
-| Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                  |
-| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                    |
-| Configure command approvals              | [Exec approvals](/tools/exec-approvals)            |
-| Inspect app/Gateway IPC                  | [macOS IPC](/platforms/mac/xpc)                    |
-| Capture logs                             | [macOS logging](/platforms/mac/logging)            |
-| Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)        |
+| Task                                     | Read                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
+| Keep state out of cloud-synced folders   | [Gateway on macOS](/platforms/mac/bundled-gateway#state-directory-on-macos)                 |
+| Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
+| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
+| Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
+| Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
+| Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
+| Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
+| Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
+| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
+| Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
+| Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
+| Capture logs                             | [macOS logging](/platforms/mac/logging)                                                     |
+| Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)                                                 |
 
 ## Related
 
