@@ -6037,7 +6037,7 @@ describe("QmdMemoryManager", () => {
     ) => {
       if (target === sessionFile) {
         const denied = Object.assign(
-          new Error(`EACCES: permission denied, stat '${String(target)}'`),
+          new Error(`EACCES: permission denied, stat '${target}'`),
           { code: "EACCES" },
         );
         throw denied;
@@ -6103,7 +6103,7 @@ describe("QmdMemoryManager", () => {
     ) => {
       if (target === vanishingSessionFile) {
         const missing = Object.assign(
-          new Error(`ENOENT: no such file or directory, stat '${String(target)}'`),
+          new Error(`ENOENT: no such file or directory, stat '${target}'`),
           { code: "ENOENT" },
         );
         throw missing;
