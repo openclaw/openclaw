@@ -166,8 +166,16 @@ describe("sessions.files RPC handlers", () => {
         {
           role: "assistant",
           content: [
-            { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
-            { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
+            {
+              type: "tool_use",
+              name: "read",
+              input: { path: "src/readme.md" },
+            },
+            {
+              type: "toolcall",
+              name: "edit",
+              arguments: { path: "ui/vite.config.ts" },
+            },
             { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
             {
               type: "tool_call",
@@ -204,7 +212,10 @@ describe("sessions.files RPC handlers", () => {
           changes: [
             { path: "ui/chat.ts", kind: "update" },
             { path: "src/readme.md", kind: "delete" },
-            { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
+            {
+              path: "old-name.md",
+              kind: { type: "update", move_path: "package.json" },
+            },
           ],
         }),
         1,
@@ -620,5 +631,44 @@ describe("sessions.files RPC handlers", () => {
       size: 260 * 1024,
       type: "session_file_too_large",
     });
+  });
+
+  it("excludes workspace-external files from the workspace rail list", async () => {
+    const outsidePath = path.join(os.tmpdir(), `openclaw-outside-${Date.now()}.txt`);
+    fs.writeFileSync(outsidePath, "outside content\n", "utf8");
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      // Read a file inside the workspace and one outside
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      visit(assistantToolCall("read", { path: "../outside.txt" }), 2);
+      return 2;
+    });
+
+    try {
+      const payload = expectOkPayload(
+        await invokeSessionFilesHandler("sessions.files.list", {
+          sessionKey: "agent:main:main",
+        }),
+      );
+
+      // The workspace-internal file should be listed
+      const insideFiles = payload.files.filter(
+        (f: Record<string, unknown>) => f.path === "src/readme.md",
+      );
+      expect(insideFiles).toHaveLength(1);
+
+      // The outside file should NOT appear in the list (filtered out)
+      const outsideFiles = payload.files.filter(
+        (f: Record<string, unknown>) => f.path === "../outside.txt",
+      );
+      expect(outsideFiles).toHaveLength(0);
+
+      // No entries should have missing=true for files that exist outside
+      const missingEntries = payload.files.filter(
+        (f: Record<string, unknown>) => f.missing === true,
+      );
+      expect(missingEntries).toHaveLength(0);
+    } finally {
+      fs.rmSync(outsidePath, { force: true });
+    }
   });
 });
