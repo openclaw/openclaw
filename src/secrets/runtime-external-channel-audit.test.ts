@@ -541,4 +541,41 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     ]);
     expectMetadataBackedContractsWereUsed();
   });
+
+  it("resolves top-level Feishu appSecret SecretRef when all accounts override the field", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appSecret: ref("FEISHU_APP_SECRET"),
+            accounts: {
+              work: {
+                enabled: true,
+                appSecret: "inline-work-secret",
+              },
+            },
+          },
+        },
+      }),
+      env: { FEISHU_APP_SECRET: "resolved-feishu-secret" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    // The top-level appSecret must be resolved even though the only account
+    // overrides it — the implicit [default] channel still uses the top-level value.
+    expect(getPath(snapshot.config, ["channels", "feishu", "appSecret"])).toBe(
+      "resolved-feishu-secret",
+    );
+    expect(
+      snapshot.warnings.some(
+        (w) =>
+          w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
+          w.path === "channels.feishu.appSecret",
+      ),
+    ).toBe(false);
+  });
 });

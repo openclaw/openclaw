@@ -132,7 +132,13 @@ export function collectSimpleChannelFieldAssignments(params: {
     expected: "string",
     defaults: params.defaults,
     context: params.context,
-    active: isBaseFieldActiveForChannelSurface(params.surface, params.field),
+    // Simple channel fields (e.g. appSecret, token) are always used by the
+    // implicit [default] channel when the channel is enabled, even when every
+    // explicit account overrides the field.  The previous gate
+    // (isBaseFieldActiveForChannelSurface) only checked whether any explicit
+    // account inherits the field, which caused top-level SecretRefs to be
+    // skipped when all accounts provided their own inline values.
+    active: params.surface.channelEnabled,
     inactiveReason: params.topInactiveReason,
     apply: (value) => {
       params.channel[params.field] = value;
