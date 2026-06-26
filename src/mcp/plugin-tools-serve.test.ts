@@ -180,6 +180,77 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("skips unreadable plugin tool descriptors while keeping healthy MCP siblings", async () => {
+    const healthyExecute = vi.fn().mockResolvedValue({ content: "ok" });
+    const unreadableNameTool = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("name unavailable");
+          },
+        },
+        description: { value: "Unreadable name" },
+        parameters: { value: { type: "object", properties: {} } },
+        execute: { value: vi.fn() },
+      },
+    );
+    const unreadableParametersTool = Object.defineProperties(
+      {},
+      {
+        name: { value: "broken_parameters" },
+        description: { value: "Unreadable parameters" },
+        parameters: {
+          get() {
+            throw new Error("parameters unavailable");
+          },
+        },
+        execute: { value: vi.fn() },
+      },
+    );
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+
+    const handlers = createPluginToolsMcpHandlers([
+      unreadableNameTool,
+      unreadableParametersTool,
+      {
+        name: "revoked_schema",
+        description: "Revoked schema",
+        parameters: revoked.proxy,
+        execute: vi.fn(),
+      },
+      {
+        name: "healthy_tool",
+        description: "Healthy tool",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+        execute: healthyExecute,
+      },
+    ] as unknown as AnyAgentTool[]);
+
+    const listed = await handlers.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["healthy_tool"]);
+    expect(listed.tools[0]?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+    });
+
+    const result = await handlers.callTool({
+      name: "healthy_tool",
+      arguments: { query: "ok" },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(healthyExecute).toHaveBeenCalledTimes(1);
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",
