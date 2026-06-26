@@ -587,6 +587,37 @@ describe("state migrations", () => {
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
 
+  it("canonicalizes parsed owners before removing the legacy store", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "agent:archive:main": { sessionId: "archive-session", updatedAt: 20 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+
+    await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const store = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string }
+    >;
+    expect(store["agent:archive:work"]?.sessionId).toBe("archive-session");
+    expect(store["agent:archive:main"]).toBeUndefined();
+    await expectMissingPath(legacyStorePath);
+  });
+
   it("defers non-main owner merges across hard-linked stores", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

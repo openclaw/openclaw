@@ -4448,7 +4448,7 @@ async function migrateLegacySessions(
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
     skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
-    preserveCanonicalAgentOwner: detected.sessions.preserveAmbiguousKeys,
+    preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
@@ -4457,7 +4457,7 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
-    preserveCanonicalAgentOwner: detected.sessions.preserveAmbiguousKeys,
+    preserveCanonicalAgentOwner: true,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
