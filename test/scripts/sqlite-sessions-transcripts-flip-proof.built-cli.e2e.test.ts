@@ -39,6 +39,16 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
           checkpoint.sqlite.transcriptEvents >= 13,
       ),
     ).toBe(true);
+    const doctorFixCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-doctor-fix",
+    );
+    expect(
+      doctorFixCheckpoint?.archiveArtifacts.some(
+        (artifact) =>
+          artifact.path.includes(`${report.legacySessionId}.trajectory.jsonl`) &&
+          artifact.textTail?.includes("trajectory") === true,
+      ),
+    ).toBe(true);
     expect(
       report.checkpoints.some(
         (checkpoint) =>
@@ -76,6 +86,25 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
           ),
       ),
     ).toBe(true);
+    const resetCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-sessions-reset",
+    );
+    const resetArchive = resetCheckpoint?.archiveArtifacts.find(
+      (artifact) =>
+        artifact.archiveReason === "reset" && artifact.archiveSessionId === report.legacySessionId,
+    );
+    expect(resetArchive?.textTail).toContain("legacy hello");
+    expect(resetArchive?.textTail).toContain("sqlite user-facing send before reset");
+    const sharedFirstCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-shared-first-delete",
+    );
+    expect(
+      sharedFirstCheckpoint?.archiveArtifacts.some(
+        (artifact) =>
+          artifact.archiveReason === "deleted" &&
+          artifact.archiveSessionId === "sqlite-shared-session",
+      ),
+    ).toBe(false);
     const concurrentCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-concurrent-multi-client",
     );

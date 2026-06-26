@@ -43,9 +43,15 @@ type DoctorCommandEvidence = {
 };
 
 type FileInventoryEntry = {
+  archiveReason?: "bak" | "deleted" | "reset";
+  archiveSessionId?: string;
   path: string;
   bytes: number;
+  jsonlTypes?: string[];
   lines?: number;
+  messageRoles?: string[];
+  messageTexts?: string[];
+  textTail?: string;
 };
 
 type SqliteSessionEntryEvidence = {
@@ -1243,18 +1249,19 @@ async function inventoryArchiveArtifacts(context: ProofContext): Promise<FileInv
   const files: FileInventoryEntry[] = [];
   for (const root of roots) {
     await walkFiles(root, async (filePath) => {
-      const isActiveDirectFile =
-        filePath.startsWith(context.activeSessionsDir) &&
-        path.dirname(filePath) === context.activeSessionsDir;
-      if (isActiveDirectFile) {
-        return;
-      }
       const basename = path.basename(filePath);
       const archiveLike =
         basename.includes(".jsonl") ||
         basename.includes(".reset.") ||
         basename.includes(".deleted.") ||
         basename.includes(".bak.");
+      const isActivePrimaryJsonl =
+        path.dirname(filePath) === context.activeSessionsDir &&
+        basename.endsWith(".jsonl") &&
+        parseArchiveArtifactName(basename) === undefined;
+      if (isActivePrimaryJsonl) {
+        return;
+      }
       if (archiveLike) {
         files.push(await inventoryFile(filePath, context.stateDir));
       }
@@ -1285,10 +1292,67 @@ async function inventoryFile(filePath: string, relativeRoot: string): Promise<Fi
     fs.stat(filePath),
     fs.readFile(filePath, "utf8").catch(() => undefined),
   ]);
+  const archive = parseArchiveArtifactName(path.basename(filePath));
+  const jsonl = text !== undefined ? summarizeJsonl(text) : undefined;
   return {
+    ...(archive ? archive : {}),
     path: path.relative(relativeRoot, filePath),
     bytes: stat.size,
-    ...(text !== undefined ? { lines: text.split(/\r?\n/u).filter(Boolean).length } : {}),
+    ...(text !== undefined
+      ? { lines: text.split(/\r?\n/u).filter(Boolean).length, textTail: tail(text, 2_000) }
+      : {}),
+    ...(jsonl?.jsonlTypes.length ? { jsonlTypes: jsonl.jsonlTypes } : {}),
+    ...(jsonl?.messageRoles.length ? { messageRoles: jsonl.messageRoles } : {}),
+    ...(jsonl?.messageTexts.length ? { messageTexts: jsonl.messageTexts } : {}),
+  };
+}
+
+function parseArchiveArtifactName(
+  fileName: string,
+): Pick<FileInventoryEntry, "archiveReason" | "archiveSessionId"> | undefined {
+  for (const archiveReason of ["deleted", "reset", "bak"] as const) {
+    const marker = `.jsonl.${archiveReason}.`;
+    const index = fileName.lastIndexOf(marker);
+    if (index > 0) {
+      return { archiveReason, archiveSessionId: fileName.slice(0, index) };
+    }
+  }
+  return undefined;
+}
+
+function summarizeJsonl(text: string): {
+  jsonlTypes: string[];
+  messageRoles: string[];
+  messageTexts: string[];
+} {
+  const jsonlTypes = new Set<string>();
+  const messageRoles = new Set<string>();
+  const messageTexts = new Set<string>();
+  for (const line of text.split(/\r?\n/u)) {
+    if (!line.trim()) {
+      continue;
+    }
+    const event = parseJsonObject(line);
+    if (typeof event?.type === "string") {
+      jsonlTypes.add(event.type);
+    }
+    const message =
+      event && typeof event.message === "object" && event.message !== null
+        ? (event.message as { content?: unknown; role?: unknown })
+        : undefined;
+    if (typeof message?.role === "string") {
+      messageRoles.add(message.role);
+    }
+    if (message?.content !== undefined) {
+      messageTexts.add(String(message.content));
+    } else if (typeof event?.content === "string") {
+      messageTexts.add(event.content);
+    }
+  }
+  return {
+    jsonlTypes: [...jsonlTypes].toSorted(),
+    messageRoles: [...messageRoles].toSorted(),
+    messageTexts: [...messageTexts].toSorted(),
   };
 }
 
@@ -1414,6 +1478,102 @@ function validateCheckpointInvariants(
   ) {
     failures.push(`${checkpoint.label}: shared sibling entry was deleted too early`);
   }
+  if (checkpoint.label === "after-doctor-fix") {
+    requireArchiveText(checkpoint, failures, {
+      description: "legacy trajectory sidecar",
+      includes: ["trajectory", context.legacySessionId],
+      pathIncludes: `${context.legacySessionId}.trajectory.jsonl`,
+    });
+    requireArchiveText(checkpoint, failures, {
+      description: "preexisting deleted sidecar",
+      includes: ["old-orphan"],
+      pathIncludes: "old-orphan.deleted.jsonl",
+    });
+  }
+  if (checkpoint.label === "after-sessions-reset") {
+    requireArchiveText(checkpoint, failures, {
+      description: "reset transcript archive",
+      includes: ["legacy hello", "sqlite user-facing send before reset"],
+      reason: "reset",
+      sessionId: context.legacySessionId,
+    });
+  }
+  if (checkpoint.label === "after-sessions-delete") {
+    requireArchiveText(checkpoint, failures, {
+      description: "deleted transcript archive",
+      includes: ["delete me"],
+      reason: "deleted",
+      sessionId: "sqlite-delete-session",
+    });
+  }
+  if (checkpoint.label === "after-shared-first-delete") {
+    const archivedShared = findArchiveArtifact(checkpoint, {
+      reason: "deleted",
+      sessionId: "sqlite-shared-session",
+    });
+    if (archivedShared) {
+      failures.push(
+        `${checkpoint.label}: shared transcript archived before final reference delete`,
+      );
+    }
+  }
+  if (checkpoint.label === "after-shared-final-delete") {
+    requireArchiveText(checkpoint, failures, {
+      description: "final shared transcript archive",
+      includes: ["shared"],
+      reason: "deleted",
+      sessionId: "sqlite-shared-session",
+    });
+  }
+}
+
+function requireArchiveText(
+  checkpoint: ProofCheckpoint,
+  failures: string[],
+  params: {
+    description: string;
+    includes: string[];
+    pathIncludes?: string;
+    reason?: "deleted" | "reset";
+    sessionId?: string;
+  },
+): void {
+  const artifact = findArchiveArtifact(checkpoint, params);
+  if (!artifact) {
+    failures.push(`${checkpoint.label}: missing ${params.description}`);
+    return;
+  }
+  const text = artifact.textTail ?? "";
+  const missing = params.includes.filter((expected) => !text.includes(expected));
+  if (missing.length > 0) {
+    failures.push(
+      `${checkpoint.label}: ${params.description} missing archive content ${missing
+        .map((value) => JSON.stringify(value))
+        .join(", ")} in ${artifact.path}`,
+    );
+  }
+}
+
+function findArchiveArtifact(
+  checkpoint: ProofCheckpoint,
+  params: {
+    pathIncludes?: string;
+    reason?: "deleted" | "reset";
+    sessionId?: string;
+  },
+): FileInventoryEntry | undefined {
+  return checkpoint.archiveArtifacts.find((artifact) => {
+    if (params.pathIncludes && !artifact.path.includes(params.pathIncludes)) {
+      return false;
+    }
+    if (params.reason && artifact.archiveReason !== params.reason) {
+      return false;
+    }
+    if (params.sessionId && artifact.archiveSessionId !== params.sessionId) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
