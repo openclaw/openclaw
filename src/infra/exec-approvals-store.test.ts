@@ -1051,4 +1051,94 @@ describe("exec approvals store helpers", () => {
     expect(resolved.defaults.security).toBe("full");
     expect(resolved.defaults.ask).toBe("off");
   });
+
+  it("falls back to deny when legacy file contains invalid JSON", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    const legacyApprovalsPath = approvalsFilePath(dir);
+
+    fs.mkdirSync(path.dirname(legacyApprovalsPath), { recursive: true });
+    fs.writeFileSync(legacyApprovalsPath, "this is not valid json", "utf8");
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const resolved = resolveExecApprovals();
+
+    // Corrupt file should fall through to safe deny defaults
+    expect(resolved.defaults.security).toBe("deny");
+    expect(resolved.defaults.ask).toBe("always");
+    expect(resolved.defaults.askFallback).toBe("deny");
+  });
+
+  it("falls back to deny when legacy file has non-ExecApprovalsFile content", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    const legacyApprovalsPath = approvalsFilePath(dir);
+
+    fs.mkdirSync(path.dirname(legacyApprovalsPath), { recursive: true });
+    fs.writeFileSync(legacyApprovalsPath, JSON.stringify({ notAnApprovalsFile: true }), "utf8");
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const resolved = resolveExecApprovals();
+
+    // Non-approvals content normalizes to empty defaults; the ?? chain in
+    // createUnmigratedLegacyExecApprovalsFallback replaces each missing
+    // field with the safe fallback (deny/always/deny)
+    expect(resolved.defaults.security).toBe("deny");
+    expect(resolved.defaults.ask).toBe("always");
+    expect(resolved.defaults.askFallback).toBe("deny");
+  });
+
+  it("fills safe defaults for missing fields in legacy file", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    const legacyApprovalsPath = approvalsFilePath(dir);
+
+    fs.mkdirSync(path.dirname(legacyApprovalsPath), { recursive: true });
+    fs.writeFileSync(
+      legacyApprovalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full" },
+        agents: {},
+      }),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const resolved = resolveExecApprovals();
+
+    // security is honored from legacy file defaults
+    expect(resolved.defaults.security).toBe("full");
+    // ask was not set in legacy file; the fallback uses ?? "always" as
+    // a conservative intermediate, but normalizeAsk in
+    // resolveExecApprovalsFromFile accepts "always" as valid
+    expect(resolved.defaults.ask).toBe("always");
+    // askFallback not set in legacy; ?? "deny" supplies the safe default
+    expect(resolved.defaults.askFallback).toBe("deny");
+    // agent-level values follow the same chain
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("always");
+  });
+
+  it("falls back to global defaults when no legacy file exists and state dir is custom", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    const stateApprovalsPath = path.join(stateDir, "exec-approvals.json");
+
+    // Deliberately do NOT create the legacy file
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    expect(fs.existsSync(stateApprovalsPath)).toBe(false);
+
+    const resolved = resolveExecApprovals();
+
+    // No legacy file → hasUnmigratedLegacyExecApprovals returns false,
+    // so normal codepath applies (global defaults: full/off/deny)
+    expect(resolved.defaults.security).toBe("full");
+    expect(resolved.defaults.ask).toBe("off");
+    expect(resolved.defaults.askFallback).toBe("deny");
+  });
 });
