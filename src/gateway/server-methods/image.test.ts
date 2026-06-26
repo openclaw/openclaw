@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { imageHandlers } from "./image.js";
 
 vi.mock("../../image-generation/provider-registry.js", () => ({
@@ -58,13 +57,6 @@ function expectSuccess(respond: ReturnType<typeof vi.fn>): {
   const call = respondCall(respond);
   expect(call[0]).toBe(true);
   return call[1] as { providers: unknown[]; active: string | null };
-}
-
-function expectError(respond: ReturnType<typeof vi.fn>, code: number, message: string) {
-  const call = respondCall(respond);
-  expect(call[0]).toBe(false);
-  expect(call[2]?.code).toBe(code);
-  expect(call[2]?.message).toContain(message);
 }
 
 function createInvokeParams(cfg: Record<string, unknown>) {
