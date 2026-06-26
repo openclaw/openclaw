@@ -47,6 +47,8 @@ async function loadBeforeResetTranscript(params: {
     return {
       sessionFile: params.sessionFile,
       messages: parseTranscriptMessages(
+        // before_reset snapshots the canonical pre-reset rows. sessionFile is
+        // hook metadata only and must not be treated as a readable path.
         await loadTranscriptEvents({
           ...(params.agentId ? { agentId: params.agentId } : {}),
           sessionId: params.sessionId,

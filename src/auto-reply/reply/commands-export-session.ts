@@ -294,7 +294,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { entry } = sessionTarget;
 
-  // 2. Load session entries
+  // Active exports run after startup migration, so SQLite rows are canonical.
+  // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
   const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
     agentId: sessionTarget.agentId,
     sessionId: sessionTarget.sessionId,
