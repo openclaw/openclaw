@@ -11,7 +11,11 @@ import {
   watchTelegramFetch,
 } from "./bot.media.test-utils.js";
 
-type ReplyPayload = { Body: string; MediaPaths?: string[] } & Record<string, unknown>;
+type ReplyPayload = {
+  Body: string;
+  MediaPaths?: string[];
+  UntrustedStructuredContext?: unknown[];
+} & Record<string, unknown>;
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function mockCall(mock: MockWithCalls, index: number): unknown[] {
@@ -29,6 +33,33 @@ function replyPayload(replySpy: ReturnType<typeof vi.fn>, index = 0): ReplyPaylo
     throw new Error(`expected reply payload ${index}`);
   }
   return payload as ReplyPayload;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} array`);
+  }
+  return value;
+}
+
+function conversationMessages(payload: ReplyPayload): Map<unknown, Record<string, unknown>> {
+  const [conversationContext] = requireArray(
+    payload.UntrustedStructuredContext,
+    "structured context",
+  );
+  const contextRecord = requireRecord(conversationContext, "conversation context");
+  const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+  const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+    (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+  );
+  return new Map(messages.map((message) => [message.message_id, message]));
 }
 
 function downloadRequest(
@@ -490,6 +521,106 @@ describe("telegram media groups", () => {
           scenario.assert(replySpy);
         }
       } finally {
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+        fetchSpy.mockRestore();
+      }
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "hydrates every captioned album sibling in prompt context",
+    async () => {
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramPngDownload();
+      let nextTimerHandle = 1;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
+        const handle = nextTimerHandle;
+        nextTimerHandle += 1;
+        return handle as unknown as ReturnType<typeof setTimeout>;
+      });
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const savedPaths = [
+        "/tmp/media/inbound/album-context-1.png",
+        "/tmp/media/inbound/album-context-2.png",
+        "/tmp/media/inbound/album-context-3.png",
+      ];
+
+      try {
+        for (const path of savedPaths) {
+          setNextSavedMediaPath({ path, contentType: "image/png" });
+        }
+
+        for (const message of [
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 301,
+              caption: "Here is the complete album",
+              date: 1736380800,
+              media_group_id: "album-context",
+              photo: [{ file_id: "album-photo-1" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-context-1.png" }),
+          },
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 302,
+              date: 1736380801,
+              media_group_id: "album-context",
+              photo: [{ file_id: "album-photo-2" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-context-2.png" }),
+          },
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 303,
+              date: 1736380802,
+              media_group_id: "album-context",
+              photo: [{ file_id: "album-photo-3" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-context-3.png" }),
+          },
+        ]) {
+          await handler({
+            message: message.message,
+            me: { username: "openclaw_bot" },
+            getFile: message.getFile,
+          });
+        }
+
+        await flushActiveScheduledTimersForDelay({
+          setTimeoutSpy,
+          clearTimeoutSpy,
+          delayMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+          expectedCount: 1,
+        });
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        const payload = replyPayload(replySpy);
+        expect(payload.Body).toContain("Here is the complete album");
+        expect(payload.MediaPaths).toEqual(savedPaths);
+        const messagesById = conversationMessages(payload);
+        expect(messagesById.get("302")?.media_path).toBe("media://inbound/album-context-2.png");
+        expect(messagesById.get("302")?.media_ref).toBeUndefined();
+        expect(messagesById.get("303")?.media_path).toBe("media://inbound/album-context-3.png");
+        expect(messagesById.get("303")?.media_ref).toBeUndefined();
+      } finally {
+        for (const timer of resolveActiveScheduledTimersForDelay(
+          setTimeoutSpy,
+          clearTimeoutSpy,
+          TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+        )) {
+          clearTimeout(timer.handle);
+        }
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
         fetchSpy.mockRestore();
