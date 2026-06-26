@@ -159,6 +159,13 @@ describe("parseByteSize", () => {
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
     expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
+
+  it.each(["9007199254740993", "9000000tb"] as const)(
+    "rejects finite-but-unsafe values that would round to a different number: %j",
+    (input) => {
+      expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
+    },
+  );
 });
 
 describe("parseDurationMs", () => {

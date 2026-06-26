@@ -28,6 +28,16 @@ function invalidByteSize(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
 }
 
+// Reject finite-but-unsafe results (above Number.MAX_SAFE_INTEGER), which round to a different
+// number than the user typed; mirrors roundSafeDurationMs in parse-duration.ts.
+function roundSafeByteSize(raw: string, value: number): number {
+  const bytes = Math.round(value);
+  if (!Number.isSafeInteger(bytes)) {
+    throw invalidByteSize(raw);
+  }
+  return bytes;
+}
+
 /** Parse a non-negative byte size with optional binary units like kb, mb, gb, or tb. */
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
@@ -51,9 +61,5 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
     throw invalidByteSize(raw, `unknown unit "${unit}"`);
   }
 
-  const bytes = Math.round(value * multiplier);
-  if (!Number.isFinite(bytes)) {
-    throw invalidByteSize(raw);
-  }
-  return bytes;
+  return roundSafeByteSize(raw, value * multiplier);
 }
