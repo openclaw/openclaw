@@ -743,6 +743,72 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves multi-owner rows through coalesced templated-store migration", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const storeTemplate = path.join(
+      stateDir,
+      "agents",
+      "{agentId}",
+      "..",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "voice:15550001111": {
+          sessionId: "shared-voice",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "voice",
+            runtimeSessionName: "shared-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(legacyStorePath, "{}\n", "utf8");
+    const cfg = {
+      session: { store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }] },
+      plugins: {
+        entries: {
+          "voice-call": { config: { agentId: "voice" } },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      { sessionId: string; acp?: unknown }
+    >;
+    expect(store["voice:15550001111"]?.sessionId).toBe("shared-voice");
+    expect(store["voice:15550001111"]?.acp).toBeDefined();
+    expect(store["agent:main:voice:15550001111"]).toBeUndefined();
+    expect(store["agent:voice:voice:15550001111"]).toBeUndefined();
+    expect(result.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
+    const acpWarningPrefix =
+      "Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ";
+    expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
+      2,
+    );
+  });
+
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

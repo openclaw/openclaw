@@ -5277,6 +5277,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
       : undefined;
   const storeGroups: Array<{
     target: (typeof targets)[number];
+    agentIds: Set<string>;
     hasDistinctAliases: boolean;
   }> = [];
 
@@ -5288,16 +5289,21 @@ async function migrateLegacyAcpSessionMetadata(params: {
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
     if (group) {
+      group.agentIds.add(normalizeAgentId(target.agentId));
       group.hasDistinctAliases ||= sessionStorePathsHaveDistinctEntries(
         group.target.storePath,
         target.storePath,
       );
       continue;
     }
-    storeGroups.push({ target, hasDistinctAliases: false });
+    storeGroups.push({
+      target,
+      agentIds: new Set([normalizeAgentId(target.agentId)]),
+      hasDistinctAliases: false,
+    });
   }
 
-  for (const { target, hasDistinctAliases } of storeGroups) {
+  for (const { target, agentIds, hasDistinctAliases } of storeGroups) {
     const storePath = target.storePath;
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
@@ -5341,13 +5347,15 @@ async function migrateLegacyAcpSessionMetadata(params: {
         continue;
       }
       if (normalizedEntry.acp) {
+        const ambiguousSharedStoreKey = isAmbiguousSharedStoreKey(sessionKey, mainKey, scope);
         const ambiguousFixedStoreKey =
           fixedCustomStorePath !== undefined &&
           sessionStorePathsMatch(storePath, fixedCustomStorePath) &&
-          isAmbiguousSharedStoreKey(sessionKey, mainKey, scope);
+          ambiguousSharedStoreKey;
+        const ambiguousMultiOwnerKey = agentIds.size > 1 && ambiguousSharedStoreKey;
         const foreignMainAlias =
           pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(sessionKey, mainKey);
-        if (ambiguousFixedStoreKey || foreignMainAlias) {
+        if (ambiguousFixedStoreKey || ambiguousMultiOwnerKey || foreignMainAlias) {
           preserved++;
           normalized[sessionKey] = normalizedEntry;
           continue;
@@ -5421,8 +5429,12 @@ function sessionStorePathsHaveDistinctEntries(left: string, right: string): bool
     return false;
   }
   try {
-    // Symlink spellings of one directory entry are safe to replace atomically;
-    // hard links resolve to distinct pathnames and would split on replacement.
+    // Replacing a final-component symlink splits it from its target. Parent
+    // symlink spellings are safe because both names still address one entry.
+    if (fs.lstatSync(left).isSymbolicLink() || fs.lstatSync(right).isSymbolicLink()) {
+      return true;
+    }
+    // Hard links resolve to distinct pathnames and split on replacement.
     return fs.realpathSync.native(left) !== fs.realpathSync.native(right);
   } catch {
     return true;
@@ -5467,9 +5479,6 @@ function resolveSessionStoreOwnership(params: {
     !configuredStore.includes("{agentId}")
       ? resolveStorePathFromTemplate(configuredStore, params.targetAgentId, params.env)
       : undefined;
-  const preserveAmbiguousKeys =
-    fixedCustomStorePath !== undefined &&
-    sessionStorePathsMatch(fixedCustomStorePath, targetStorePath);
   const candidateAgentIds = new Set([
     params.targetAgentId,
     ...(Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : []).flatMap((entry) =>
@@ -5477,7 +5486,15 @@ function resolveSessionStoreOwnership(params: {
     ),
     ...params.pluginSessionStoreAgentIds.map((id) => normalizeAgentId(id)),
   ]);
-  const candidateStorePaths = [...candidateAgentIds].map(resolveAgentStorePath);
+  const configuredOwnerStorePaths = [...candidateAgentIds].map(resolveAgentStorePath);
+  const targetStoreOwnerCount = configuredOwnerStorePaths.filter((storePath) =>
+    sessionStorePathsMatch(storePath, targetStorePath),
+  ).length;
+  const preserveAmbiguousKeys =
+    (fixedCustomStorePath !== undefined &&
+      sessionStorePathsMatch(fixedCustomStorePath, targetStorePath)) ||
+    targetStoreOwnerCount > 1;
+  const candidateStorePaths = [...configuredOwnerStorePaths];
   const agentsDir = path.join(params.stateDir, "agents");
   for (const entry of safeReadDir(agentsDir)) {
     if (entry.isDirectory()) {
