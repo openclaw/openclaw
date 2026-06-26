@@ -773,6 +773,18 @@ describe("state migrations", () => {
             lastActivityAt: 20,
           },
         },
+        "agent:voice::matrix:channel:!room:example.org": {
+          sessionId: "malformed-owner",
+          updatedAt: 10,
+          acp: {
+            backend: "test",
+            agent: "voice",
+            runtimeSessionName: "malformed-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 10,
+          },
+        },
       }),
       "utf8",
     );
@@ -792,13 +804,18 @@ describe("state migrations", () => {
     >;
     expect(store["voice:15550001111"]?.sessionId).toBe("shared-voice");
     expect(store["voice:15550001111"]?.acp).toBeDefined();
+    expect(store["agent:voice::matrix:channel:!room:example.org"]?.sessionId).toBe(
+      "malformed-owner",
+    );
+    expect(store["agent:voice::matrix:channel:!room:example.org"]?.acp).toBeDefined();
     expect(store["agent:main:voice:15550001111"]).toBeUndefined();
     expect(store["agent:voice:voice:15550001111"]).toBeUndefined();
+    expect(store["agent:main:agent:voice::matrix:channel:!room:example.org"]).toBeUndefined();
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
     const acpWarningPrefix =
-      "Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ";
+      "Preserved ACP metadata for 2 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
       2,
     );

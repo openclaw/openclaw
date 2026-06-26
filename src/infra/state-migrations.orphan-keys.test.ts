@@ -326,7 +326,11 @@ describe("migrateOrphanedSessionKeys", () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
       writeStore(standardStorePath, {
-        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+        "agent:voice::matrix:channel:!room:example.org": {
+          sessionId: "malformed-owner",
+          updatedAt: 2000,
+        },
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 1000 },
         "agent:voice:MixedCase": { sessionId: "scoped", updatedAt: 1000 },
       });
       const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
@@ -346,17 +350,21 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred migration of 1 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
       ]);
       expect(rerun).toEqual(result);
-      expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
-        "legacy-voice",
-      );
+      expect(
+        requireStoreEntry(
+          readStore(standardStorePath),
+          "agent:voice::matrix:channel:!room:example.org",
+        ).sessionId,
+      ).toBe("malformed-owner");
       expect(
         requireStoreEntry(readStore(standardStorePath), "agent:voice:MixedCase").sessionId,
       ).toBe("scoped");
-      expect(readStore(standardStorePath)["agent:ops:voice:15550001111"]).toBeUndefined();
-      expect(readStore(standardStorePath)["agent:voice:voice:15550001111"]).toBeUndefined();
+      expect(
+        readStore(standardStorePath)["agent:ops:agent:voice::matrix:channel:!room:example.org"],
+      ).toBeUndefined();
       expect(fs.statSync(configuredStorePath).ino).toBe(fs.statSync(standardStorePath).ino);
     });
   });
@@ -365,7 +373,11 @@ describe("migrateOrphanedSessionKeys", () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
       writeStore(standardStorePath, {
-        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+        "agent:voice::matrix:channel:!room:example.org": {
+          sessionId: "malformed-owner",
+          updatedAt: 2000,
+        },
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 1000 },
       });
       const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
       fs.symlinkSync(standardStorePath, configuredStorePath);
@@ -383,12 +395,15 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred migration of 1 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
       ]);
       expect(fs.lstatSync(configuredStorePath).isSymbolicLink()).toBe(true);
-      expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
-        "legacy-voice",
-      );
+      expect(
+        requireStoreEntry(
+          readStore(standardStorePath),
+          "agent:voice::matrix:channel:!room:example.org",
+        ).sessionId,
+      ).toBe("malformed-owner");
     });
   });
 

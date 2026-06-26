@@ -3007,6 +3007,11 @@ function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
   );
 }
 
+function hasCanonicalAgentSessionOwner(key: string): boolean {
+  const parsed = parseAgentSessionKey(key);
+  return parsed !== null && normalizeAgentId(parsed.agentId) === parsed.agentId;
+}
+
 function canonicalizeSessionKeyForAgent(params: {
   key: string;
   agentId: string;
@@ -3043,7 +3048,10 @@ function canonicalizeSessionKeyForAgent(params: {
   }
   // Unscoped and legacy default-main keys in a potentially shared store have no durable owner.
   // Keep it untouched instead of assigning another agent's history by iteration order.
-  if (params.preserveAmbiguousKeys && (!rawLower.startsWith("agent:") || legacyDefaultMainAlias)) {
+  if (
+    params.preserveAmbiguousKeys &&
+    (!hasCanonicalAgentSessionOwner(raw) || legacyDefaultMainAlias)
+  ) {
     return params.key;
   }
 
@@ -3277,7 +3285,7 @@ function isAmbiguousSharedStoreKey(key: string, mainKey: string, scope?: Session
   ) {
     return false;
   }
-  return !lower.startsWith("agent:") || isLegacyDefaultMainAliasKey(lower, mainKey);
+  return !hasCanonicalAgentSessionOwner(raw) || isLegacyDefaultMainAliasKey(lower, mainKey);
 }
 
 function aliasedSessionStoreMigrationWarning(params: {
