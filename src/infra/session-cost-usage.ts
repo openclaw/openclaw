@@ -795,12 +795,12 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   );
   const toolUsage: SessionToolUsage | undefined = toolUsageMap.size
     ? {
-        totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
-        uniqueTools: toolUsageMap.size,
-        tools: Array.from(toolUsageMap.entries())
-          .map(([name, count]) => ({ name, count }))
-          .toSorted((a, b) => b.count - a.count),
-      }
+      totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
+      uniqueTools: toolUsageMap.size,
+      tools: Array.from(toolUsageMap.entries())
+        .map(([name, count]) => ({ name, count }))
+        .toSorted((a, b) => b.count - a.count),
+    }
     : undefined;
   const modelUsage = Array.from(modelUsageMap.values()).toSorted((a, b) => {
     const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
@@ -1165,8 +1165,16 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        (entry.costTotal === 0 &&
+          isModelPricingKnown(cost) &&
+          computeUsageTokenTotals(entry.usage).totalTokens > 0)
+      ) {
+        // Fill in missing cost estimates, and override an API-reported zero cost
+        // when the model has known pricing and tokens were consumed. Some providers
+        // (e.g. DeepSeek V4) return usage.cost.total: 0 even for non-zero token
+        // usage, causing the Control UI Spend panel to show $0 for real spend.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
       }
     }
@@ -1215,8 +1223,8 @@ export function resolveExistingUsageSessionFile(params: {
     params.sessionFile ??
     (params.sessionId
       ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
+        agentId: params.agentId,
+      })
       : undefined);
 
   if (candidate && fs.existsSync(candidate)) {
@@ -1355,16 +1363,16 @@ async function scanUsageFileForCache(params: {
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   const appendOnlyPreviousCandidate =
     params.previous &&
-    params.previous.filePath === params.file.filePath &&
-    params.previous.size > 0 &&
-    params.previous.size < params.file.size &&
-    params.previous.pricingFingerprint === pricingFingerprint &&
-    params.previous.mtimeMs <= params.file.mtimeMs
+      params.previous.filePath === params.file.filePath &&
+      params.previous.size > 0 &&
+      params.previous.size < params.file.size &&
+      params.previous.pricingFingerprint === pricingFingerprint &&
+      params.previous.mtimeMs <= params.file.mtimeMs
       ? params.previous
       : undefined;
   const appendOnlyPrevious =
     appendOnlyPreviousCandidate &&
-    (!params.includeSessionSummary || appendOnlyPreviousCandidate.transcriptEntries)
+      (!params.includeSessionSummary || appendOnlyPreviousCandidate.transcriptEntries)
       ? appendOnlyPreviousCandidate
       : undefined;
   const totals = emptyTotals();
@@ -1377,7 +1385,7 @@ async function scanUsageFileForCache(params: {
   let countedRecords = 0;
   const startOffset =
     appendOnlyPrevious &&
-    (await canReadJsonlFromOffset(params.file.filePath, appendOnlyPrevious.size))
+      (await canReadJsonlFromOffset(params.file.filePath, appendOnlyPrevious.size))
       ? appendOnlyPrevious.size
       : undefined;
 
@@ -1429,34 +1437,34 @@ async function scanUsageFileForCache(params: {
     parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ?? undefined;
   const combinedTranscriptEntries = shouldTrackTranscriptEntries
     ? [
-        ...((appendOnlyPrevious && startOffset !== undefined
-          ? appendOnlyPrevious.transcriptEntries
-          : undefined) ?? []),
-        ...(transcriptEntries ?? []),
-      ]
+      ...((appendOnlyPrevious && startOffset !== undefined
+        ? appendOnlyPrevious.transcriptEntries
+        : undefined) ?? []),
+      ...(transcriptEntries ?? []),
+    ]
     : undefined;
   const sessionSummary =
     combinedTranscriptEntries &&
-    (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
+      (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
       ? (buildSessionCostSummaryFromCacheEntry({
-          entry: {
-            filePath: params.file.filePath,
-            size: params.file.size,
-            mtimeMs: params.file.mtimeMs,
-            pricingFingerprint,
-            scannedAt: Date.now(),
-            parsedRecords,
-            countedRecords,
-            usageEntries,
-            transcriptEntries: combinedTranscriptEntries,
-            totals,
-            sessionId,
-          },
+        entry: {
+          filePath: params.file.filePath,
+          size: params.file.size,
+          mtimeMs: params.file.mtimeMs,
+          pricingFingerprint,
+          scannedAt: Date.now(),
+          parsedRecords,
+          countedRecords,
+          usageEntries,
+          transcriptEntries: combinedTranscriptEntries,
+          totals,
           sessionId,
-          sessionFile: params.file.filePath,
-          startMs: Number.NEGATIVE_INFINITY,
-          endMs: Number.POSITIVE_INFINITY,
-        }) ?? undefined)
+        },
+        sessionId,
+        sessionFile: params.file.filePath,
+        startMs: Number.NEGATIVE_INFINITY,
+        endMs: Number.POSITIVE_INFINITY,
+      }) ?? undefined)
       : undefined;
 
   if (appendOnlyPrevious && startOffset !== undefined) {
@@ -1752,22 +1760,22 @@ export async function loadSessionCostSummaryFromCache(params: {
   ) {
     summary = entry
       ? buildSessionCostSummaryFromCacheEntry({
-          entry,
+        entry,
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        startMs: params.startMs,
+        endMs: params.endMs,
+      })
+      : params.refreshMode === "sync-when-empty"
+        ? await loadSessionCostSummary({
           sessionId: params.sessionId,
+          sessionEntry: params.sessionEntry,
           sessionFile: params.sessionFile,
+          config: params.config,
+          agentId: params.agentId,
           startMs: params.startMs,
           endMs: params.endMs,
         })
-      : params.refreshMode === "sync-when-empty"
-        ? await loadSessionCostSummary({
-            sessionId: params.sessionId,
-            sessionEntry: params.sessionEntry,
-            sessionFile: params.sessionFile,
-            config: params.config,
-            agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
         : null;
   }
   return {
@@ -1840,12 +1848,12 @@ export async function loadSessionCostSummariesFromCache(params: {
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
-            entry,
-            sessionId: session.sessionId,
-            sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
+          entry,
+          sessionId: session.sessionId,
+          sessionFile: session.sessionFile,
+          startMs: params.startMs,
+          endMs: params.endMs,
+        })
         : null;
     }
     return summary;
@@ -2245,9 +2253,9 @@ export async function loadSessionCostSummary(params: {
           entry.costBreakdown?.total ??
           (entry.costBreakdown
             ? (entry.costBreakdown.input ?? 0) +
-              (entry.costBreakdown.output ?? 0) +
-              (entry.costBreakdown.cacheRead ?? 0) +
-              (entry.costBreakdown.cacheWrite ?? 0)
+            (entry.costBreakdown.output ?? 0) +
+            (entry.costBreakdown.cacheRead ?? 0) +
+            (entry.costBreakdown.cacheWrite ?? 0)
             : (entry.costTotal ?? 0));
 
         const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
@@ -2350,22 +2358,22 @@ export async function loadSessionCostSummary(params: {
 
   const toolUsage: SessionToolUsage | undefined = toolUsageMap.size
     ? {
-        totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
-        uniqueTools: toolUsageMap.size,
-        tools: Array.from(toolUsageMap.entries())
-          .map(([name, count]) => ({ name, count }))
-          .toSorted((a, b) => b.count - a.count),
-      }
+      totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
+      uniqueTools: toolUsageMap.size,
+      tools: Array.from(toolUsageMap.entries())
+        .map(([name, count]) => ({ name, count }))
+        .toSorted((a, b) => b.count - a.count),
+    }
     : undefined;
 
   const modelUsage = modelUsageMap.size
     ? Array.from(modelUsageMap.values()).toSorted((a, b) => {
-        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
-        if (costDiff !== 0) {
-          return costDiff;
-        }
-        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
-      })
+      const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+      if (costDiff !== 0) {
+        return costDiff;
+      }
+      return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+    })
     : undefined;
 
   return {
@@ -2635,9 +2643,9 @@ export async function loadSessionLogs(params: {
           tokens =
             usage.total ??
             (usage.input ?? 0) +
-              (usage.output ?? 0) +
-              (usage.cacheRead ?? 0) +
-              (usage.cacheWrite ?? 0);
+            (usage.output ?? 0) +
+            (usage.cacheRead ?? 0) +
+            (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
           if (breakdown?.total !== undefined) {
             cost = breakdown.total;

@@ -300,6 +300,68 @@ describe("session cost usage", () => {
     });
   });
 
+  it("estimates cost from pricing grid when API returns cost.total: 0 but pricing is known (DeepSeek V4 regression)", async () => {
+    const root = await makeSessionCostRoot("cost-deepseek-zero-api");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // DeepSeek V4 (and similar providers) return usage.cost.total: 0 in their API
+    // responses even when tokens are consumed. The fix must override that $0 with a
+    // local estimate whenever the model has a known pricing config.
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-chat",
+        usage: {
+          input: 1000,
+          output: 500,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1500,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // Configure a known non-zero pricing for DeepSeek — $0.14/M input, $0.28/M output
+    // (representative of deepseek-chat at the time of the bug report).
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-chat",
+                cost: { input: 0.00000014, output: 0.00000028, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(1500);
+      // The API returned 0 but pricing is known, so the cost must be estimated:
+      // 1000 * 0.00000014 + 500 * 0.00000028 = 0.00014 + 0.00014 = 0.00028
+      expect(summary.totals.totalCost).toBeCloseTo(0.00028, 8);
+      // A known-priced model with an API-zero response is NOT a missing-cost entry;
+      // it gets a real estimate instead.
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
