@@ -165,12 +165,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         context.resetSessionKey,
         "sqlite user-facing send before reset",
       );
-      await waitForHistoryContains(
-        restartedClient,
-        context.resetSessionKey,
+      await waitForSqliteMessageContains(
+        context.agentDbPath,
+        context.legacySessionId,
+        "user",
         "sqlite user-facing send before reset",
       );
-      await waitForSqliteEvents(context.agentDbPath, context.legacySessionId, 3);
       await record("after-chat-send");
 
       const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
@@ -466,6 +466,66 @@ async function waitForSqliteEvents(
     await sleep(50);
   }
   throw new Error(`timed out waiting for ${minEvents} SQLite events for ${sessionId}`);
+}
+
+async function waitForSqliteMessageContains(
+  dbPath: string,
+  sessionId: string,
+  role: "assistant" | "user",
+  expected: string,
+): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const messages = readSqliteTranscriptMessages(dbPath, sessionId);
+    if (
+      messages.some(
+        (message) => message.role === role && JSON.stringify(message.content).includes(expected),
+      )
+    ) {
+      return;
+    }
+    await sleep(50);
+  }
+  throw new Error(
+    `timed out waiting for SQLite ${role} transcript message containing ${JSON.stringify(
+      expected,
+    )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
+  );
+}
+
+function readSqliteTranscriptMessages(
+  dbPath: string,
+  sessionId: string,
+): Array<{ content?: unknown; role?: string }> {
+  if (!fsSync.existsSync(dbPath)) {
+    return [];
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare(
+        `SELECT event_json AS eventJson
+         FROM transcript_events
+         WHERE session_id = ?
+         ORDER BY seq ASC`,
+      )
+      .all(sessionId) as Array<{ eventJson?: unknown }>;
+    return rows.flatMap((row) => {
+      if (typeof row.eventJson !== "string") {
+        return [];
+      }
+      const event = parseJsonObject(row.eventJson);
+      const message =
+        event && typeof event.message === "object" && event.message !== null
+          ? (event.message as { content?: unknown; role?: unknown })
+          : undefined;
+      return typeof message?.role === "string"
+        ? [{ role: message.role, content: message.content }]
+        : [];
+    });
+  } finally {
+    db.close();
+  }
 }
 
 async function captureCheckpoint(
