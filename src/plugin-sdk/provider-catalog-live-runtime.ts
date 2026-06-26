@@ -1,5 +1,6 @@
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
@@ -124,14 +125,18 @@ function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext)
   };
 }
 
-function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
-  const requestApiKey = selectLiveModelCatalogRequestApiKey(params);
-  const headers = new Headers(
-    (params.buildRequestHeaders ?? buildDefaultLiveModelCatalogHeaders)({
-      apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
-      discoveryApiKey: requestApiKey,
-    }),
-  );
+function buildHeaders(
+  params: FetchLiveProviderModelIdsParams,
+  safeReplayHeaders?: Headers,
+): Headers {
+  const headers = safeReplayHeaders
+    ? new Headers(safeReplayHeaders)
+    : new Headers(
+        (params.buildRequestHeaders ?? buildDefaultLiveModelCatalogHeaders)({
+          apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
+          discoveryApiKey: selectLiveModelCatalogRequestApiKey(params),
+        }),
+      );
   if (!headers.has("accept")) {
     headers.set("accept", "application/json");
   }
@@ -234,12 +239,14 @@ async function fetchLiveProviderModelCatalogPage(
     fetchGuard: LiveModelCatalogFetchGuard;
     url: string;
     timeoutMs: number;
+    safeReplayHeaders?: Headers;
   },
-): Promise<{ body: unknown; finalUrl: string; rows: readonly unknown[] }> {
+): Promise<{ body: unknown; finalUrl: string; requestHeaders: Headers; rows: readonly unknown[] }> {
+  const requestHeaders = buildHeaders(params, params.safeReplayHeaders);
   const { response, finalUrl, release } = await params.fetchGuard({
     url: params.url,
     init: {
-      headers: buildHeaders(params),
+      headers: requestHeaders,
     },
     signal: params.signal,
     timeoutMs: params.timeoutMs,
@@ -254,7 +261,12 @@ async function fetchLiveProviderModelCatalogPage(
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
     const body = await readLiveModelCatalogJson(response, params.timeoutMs);
-    return { body, finalUrl, rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body) };
+    return {
+      body,
+      finalUrl,
+      requestHeaders,
+      rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body),
+    };
   } finally {
     await release();
   }
@@ -269,6 +281,7 @@ export async function fetchLiveProviderModelRows(
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
   let pageUrl: string | undefined = params.endpoint;
+  let safeReplayHeaders: Headers | undefined;
   for (let page = 0; page < LIVE_MODEL_CATALOG_MAX_PAGES && pageUrl; page += 1) {
     if (seenPageUrls.has(pageUrl)) {
       break;
@@ -280,13 +293,20 @@ export async function fetchLiveProviderModelRows(
       );
     }
     seenPageUrls.add(pageUrl);
+    const requestedPageUrl = pageUrl;
     const result = await fetchLiveProviderModelCatalogPage({
       ...params,
       fetchGuard,
-      url: pageUrl,
+      url: requestedPageUrl,
       timeoutMs: remainingTimeoutMs,
+      safeReplayHeaders,
     });
     rows.push(...result.rows);
+    if (safeReplayHeaders || new URL(result.finalUrl).origin !== new URL(requestedPageUrl).origin) {
+      safeReplayHeaders = new Headers(
+        retainSafeHeadersForCrossOriginRedirect(result.requestHeaders),
+      );
+    }
     const nextPage = resolveLiveModelCatalogNextPage(result.finalUrl, result.body);
     if (nextPage.status === "incomplete") {
       throw new Error(

@@ -281,6 +281,54 @@ describe("provider-catalog-live-runtime", () => {
     );
   });
 
+  it("does not re-add credentials to redirected-origin pagination requests", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            links: { next: "?page=2" },
+          }),
+        ),
+        finalUrl: "https://redirected.example.test/v1/models/",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://redirected.example.test/v1/models/?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        discoveryApiKey: "provider-token",
+        fetchGuard: fetchGuardMock,
+        buildRequestHeaders: ({ discoveryApiKey }) => ({
+          Accept: "application/json",
+          ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+          "ChatGPT-Account-ID": "acct-1",
+        }),
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    const firstHeaders = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
+    const secondHeaders = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
+    expect(firstHeaders).toBeInstanceOf(Headers);
+    expect(secondHeaders).toBeInstanceOf(Headers);
+    expect((firstHeaders as Headers).get("authorization")).toBe("Bearer provider-token");
+    expect((firstHeaders as Headers).get("chatgpt-account-id")).toBe("acct-1");
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://redirected.example.test/v1/models/?page=2",
+    );
+    expect((secondHeaders as Headers).get("authorization")).toBeNull();
+    expect((secondHeaders as Headers).get("chatgpt-account-id")).toBeNull();
+    expect((secondHeaders as Headers).get("accept")).toBe("application/json");
+  });
+
   it("follows nextPageToken pagination before projecting model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
