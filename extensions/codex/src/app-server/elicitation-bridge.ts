@@ -50,7 +50,7 @@ const MCP_TOOL_APPROVAL_CONNECTOR_SOURCE = "connector";
 const CODEX_APPS_SERVER_NAME = "codex_apps";
 const COMPUTER_USE_APPROVAL_TITLE = "Computer Use approval";
 const EMPTY_OBJECT_SCHEMA: JsonObject = { type: "object", properties: {} };
-const EMPTY_SCHEMA_APPROVAL_CONTENT: JsonObject = { approve: true };
+const COMPUTER_USE_EMPTY_SCHEMA_ACCEPT_CONTENT: JsonObject = { approve: true };
 const PLUGIN_APP_ID_META_KEYS = ["app_id", "appId", "codex_app_id", "codexAppId"];
 const PLUGIN_CONNECTOR_ID_META_KEYS = ["connector_id", "connectorId"];
 const PLUGIN_NAME_META_KEYS = ["plugin_name", "pluginName", "codex_plugin_name", "codexPluginName"];
@@ -487,7 +487,7 @@ function readComputerUseApprovalElicitation(
     }),
     requestedSchema,
     meta,
-    emptySchemaAcceptContent: EMPTY_SCHEMA_APPROVAL_CONTENT,
+    emptySchemaAcceptContent: COMPUTER_USE_EMPTY_SCHEMA_ACCEPT_CONTENT,
   };
 }
 
@@ -680,6 +680,13 @@ async function requestPluginApprovalOutcome(params: {
   }
 }
 
+function cloneEmptySchemaAcceptContent(content: JsonObject | undefined): JsonObject | null {
+  if (!content) {
+    return null;
+  }
+  return { ...content };
+}
+
 function buildElicitationResponse(
   approvalPrompt: Pick<
     BridgeableApprovalElicitation,
@@ -700,7 +707,7 @@ function buildElicitationResponse(
     if (hasNoSchemaProperties(requestedSchema)) {
       return {
         action: "accept",
-        content: approvalPrompt.emptySchemaAcceptContent ?? null,
+        content: cloneEmptySchemaAcceptContent(approvalPrompt.emptySchemaAcceptContent),
         _meta: buildAcceptedMeta(meta, outcome, approvalPrompt.persistHintsMode ?? "legacy"),
       };
     }

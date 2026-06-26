@@ -338,7 +338,7 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
-  it("does not return a contentless accept for empty Computer Use schemas", async () => {
+  it("returns explicit approval content for empty Computer Use schemas", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty", status: "accepted" })
       .mockResolvedValueOnce({ id: "plugin:approval-computer-use-empty", decision: "allow-once" });
