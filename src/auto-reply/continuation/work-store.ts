@@ -117,6 +117,27 @@ function decodeWorkState(flow: TaskFlowRecord): PendingWorkState | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function finalizeDeliveredWorkFlow(flow: TaskFlowRecord, state: PendingWorkState): void {
+  const now = Date.now();
+  const finished = finishFlow({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+    currentStep: "Same-session continuation turn granted",
+    stateJson: {
+      ...state,
+      turnGrantedAt: state.turnGrantedAt ?? now,
+      busySkipCount: 0,
+    },
+    updatedAt: now,
+    endedAt: now,
+  });
+  if (!finished.applied) {
+    log.warn(
+      `[continuation:work-delivered-finish-not-committed] flowId=${flow.flowId} expectedRevision=${flow.revision}`,
+    );
+  }
+}
+
 function workGoal(work: PendingContinuationWork): string {
   const reason = work.reason?.trim();
   return reason ? `Continuation work: ${reason.slice(0, 80)}` : "Continuation work";
@@ -200,31 +221,21 @@ export function consumePendingWork(
   const now = Date.now();
   const work: PendingContinuationWork[] = [];
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)
-    .filter((candidate) => {
-      if (!isContinuationWorkFlow(candidate)) {
-        return false;
-      }
-      // #990 Pillar-0 (:259 dedup harden): a cancel-requested flow is terminating
-      // — never consume/drive it. cancelFlowById finalizes managed continuation
-      // work to `cancelled` synchronously, but a transient revision conflict can
-      // leave it cancelRequestedAt-marked yet not-yet-terminal until the
-      // maintenance reaper (task-flow-registry.maintenance.ts) finalizes it.
-      // Honoring the request here means a cancelled wake is never granted a turn
-      // out from under the cancel. Terminal statuses are already excluded below.
-      if (candidate.cancelRequestedAt != null) {
-        return false;
-      }
-      if (options.includeRunning) {
-        return (
-          candidate.status === "queued" ||
-          (candidate.status === "running" &&
-            (options.includeRunningUpdatedAtOrBefore === undefined ||
-              candidate.updatedAt <= options.includeRunningUpdatedAtOrBefore))
-        );
-      }
-      return candidate.status === "queued";
-    })
+    .filter(isContinuationWorkFlow)
     .toSorted((a, b) => a.createdAt - b.createdAt)) {
+    // #990 Pillar-0 (:259 dedup harden): a cancel-requested flow is terminating
+    // — never consume/drive it. cancelFlowById finalizes managed continuation
+    // work to `cancelled` synchronously, but a transient revision conflict can
+    // leave it cancelRequestedAt-marked yet not-yet-terminal until the
+    // maintenance reaper (task-flow-registry.maintenance.ts) finalizes it.
+    // Honoring the request here means a cancelled wake is never granted a turn
+    // out from under the cancel. Terminal statuses are already excluded below.
+    if (flow.cancelRequestedAt != null) {
+      continue;
+    }
+    if (flow.status !== "queued" && flow.status !== "running") {
+      continue;
+    }
     const state = decodeWorkState(flow);
     if (!state) {
       log.warn(
@@ -243,6 +254,15 @@ export function consumePendingWork(
     // (the process died after the durable mark but before finishFlow finalized
     // it), never re-consume it — that would be a restart-gap double-delivery.
     if (state.succeeded) {
+      finalizeDeliveredWorkFlow(flow, state);
+      continue;
+    }
+    const canConsumeRunning =
+      flow.status === "running" &&
+      options.includeRunning === true &&
+      (options.includeRunningUpdatedAtOrBefore === undefined ||
+        flow.updatedAt <= options.includeRunningUpdatedAtOrBefore);
+    if (flow.status !== "queued" && !canConsumeRunning) {
       continue;
     }
     const idleRetryReady = options.includeIdleRetry === true && state.idleRetry !== undefined;
@@ -484,6 +504,13 @@ export function markPendingWorkReaped(work: PendingContinuationWork, summary: st
 
 export function peekSoonestUnmaturedWorkDueAt(sessionKey: string): number | undefined {
   const now = Date.now();
+  return peekSoonestQueuedWorkDueAt(sessionKey, { after: now });
+}
+
+export function peekSoonestQueuedWorkDueAt(
+  sessionKey: string,
+  options: { after?: number } = {},
+): number | undefined {
   let soonest: number | undefined;
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
     if (!isContinuationWorkFlow(flow) || flow.status !== "queued") {
@@ -493,7 +520,7 @@ export function peekSoonestUnmaturedWorkDueAt(sessionKey: string): number | unde
     if (!state) {
       continue;
     }
-    if (state.dueAt <= now) {
+    if (options.after !== undefined && state.dueAt <= options.after) {
       continue;
     }
     soonest = soonest === undefined ? state.dueAt : Math.min(soonest, state.dueAt);
@@ -521,13 +548,38 @@ export function peekSoonestRunningWorkRecoveryDueAt(
     if (state.succeeded) {
       continue;
     }
-    const recoveryDueAt = Math.max(state.dueAt, flow.updatedAt + staleMs);
+    const recoveryDueAt =
+      state.idleRetry !== undefined
+        ? flow.updatedAt + staleMs
+        : Math.max(state.dueAt, flow.updatedAt + staleMs);
     if (recoveryDueAt <= now) {
       return now;
     }
     soonest = soonest === undefined ? recoveryDueAt : Math.min(soonest, recoveryDueAt);
   }
   return soonest;
+}
+
+export function hasPendingIdleRetryWork(
+  sessionKey: string,
+  params: { trigger: PendingContinuationIdleRetry["trigger"]; excludeFlowId?: string },
+): boolean {
+  return listTaskFlowsForOwnerKey(sessionKey).some((flow) => {
+    if (!isContinuationWorkFlow(flow) || (flow.status !== "queued" && flow.status !== "running")) {
+      return false;
+    }
+    if (params.excludeFlowId !== undefined && flow.flowId === params.excludeFlowId) {
+      return false;
+    }
+    if (flow.cancelRequestedAt != null) {
+      return false;
+    }
+    const state = decodeWorkState(flow);
+    if (!state || state.succeeded) {
+      return false;
+    }
+    return state.idleRetry?.trigger === params.trigger;
+  });
 }
 
 export function pendingWorkCount(sessionKey: string): number {

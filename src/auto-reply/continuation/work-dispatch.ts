@@ -14,6 +14,7 @@ import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from 
 import {
   consumePendingWork,
   enqueuePendingWork,
+  hasPendingIdleRetryWork,
   listPendingWorkSessionKeysForRecovery,
   markPendingWorkDelivered,
   markPendingWorkFailed,
@@ -21,6 +22,7 @@ import {
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
   queuedPendingWorkCount,
+  peekSoonestQueuedWorkDueAt,
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
@@ -181,7 +183,8 @@ function requeueWorkForRetry(
 ): boolean {
   const requeued = requeuePendingWork(work, params);
   if (requeued) {
-    armWorkTimer(work.sessionKey, params.dueAt);
+    const soonestQueued = peekSoonestQueuedWorkDueAt(work.sessionKey);
+    armWorkTimer(work.sessionKey, earlierDueAt(params.dueAt, soonestQueued) ?? params.dueAt);
   }
   return requeued;
 }
@@ -205,6 +208,40 @@ function idleRetryTriggerLabel(
   trigger: ContinuationIdleRetryTrigger,
 ): "reply-run-ended" | "command-lane-idle" {
   return trigger.kind;
+}
+
+function idleRetryTriggerFromWork(
+  work: PendingContinuationWork,
+): ContinuationIdleRetryTrigger | undefined {
+  if (!work.idleRetry) {
+    return undefined;
+  }
+  return work.idleRetry.trigger === "reply-run-ended"
+    ? { kind: "reply-run-ended" }
+    : { kind: "command-lane-idle", lane: MAIN_COMMAND_LANE };
+}
+
+function clearIdleRetryForWork(work: PendingContinuationWork): void {
+  const idleRetry = work.idleRetry;
+  const trigger = idleRetryTriggerFromWork(work);
+  if (!idleRetry || !trigger) {
+    return;
+  }
+  const key = idleRetryTriggerKey(work.sessionKey, trigger);
+  const controller = idleRetryControllers.get(key);
+  if (!controller) {
+    return;
+  }
+  if (
+    hasPendingIdleRetryWork(work.sessionKey, {
+      trigger: idleRetry.trigger,
+      ...(work.flowId ? { excludeFlowId: work.flowId } : {}),
+    })
+  ) {
+    return;
+  }
+  controller.abort();
+  idleRetryControllers.delete(key);
 }
 
 export function classifyContinuationWorkReason(
@@ -487,8 +524,14 @@ export async function dispatchPendingContinuationWork(params: {
   includeRunningUpdatedAtOrBefore?: number;
   includeIdleRetry?: boolean;
 }): Promise<{ dispatched: number; failed: number; reaped: number }> {
+  const recoverRunning = params.recoverRunning === true;
+  let runningRecoveryBlockedByActiveReply = false;
+  if (recoverRunning) {
+    const { replyRunRegistry } = await import("../reply/reply-run-registry.js");
+    runningRecoveryBlockedByActiveReply = replyRunRegistry.isActive(params.sessionKey);
+  }
   const works = consumePendingWork(params.sessionKey, {
-    includeRunning: params.recoverRunning === true,
+    includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
     includeIdleRetry: params.includeIdleRetry === true,
   });
@@ -504,6 +547,7 @@ export async function dispatchPendingContinuationWork(params: {
   );
   if (superseded.length > 0) {
     for (const stale of superseded) {
+      clearIdleRetryForWork(stale);
       const overdueMs = Date.now() - stale.dueAt;
       log.info(
         `[continuation:work-superseded] flowId=${stale.flowId ?? "none"} session=${stale.sessionKey} hop=${stale.hop} overdueMs=${overdueMs} — folded into newer election`,
@@ -519,10 +563,19 @@ export async function dispatchPendingContinuationWork(params: {
     );
   }
   const soonestQueued = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
-  const soonestRunningRecovery =
-    params.recoverRunning === true
-      ? peekSoonestRunningWorkRecoveryDueAt(params.sessionKey, RUNNING_WORK_RECOVERY_STALE_MS)
-      : undefined;
+  let soonestRunningRecovery: number | undefined;
+  if (recoverRunning) {
+    const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
+      params.sessionKey,
+      RUNNING_WORK_RECOVERY_STALE_MS,
+    );
+    soonestRunningRecovery =
+      runningRecoveryDueAt === undefined
+        ? undefined
+        : runningRecoveryBlockedByActiveReply
+          ? Date.now() + RUNNING_WORK_RECOVERY_STALE_MS
+          : runningRecoveryDueAt;
+  }
   const soonest = earlierDueAt(soonestQueued, soonestRunningRecovery);
   if (soonest !== undefined) {
     armWorkTimer(params.sessionKey, soonest);
@@ -534,6 +587,7 @@ export async function dispatchPendingContinuationWork(params: {
   let failed = 0;
   let reaped = 0;
   for (const work of worksToDrive) {
+    clearIdleRetryForWork(work);
     try {
       const fireDeferredMs = Date.now() - work.electedAt;
       const fireChainId = work.chainId ?? work.flowId ?? work.sessionKey;
@@ -602,7 +656,10 @@ export async function dispatchPendingContinuationWork(params: {
           ceilingMs: runtimeConfig.maxDelayMs,
           factor: 2,
         };
-        const retryDueAt = now + backoff.ceilingMs;
+        const retryDelayMs = result.retryTrigger
+          ? backoff.ceilingMs
+          : computeBusySkipBackoffMs(priorBusySkips, backoff);
+        const retryDueAt = now + retryDelayMs;
         const requeued = requeueWorkForRetry(work, {
           dueAt: retryDueAt,
           summary: `Retryable continuation skip: ${skippedReason}`,
@@ -722,7 +779,7 @@ export async function scheduleContinuationWork(params: {
     traceparent: params.request.traceparent,
     log: (message) => params.log?.(message),
   });
-  const soonestDueAt = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
+  const soonestDueAt = peekSoonestQueuedWorkDueAt(params.sessionKey);
   const fireAt = soonestDueAt === undefined ? dueAt : Math.min(dueAt, soonestDueAt);
   // Let callers persist the advanced chain state before even zero-delay work
   // can start the next turn; the timer fires on the next event-loop tick.
@@ -807,6 +864,7 @@ export async function recoverPendingContinuationWork(): Promise<{
       sessionKey,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore,
+      includeIdleRetry: true,
     });
     dispatched += result.dispatched;
     failed += result.failed;
