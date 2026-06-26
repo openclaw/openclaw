@@ -4444,7 +4444,10 @@ async function migrateLegacySessions(
     }
   }
 
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  const merged = Object.create(null) as Record<string, SessionEntryLike>;
+  for (const [key, entry] of Object.entries(canonicalizedTarget.store)) {
+    merged[key] = entry;
+  }
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
     merged[key] = mergeSessionEntry({
       existing: merged[key],

@@ -107,10 +107,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
     listBundledChannelLegacySessionSurfaces: vi.fn(() => [
       {
         isLegacyGroupSessionKey: (key: string) => /^group:mobile-/i.test(key.trim()),
-        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
-          /^group:mobile-/i.test(key.trim())
+        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) => {
+          if (key === "legacy-prototype") {
+            return "__proto__";
+          }
+          return /^group:mobile-/i.test(key.trim())
             ? `agent:${agentId}:mobileauth:${key.trim().toLowerCase()}`
-            : null,
+            : null;
+        },
       },
     ]),
     listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
@@ -477,10 +481,6 @@ describe("state migrations", () => {
         lastActivityAt: 15,
       },
     };
-    Object.defineProperty(targetStore, "__proto__", {
-      value: { sessionId: "prototype-row", updatedAt: 10, sessionFile: "trace.jsonl" },
-      enumerable: true,
-    });
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
     cfg.session = { ...cfg.session, store: targetStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
@@ -489,6 +489,11 @@ describe("state migrations", () => {
       unknown
     >;
     legacyStore["Agent:main:desk"] = { sessionId: "mixed-case-foreign", updatedAt: 40 };
+    legacyStore["legacy-prototype"] = {
+      sessionId: "prototype-row",
+      updatedAt: 10,
+      sessionFile: "trace.jsonl",
+    };
     await fs.writeFile(legacyStorePath, `${JSON.stringify(legacyStore, null, 2)}\n`, "utf8");
 
     const detected = await detectLegacyStateMigrations({
