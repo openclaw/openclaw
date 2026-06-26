@@ -1,0 +1,187 @@
+/* Channels directory: a clean two-column list of channel rows that expand in
+   place to reveal each channel's status + config form. */
+
+.channel-directory {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.channel-directory__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.channel-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.channel-filter:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.channel-filter--active {
+  color: var(--text-strong);
+  background: var(--secondary);
+}
+
+.channel-filter__count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.channel-filter--active .channel-filter__count {
+  color: var(--text);
+}
+
+.channel-directory__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 24px;
+}
+
+.channel-directory__empty {
+  padding: 28px 4px;
+  font-size: 13px;
+}
+
+.channel-row {
+  width: calc(50% - 12px);
+  box-sizing: border-box;
+}
+
+/* An expanded row spans the full width so its form has room; flex-wrap then
+   pushes the remaining collapsed rows onto the next line. */
+.channel-row--open {
+  width: 100%;
+}
+
+.channel-row__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 6px;
+  color: var(--text);
+  transition: background var(--duration-fast) ease;
+}
+
+.channel-row__header:hover {
+  background: var(--bg-hover);
+}
+
+.channel-row--open > .channel-row__header {
+  border-bottom-color: transparent;
+}
+
+.channel-row__logo {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.channel-row__logo svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.channel-row__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.channel-row__name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.channel-row__sub {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-row__dot {
+  flex: 0 0 auto;
+}
+
+.channel-row__chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.channel-row__chevron svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+}
+
+.channel-row__body {
+  padding: 6px 6px 18px 54px;
+  border-bottom: 1px solid var(--border);
+  animation: rise 0.2s var(--ease-out) backwards;
+}
+
+.channel-raw {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.channel-raw > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.channel-raw .code-block {
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .channel-row,
+  .channel-row--open {
+    width: 100%;
+  }
+
+  .channel-row__body {
+    padding-left: 6px;
+  }
+}

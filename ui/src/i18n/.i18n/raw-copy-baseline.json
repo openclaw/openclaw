@@ -1327,48 +1327,6 @@
     {
       "count": 1,
       "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.discord.ts",
-      "text": "Bot status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.discord.ts",
-      "text": "Discord"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.googlechat.ts",
-      "text": "Chat API webhook status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.googlechat.ts",
-      "text": "Google Chat"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.imessage.ts",
-      "text": "macOS bridge status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.imessage.ts",
-      "text": "iMessage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
       "name": "placeholder",
       "path": "ui/src/ui/views/channels.nostr-profile-form.ts",
       "text": "https://example.com"
@@ -1420,77 +1378,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/channels.nostr.ts",
-      "text": "Decentralized DMs via Nostr relays (NIP-04)."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/channels.nostr.ts",
       "text": "NIP-05"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/channels.nostr.ts",
-      "text": "Nostr"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.signal.ts",
-      "text": "signal-cli status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.signal.ts",
-      "text": "Signal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.slack.ts",
-      "text": "Socket mode status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.slack.ts",
-      "text": "Slack"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/channels.telegram.ts",
-      "text": "Bot status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/channels.telegram.ts",
-      "text": "Telegram"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.telegram.ts",
-      "text": "Bot status and channel configuration."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.telegram.ts",
-      "text": "Telegram"
     },
     {
       "count": 1,
@@ -1498,20 +1386,6 @@
       "name": "text",
       "path": "ui/src/ui/views/channels.ts",
       "text": "Refreshing channel status in the background; showing the last successful snapshot."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "subtitle",
-      "path": "ui/src/ui/views/channels.whatsapp.ts",
-      "text": "Link WhatsApp Web and monitor connection health."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/views/channels.whatsapp.ts",
-      "text": "WhatsApp"
     },
     {
       "count": 1,

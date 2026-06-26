@@ -193,50 +193,44 @@ export function renderNostrCard(params: {
   };
 
   return html`
-    <div class="card">
-      <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
-      ${accountCountLabel}
-      ${hasMultipleAccounts
-        ? html`
-            <div class="account-card-list">
-              ${nostrAccounts.map((account) => renderAccountCard(account))}
+    ${accountCountLabel}
+    ${hasMultipleAccounts
+      ? html`
+          <div class="account-card-list">
+            ${nostrAccounts.map((account) => renderAccountCard(account))}
+          </div>
+        `
+      : html`
+          <div class="status-list">
+            <div>
+              <span class="label">${t("common.configured")}</span>
+              <span>${summaryConfigured ? t("common.yes") : t("common.no")}</span>
             </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">${t("common.configured")}</span>
-                <span>${summaryConfigured ? t("common.yes") : t("common.no")}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.running")}</span>
-                <span>${summaryRunning ? t("common.yes") : t("common.no")}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.publicKey")}</span>
-                <span class="monospace" title="${summaryPublicKey ?? ""}"
-                  >${truncatePubkey(summaryPublicKey)}</span
-                >
-              </div>
-              <div>
-                <span class="label">${t("common.lastStart")}</span>
-                <span>
-                  ${summaryLastStartAt
-                    ? formatRelativeTimestamp(summaryLastStartAt)
-                    : t("common.na")}
-                </span>
-              </div>
+            <div>
+              <span class="label">${t("common.running")}</span>
+              <span>${summaryRunning ? t("common.yes") : t("common.no")}</span>
             </div>
-          `}
-      ${summaryLastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
-        : nothing}
-      ${renderProfileSection()} ${renderChannelConfigSection({ channelId: "nostr", props })}
+            <div>
+              <span class="label">${t("common.publicKey")}</span>
+              <span class="monospace" title="${summaryPublicKey ?? ""}"
+                >${truncatePubkey(summaryPublicKey)}</span
+              >
+            </div>
+            <div>
+              <span class="label">${t("common.lastStart")}</span>
+              <span>
+                ${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : t("common.na")}
+              </span>
+            </div>
+          </div>
+        `}
+    ${summaryLastError
+      ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
+      : nothing}
+    ${renderProfileSection()} ${renderChannelConfigSection({ channelId: "nostr", props })}
 
-      <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>${t("common.refresh")}</button>
-      </div>
+    <div class="row" style="margin-top: 12px;">
+      <button class="btn" @click=${() => props.onRefresh(false)}>${t("common.refresh")}</button>
     </div>
   `;
 }

@@ -78,15 +78,15 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -164,7 +164,9 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import { readExpandedChannelsFromUrl, writeExpandedChannelsToUrl } from "./views/channels-url.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { ChannelFilter } from "./views/channels.types.ts";
 
 declare global {
   interface Window {
@@ -453,6 +455,8 @@ export class OpenClawApp extends LitElement {
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
   @state() whatsappBusy = false;
+  @state() channelsExpandedIds: string[] = readExpandedChannelsFromUrl();
+  @state() channelsFilter: ChannelFilter = "all";
   @state() nostrProfileFormState: NostrProfileFormState | null = null;
   @state() nostrProfileAccountId: string | null = null;
 
@@ -734,8 +738,11 @@ export class OpenClawApp extends LitElement {
   refreshSessionsAfterChat = new Map<string, import("./ui-types.js").ChatSessionRefreshTarget>();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
-  popStateHandler = () =>
+  popStateHandler = () => {
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
+    // Keep the expanded-channel selection in sync with the deep-link on back/forward.
+    this.channelsExpandedIds = readExpandedChannelsFromUrl();
+  };
   topbarObserver: ResizeObserver | null = null;
   private globalKeydownHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
@@ -1000,6 +1007,18 @@ export class OpenClawApp extends LitElement {
       this.setChatMobileControlsOpen(false);
     }
     this.navDrawerOpen = false;
+  }
+
+  toggleChannelExpanded(channelId: string) {
+    const next = this.channelsExpandedIds.includes(channelId)
+      ? this.channelsExpandedIds.filter((id) => id !== channelId)
+      : [...this.channelsExpandedIds, channelId];
+    this.channelsExpandedIds = next;
+    writeExpandedChannelsToUrl(next);
+  }
+
+  setChannelsFilter(filter: ChannelFilter) {
+    this.channelsFilter = filter;
   }
 
   setChatMobileControlsOpen(
