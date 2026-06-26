@@ -588,47 +588,60 @@ export function buildInboundUserContextPrefix(
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
 
+  // Synthetic heartbeat/cron/exec turns carry only a delivery target without the full
+  // channel inbound metadata (channel prefix, sender, message_id, etc.), which produces
+  // a partial Conversation info block that can trigger false-positive prompt injection
+  // detection in downstream agents.  Skip the block entirely for synthetic turns.
+  const syntheticProvider =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
-  const conversationInfo = {
-    chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
-    message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
-    reply_to_id: shouldIncludeConversationInfo
-      ? normalizePromptMetadataString(ctx.ReplyToId)
-      : undefined,
-    sender_id: shouldIncludeConversationInfo
-      ? normalizePromptMetadataString(ctx.SenderId)
-      : undefined,
-    conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? (normalizePromptMetadataString(ctx.SenderName) ??
-        normalizePromptMetadataString(ctx.SenderE164) ??
-        normalizePromptMetadataString(ctx.SenderId) ??
-        normalizePromptMetadataString(ctx.SenderUsername))
-      : undefined,
-    timestamp: timestampStr,
-    source_modality: resolveInboundSourceModality(ctx),
-    group_subject: normalizePromptMetadataString(ctx.GroupSubject),
-    group_channel: normalizePromptMetadataString(ctx.GroupChannel),
-    group_space: normalizePromptMetadataString(ctx.GroupSpace),
-    group_members: sanitizePromptBody(ctx.GroupMembers),
-    thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
-    inbound_event_kind: ctx.InboundEventKind,
-    topic_id:
-      ctx.MessageThreadId != null
-        ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
-        : undefined,
-    topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
-    is_forum: ctx.IsForum === true ? true : undefined,
-    ...buildConversationMentionMetadataPayload(ctx, isDirect),
-    has_reply_context:
-      replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
-    has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
-    has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
-    history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
-    history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
-    history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
-  };
+  const conversationInfo = syntheticProvider
+    ? {}
+    : {
+        chat_id: shouldIncludeConversationInfo
+          ? normalizeOptionalString(ctx.OriginatingTo)
+          : undefined,
+        message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
+        reply_to_id: shouldIncludeConversationInfo
+          ? normalizePromptMetadataString(ctx.ReplyToId)
+          : undefined,
+        sender_id: shouldIncludeConversationInfo
+          ? normalizePromptMetadataString(ctx.SenderId)
+          : undefined,
+        conversation_label: isDirect
+          ? undefined
+          : normalizePromptMetadataString(ctx.ConversationLabel),
+        sender: shouldIncludeConversationInfo
+          ? (normalizePromptMetadataString(ctx.SenderName) ??
+            normalizePromptMetadataString(ctx.SenderE164) ??
+            normalizePromptMetadataString(ctx.SenderId) ??
+            normalizePromptMetadataString(ctx.SenderUsername))
+          : undefined,
+        timestamp: timestampStr,
+        source_modality: resolveInboundSourceModality(ctx),
+        group_subject: normalizePromptMetadataString(ctx.GroupSubject),
+        group_channel: normalizePromptMetadataString(ctx.GroupChannel),
+        group_space: normalizePromptMetadataString(ctx.GroupSpace),
+        group_members: sanitizePromptBody(ctx.GroupMembers),
+        thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+        inbound_event_kind: ctx.InboundEventKind,
+        topic_id:
+          ctx.MessageThreadId != null
+            ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
+            : undefined,
+        topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
+        is_forum: ctx.IsForum === true ? true : undefined,
+        ...buildConversationMentionMetadataPayload(ctx, isDirect),
+        has_reply_context:
+          replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
+        has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
+        has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
+        history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
+        history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
+        history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
+      };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
       formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
