@@ -1162,6 +1162,29 @@ describe("runUpdate", () => {
     expect(state.updateStatusBanner).toBeNull();
   });
 
+  it("surfaces coalesced update restarts while preserving reconnect verification", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "ok",
+        after: { version: "2.0.0" },
+      },
+      restart: { coalesced: true },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.pendingUpdateHandoff).toBe(false);
+    expect(state.updateStatusBanner).toEqual({
+      tone: "info",
+      text: "Update is waiting on an already in-progress gateway restart. Leave this page open; status will update after the gateway reconnects.",
+    });
+  });
+
   it("tracks managed-service handoff updates for reconnect verification", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: true,

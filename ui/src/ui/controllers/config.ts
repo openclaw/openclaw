@@ -286,6 +286,7 @@ export async function runUpdate(state: ConfigState) {
       ok?: boolean;
       result?: { status?: string; reason?: string; after?: { version?: string | null } };
       handoff?: { status?: string };
+      restart?: { coalesced?: boolean } | null;
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
@@ -303,6 +304,12 @@ export async function runUpdate(state: ConfigState) {
     if (status === "ok" && res.ok === true) {
       state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
       state.pendingUpdateHandoff = false;
+      if (res.restart?.coalesced === true) {
+        state.updateStatusBanner = {
+          tone: "info",
+          text: "Update is waiting on an already in-progress gateway restart. Leave this page open; status will update after the gateway reconnects.",
+        };
+      }
       return;
     }
     state.pendingUpdateExpectedVersion = null;
