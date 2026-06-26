@@ -2407,9 +2407,25 @@ async function runEmbeddedAgentInternal(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          const previousActiveSessionId = activeSessionId;
+          const previousActiveSessionFile = activeSessionFile;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
+          }
+          if (
+            (sessionIdUsed && sessionIdUsed !== previousActiveSessionId) ||
+            (sessionFileUsed && sessionFileUsed !== previousActiveSessionFile)
+          ) {
+            const activeSqliteMarker = parseSqliteSessionFileMarker(activeSessionFile);
+            activeSessionTarget = activeSqliteMarker
+              ? {
+                  agentId: activeSqliteMarker.agentId,
+                  sessionId: activeSqliteMarker.sessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: activeSqliteMarker.storePath,
+                }
+              : undefined;
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
