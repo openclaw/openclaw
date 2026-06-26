@@ -1,7 +1,9 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -16,9 +18,9 @@ import {
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 // Nextcloud Talk runs against self-hosted servers whose responses are not
-// trusted to be small. Cap success JSON and error bodies so a hostile or
-// misbehaving endpoint cannot stream an unbounded body into memory.
-const NEXTCLOUD_TALK_JSON_MAX_BYTES = 16 * 1024 * 1024;
+// trusted to be small. Cap error bodies so a hostile or misbehaving endpoint
+// cannot stream an unbounded body into memory. (Success JSON is bounded by the
+// shared readProviderJsonResponse helper.)
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 
@@ -216,18 +218,14 @@ export async function sendMessageNextcloudTalk(
     let messageId = "unknown";
     let timestamp: number | undefined;
     try {
-      const bytes = await readResponseWithLimit(response, NEXTCLOUD_TALK_JSON_MAX_BYTES, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Nextcloud Talk response exceeds ${maxBytes} bytes`),
-      });
-      const data = JSON.parse(new TextDecoder().decode(bytes)) as {
+      const data = await readProviderJsonResponse<{
         ocs?: {
           data?: {
             id?: number | string;
             timestamp?: number;
           };
         };
-      };
+      }>(response, "Nextcloud Talk send");
       if (data.ocs?.data?.id != null) {
         messageId = String(data.ocs.data.id);
       }
