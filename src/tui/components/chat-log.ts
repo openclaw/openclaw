@@ -9,6 +9,11 @@ import { UserMessageComponent } from "./user-message.js";
 
 // Tolerates history timestamps slightly before locally pending messages.
 const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
+// The replay/live-final dedupe window is bounded so a stale history-replay
+// marker cannot suppress a later legitimate same-text final-only run. If
+// no live final arrives within this window the marker expires and the next
+// same-text final is allowed through.
+const HISTORY_REPLAY_DEDUPE_MS = 30_000;
 
 type RepeatableSystemMessage = {
   component: Container;
@@ -37,12 +42,19 @@ export class ChatLog extends Container {
   // Tracks the most recent history replay assistant row (no runId) so a
   // subsequent live final with the same text can be suppressed as a duplicate.
   // Cleared whenever a non-assistant component is appended (#96967).
-  private lastHistoryAssistant: { component: AssistantMessageComponent; text: string } | null =
-    null;
+  // Bounded by historyReplayDedupeMs so a stale marker cannot suppress a later
+  // legitimate same-text final-only run.
+  private lastHistoryAssistant: {
+    component: AssistantMessageComponent;
+    text: string;
+    atMs: number;
+  } | null = null;
+  private readonly historyReplayDedupeMs: number;
 
-  constructor(maxComponents = 180) {
+  constructor(maxComponents = 180, historyReplayDedupeMs = HISTORY_REPLAY_DEDUPE_MS) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
+    this.historyReplayDedupeMs = historyReplayDedupeMs;
   }
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
@@ -326,25 +338,32 @@ export class ChatLog extends Container {
     // was appended in between, suppress the live final to avoid a visible
     // duplicate row after sessions.changed reload (#96967).
     if (runId && this.lastHistoryAssistant) {
-      const lastChild = this.children[this.children.length - 1];
-      if (
-        lastChild === (this.lastHistoryAssistant.component as Component) &&
-        this.lastHistoryAssistant.text === text
-      ) {
+      // The replay marker has a bounded TTL so a stale row from an old
+      // sessions.changed reload cannot suppress a later legitimate same-text
+      // final-only run (#96967).
+      if (Date.now() - this.lastHistoryAssistant.atMs > this.historyReplayDedupeMs) {
         this.lastHistoryAssistant = null;
-        return;
+      } else {
+        const lastChild = this.children[this.children.length - 1];
+        if (
+          lastChild === (this.lastHistoryAssistant.component as Component) &&
+          this.lastHistoryAssistant.text === text
+        ) {
+          this.lastHistoryAssistant = null;
+          return;
+        }
+        // A live final with a runId arrived. The replay/live-final race window
+        // is now closed regardless of match — clear the marker so old history
+        // rows cannot suppress a later legitimate same-text final-only run.
+        this.lastHistoryAssistant = null;
       }
-      // A live final with a runId arrived. The replay/live-final race window
-      // is now closed regardless of match — clear the marker so old history
-      // rows cannot suppress a later legitimate same-text final-only run.
-      this.lastHistoryAssistant = null;
     }
     const component = new AssistantMessageComponent(text);
     this.appendNonSystem(component);
     // Track history-replay rows (no runId) after appending so appendNonSystem
     // does not clear the reference. Live finals do not need tracking.
     if (!runId) {
-      this.lastHistoryAssistant = { component, text };
+      this.lastHistoryAssistant = { component, text, atMs: Date.now() };
     }
   }
 

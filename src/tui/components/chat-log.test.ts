@@ -128,6 +128,38 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(2);
   });
 
+  it("allows live final after history replay when TTL has expired (#96967)", async () => {
+    // Short TTL so the replay marker expires before the live final arrives.
+    const chatLog = new ChatLog(40, 50);
+
+    // History replay: no runId.
+    chatLog.finalizeAssistant("Hello from Telegram");
+    expect(chatLog.children.length).toBe(1);
+
+    // Wait past the 50ms TTL so the marker expires.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Live final: same text, has runId, but marker already expired.
+    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
+
+    // Both rows are present because the marker expired.
+    expect(chatLog.children.length).toBe(2);
+  });
+
+  it("suppresses duplicate when TTL has not expired (#96967)", async () => {
+    // Long TTL so the replay marker is still valid.
+    const chatLog = new ChatLog(40, 30_000);
+
+    // History replay: no runId.
+    chatLog.finalizeAssistant("Hello from Telegram");
+    expect(chatLog.children.length).toBe(1);
+
+    // Live final immediately after: within TTL, should suppress.
+    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
+
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");
