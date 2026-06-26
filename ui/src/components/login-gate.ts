@@ -338,16 +338,19 @@ function renderLoginGate(props: LoginGateProps) {
                   }
                 }}
               />
-              <button
-                type="button"
-                class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                title=${props.showGatewayToken ? t("login.hideToken") : t("login.showToken")}
-                aria-label=${t("login.toggleTokenVisibility")}
-                aria-pressed=${props.showGatewayToken}
-                @click=${props.onToggleGatewayToken}
+              <openclaw-tooltip
+                .content=${props.showGatewayToken ? t("login.hideToken") : t("login.showToken")}
               >
-                ${props.showGatewayToken ? icons.eye : icons.eyeOff}
-              </button>
+                <button
+                  type="button"
+                  class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                  aria-label=${t("login.toggleTokenVisibility")}
+                  aria-pressed=${props.showGatewayToken}
+                  @click=${props.onToggleGatewayToken}
+                >
+                  ${props.showGatewayToken ? icons.eye : icons.eyeOff}
+                </button>
+              </openclaw-tooltip>
             </div>
           </label>
           <label class="field">
@@ -368,18 +371,21 @@ function renderLoginGate(props: LoginGateProps) {
                   }
                 }}
               />
-              <button
-                type="button"
-                class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                title=${props.showGatewayPassword
+              <openclaw-tooltip
+                .content=${props.showGatewayPassword
                   ? t("login.hidePassword")
                   : t("login.showPassword")}
-                aria-label=${t("login.togglePasswordVisibility")}
-                aria-pressed=${props.showGatewayPassword}
-                @click=${props.onToggleGatewayPassword}
               >
-                ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-              </button>
+                <button
+                  type="button"
+                  class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                  aria-label=${t("login.togglePasswordVisibility")}
+                  aria-pressed=${props.showGatewayPassword}
+                  @click=${props.onToggleGatewayPassword}
+                >
+                  ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
+                </button>
+              </openclaw-tooltip>
             </div>
           </label>
           <button class="btn primary login-gate__connect" @click=${props.onConnect}>

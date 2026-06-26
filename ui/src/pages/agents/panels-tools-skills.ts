@@ -766,7 +766,6 @@ export function renderAgentSkills(params: {
               class="btn btn--sm"
               ?disabled=${!editable || !usingAllowlist}
               @click=${() => params.onClear(params.agentId)}
-              title="Remove per-agent allowlist and use all skills"
             >
               Reset
             </button>

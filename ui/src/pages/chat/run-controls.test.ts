@@ -75,13 +75,19 @@ describe("chat run controls", () => {
       container,
     );
 
-    const queueButton = getButton(container, 'button[title="Queue"]');
-    const stopButton = getButton(container, 'button[title="Stop"]');
+    const queueButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.queueMessage")}"]`,
+    );
+    const stopButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
     expect(queueButton.disabled).toBe(true);
-    expect(stopButton.title).toBe("Stop");
+    expect(stopButton.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
     stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('button[title="New session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="New session"]')).toBeNull();
 
     const onNewSession = vi.fn();
     const onSend = vi.fn();
@@ -99,14 +105,20 @@ describe("chat run controls", () => {
       container,
     );
 
-    const newSessionButton = getButton(container, 'button[title="New session"]');
-    expect(newSessionButton.title).toBe("New session");
+    const newSessionButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.newSession")}"]`,
+    );
+    expect(newSessionButton.getAttribute("aria-label")).toBe(t("chat.runControls.newSession"));
     expect(newSessionButton.textContent).toContain("New session");
     newSessionButton.click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
 
-    const sendButton = getButton(container, 'button[title="Send"]');
-    expect(sendButton.title).toBe("Send");
+    const sendButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.sendMessage")}"]`,
+    );
+    expect(sendButton.getAttribute("aria-label")).toBe(t("chat.runControls.sendMessage"));
     expect(sendButton.textContent).toContain("Send");
     sendButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
@@ -130,7 +142,10 @@ describe("chat run controls", () => {
       container,
     );
 
-    const queueButton = getButton(container, 'button[title="Queue"]');
+    const queueButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.queueMessage")}"]`,
+    );
     expect(queueButton.disabled).toBe(false);
     queueButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" follow up ");
@@ -151,7 +166,10 @@ describe("chat run controls", () => {
       container,
     );
 
-    const stopButton = getButton(container, 'button[title="Stop"]');
+    const stopButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
     expect(stopButton.disabled).toBe(false);
     stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
@@ -163,15 +181,15 @@ describe("chat run controls", () => {
     render(renderChatRunControls(createProps({ hasMessages: true })), container);
 
     expect(
-      getButton(container, `button[title="${t("chat.runControls.newSession")}"]`).textContent,
+      getButton(container, `button[aria-label="${t("chat.runControls.newSession")}"]`).textContent,
     ).toContain(t("chat.runControls.newSession"));
     expect(
-      getButton(container, `button[title="${t("chat.runControls.export")}"]`).textContent,
+      getButton(container, `button[aria-label="${t("chat.runControls.exportChat")}"]`).textContent,
     ).toContain(t("chat.runControls.export"));
     expect(
-      getButton(container, `button[title="${t("chat.runControls.send")}"]`).textContent,
+      getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`).textContent,
     ).toContain(t("chat.runControls.send"));
-    expect(container.querySelector('button[title="New session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="New session"]')).toBeNull();
   });
 });
 

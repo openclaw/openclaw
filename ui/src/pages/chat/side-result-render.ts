@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import "../../components/tooltip.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { ChatSideResult } from "./side-result.ts";
 
@@ -25,15 +26,16 @@ export function renderSideResult(
           <span class="chat-side-result__label">BTW</span>
           <span class="chat-side-result__meta">Not saved to chat history</span>
         </div>
-        <button
-          class="btn chat-side-result__dismiss"
-          type="button"
-          aria-label="Dismiss BTW result"
-          title="Dismiss"
-          @click=${() => onDismiss?.()}
-        >
-          ${icons.x}
-        </button>
+        <openclaw-tooltip content="Dismiss">
+          <button
+            class="btn chat-side-result__dismiss"
+            type="button"
+            aria-label="Dismiss BTW result"
+            @click=${() => onDismiss?.()}
+          >
+            ${icons.x}
+          </button>
+        </openclaw-tooltip>
       </div>
       <div class="chat-side-result__question">${sideResult.question}</div>
       <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>

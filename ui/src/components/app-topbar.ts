@@ -4,6 +4,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./dashboard-header.ts";
 import "./theme-mode-toggle.ts";
+import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
@@ -36,6 +37,8 @@ export class AppTopbar extends LitElement {
   };
 
   override render() {
+    const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
+    const paletteLabel = t("chat.commandPaletteTitle");
     return html`
       <header
         class="topbar"
@@ -43,17 +46,18 @@ export class AppTopbar extends LitElement {
         aria-hidden=${this.onboarding ? "true" : nothing}
       >
         <div class="topnav-shell">
-          <button
-            type="button"
-            class="sidebar-menu-trigger topbar-nav-toggle"
-            @click=${(event: MouseEvent) =>
-              this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
-            title="${this.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
-            aria-label="${this.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
-            aria-expanded=${this.navDrawerOpen}
-          >
-            <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
-          </button>
+          <openclaw-tooltip .content=${drawerLabel}>
+            <button
+              type="button"
+              class="sidebar-menu-trigger topbar-nav-toggle"
+              @click=${(event: MouseEvent) =>
+                this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
+              aria-label=${drawerLabel}
+              aria-expanded=${this.navDrawerOpen}
+            >
+              <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
+            </button>
+          </openclaw-tooltip>
           <div class="topnav-shell__content">
             <dashboard-header
               .routeId=${this.routeId}
@@ -64,16 +68,17 @@ export class AppTopbar extends LitElement {
             ></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
-            <button
-              class="topbar-search"
-              ?disabled=${this.searchDisabled || !this.onOpenPalette}
-              @click=${() => this.onOpenPalette?.()}
-              title=${t("chat.commandPaletteTitle")}
-              aria-label=${t("chat.openCommandPalette")}
-            >
-              <span class="topbar-search__label">${t("common.search")}</span>
-              <kbd class="topbar-search__kbd">⌘K</kbd>
-            </button>
+            <openclaw-tooltip .content=${paletteLabel}>
+              <button
+                class="topbar-search"
+                ?disabled=${this.searchDisabled || !this.onOpenPalette}
+                @click=${() => this.onOpenPalette?.()}
+                aria-label=${t("chat.openCommandPalette")}
+              >
+                <span class="topbar-search__label">${t("common.search")}</span>
+                <kbd class="topbar-search__kbd">⌘K</kbd>
+              </button>
+            </openclaw-tooltip>
             <div class="topbar-status">
               ${this.routeOwnsHeader && this.headerError
                 ? html`<div class="pill danger">${this.headerError}</div>`

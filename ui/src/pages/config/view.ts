@@ -20,6 +20,7 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
+import "../../components/tooltip.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
@@ -1509,11 +1510,7 @@ export function renderConfig(props: ConfigProps) {
             <div class="config-actions__buttons">
               ${props.onOpenFile
                 ? html`
-                    <button
-                      class="btn btn--sm"
-                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
-                      @click=${props.onOpenFile}
-                    >
+                    <button class="btn btn--sm" @click=${props.onOpenFile}>
                       ${icons.fileText} Open
                     </button>
                   `
@@ -1873,20 +1870,25 @@ export function renderConfig(props: ConfigProps) {
                                   >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
                                   ${blurred ? "redacted" : "visible"}</span
                                 >
-                                <button
-                                  class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                  title=${blurred
+                                <openclaw-tooltip
+                                  .content=${blurred
                                     ? "Reveal sensitive values"
                                     : "Hide sensitive values"}
-                                  aria-label="Toggle raw config redaction"
-                                  aria-pressed=${!blurred}
-                                  @click=${() => {
-                                    cvs.rawRevealed = !cvs.rawRevealed;
-                                    requestUpdate();
-                                  }}
                                 >
-                                  ${blurred ? icons.eyeOff : icons.eye}
-                                </button>
+                                  <button
+                                    class="btn btn--icon config-raw-toggle ${blurred
+                                      ? ""
+                                      : "active"}"
+                                    aria-label="Toggle raw config redaction"
+                                    aria-pressed=${!blurred}
+                                    @click=${() => {
+                                      cvs.rawRevealed = !cvs.rawRevealed;
+                                      requestUpdate();
+                                    }}
+                                  >
+                                    ${blurred ? icons.eyeOff : icons.eye}
+                                  </button>
+                                </openclaw-tooltip>
                               `
                             : nothing}
                         </span>

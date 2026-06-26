@@ -8,6 +8,7 @@ import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { getVisibleSessionRows, type SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -315,29 +316,31 @@ export class SessionPicker extends LitElement {
               }}
             />
           </label>
-          <button
-            class="btn btn--ghost btn--icon chat-session-picker__icon-button"
-            data-chat-session-search-submit="true"
-            type="button"
-            title=${t("common.search")}
-            aria-label=${t("common.search")}
-            ?disabled=${!this.connected}
-            @click=${() => void this.applySearch()}
-          >
-            ${icons.search}
-          </button>
+          <openclaw-tooltip .content=${t("common.search")}>
+            <button
+              class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+              data-chat-session-search-submit="true"
+              type="button"
+              aria-label=${t("common.search")}
+              ?disabled=${!this.connected}
+              @click=${() => void this.applySearch()}
+            >
+              ${icons.search}
+            </button>
+          </openclaw-tooltip>
           ${hasQuery
             ? html`
-                <button
-                  class="btn btn--ghost btn--icon chat-session-picker__icon-button"
-                  data-chat-session-search-clear="true"
-                  type="button"
-                  title=${t("chat.selectors.clearSessionSearch")}
-                  aria-label=${t("chat.selectors.clearSessionSearch")}
-                  @click=${this.clearSearch}
-                >
-                  ${icons.x}
-                </button>
+                <openclaw-tooltip .content=${t("chat.selectors.clearSessionSearch")}>
+                  <button
+                    class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+                    data-chat-session-search-clear="true"
+                    type="button"
+                    aria-label=${t("chat.selectors.clearSessionSearch")}
+                    @click=${this.clearSearch}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
               `
             : nothing}
         </div>
@@ -427,7 +430,6 @@ export class SessionPicker extends LitElement {
             class="chat-controls__session-trigger"
             data-chat-session-select="true"
             type="button"
-            title=${selectedLabel}
             aria-label=${t("chat.selectors.session")}
             aria-haspopup="dialog"
             aria-expanded=${this.open ? "true" : "false"}

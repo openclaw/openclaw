@@ -11,6 +11,7 @@ import type {
 } from "../../api/types.ts";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -1103,18 +1104,20 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
                     >
                   </div>
                 `}
-            <button
-              class="chat-attachment-remove"
-              type="button"
-              aria-label="Remove attachment"
-              @click=${() => {
-                const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
-                releaseChatAttachmentPayload(att.id);
-                props.onAttachmentsChange?.(next);
-              }}
-            >
-              &times;
-            </button>
+            <openclaw-tooltip content="Remove attachment">
+              <button
+                class="chat-attachment-remove"
+                type="button"
+                aria-label="Remove attachment"
+                @click=${() => {
+                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                  releaseChatAttachmentPayload(att.id);
+                  props.onAttachmentsChange?.(next);
+                }}
+              >
+                &times;
+              </button>
+            </openclaw-tooltip>
           </div>
         `,
       )}
@@ -1184,16 +1187,19 @@ function renderSessionWorkspaceRail(
         class="chat-workspace-rail chat-workspace-rail--collapsed"
         aria-label=${t("chat.workspaceFiles.label")}
       >
-        <button
-          type="button"
-          class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-          title=${t("chat.workspaceFiles.expand")}
-          aria-label=${t("chat.workspaceFiles.expand")}
-          aria-expanded="false"
-          @click=${sessionWorkspace.onToggleCollapsed}
-        >
-          <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.panelRightOpen}</span>
-        </button>
+        <openclaw-tooltip .content=${t("chat.workspaceFiles.expand")}>
+          <button
+            type="button"
+            class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+            aria-label=${t("chat.workspaceFiles.expand")}
+            aria-expanded="false"
+            @click=${sessionWorkspace.onToggleCollapsed}
+          >
+            <span class="nav-collapse-toggle__icon" aria-hidden="true"
+              >${icons.panelRightOpen}</span
+            >
+          </button>
+        </openclaw-tooltip>
         <span class="chat-workspace-rail__collapsed-icon" aria-hidden="true"
           >${icons.fileText}</span
         >
@@ -1219,30 +1225,32 @@ function renderSessionWorkspaceRail(
     >
       ${options.preview === false
         ? nothing
-        : html`<button
-            class="chat-workspace-rail__row-action"
-            type="button"
-            title=${t("chat.workspaceFiles.preview")}
-            aria-label=${t("chat.workspaceFiles.preview")}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              sessionWorkspace.onOpenFile(path);
-            }}
-          >
-            ${icons.eye}
-          </button>`}
-      <button
-        class="chat-workspace-rail__row-action"
-        type="button"
-        title=${t("chat.workspaceFiles.copyPath")}
-        aria-label=${t("chat.workspaceFiles.copyPath")}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          sessionWorkspace.onCopyPath(path);
-        }}
-      >
-        ${icons.copy}
-      </button>
+        : html`<openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
+            <button
+              class="chat-workspace-rail__row-action"
+              type="button"
+              aria-label=${t("chat.workspaceFiles.preview")}
+              @click=${(event: Event) => {
+                event.stopPropagation();
+                sessionWorkspace.onOpenFile(path);
+              }}
+            >
+              ${icons.eye}
+            </button>
+          </openclaw-tooltip>`}
+      <openclaw-tooltip .content=${t("chat.workspaceFiles.copyPath")}>
+        <button
+          class="chat-workspace-rail__row-action"
+          type="button"
+          aria-label=${t("chat.workspaceFiles.copyPath")}
+          @click=${(event: Event) => {
+            event.stopPropagation();
+            sessionWorkspace.onCopyPath(path);
+          }}
+        >
+          ${icons.copy}
+        </button>
+      </openclaw-tooltip>
     </span>
   `;
   const renderSessionSummary = (): TemplateResult | typeof nothing => {
@@ -1491,18 +1499,19 @@ function renderSessionWorkspaceRail(
                     </span>
                   </button>
                   <span class="chat-workspace-rail__row-actions">
-                    <button
-                      class="chat-workspace-rail__row-action"
-                      type="button"
-                      title=${t("chat.workspaceFiles.preview")}
-                      aria-label=${t("chat.workspaceFiles.preview")}
-                      @click=${(event: Event) => {
-                        event.stopPropagation();
-                        sessionWorkspace.onOpenArtifact(artifact.id);
-                      }}
-                    >
-                      ${icons.eye}
-                    </button>
+                    <openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
+                      <button
+                        class="chat-workspace-rail__row-action"
+                        type="button"
+                        aria-label=${t("chat.workspaceFiles.preview")}
+                        @click=${(event: Event) => {
+                          event.stopPropagation();
+                          sessionWorkspace.onOpenArtifact(artifact.id);
+                        }}
+                      >
+                        ${icons.eye}
+                      </button>
+                    </openclaw-tooltip>
                   </span>
                 </div>
               `;
@@ -1517,28 +1526,30 @@ function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          <button
-            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-            type="button"
-            title=${t("chat.workspaceFiles.refresh")}
-            aria-label=${t("chat.workspaceFiles.refresh")}
-            ?disabled=${sessionWorkspace.loading}
-            @click=${sessionWorkspace.onRefresh}
-          >
-            ${icons.refresh}
-          </button>
-          <button
-            type="button"
-            class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-            title=${t("chat.workspaceFiles.collapse")}
-            aria-label=${t("chat.workspaceFiles.collapse")}
-            aria-expanded="true"
-            @click=${sessionWorkspace.onToggleCollapsed}
-          >
-            <span class="nav-collapse-toggle__icon" aria-hidden="true"
-              >${icons.panelRightClose}</span
+          <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
+            <button
+              class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+              type="button"
+              aria-label=${t("chat.workspaceFiles.refresh")}
+              ?disabled=${sessionWorkspace.loading}
+              @click=${sessionWorkspace.onRefresh}
             >
-          </button>
+              ${icons.refresh}
+            </button>
+          </openclaw-tooltip>
+          <openclaw-tooltip .content=${t("chat.workspaceFiles.collapse")}>
+            <button
+              type="button"
+              class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+              aria-label=${t("chat.workspaceFiles.collapse")}
+              aria-expanded="true"
+              @click=${sessionWorkspace.onToggleCollapsed}
+            >
+              <span class="nav-collapse-toggle__icon" aria-hidden="true"
+                >${icons.panelRightClose}</span
+              >
+            </button>
+          </openclaw-tooltip>
         </div>
       </div>
       ${sessionWorkspace.list?.root
@@ -1875,17 +1886,19 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
           requestUpdate();
         }}
       />
-      <button
-        class="btn btn--ghost"
-        aria-label="Close search"
-        @click=${() => {
-          vs.searchOpen = false;
-          vs.searchQuery = "";
-          requestUpdate();
-        }}
-      >
-        ${icons.x}
-      </button>
+      <openclaw-tooltip content="Close search">
+        <button
+          class="btn btn--ghost"
+          aria-label="Close search"
+          @click=${() => {
+            vs.searchOpen = false;
+            vs.searchQuery = "";
+            requestUpdate();
+          }}
+        >
+          ${icons.x}
+        </button>
+      </openclaw-tooltip>
     </div>
   `;
 }
@@ -1940,16 +1953,18 @@ function renderPinnedSection(
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
                     >
-                    <button
-                      class="btn btn--ghost"
-                      @click=${() => {
-                        pinned.unpin(index);
-                        requestUpdate();
-                      }}
-                      title="Unpin"
-                    >
-                      ${icons.x}
-                    </button>
+                    <openclaw-tooltip content="Unpin">
+                      <button
+                        class="btn btn--ghost"
+                        aria-label="Unpin"
+                        @click=${() => {
+                          pinned.unpin(index);
+                          requestUpdate();
+                        }}
+                      >
+                        ${icons.x}
+                      </button>
+                    </openclaw-tooltip>
                   </div>
                 `,
               )}
@@ -2796,15 +2811,16 @@ export function renderChat(props: ChatProps) {
               </span>
               ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
                 ? html`
-                    <button
-                      class="callout__dismiss"
-                      type="button"
-                      @click=${props.onDismissRealtimeTalkError}
-                      aria-label=${t("chat.composer.dismissTalkError")}
-                      title=${t("chat.composer.dismissTalkError")}
-                    >
-                      ${icons.x}
-                    </button>
+                    <openclaw-tooltip .content=${t("chat.composer.dismissTalkError")}>
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissRealtimeTalkError}
+                        aria-label=${t("chat.composer.dismissTalkError")}
+                      >
+                        ${icons.x}
+                      </button>
+                    </openclaw-tooltip>
                   `
                 : nothing}
             </div>
@@ -2854,57 +2870,62 @@ export function renderChat(props: ChatProps) {
 
       <div class="agent-chat__toolbar">
         <div class="agent-chat__toolbar-left">
-          <button
-            type="button"
-            class="agent-chat__input-btn"
-            @click=${clickComposerFileInput}
-            title=${t("chat.composer.attachFile")}
-            aria-label=${t("chat.composer.attachFile")}
-            ?disabled=${!canCompose}
-          >
-            ${icons.paperclip}
-            <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
-          </button>
+          <openclaw-tooltip .content=${t("chat.composer.attachFile")}>
+            <button
+              type="button"
+              class="agent-chat__input-btn"
+              @click=${clickComposerFileInput}
+              aria-label=${t("chat.composer.attachFile")}
+              ?disabled=${!canCompose}
+            >
+              ${icons.paperclip}
+              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
+            </button>
+          </openclaw-tooltip>
 
           ${props.onToggleRealtimeTalk
             ? html`
-                <button
-                  class="agent-chat__input-btn ${props.realtimeTalkActive
-                    ? "agent-chat__input-btn--talk"
-                    : ""}"
-                  @click=${props.onToggleRealtimeTalk}
-                  title=${props.realtimeTalkActive
+                <openclaw-tooltip
+                  .content=${props.realtimeTalkActive
                     ? t("chat.composer.stopTalk")
                     : t("chat.composer.startTalk")}
-                  aria-label=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                  ?disabled=${!canCompose && !props.realtimeTalkActive}
                 >
-                  ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                  <span class="agent-chat__control-label"
-                    >${props.realtimeTalkActive
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    aria-label=${props.realtimeTalkActive
                       ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}</span
+                      : t("chat.composer.startTalk")}
+                    ?disabled=${!canCompose && !props.realtimeTalkActive}
                   >
-                </button>
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                    <span class="agent-chat__control-label"
+                      >${props.realtimeTalkActive
+                        ? t("chat.composer.stopTalk")
+                        : t("chat.composer.startTalk")}</span
+                    >
+                  </button>
+                </openclaw-tooltip>
               `
             : nothing}
           ${props.onToggleRealtimeTalkOptions
             ? html`
-                <button
-                  class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                    ? "agent-chat__input-btn--talk"
-                    : ""}"
-                  @click=${props.onToggleRealtimeTalkOptions}
-                  title="Talk settings"
-                  aria-label="Talk settings"
-                  aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                  ?disabled=${!canCompose || props.realtimeTalkActive}
-                >
-                  ${icons.settings}
-                  <span class="agent-chat__control-label">Talk settings</span>
-                </button>
+                <openclaw-tooltip content="Talk settings">
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalkOptions}
+                    aria-label="Talk settings"
+                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                    ?disabled=${!canCompose || props.realtimeTalkActive}
+                  >
+                    ${icons.settings}
+                    <span class="agent-chat__control-label">Talk settings</span>
+                  </button>
+                </openclaw-tooltip>
               `
             : nothing}
           ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
@@ -2962,15 +2983,16 @@ export function renderChat(props: ChatProps) {
                 <span class="callout__content">${props.error}</span>
                 ${props.onDismissError
                   ? html`
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissError}
-                        aria-label="Dismiss error"
-                        title="Dismiss error"
-                      >
-                        ${icons.x}
-                      </button>
+                      <openclaw-tooltip content="Dismiss error">
+                        <button
+                          class="callout__dismiss"
+                          type="button"
+                          @click=${props.onDismissError}
+                          aria-label="Dismiss error"
+                        >
+                          ${icons.x}
+                        </button>
+                      </openclaw-tooltip>
                     `
                   : nothing}
               </div>
@@ -2980,15 +3002,16 @@ export function renderChat(props: ChatProps) {
       ${
         props.focusMode && props.onToggleFocusMode
           ? html`
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
-                title="Exit focus mode"
-              >
-                ${icons.x}
-              </button>
+              <openclaw-tooltip content="Exit focus mode">
+                <button
+                  class="chat-focus-exit"
+                  type="button"
+                  @click=${props.onToggleFocusMode}
+                  aria-label="Exit focus mode"
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
             `
           : nothing
       }

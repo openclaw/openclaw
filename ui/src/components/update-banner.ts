@@ -104,18 +104,19 @@ export class UpdateBanner extends LitElement {
             >
               ${props.updateRunning ? t("chat.updating") : t("chat.updateNow")}
             </button>
-            <button
-              class="update-banner__close"
-              type="button"
-              title=${t("common.dismiss")}
-              aria-label=${t("chat.dismissUpdateBanner")}
-              @click=${() => {
-                dismiss(updateAvailable);
-                props.onDismiss();
-              }}
-            >
-              ${icons.x}
-            </button>
+            <openclaw-tooltip .content=${t("common.dismiss")}>
+              <button
+                class="update-banner__close"
+                type="button"
+                aria-label=${t("chat.dismissUpdateBanner")}
+                @click=${() => {
+                  dismiss(updateAvailable);
+                  props.onDismiss();
+                }}
+              >
+                ${icons.x}
+              </button>
+            </openclaw-tooltip>
           </div>`
         : nothing}
     `;

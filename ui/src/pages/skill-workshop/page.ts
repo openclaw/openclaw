@@ -3,6 +3,7 @@ import { consume } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext } from "../../app/context.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import {
   countSkillWorkshopProposals,
@@ -98,7 +99,6 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState) {
           class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
           role="tab"
           aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
-          title="Board view"
           @click=${() => setSkillWorkshopMode(state, "board", requestUpdate)}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
@@ -113,7 +113,6 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState) {
           class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
           role="tab"
           aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
-          title="Today view"
           @click=${() => setSkillWorkshopMode(state, "today", requestUpdate)}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">

@@ -44,13 +44,6 @@ import {
 } from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import {
-  clearActiveFloatingTooltips,
-  prepareActiveFloatingTooltipsForRender,
-  promoteNativeTitleTooltip,
-  refreshActiveFloatingTooltip,
-  restoreNativeTitleTooltip,
-} from "../lib/dom-tooltips.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
@@ -836,19 +829,6 @@ export class OpenClawApp extends LitElement {
     }
     this.setChatMobileControlsOpen(false);
   };
-  private nativeTitleTooltipPointerOverHandler = (event: PointerEvent) => {
-    promoteNativeTitleTooltip(event.target, this, "pointer");
-  };
-  private nativeTitleTooltipPointerOutHandler = (event: PointerEvent) => {
-    restoreNativeTitleTooltip(event.target, this, "pointer", event.relatedTarget);
-  };
-  private nativeTitleTooltipFocusInHandler = (event: FocusEvent) => {
-    promoteNativeTitleTooltip(event.target, this, "focus");
-  };
-  private nativeTitleTooltipFocusOutHandler = (event: FocusEvent) => {
-    restoreNativeTitleTooltip(event.target, this, "focus", event.relatedTarget);
-  };
-
   override createRenderRoot() {
     return this;
   }
@@ -869,10 +849,6 @@ export class OpenClawApp extends LitElement {
     document.addEventListener("keydown", this.globalKeydownHandler);
     document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
-    this.addEventListener("pointerover", this.nativeTitleTooltipPointerOverHandler);
-    this.addEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
-    this.addEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
-    this.addEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
     if (this.applicationContextDisposed) {
       this.applicationContext = createApplicationContext(
         this as unknown as Parameters<typeof createApplicationContext>[0],
@@ -892,21 +868,12 @@ export class OpenClawApp extends LitElement {
     handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
   }
 
-  protected override willUpdate() {
-    prepareActiveFloatingTooltipsForRender(this);
-  }
-
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.globalKeydownHandler);
     this.nativeBridgeCleanup?.();
     this.nativeBridgeCleanup = null;
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
-    this.removeEventListener("pointerover", this.nativeTitleTooltipPointerOverHandler);
-    this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
-    this.removeEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
-    this.removeEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
-    clearActiveFloatingTooltips(this);
     if (this.sessionSwitchNoticeTimer !== null) {
       window.clearTimeout(this.sessionSwitchNoticeTimer);
       this.sessionSwitchNoticeTimer = null;
@@ -928,7 +895,6 @@ export class OpenClawApp extends LitElement {
       changed,
       this.applicationContext,
     );
-    refreshActiveFloatingTooltip(this);
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }

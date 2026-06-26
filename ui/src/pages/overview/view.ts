@@ -14,6 +14,7 @@ import type { RouteId } from "../../app-routes.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
 import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
@@ -297,19 +298,22 @@ export function renderOverview(props: OverviewProps) {
                       }}
                       placeholder="OPENCLAW_GATEWAY_TOKEN"
                     />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayToken
+                    <openclaw-tooltip
+                      .content=${props.showGatewayToken
                         ? t("overview.access.hideToken")
                         : t("overview.access.showToken")}
-                      aria-label=${t("overview.access.toggleTokenVisibility")}
-                      aria-pressed=${props.showGatewayToken}
-                      @click=${props.onToggleGatewayTokenVisibility}
                     >
-                      ${props.showGatewayToken ? icons.eye : icons.eyeOff}
-                    </button>
+                      <button
+                        type="button"
+                        class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                        style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                        aria-label=${t("overview.access.toggleTokenVisibility")}
+                        aria-pressed=${props.showGatewayToken}
+                        @click=${props.onToggleGatewayTokenVisibility}
+                      >
+                        ${props.showGatewayToken ? icons.eye : icons.eyeOff}
+                      </button>
+                    </openclaw-tooltip>
                   </div>
                 </label>
                 <label class="field">
@@ -326,19 +330,22 @@ export function renderOverview(props: OverviewProps) {
                       }}
                       placeholder=${t("overview.access.passwordPlaceholder")}
                     />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayPassword
+                    <openclaw-tooltip
+                      .content=${props.showGatewayPassword
                         ? t("overview.access.hidePassword")
                         : t("overview.access.showPassword")}
-                      aria-label=${t("overview.access.togglePasswordVisibility")}
-                      aria-pressed=${props.showGatewayPassword}
-                      @click=${props.onToggleGatewayPasswordVisibility}
                     >
-                      ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-                    </button>
+                      <button
+                        type="button"
+                        class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                        style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                        aria-label=${t("overview.access.togglePasswordVisibility")}
+                        aria-pressed=${props.showGatewayPassword}
+                        @click=${props.onToggleGatewayPasswordVisibility}
+                      >
+                        ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
+                      </button>
+                    </openclaw-tooltip>
                   </div>
                 </label>
               `}

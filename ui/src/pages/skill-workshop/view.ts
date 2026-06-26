@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal.ts";
+import "../../components/tooltip.ts";
 
 export type SkillWorkshopProposalStatus =
   | "pending"
@@ -185,15 +186,16 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             <div class="sw-revision-dialog__eyebrow">${verb} proposal</div>
             <h2 id="sw-revision-title">${proposal.slug}</h2>
           </div>
-          <button
-            class="sw-revision-dialog__close"
-            title="Close"
-            aria-label="Close"
-            ?disabled=${Boolean(props.actionBusy)}
-            @click=${props.onRevisionCancel}
-          >
-            ×
-          </button>
+          <openclaw-tooltip content="Close">
+            <button
+              class="sw-revision-dialog__close"
+              aria-label="Close"
+              ?disabled=${Boolean(props.actionBusy)}
+              @click=${props.onRevisionCancel}
+            >
+              ×
+            </button>
+          </openclaw-tooltip>
         </div>
         <p class="sw-revision-dialog__copy">
           Tell the agent what should change. The proposal stays pending and the workshop will create
@@ -413,8 +415,12 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
           </div>
         </div>
         <div class="sw-detail__nav">
-          <button title="Previous" @click=${props.onPrev}>↑</button>
-          <button title="Next" @click=${props.onNext}>↓</button>
+          <openclaw-tooltip content="Previous">
+            <button aria-label="Previous" @click=${props.onPrev}>↑</button>
+          </openclaw-tooltip>
+          <openclaw-tooltip content="Next">
+            <button aria-label="Next" @click=${props.onNext}>↓</button>
+          </openclaw-tooltip>
         </div>
       </div>
 

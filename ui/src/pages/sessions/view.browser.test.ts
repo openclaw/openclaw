@@ -80,7 +80,7 @@ function sessionsTableHtml() {
               <tr class="session-data-row session-data-row--expandable">
                 <td class="data-table-checkbox-col"><input type="checkbox" /></td>
                 <td class="data-table-key-col">
-                  <div class="mono session-key-cell" title="agent:main:main">
+                  <div class="mono session-key-cell" aria-label="agent:main:main">
                     <a class="session-link">agent:main:main</a>
                   </div>
                 </td>
@@ -106,7 +106,7 @@ function sessionsTableHtml() {
                 <td><select><option>on</option></select></td>
                 <td><select><option>full</option></select></td>
                 <td><select><option>stream</option></select></td>
-                <td><button class="icon-btn" title="Add to Workboard"></button></td>
+                <td><button class="icon-btn" aria-label="Add to Workboard"></button></td>
               </tr>
               <tr class="session-checkpoint-details-row">
                 <td colspan="14">

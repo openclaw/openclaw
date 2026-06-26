@@ -7,6 +7,7 @@ import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
+import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
@@ -14,13 +15,6 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import {
-  clearActiveFloatingTooltips,
-  prepareActiveFloatingTooltipsForRender,
-  promoteNativeTitleTooltip,
-  refreshActiveFloatingTooltip,
-  restoreNativeTitleTooltip,
-} from "../lib/dom-tooltips.ts";
 import type { RouteLocation, RouterState } from "../router/types.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -167,49 +161,53 @@ export class OpenClawApp extends LitElement {
       : nothing;
     if (!this.gatewayConnected) {
       return html`
-        <openclaw-login-gate
-          .props=${{
-            basePath: context.basePath,
-            connected: this.gatewayConnected,
-            lastError: this.gatewayLastError,
-            lastErrorCode: this.gatewayLastErrorCode,
-            hasToken: Boolean(this.loginToken.trim()),
-            hasPassword: Boolean(this.loginPassword.trim()),
-            gatewayUrl: this.loginGatewayUrl,
-            token: this.loginToken,
-            password: this.loginPassword,
-            showGatewayToken: this.loginShowGatewayToken,
-            showGatewayPassword: this.loginShowGatewayPassword,
-            onGatewayUrlChange: (value: string) => {
-              this.loginGatewayUrl = value;
-            },
-            onTokenChange: (value: string) => {
-              this.loginToken = value;
-            },
-            onPasswordChange: (value: string) => {
-              this.loginPassword = value;
-            },
-            onToggleGatewayToken: () => {
-              this.loginShowGatewayToken = !this.loginShowGatewayToken;
-            },
-            onToggleGatewayPassword: () => {
-              this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
-            },
-            onConnect: () => {
-              context.gateway.connect({
-                gatewayUrl: this.loginGatewayUrl,
-                token: this.loginToken,
-                password: this.loginPassword,
-              });
-            },
-          }}
-        ></openclaw-login-gate>
-        ${gatewayUrlConfirmation}
+        <openclaw-tooltip-provider>
+          <openclaw-login-gate
+            .props=${{
+              basePath: context.basePath,
+              connected: this.gatewayConnected,
+              lastError: this.gatewayLastError,
+              lastErrorCode: this.gatewayLastErrorCode,
+              hasToken: Boolean(this.loginToken.trim()),
+              hasPassword: Boolean(this.loginPassword.trim()),
+              gatewayUrl: this.loginGatewayUrl,
+              token: this.loginToken,
+              password: this.loginPassword,
+              showGatewayToken: this.loginShowGatewayToken,
+              showGatewayPassword: this.loginShowGatewayPassword,
+              onGatewayUrlChange: (value: string) => {
+                this.loginGatewayUrl = value;
+              },
+              onTokenChange: (value: string) => {
+                this.loginToken = value;
+              },
+              onPasswordChange: (value: string) => {
+                this.loginPassword = value;
+              },
+              onToggleGatewayToken: () => {
+                this.loginShowGatewayToken = !this.loginShowGatewayToken;
+              },
+              onToggleGatewayPassword: () => {
+                this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
+              },
+              onConnect: () => {
+                context.gateway.connect({
+                  gatewayUrl: this.loginGatewayUrl,
+                  token: this.loginToken,
+                  password: this.loginPassword,
+                });
+              },
+            }}
+          ></openclaw-login-gate>
+          ${gatewayUrlConfirmation}
+        </openclaw-tooltip-provider>
       `;
     }
     return html`
-      ${gatewayUrlConfirmation}
-      <openclaw-app-shell .runtime=${runtime} .onboarding=${this.onboarding}></openclaw-app-shell>
+      <openclaw-tooltip-provider>
+        ${gatewayUrlConfirmation}
+        <openclaw-app-shell .runtime=${runtime} .onboarding=${this.onboarding}></openclaw-app-shell>
+      </openclaw-tooltip-provider>
     `;
   }
 }
@@ -243,22 +241,6 @@ class OpenClawShell extends LitElement {
   private stopRouteSubscription: (() => void) | undefined;
   private stopOverlaySubscription: (() => void) | undefined;
 
-  private readonly nativeTitleTooltipPointerOver = (event: PointerEvent) => {
-    promoteNativeTitleTooltip(event.target, this, "pointer");
-  };
-
-  private readonly nativeTitleTooltipPointerOut = (event: PointerEvent) => {
-    restoreNativeTitleTooltip(event.target, this, "pointer", event.relatedTarget);
-  };
-
-  private readonly nativeTitleTooltipFocusIn = (event: FocusEvent) => {
-    promoteNativeTitleTooltip(event.target, this, "focus");
-  };
-
-  private readonly nativeTitleTooltipFocusOut = (event: FocusEvent) => {
-    restoreNativeTitleTooltip(event.target, this, "focus", event.relatedTarget);
-  };
-
   override createRenderRoot() {
     return this;
   }
@@ -267,15 +249,10 @@ class OpenClawShell extends LitElement {
     super.connectedCallback();
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    this.addEventListener("pointerover", this.nativeTitleTooltipPointerOver);
-    this.addEventListener("pointerout", this.nativeTitleTooltipPointerOut);
-    this.addEventListener("focusin", this.nativeTitleTooltipFocusIn);
-    this.addEventListener("focusout", this.nativeTitleTooltipFocusOut);
   }
 
   override updated() {
     this.startSubscriptions();
-    refreshActiveFloatingTooltip(this);
   }
 
   private startSubscriptions() {
@@ -313,10 +290,6 @@ class OpenClawShell extends LitElement {
     });
   }
 
-  protected override willUpdate() {
-    prepareActiveFloatingTooltipsForRender(this);
-  }
-
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     this.stopGatewaySubscription?.();
@@ -327,12 +300,7 @@ class OpenClawShell extends LitElement {
     this.stopRouteSubscription = undefined;
     this.stopOverlaySubscription?.();
     this.stopOverlaySubscription = undefined;
-    this.removeEventListener("pointerover", this.nativeTitleTooltipPointerOver);
-    this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOut);
-    this.removeEventListener("focusin", this.nativeTitleTooltipFocusIn);
-    this.removeEventListener("focusout", this.nativeTitleTooltipFocusOut);
     this.navDrawerTrigger = null;
-    clearActiveFloatingTooltips(this);
     super.disconnectedCallback();
   }
 

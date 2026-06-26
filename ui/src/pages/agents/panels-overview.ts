@@ -7,6 +7,7 @@ import type {
   ModelCatalogEntry,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -112,14 +113,16 @@ export function renderAgentOverview(params: {
         <div class="agent-kv">
           <div class="label">Workspace</div>
           <div>
-            <button
-              type="button"
-              class="workspace-link mono"
-              @click=${() => onSelectPanel("files")}
-              title="Open Files tab"
-            >
-              ${workspace}
-            </button>
+            <openclaw-tooltip content="Open Files tab">
+              <button
+                type="button"
+                class="workspace-link mono"
+                @click=${() => onSelectPanel("files")}
+                aria-label="Open Files tab"
+              >
+                ${workspace}
+              </button>
+            </openclaw-tooltip>
           </div>
         </div>
         <div class="agent-kv">

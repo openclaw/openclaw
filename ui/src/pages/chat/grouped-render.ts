@@ -23,6 +23,7 @@ import type {
 } from "./chat-types.ts";
 export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
+import "../../components/tooltip.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
@@ -979,25 +980,25 @@ function placeDeleteConfirmPopover(
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   return html`
     <span class="chat-delete-wrap">
-      <button
-        class="chat-group-delete"
-        title="Delete"
-        aria-label="Delete message"
-        @click=${(e: Event) => {
-          if (shouldSkipDeleteConfirm()) {
-            onDelete();
-            return;
-          }
-          const btn = e.currentTarget as HTMLElement;
-          const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
-          const existing = wrap?.querySelector(".chat-delete-confirm");
-          if (existing) {
-            dismissDeleteConfirm(existing);
-            return;
-          }
-          const popover = document.createElement("div");
-          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
-          popover.innerHTML = `
+      <openclaw-tooltip content="Delete">
+        <button
+          class="chat-group-delete"
+          aria-label="Delete message"
+          @click=${(e: Event) => {
+            if (shouldSkipDeleteConfirm()) {
+              onDelete();
+              return;
+            }
+            const btn = e.currentTarget as HTMLElement;
+            const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
+            const existing = wrap?.querySelector(".chat-delete-confirm");
+            if (existing) {
+              dismissDeleteConfirm(existing);
+              return;
+            }
+            const popover = document.createElement("div");
+            popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
+            popover.innerHTML = `
             <p class="chat-delete-confirm__text">Delete this message?</p>
             <label class="chat-delete-confirm__remember">
               <input type="checkbox" class="chat-delete-confirm__check" />
@@ -1008,53 +1009,54 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
               <button class="chat-delete-confirm__yes" type="button">Delete</button>
             </div>
           `;
-          wrap.appendChild(popover);
-          placeDeleteConfirmPopover(btn, popover, side);
+            wrap.appendChild(popover);
+            placeDeleteConfirmPopover(btn, popover, side);
 
-          const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
-          const yes = popover.querySelector(".chat-delete-confirm__yes")!;
-          const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
+            const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
+            const yes = popover.querySelector(".chat-delete-confirm__yes")!;
+            const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
 
-          let dismissed = false;
-          function dismissPopover() {
-            if (dismissed) {
-              return;
+            let dismissed = false;
+            function dismissPopover() {
+              if (dismissed) {
+                return;
+              }
+              dismissed = true;
+              document.removeEventListener("click", closeOnOutside, true);
+              deleteConfirmDismissers.delete(popover);
+              popover.remove();
             }
-            dismissed = true;
-            document.removeEventListener("click", closeOnOutside, true);
-            deleteConfirmDismissers.delete(popover);
-            popover.remove();
-          }
-          function closeOnOutside(evt: MouseEvent) {
-            const target = evt.target;
-            if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
+            function closeOnOutside(evt: MouseEvent) {
+              const target = evt.target;
+              if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
+                dismissPopover();
+              }
+            }
+
+            deleteConfirmDismissers.set(popover, dismissPopover);
+
+            cancel.addEventListener("click", dismissPopover);
+            yes.addEventListener("click", () => {
+              if (check.checked) {
+                try {
+                  getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
+                } catch {}
+              }
               dismissPopover();
-            }
-          }
+              onDelete();
+            });
 
-          deleteConfirmDismissers.set(popover, dismissPopover);
-
-          cancel.addEventListener("click", dismissPopover);
-          yes.addEventListener("click", () => {
-            if (check.checked) {
-              try {
-                getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
-              } catch {}
-            }
-            dismissPopover();
-            onDelete();
-          });
-
-          requestAnimationFrame(() => {
-            if (!dismissed && popover.isConnected) {
-              placeDeleteConfirmPopover(btn, popover, side);
-              document.addEventListener("click", closeOnOutside, true);
-            }
-          });
-        }}
-      >
-        ${icons.trash ?? icons.x}
-      </button>
+            requestAnimationFrame(() => {
+              if (!dismissed && popover.isConnected) {
+                placeDeleteConfirmPopover(btn, popover, side);
+                document.addEventListener("click", closeOnOutside, true);
+              }
+            });
+          }}
+        >
+          ${icons.trash ?? icons.x}
+        </button>
+      </openclaw-tooltip>
     </span>
   `;
 }
@@ -1751,29 +1753,30 @@ function renderExpandButton(
   },
 ) {
   return html`
-    <button
-      class="btn btn--xs chat-expand-btn"
-      type="button"
-      title="Open in canvas"
-      aria-label="Open in canvas"
-      @click=${() =>
-        onOpenSidebar({
-          kind: "markdown",
-          content: markdown,
-          ...(options?.sessionKey && options?.messageId
-            ? {
-                fullMessageRequest: {
-                  sessionKey: options.sessionKey,
-                  ...(options.agentId ? { agentId: options.agentId } : {}),
-                  messageId: options.messageId,
-                  kind: "assistant_message" as const,
-                },
-              }
-            : {}),
-        })}
-    >
-      <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
-    </button>
+    <openclaw-tooltip content="Open in canvas">
+      <button
+        class="btn btn--xs chat-expand-btn"
+        type="button"
+        aria-label="Open in canvas"
+        @click=${() =>
+          onOpenSidebar({
+            kind: "markdown",
+            content: markdown,
+            ...(options?.sessionKey && options?.messageId
+              ? {
+                  fullMessageRequest: {
+                    sessionKey: options.sessionKey,
+                    ...(options.agentId ? { agentId: options.agentId } : {}),
+                    messageId: options.messageId,
+                    kind: "assistant_message" as const,
+                  },
+                }
+              : {}),
+          })}
+      >
+        <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+      </button>
+    </openclaw-tooltip>
   `;
 }
 

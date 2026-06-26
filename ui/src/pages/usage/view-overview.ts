@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
@@ -18,205 +19,6 @@ function pct(part: number, total: number): number {
     return 0;
   }
   return (part / total) * 100;
-}
-
-const DAILY_BAR_TOOLTIP_MARGIN_PX = 8;
-const DAILY_BAR_TOOLTIP_GAP_PX = 8;
-
-type DailyBarTooltipTrigger = "hover" | "focus";
-
-type DailyBarTooltipContent = {
-  dateLabel: string;
-  tokensLabel: string;
-  costLabel: string;
-  breakdownLines: string[];
-};
-
-type ActiveDailyBarTooltip = {
-  source: HTMLElement;
-  reasons: Set<DailyBarTooltipTrigger>;
-  content: DailyBarTooltipContent;
-};
-
-let activeDailyBarTooltip: ActiveDailyBarTooltip | null = null;
-let floatingDailyBarTooltip: HTMLElement | null = null;
-let floatingDailyBarTooltipListenersAttached = false;
-let floatingDailyBarTooltipObserver: MutationObserver | null = null;
-let suppressNextDailyBarFocusTooltip = false;
-let suppressDailyBarFocusTooltipTimer: number | null = null;
-
-function clampValue(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
-}
-
-function getFloatingDailyBarTooltip(): HTMLElement {
-  if (!floatingDailyBarTooltip) {
-    floatingDailyBarTooltip = document.createElement("div");
-    floatingDailyBarTooltip.className = "daily-bar-tooltip daily-bar-tooltip--floating";
-  }
-  if (!floatingDailyBarTooltip.isConnected) {
-    document.body.append(floatingDailyBarTooltip);
-  }
-  return floatingDailyBarTooltip;
-}
-
-function renderFloatingDailyBarTooltipContent(
-  tooltip: HTMLElement,
-  content: DailyBarTooltipContent,
-) {
-  const date = document.createElement("strong");
-  date.textContent = content.dateLabel;
-
-  const children: Node[] = [
-    date,
-    document.createElement("br"),
-    document.createTextNode(content.tokensLabel),
-    document.createElement("br"),
-    document.createTextNode(content.costLabel),
-  ];
-
-  for (const line of content.breakdownLines) {
-    const item = document.createElement("div");
-    item.textContent = line;
-    children.push(item);
-  }
-
-  tooltip.replaceChildren(...children);
-}
-
-function positionFloatingDailyBarTooltip() {
-  if (!activeDailyBarTooltip) {
-    return;
-  }
-  if (!activeDailyBarTooltip.source.isConnected) {
-    hideDailyBarTooltip();
-    return;
-  }
-
-  const tooltip = getFloatingDailyBarTooltip();
-  const sourceRect = activeDailyBarTooltip.source.getBoundingClientRect();
-  tooltip.style.visibility = "hidden";
-  tooltip.style.left = "0px";
-  tooltip.style.top = "0px";
-
-  const tooltipRect = tooltip.getBoundingClientRect();
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-  const maxLeft = viewportWidth - tooltipRect.width - DAILY_BAR_TOOLTIP_MARGIN_PX;
-  const maxTop = viewportHeight - tooltipRect.height - DAILY_BAR_TOOLTIP_MARGIN_PX;
-  const left = clampValue(
-    sourceRect.left + sourceRect.width / 2 - tooltipRect.width / 2,
-    DAILY_BAR_TOOLTIP_MARGIN_PX,
-    maxLeft,
-  );
-  let top = sourceRect.top - tooltipRect.height - DAILY_BAR_TOOLTIP_GAP_PX;
-  let placement = "above";
-
-  if (top < DAILY_BAR_TOOLTIP_MARGIN_PX) {
-    placement = "below";
-    top = sourceRect.bottom + DAILY_BAR_TOOLTIP_GAP_PX;
-  }
-
-  tooltip.dataset.placement = placement;
-  tooltip.style.left = `${Math.round(left)}px`;
-  tooltip.style.top = `${Math.round(clampValue(top, DAILY_BAR_TOOLTIP_MARGIN_PX, maxTop))}px`;
-  tooltip.style.visibility = "";
-}
-
-function attachFloatingDailyBarTooltipListeners() {
-  if (floatingDailyBarTooltipListenersAttached) {
-    return;
-  }
-  window.addEventListener("resize", positionFloatingDailyBarTooltip);
-  window.addEventListener("scroll", positionFloatingDailyBarTooltip, true);
-  floatingDailyBarTooltipListenersAttached = true;
-}
-
-function detachFloatingDailyBarTooltipListeners() {
-  if (!floatingDailyBarTooltipListenersAttached) {
-    return;
-  }
-  window.removeEventListener("resize", positionFloatingDailyBarTooltip);
-  window.removeEventListener("scroll", positionFloatingDailyBarTooltip, true);
-  floatingDailyBarTooltipListenersAttached = false;
-}
-
-function attachFloatingDailyBarTooltipObserver() {
-  if (floatingDailyBarTooltipObserver) {
-    return;
-  }
-  floatingDailyBarTooltipObserver = new MutationObserver(() => {
-    if (activeDailyBarTooltip && !activeDailyBarTooltip.source.isConnected) {
-      hideDailyBarTooltip();
-    }
-  });
-  floatingDailyBarTooltipObserver.observe(document.body, { childList: true, subtree: true });
-}
-
-function detachFloatingDailyBarTooltipObserver() {
-  floatingDailyBarTooltipObserver?.disconnect();
-  floatingDailyBarTooltipObserver = null;
-}
-
-function showDailyBarTooltip(
-  source: HTMLElement,
-  content: DailyBarTooltipContent,
-  reason: DailyBarTooltipTrigger,
-) {
-  if (!activeDailyBarTooltip || activeDailyBarTooltip.source !== source) {
-    activeDailyBarTooltip = {
-      source,
-      reasons: new Set(),
-      content,
-    };
-  }
-
-  activeDailyBarTooltip.content = content;
-  activeDailyBarTooltip.reasons.add(reason);
-
-  const tooltip = getFloatingDailyBarTooltip();
-  renderFloatingDailyBarTooltipContent(tooltip, content);
-  positionFloatingDailyBarTooltip();
-  attachFloatingDailyBarTooltipListeners();
-  attachFloatingDailyBarTooltipObserver();
-}
-
-function hideDailyBarTooltip(source?: HTMLElement, reason?: DailyBarTooltipTrigger) {
-  if (!activeDailyBarTooltip) {
-    return;
-  }
-  if (source && activeDailyBarTooltip.source !== source) {
-    return;
-  }
-  if (reason) {
-    activeDailyBarTooltip.reasons.delete(reason);
-    if (activeDailyBarTooltip.reasons.size > 0) {
-      return;
-    }
-  }
-
-  activeDailyBarTooltip = null;
-  floatingDailyBarTooltip?.remove();
-  detachFloatingDailyBarTooltipListeners();
-  detachFloatingDailyBarTooltipObserver();
-}
-
-function suppressDailyBarFocusTooltipForPointer() {
-  suppressNextDailyBarFocusTooltip = true;
-  if (suppressDailyBarFocusTooltipTimer !== null) {
-    window.clearTimeout(suppressDailyBarFocusTooltipTimer);
-  }
-  suppressDailyBarFocusTooltipTimer = window.setTimeout(() => {
-    suppressNextDailyBarFocusTooltip = false;
-    suppressDailyBarFocusTooltipTimer = null;
-  }, 0);
-}
-
-function showDailyBarFocusTooltip(source: HTMLElement, content: DailyBarTooltipContent) {
-  if (suppressNextDailyBarFocusTooltip) {
-    return;
-  }
-  showDailyBarTooltip(source, content, "focus");
 }
 
 function handleDailyBarKeydown(
@@ -306,14 +108,15 @@ function renderFilterChips(
         ? html`
             <div class="filter-chip">
               <span class="filter-chip-label">${t("usage.filters.days")}: ${daysLabel}</span>
-              <button
-                class="filter-chip-remove"
-                @click=${onClearDays}
-                title=${t("usage.filters.remove")}
-                aria-label="Remove days filter"
-              >
-                ×
-              </button>
+              <openclaw-tooltip .content=${t("usage.filters.remove")}>
+                <button
+                  class="filter-chip-remove"
+                  @click=${onClearDays}
+                  aria-label="Remove days filter"
+                >
+                  ×
+                </button>
+              </openclaw-tooltip>
             </div>
           `
         : nothing}
@@ -321,14 +124,15 @@ function renderFilterChips(
         ? html`
             <div class="filter-chip">
               <span class="filter-chip-label">${t("usage.filters.hours")}: ${hoursLabel}</span>
-              <button
-                class="filter-chip-remove"
-                @click=${onClearHours}
-                title=${t("usage.filters.remove")}
-                aria-label="Remove hours filter"
-              >
-                ×
-              </button>
+              <openclaw-tooltip .content=${t("usage.filters.remove")}>
+                <button
+                  class="filter-chip-remove"
+                  @click=${onClearHours}
+                  aria-label="Remove hours filter"
+                >
+                  ×
+                </button>
+              </openclaw-tooltip>
             </div>
           `
         : nothing}
@@ -336,14 +140,15 @@ function renderFilterChips(
         ? html`
             <div class="filter-chip" title="${sessionsFullName}">
               <span class="filter-chip-label">${t("usage.filters.session")}: ${sessionsLabel}</span>
-              <button
-                class="filter-chip-remove"
-                @click=${onClearSessions}
-                title=${t("usage.filters.remove")}
-                aria-label="Remove session filter"
-              >
-                ×
-              </button>
+              <openclaw-tooltip .content=${t("usage.filters.remove")}>
+                <button
+                  class="filter-chip-remove"
+                  @click=${onClearSessions}
+                  aria-label="Remove session filter"
+                >
+                  ×
+                </button>
+              </openclaw-tooltip>
             </div>
           `
         : nothing}
@@ -474,47 +279,49 @@ function renderDailyChartCompact(
               breakdownLines,
             };
             return html`
-              <div
-                class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
-                role="button"
-                tabindex="0"
-                aria-pressed=${isSelected ? "true" : "false"}
-                aria-label=${`${tooltipContent.dateLabel}: ${tooltipContent.tokensLabel}, ${tooltipContent.costLabel}`}
-                @pointerdown=${suppressDailyBarFocusTooltipForPointer}
-                @mouseenter=${(e: MouseEvent) =>
-                  showDailyBarTooltip(e.currentTarget as HTMLElement, tooltipContent, "hover")}
-                @mouseleave=${(e: MouseEvent) =>
-                  hideDailyBarTooltip(e.currentTarget as HTMLElement, "hover")}
-                @focus=${(e: FocusEvent) =>
-                  showDailyBarFocusTooltip(e.currentTarget as HTMLElement, tooltipContent)}
-                @blur=${(e: FocusEvent) =>
-                  hideDailyBarTooltip(e.currentTarget as HTMLElement, "focus")}
-                @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
-                @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
+              <openclaw-tooltip
+                .content=${[
+                  tooltipContent.dateLabel,
+                  tooltipContent.tokensLabel,
+                  tooltipContent.costLabel,
+                  ...tooltipContent.breakdownLines,
+                ].join("\n")}
               >
-                ${dailyChartMode === "by-type"
-                  ? html`
-                      <div
-                        class="daily-bar daily-bar--stacked"
-                        style="height: ${heightPx.toFixed(0)}px;"
-                      >
-                        ${(() => {
-                          const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
-                          return segments.map(
-                            (seg) => html`
-                              <div
-                                class="cost-segment ${seg.class}"
-                                style="height: ${(seg.value / total) * 100}%"
-                              ></div>
-                            `,
-                          );
-                        })()}
-                      </div>
-                    `
-                  : html` <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div> `}
-                ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
-                <div class="${labelClass}">${shortLabel}</div>
-              </div>
+                <div
+                  class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
+                  role="button"
+                  tabindex="0"
+                  aria-pressed=${isSelected ? "true" : "false"}
+                  aria-label=${`${tooltipContent.dateLabel}: ${tooltipContent.tokensLabel}, ${tooltipContent.costLabel}`}
+                  @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
+                  @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
+                >
+                  ${dailyChartMode === "by-type"
+                    ? html`
+                        <div
+                          class="daily-bar daily-bar--stacked"
+                          style="height: ${heightPx.toFixed(0)}px;"
+                        >
+                          ${(() => {
+                            const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+                            return segments.map(
+                              (seg) => html`
+                                <div
+                                  class="cost-segment ${seg.class}"
+                                  style="height: ${(seg.value / total) * 100}%"
+                                ></div>
+                              `,
+                            );
+                          })()}
+                        </div>
+                      `
+                    : html`
+                        <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
+                      `}
+                  ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
+                  <div class="${labelClass}">${shortLabel}</div>
+                </div>
+              </openclaw-tooltip>
             `;
           })}
         </div>
@@ -1050,7 +857,6 @@ function renderSessionsCard(
         <div class="session-bar-actions">
           <button
             class="btn btn--sm btn--ghost"
-            title=${t("usage.sessions.copyName")}
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
               void copySessionName(s);
@@ -1130,15 +936,21 @@ function renderSessionsCard(
             </option>
           </select>
         </label>
-        <button
-          class="btn btn--sm"
-          @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
-          title=${sessionSortDir === "desc"
+        <openclaw-tooltip
+          .content=${sessionSortDir === "desc"
             ? t("usage.sessions.descending")
             : t("usage.sessions.ascending")}
         >
-          ${sessionSortDir === "desc" ? "↓" : "↑"}
-        </button>
+          <button
+            class="btn btn--sm"
+            aria-label=${sessionSortDir === "desc"
+              ? t("usage.sessions.descending")
+              : t("usage.sessions.ascending")}
+            @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
+          >
+            ${sessionSortDir === "desc" ? "↓" : "↑"}
+          </button>
+        </openclaw-tooltip>
         ${selectedCount > 0
           ? html`
               <button class="btn btn--sm" @click=${onClearSessions}>

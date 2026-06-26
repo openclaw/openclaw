@@ -14,6 +14,7 @@ import type {
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-routes.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
@@ -791,16 +792,17 @@ export function renderCron(props: CronProps) {
                         </div>
                       `}
                 </div>
-                <button
-                  type="button"
-                  class="btn cron-form-collapse-toggle"
-                  data-test-id="cron-form-close"
-                  title=${t("common.dismiss")}
-                  aria-label=${t("common.dismiss")}
-                  @click=${props.onCancelEdit}
-                >
-                  <span aria-hidden="true">×</span>
-                </button>
+                <openclaw-tooltip .content=${t("common.dismiss")}>
+                  <button
+                    type="button"
+                    class="btn cron-form-collapse-toggle"
+                    data-test-id="cron-form-close"
+                    aria-label=${t("common.dismiss")}
+                    @click=${props.onCancelEdit}
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
+                </openclaw-tooltip>
               </div>
               <div class="cron-form" ?hidden=${formCollapsed}>
                 <div class="cron-required-legend">

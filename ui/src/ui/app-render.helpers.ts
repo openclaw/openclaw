@@ -9,6 +9,7 @@ import {
 import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../app/settings.ts";
 import { icons } from "../components/icons.ts";
+import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import {
   isCronSessionKey,
@@ -296,28 +297,28 @@ function renderChatAutoScrollToggle(state: AppViewState, options: { labelled?: b
   const label = `${t("chat.autoScrollMode")}: ${chatAutoScrollLabel(mode)}`;
   const active = mode !== "off";
   return html`
-    <button
-      class="btn btn--sm btn--icon ${options.labelled ? "chat-settings-action" : ""} ${active
-        ? "active"
-        : ""}"
-      data-chat-auto-scroll-toggle="true"
-      data-chat-auto-scroll-mode=${mode}
-      data-tooltip=${label}
-      aria-label=${label}
-      aria-pressed=${active}
-      title=${label}
-      @click=${() => {
-        state.applySettings({
-          ...state.settings,
-          chatAutoScroll: nextChatAutoScrollMode(mode),
-        });
-      }}
-    >
-      ${icons.scrollText}
-      ${options.labelled
-        ? html`<span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>`
-        : ""}
-    </button>
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--sm btn--icon ${options.labelled ? "chat-settings-action" : ""} ${active
+          ? "active"
+          : ""}"
+        data-chat-auto-scroll-toggle="true"
+        data-chat-auto-scroll-mode=${mode}
+        aria-label=${label}
+        aria-pressed=${active}
+        @click=${() => {
+          state.applySettings({
+            ...state.settings,
+            chatAutoScroll: nextChatAutoScrollMode(mode),
+          });
+        }}
+      >
+        ${icons.scrollText}
+        ${options.labelled
+          ? html`<span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>`
+          : ""}
+      </button>
+    </openclaw-tooltip>
   `;
 }
 
@@ -382,28 +383,29 @@ export function renderChatControls(state: AppViewState, onNavigate?: (routeId: R
     </div>
     ${renderChatQuotaPill(state, onNavigate)}
     <div class="chat-settings-popover-wrapper">
-      <button
-        class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
-        type="button"
-        title=${settingsTitle}
-        aria-label=${settingsTitle}
-        aria-expanded=${settingsOpen}
-        aria-controls="chat-composer-settings-popover"
-        @click=${(e: Event) => {
-          e.stopPropagation();
-          (e.currentTarget as HTMLElement)
-            .closest(".agent-chat__composer-controls")
-            ?.querySelectorAll("details.chat-controls__inline-select[open]")
-            .forEach((details) => details.removeAttribute("open"));
-          state.setChatMobileControlsOpen(!settingsOpen, {
-            trigger: e.currentTarget as HTMLElement,
-          });
-        }}
-      >
-        <span class="chat-settings-chip__icon">${icons.settings}</span>
-        <span class="chat-settings-chip__text">${settingsLabel}</span>
-        <span class="chat-settings-chip__chevron">${icons.chevronDown}</span>
-      </button>
+      <openclaw-tooltip .content=${settingsTitle}>
+        <button
+          class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
+          type="button"
+          aria-label=${settingsTitle}
+          aria-expanded=${settingsOpen}
+          aria-controls="chat-composer-settings-popover"
+          @click=${(e: Event) => {
+            e.stopPropagation();
+            (e.currentTarget as HTMLElement)
+              .closest(".agent-chat__composer-controls")
+              ?.querySelectorAll("details.chat-controls__inline-select[open]")
+              .forEach((details) => details.removeAttribute("open"));
+            state.setChatMobileControlsOpen(!settingsOpen, {
+              trigger: e.currentTarget as HTMLElement,
+            });
+          }}
+        >
+          <span class="chat-settings-chip__icon">${icons.settings}</span>
+          <span class="chat-settings-chip__text">${settingsLabel}</span>
+          <span class="chat-settings-chip__chevron">${icons.chevronDown}</span>
+        </button>
+      </openclaw-tooltip>
       <div
         id="chat-composer-settings-popover"
         class="chat-settings-popover ${settingsOpen ? "chat-settings-popover--open" : ""}"
@@ -413,97 +415,97 @@ export function renderChatControls(state: AppViewState, onNavigate?: (routeId: R
         <div class="chat-settings-popover__section">
           <span class="chat-settings-popover__label">${settingsLabel}</span>
           <div class="chat-settings-popover__toggles">
-            <button
-              class="btn btn--sm btn--icon chat-settings-action"
-              ?disabled=${refreshDisabled}
-              @click=${() => {
-                if (!refreshDisabled) {
-                  void handleChatManualRefresh(state as ChatRefreshHost);
-                }
-              }}
-              title=${t("common.refresh")}
-              aria-label=${t("common.refresh")}
-              data-tooltip=${t("common.refresh")}
-            >
-              ${icons.refresh}
-              <span class="chat-settings-action__text">${t("common.refresh")}</span>
-            </button>
+            <openclaw-tooltip .content=${t("common.refresh")}>
+              <button
+                class="btn btn--sm btn--icon chat-settings-action"
+                ?disabled=${refreshDisabled}
+                @click=${() => {
+                  if (!refreshDisabled) {
+                    void handleChatManualRefresh(state as ChatRefreshHost);
+                  }
+                }}
+                aria-label=${t("common.refresh")}
+              >
+                ${icons.refresh}
+                <span class="chat-settings-action__text">${t("common.refresh")}</span>
+              </button>
+            </openclaw-tooltip>
             ${renderChatAutoScrollToggle(state, { labelled: true })}
-            <button
-              class="btn btn--sm btn--icon chat-settings-action ${showThinking ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (disableThinkingToggle) {
-                  return;
-                }
-                state.applySettings({
-                  ...state.settings,
-                  chatShowThinking: !state.settings.chatShowThinking,
-                });
-              }}
-              aria-pressed=${showThinking}
-              title=${thinkingLabel}
-              aria-label=${thinkingLabel}
-              data-tooltip=${thinkingLabel}
-            >
-              ${icons.brain}
-              <span class="chat-settings-action__text">${t("cron.form.thinking")}</span>
-            </button>
-            <button
-              class="btn btn--sm btn--icon chat-settings-action ${showToolCalls ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (disableThinkingToggle) {
-                  return;
-                }
-                state.applySettings({
-                  ...state.settings,
-                  chatShowToolCalls: !state.settings.chatShowToolCalls,
-                });
-              }}
-              aria-pressed=${showToolCalls}
-              title=${toolCallsLabel}
-              aria-label=${toolCallsLabel}
-              data-tooltip=${toolCallsLabel}
-            >
-              ${toolCallsIcon}
-              <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
-            </button>
-            <button
-              class="btn btn--sm btn--icon chat-settings-action ${persistCommentary
-                ? "active"
-                : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (disableThinkingToggle) {
-                  return;
-                }
-                state.applySettings({
-                  ...state.settings,
-                  chatPersistCommentary: !persistCommentary,
-                });
-              }}
-              aria-pressed=${persistCommentary}
-              title=${commentaryLabel}
-              aria-label=${commentaryLabel}
-              data-tooltip=${commentaryLabel}
-            >
-              ${persistCommentary ? icons.pin : icons.pinOff}
-              <span class="chat-settings-action__text">${t("chat.commentaryLabel")}</span>
-            </button>
-            <button
-              class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
-              @click=${() => {
-                state.sessionsHideCron = !hideCron;
-              }}
-              aria-pressed=${hideCron}
-              title=${cronLabel}
-              aria-label=${cronLabel}
-              data-tooltip=${cronLabel}
-            >
-              ${renderCronFilterIcon(hiddenCronCount)}
-              <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
-            </button>
+            <openclaw-tooltip .content=${thinkingLabel}>
+              <button
+                class="btn btn--sm btn--icon chat-settings-action ${showThinking ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (disableThinkingToggle) {
+                    return;
+                  }
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowThinking: !state.settings.chatShowThinking,
+                  });
+                }}
+                aria-pressed=${showThinking}
+                aria-label=${thinkingLabel}
+              >
+                ${icons.brain}
+                <span class="chat-settings-action__text">${t("cron.form.thinking")}</span>
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${toolCallsLabel}>
+              <button
+                class="btn btn--sm btn--icon chat-settings-action ${showToolCalls ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (disableThinkingToggle) {
+                    return;
+                  }
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowToolCalls: !state.settings.chatShowToolCalls,
+                  });
+                }}
+                aria-pressed=${showToolCalls}
+                aria-label=${toolCallsLabel}
+              >
+                ${toolCallsIcon}
+                <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${commentaryLabel}>
+              <button
+                class="btn btn--sm btn--icon chat-settings-action ${persistCommentary
+                  ? "active"
+                  : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (disableThinkingToggle) {
+                    return;
+                  }
+                  state.applySettings({
+                    ...state.settings,
+                    chatPersistCommentary: !persistCommentary,
+                  });
+                }}
+                aria-pressed=${persistCommentary}
+                aria-label=${commentaryLabel}
+              >
+                ${persistCommentary ? icons.pin : icons.pinOff}
+                <span class="chat-settings-action__text">${t("chat.commentaryLabel")}</span>
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${cronLabel}>
+              <button
+                class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
+                @click=${() => {
+                  state.sessionsHideCron = !hideCron;
+                }}
+                aria-pressed=${hideCron}
+                aria-label=${cronLabel}
+              >
+                ${renderCronFilterIcon(hiddenCronCount)}
+                <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
+              </button>
+            </openclaw-tooltip>
           </div>
         </div>
       </div>
@@ -544,35 +546,36 @@ export function renderChatMobileToggle(state: AppViewState) {
 
   return html`
     <div class="chat-mobile-controls-wrapper">
-      <button
-        class="btn btn--sm btn--icon chat-controls-mobile-toggle"
-        @click=${(e: Event) => {
-          e.stopPropagation();
-          state.setChatMobileControlsOpen(!mobileControlsOpen, {
-            trigger: e.currentTarget as HTMLElement,
-          });
-        }}
-        title=${t("chat.settings")}
-        aria-label=${t("chat.settings")}
-        aria-expanded=${mobileControlsOpen}
-        aria-controls=${controlsDropdownId}
-      >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+      <openclaw-tooltip .content=${t("chat.settings")}>
+        <button
+          class="btn btn--sm btn--icon chat-controls-mobile-toggle"
+          @click=${(e: Event) => {
+            e.stopPropagation();
+            state.setChatMobileControlsOpen(!mobileControlsOpen, {
+              trigger: e.currentTarget as HTMLElement,
+            });
+          }}
+          aria-label=${t("chat.settings")}
+          aria-expanded=${mobileControlsOpen}
+          aria-controls=${controlsDropdownId}
         >
-          <circle cx="12" cy="12" r="3"></circle>
-          <path
-            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-          ></path>
-        </svg>
-      </button>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+        </button>
+      </openclaw-tooltip>
       <div
         id=${controlsDropdownId}
         class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
@@ -584,68 +587,82 @@ export function renderChatMobileToggle(state: AppViewState) {
           ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
-            <button
-              class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (!disableThinkingToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowThinking: !state.settings.chatShowThinking,
-                  });
-                }
-              }}
-              aria-pressed=${showThinking}
-              title=${t("chat.thinkingToggle")}
-            >
-              ${icons.brain}
-            </button>
-            <button
-              class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (!disableThinkingToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowToolCalls: !state.settings.chatShowToolCalls,
-                  });
-                }
-              }}
-              aria-pressed=${showToolCalls}
-              title=${t("chat.toolCallsToggle")}
-            >
-              ${toolCallsIcon}
-            </button>
-            <button
-              class="btn btn--sm btn--icon ${persistCommentary ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (!disableThinkingToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatPersistCommentary: !persistCommentary,
-                  });
-                }
-              }}
-              aria-pressed=${persistCommentary}
-              title=${t("chat.commentaryToggle")}
-            >
-              ${persistCommentary ? icons.pin : icons.pinOff}
-            </button>
-            <button
-              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
-              @click=${() => {
-                state.sessionsHideCron = !hideCron;
-              }}
-              aria-pressed=${hideCron}
-              title=${hideCron
+            <openclaw-tooltip .content=${t("chat.thinkingToggle")}>
+              <button
+                class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (!disableThinkingToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatShowThinking: !state.settings.chatShowThinking,
+                    });
+                  }
+                }}
+                aria-pressed=${showThinking}
+                aria-label=${t("chat.thinkingToggle")}
+              >
+                ${icons.brain}
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${t("chat.toolCallsToggle")}>
+              <button
+                class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (!disableThinkingToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatShowToolCalls: !state.settings.chatShowToolCalls,
+                    });
+                  }
+                }}
+                aria-pressed=${showToolCalls}
+                aria-label=${t("chat.toolCallsToggle")}
+              >
+                ${toolCallsIcon}
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${t("chat.commentaryToggle")}>
+              <button
+                class="btn btn--sm btn--icon ${persistCommentary ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (!disableThinkingToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatPersistCommentary: !persistCommentary,
+                    });
+                  }
+                }}
+                aria-pressed=${persistCommentary}
+                aria-label=${t("chat.commentaryToggle")}
+              >
+                ${persistCommentary ? icons.pin : icons.pinOff}
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip
+              .content=${hideCron
                 ? hiddenCronCount > 0
                   ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
                   : t("chat.showCronSessions")
                 : t("chat.hideCronSessions")}
             >
-              ${renderCronFilterIcon(hiddenCronCount)}
-            </button>
+              <button
+                class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+                @click=${() => {
+                  state.sessionsHideCron = !hideCron;
+                }}
+                aria-pressed=${hideCron}
+                aria-label=${hideCron
+                  ? hiddenCronCount > 0
+                    ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                    : t("chat.showCronSessions")
+                  : t("chat.hideCronSessions")}
+              >
+                ${renderCronFilterIcon(hiddenCronCount)}
+              </button>
+            </openclaw-tooltip>
           </div>
         </div>
       </div>

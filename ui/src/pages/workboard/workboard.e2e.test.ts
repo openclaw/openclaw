@@ -423,7 +423,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
-      await details.locator('button[title="Cancel"]').click();
+      await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
       const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
@@ -474,7 +474,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         state: "visible",
       });
       await captureScreenshot(writable.page, artifacts, "06-lifecycle-review");
-      await details.locator('button[title="Cancel"]').click();
+      await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
       await writableGateway.deferNext("workboard.cards.list");
@@ -517,9 +517,9 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       });
       await captureScreenshot(readOnly.page, artifacts, "08-read-only-board");
       expect(await readOnly.page.getByRole("button", { name: /New card/u }).count()).toBe(0);
-      expect(await readOnly.page.locator('button[title="Edit card"]').count()).toBe(0);
-      expect(await readOnly.page.locator('button[title="Delete card"]').count()).toBe(0);
-      expect(await readOnly.page.locator('button[title="Run default agent"]').count()).toBe(0);
+      expect(await readOnly.page.locator('button[aria-label="Edit card"]').count()).toBe(0);
+      expect(await readOnly.page.locator('button[aria-label="Delete card"]').count()).toBe(0);
+      expect(await readOnly.page.locator('button[aria-label="Run default agent"]').count()).toBe(0);
       expect(
         await cardInColumn(readOnly.page, "Running", editedCard.title).getAttribute("draggable"),
       ).toBe("false");

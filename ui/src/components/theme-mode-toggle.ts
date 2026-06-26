@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 export type ThemeModeChangeDetail = {
   mode: ThemeMode;
@@ -47,23 +48,23 @@ export class ThemeModeToggle extends LitElement {
           const label = t(option.labelKey);
           const tooltip = t("common.colorModeOption", { mode: label });
           return html`
-            <button
-              type="button"
-              class="topbar-theme-mode__btn ${option.id === this.mode
-                ? "topbar-theme-mode__btn--active"
-                : ""}"
-              title=${tooltip}
-              aria-label=${tooltip}
-              data-tooltip=${tooltip}
-              aria-pressed=${option.id === this.mode}
-              @click=${(event: Event) => this.handleModeChange(option.id, event)}
-            >
-              ${option.id === "system"
-                ? icons.monitor
-                : option.id === "light"
-                  ? icons.sun
-                  : icons.moon}
-            </button>
+            <openclaw-tooltip .content=${tooltip}>
+              <button
+                type="button"
+                class="topbar-theme-mode__btn ${option.id === this.mode
+                  ? "topbar-theme-mode__btn--active"
+                  : ""}"
+                aria-label=${tooltip}
+                aria-pressed=${option.id === this.mode}
+                @click=${(event: Event) => this.handleModeChange(option.id, event)}
+              >
+                ${option.id === "system"
+                  ? icons.monitor
+                  : option.id === "light"
+                    ? icons.sun
+                    : icons.moon}
+              </button>
+            </openclaw-tooltip>
           `;
         })}
       </div>

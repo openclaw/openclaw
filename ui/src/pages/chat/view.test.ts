@@ -4422,7 +4422,6 @@ describe("chat session controls", () => {
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
-    expect(thinkingSelect.title).toContain("Adaptive");
     // "adaptive" is not one of the offered stops, so the parked thumb must
     // render as unanchored instead of pretending the default is "off".
     expect(getThinkingSliderValues(container)).not.toContain("adaptive");
@@ -4569,7 +4568,6 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(thinkingSelect.title).toContain("High");
     expect(getThinkingSliderValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
   });
@@ -4586,7 +4584,6 @@ describe("chat session controls", () => {
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
-    expect(thinkingSelect.title).toContain("Adaptive");
   });
 });
 

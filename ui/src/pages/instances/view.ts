@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatPresenceAge } from "../../lib/presenter.ts";
 
@@ -26,19 +27,22 @@ export function renderInstances(props: InstancesProps) {
           <div class="card-sub">${t("instances.subtitle")}</div>
         </div>
         <div class="row" style="gap: 8px;">
-          <button
-            class="btn btn--icon ${masked ? "" : "active"}"
-            @click=${() => {
-              hostsRevealed = !hostsRevealed;
-              props.onRefresh();
-            }}
-            title=${masked ? t("instances.showHosts") : t("instances.hideHosts")}
-            aria-label=${t("instances.toggleHostVisibility")}
-            aria-pressed=${!masked}
-            style="width: 36px; height: 36px;"
+          <openclaw-tooltip
+            .content=${masked ? t("instances.showHosts") : t("instances.hideHosts")}
           >
-            ${masked ? icons.eyeOff : icons.eye}
-          </button>
+            <button
+              class="btn btn--icon ${masked ? "" : "active"}"
+              @click=${() => {
+                hostsRevealed = !hostsRevealed;
+                props.onRefresh();
+              }}
+              aria-label=${t("instances.toggleHostVisibility")}
+              aria-pressed=${!masked}
+              style="width: 36px; height: 36px;"
+            >
+              ${masked ? icons.eyeOff : icons.eye}
+            </button>
+          </openclaw-tooltip>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
             ${props.loading ? t("common.loading") : t("common.refresh")}
           </button>

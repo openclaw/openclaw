@@ -17,6 +17,22 @@ function renderInto(container: HTMLElement, props: WorkboardRenderProps) {
   render(renderWorkboard(props), container);
 }
 
+function buttonByLabel(container: Element, label: string): HTMLButtonElement | null {
+  return (
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.getAttribute("aria-label") === label,
+    ) ?? null
+  );
+}
+
+function buttonByText(container: Element, text: string): HTMLButtonElement | null {
+  return (
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+      button.textContent?.includes(text),
+    ) ?? null
+  );
+}
+
 function dispatchKey(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {
     key,
@@ -50,7 +66,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')).toBeNull();
+    expect(buttonByText(container, "Refresh")).toBeNull();
     expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
       "Refreshing",
     );
@@ -226,39 +242,29 @@ describe("renderWorkboard", () => {
 
     render(renderWorkboard(props), container);
 
-    const dispatchButton = container.querySelector<HTMLButtonElement>(
-      'button[title="Dispatch ready work"]',
-    );
+    const dispatchButton = buttonByText(container, "Dispatch ready work");
     expect(dispatchButton?.disabled).toBe(false);
 
     state.draftSaving = true;
     render(renderWorkboard(props), container);
 
-    expect(
-      container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
-    ).toBe(true);
+    expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     state.loading = false;
     state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
-      true,
-    );
+    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
 
     state.draftSaving = false;
     state.dispatching = true;
     render(renderWorkboard(props), container);
 
-    expect(
-      container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
-    ).toBe(true);
+    expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
-      true,
-    );
+    expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
   });
 
   it("disables card-write controls while dispatch is running", () => {
@@ -296,18 +302,10 @@ describe("renderWorkboard", () => {
 
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector<HTMLButtonElement>('button[title="New card"]')?.disabled).toBe(
-      true,
-    );
-    expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')?.disabled).toBe(
-      true,
-    );
-    expect(
-      container.querySelector<HTMLButtonElement>('button[title="Archive card"]')?.disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>('button[title="Delete card"]')?.disabled,
-    ).toBe(true);
+    expect(buttonByText(container, "New card")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Edit card")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Archive card")?.disabled).toBe(true);
+    expect(buttonByLabel(container, "Delete card")?.disabled).toBe(true);
     expect(
       container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
     ).toBe(true);
@@ -573,16 +571,16 @@ describe("renderWorkboard", () => {
 
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector('button[title="Edit card"]')).toBeNull();
-    expect(container.querySelector('button[title="Archive card"]')).toBeNull();
-    expect(container.querySelector('button[title="New card"]')).toBeNull();
+    expect(buttonByLabel(container, "Edit card")).toBeNull();
+    expect(buttonByLabel(container, "Archive card")).toBeNull();
+    expect(buttonByText(container, "New card")).toBeNull();
     expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
 
     await vi.waitFor(() => expect(state.mutationReadiness).toBe("ready"));
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector('button[title="Edit card"]')).not.toBeNull();
-    expect(container.querySelector('button[title="New card"]')).not.toBeNull();
+    expect(buttonByLabel(container, "Edit card")).not.toBeNull();
+    expect(buttonByText(container, "New card")).not.toBeNull();
   });
 
   it("keeps a stale edit draft disabled until it is cancelled", async () => {
@@ -637,7 +635,7 @@ describe("renderWorkboard", () => {
     );
 
     container
-      .querySelector<HTMLButtonElement>('button[title="Cancel"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(state.draftOpen).toBe(false);
@@ -1441,7 +1439,7 @@ describe("renderWorkboard", () => {
 
     onOpenSession.mockClear();
     container
-      .querySelector<HTMLButtonElement>('button[title="Delete card"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenSession).not.toHaveBeenCalled();
   });
@@ -1766,11 +1764,13 @@ describe("renderWorkboard", () => {
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
     expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
-    expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
+    expect(startButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run default agent",
+    ]);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
       renderWorkboard({
@@ -1846,10 +1846,10 @@ describe("renderWorkboard", () => {
     const start = childCard?.querySelector<HTMLButtonElement>(".workboard-card__start");
     expect(childCard?.textContent).toContain("1 blocked");
     expect(start?.disabled).toBe(false);
-    expect(start?.title).toBe("Run default agent");
+    expect(start?.getAttribute("aria-label")).toBe("Run default agent");
 
     childCard
-      ?.querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -1909,10 +1909,12 @@ describe("renderWorkboard", () => {
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
     expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
-    expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
+    expect(startButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Run default agent",
+    ]);
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
       renderWorkboard({
@@ -2042,7 +2044,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).not.toContain("Still running according to stale cache.");
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -2091,12 +2093,12 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.textContent).toContain("Task running");
-    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -2138,7 +2140,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2175,7 +2177,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2212,7 +2214,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2249,7 +2251,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2285,8 +2287,8 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>('button[title="Delete card"]')).toBeNull();
+    expect(buttonByLabel(container, "Edit card")).toBeNull();
+    expect(buttonByLabel(container, "Delete card")).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary"),
@@ -2597,7 +2599,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-events")?.textContent).toContain("Moved to Review");
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -2685,7 +2687,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).not.toContain("Archived task");
 
     container
-      .querySelector<HTMLButtonElement>('button[title="Show archived cards"]')
+      .querySelector<HTMLButtonElement>(".workboard-archive-toggle")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
       renderWorkboard({
@@ -2700,12 +2702,10 @@ describe("renderWorkboard", () => {
       container,
     );
     expect(container.textContent).toContain("Archived task");
-    expect(
-      container.querySelector<HTMLButtonElement>('button[title="Hide archived cards"]'),
-    ).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>(".workboard-archive-toggle")).not.toBeNull();
 
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
       renderWorkboard({
@@ -3133,122 +3133,6 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("clears an active card tooltip when opening details", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.cards = [
-      {
-        id: "card-1",
-        title: "Tooltip clearing task",
-        status: "ready",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ];
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
-
-    const detailsButton = container.querySelector<HTMLButtonElement>(
-      'button[title="View details"]',
-    );
-    const tooltip = document.createElement("div");
-    tooltip.className = "control-ui-floating-tooltip";
-    tooltip.dataset.open = "true";
-    document.body.append(tooltip);
-    detailsButton?.setAttribute("data-floating-tooltip-active", "true");
-    detailsButton?.setAttribute("data-native-tooltip-title", "View details");
-    detailsButton?.setAttribute("data-native-tooltip-generated", "true");
-    detailsButton?.setAttribute("data-tooltip", "View details");
-    detailsButton?.removeAttribute("title");
-
-    detailsButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(state.detailCardId).toBe("card-1");
-    expect(detailsButton?.getAttribute("title")).toBe("View details");
-    expect(detailsButton?.getAttribute("data-tooltip")).toBeNull();
-    expect(detailsButton?.getAttribute("data-floating-tooltip-active")).toBeNull();
-    expect(tooltip.dataset.open).toBe("false");
-
-    container.remove();
-    tooltip.remove();
-  });
-
-  it("clears active tooltips before opening create and edit modals", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.cards = [
-      {
-        id: "card-1",
-        title: "Tooltip clearing task",
-        status: "ready",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ];
-    const container = document.createElement("div");
-    document.body.append(container);
-    const props: WorkboardRenderProps = {
-      host,
-      client: null,
-      connected: true,
-      pluginEnabled: true,
-      agentsList: null,
-      sessions: [],
-      onOpenSession: () => undefined,
-    };
-
-    try {
-      for (const title of ["New card", "Edit card"]) {
-        state.draftOpen = false;
-        state.editingCardId = null;
-        renderInto(container, props);
-        const button = container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
-        const tooltip = document.createElement("div");
-        tooltip.className = "control-ui-floating-tooltip";
-        tooltip.dataset.open = "true";
-        document.body.append(tooltip);
-        button?.setAttribute("data-floating-tooltip-active", "true");
-        button?.setAttribute("data-native-tooltip-title", title);
-        button?.setAttribute("data-native-tooltip-generated", "true");
-        button?.setAttribute("data-tooltip", title);
-        button?.removeAttribute("title");
-
-        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-        expect(state.draftOpen).toBe(true);
-        expect(button?.getAttribute("title")).toBe(title);
-        expect(button?.getAttribute("data-tooltip")).toBeNull();
-        expect(button?.getAttribute("data-floating-tooltip-active")).toBeNull();
-        expect(tooltip.dataset.open).toBe("false");
-        tooltip.remove();
-      }
-    } finally {
-      container.remove();
-      document.querySelector(".control-ui-floating-tooltip")?.remove();
-    }
-  });
-
   it("preflights model-specific starts for ACP runtime agents", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -3294,7 +3178,7 @@ describe("renderWorkboard", () => {
     ];
     expect(engineButtons).toHaveLength(4);
     expect(engineButtons.every((button) => button.disabled)).toBe(true);
-    expect(engineButtons[0]?.title).toContain("uses the codex ACP runtime");
+    expect(engineButtons[0]?.getAttribute("aria-label")).toContain("uses the codex ACP runtime");
   });
 
   it("does not render details for archived selected cards", () => {
@@ -3391,7 +3275,7 @@ describe("renderWorkboard", () => {
       expect(container.textContent).toContain("No recent session activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -3438,7 +3322,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
-    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it("opens an edit modal and submits card updates", async () => {
@@ -3497,7 +3381,7 @@ describe("renderWorkboard", () => {
 
     render(renderWorkboard(props), container);
     container
-      .querySelector<HTMLButtonElement>('button[title="Edit card"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -3551,7 +3435,7 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     container
-      .querySelector<HTMLButtonElement>('button[title="Edit card"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -3646,7 +3530,7 @@ describe("renderWorkboard", () => {
 
     render(renderWorkboard(props), container);
     container
-      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
@@ -3703,7 +3587,7 @@ describe("renderWorkboard", () => {
       container,
     );
     container
-      .querySelector<HTMLButtonElement>('button[title="Archive card"]')
+      .querySelector<HTMLButtonElement>('button[aria-label="Archive card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();

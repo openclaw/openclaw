@@ -150,7 +150,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const button = container.querySelector<HTMLButtonElement>('button[title="Add to Workboard"]');
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add to Workboard"]',
+    );
     if (!(button instanceof HTMLButtonElement)) {
       throw new Error("Expected Add to Workboard button");
     }
@@ -242,10 +244,10 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector('button[title="Open Workboard card"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Open Workboard card"]')).not.toBeNull();
   });
 
-  it("uses one short styled tooltip per session filter", async () => {
+  it("uses the shared tooltip component for session filters", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -257,33 +259,19 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const filters = container.querySelector(".sessions-filter-bar");
-    const activeField = filters
-      ?.querySelector<HTMLInputElement>(".session-filter-input--minutes")
-      ?.closest("label");
-    const limitField = filters
-      ?.querySelector<HTMLInputElement>(".session-filter-input--limit")
-      ?.closest("label");
-    const globalToggle = filters
-      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
-      ?.closest("label");
-    const unknownToggle = filters
-      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeUnknown]")
-      ?.closest("label");
-    const archivedToggle = filters
-      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
-      ?.closest("label");
+    const activeField = filters?.querySelector(".session-filter-input--minutes")?.closest("label");
+    const tooltips = Array.from(
+      filters?.querySelectorAll<HTMLElement>("openclaw-tooltip") ?? [],
+    ).map((tooltip) => (tooltip as HTMLElement & { content: string }).content);
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
-    expect(activeField?.getAttribute("data-tooltip")).toBe(
+    expect(tooltips).toEqual([
       "Loads sessions updated in the last 120 minutes.",
-    );
-    expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
-    expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
-    expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
-    expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Show only archived sessions.");
-    expect(
-      Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
-    ).toStrictEqual([]);
+      "Max sessions to load.",
+      "Include global sessions.",
+      "Include unknown sessions.",
+      "Show only archived sessions.",
+    ]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {
@@ -301,10 +289,10 @@ describe("sessions view", () => {
 
     const primaryRow = container.querySelector(".session-filter-primary-row");
     expect(primaryRow?.querySelector(".session-filter-input--minutes")?.closest("label")).toBe(
-      primaryRow?.firstElementChild,
+      primaryRow?.firstElementChild?.querySelector("label"),
     );
     expect(primaryRow?.querySelector(".session-filter-input--limit")?.closest("label")).toBe(
-      primaryRow?.lastElementChild,
+      primaryRow?.lastElementChild?.querySelector("label"),
     );
 
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
@@ -520,7 +508,9 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
+    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
+      "📊 Data Expert (dingtalk)",
+    );
   });
 
   it("keeps raw keys when identity data is unavailable", async () => {
@@ -541,7 +531,9 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("agent:unknown-agent:telegram:abc123");
-    expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
+    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
+      "agent:unknown-agent:telegram:abc123",
+    );
   });
 
   it("renders cron session kind distinctly", async () => {

@@ -2,6 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons as sharedIcons } from "../components/icons.ts";
+import "../components/tooltip.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -190,27 +191,25 @@ function renderSensitiveToggleButton(params: {
   if (!state.isSensitive || !params.onToggleSensitivePath) {
     return nothing;
   }
+  const label = state.canReveal
+    ? state.isRevealed
+      ? "Hide value"
+      : "Reveal value"
+    : "Disable stream mode to reveal value";
   return html`
-    <button
-      type="button"
-      class="btn btn--icon ${state.isRevealed ? "active" : ""}"
-      style="width:28px;height:28px;padding:0;"
-      title=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
-      aria-label=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
-      aria-pressed=${state.isRevealed}
-      ?disabled=${params.disabled || !state.canReveal}
-      @click=${() => params.onToggleSensitivePath?.(params.path)}
-    >
-      ${state.isRevealed ? sharedIcons.eye : sharedIcons.eyeOff}
-    </button>
+    <openclaw-tooltip .content=${label}>
+      <button
+        type="button"
+        class="btn btn--icon ${state.isRevealed ? "active" : ""}"
+        style="width:28px;height:28px;padding:0;"
+        aria-label=${label}
+        aria-pressed=${state.isRevealed}
+        ?disabled=${params.disabled || !state.canReveal}
+        @click=${() => params.onToggleSensitivePath?.(params.path)}
+      >
+        ${state.isRevealed ? sharedIcons.eye : sharedIcons.eyeOff}
+      </button>
+    </openclaw-tooltip>
   `;
 }
 
@@ -751,15 +750,17 @@ function renderTextInput(params: {
             })}
         ${schema.default !== undefined
           ? html`
-              <button
-                type="button"
-                class="cfg-input__reset"
-                title="Reset to default"
-                ?disabled=${disabled || effectiveRedacted}
-                @click=${() => onPatch(path, schema.default)}
-              >
-                ↺
-              </button>
+              <openclaw-tooltip content="Reset to default">
+                <button
+                  type="button"
+                  class="cfg-input__reset"
+                  aria-label="Reset to default"
+                  ?disabled=${disabled || effectiveRedacted}
+                  @click=${() => onPatch(path, schema.default)}
+                >
+                  ↺
+                </button>
+              </openclaw-tooltip>
             `
           : nothing}
       </div>
@@ -1135,19 +1136,21 @@ function renderArray(params: {
                   <div class="cfg-array__item">
                     <div class="cfg-array__item-header">
                       <span class="cfg-array__item-index">#${idx + 1}</span>
-                      <button
-                        type="button"
-                        class="cfg-array__item-remove"
-                        title="Remove item"
-                        ?disabled=${disabled}
-                        @click=${() => {
-                          const next = [...arr];
-                          next.splice(idx, 1);
-                          onPatch(path, next);
-                        }}
-                      >
-                        ${icons.trash}
-                      </button>
+                      <openclaw-tooltip content="Remove item">
+                        <button
+                          type="button"
+                          class="cfg-array__item-remove"
+                          aria-label="Remove item"
+                          ?disabled=${disabled}
+                          @click=${() => {
+                            const next = [...arr];
+                            next.splice(idx, 1);
+                            onPatch(path, next);
+                          }}
+                        >
+                          ${icons.trash}
+                        </button>
+                      </openclaw-tooltip>
                     </div>
                     <div class="cfg-array__item-content">
                       ${renderNode({
@@ -1284,19 +1287,21 @@ function renderMapField(params: {
                           }}
                         />
                       </div>
-                      <button
-                        type="button"
-                        class="cfg-map__item-remove"
-                        title="Remove entry"
-                        ?disabled=${disabled}
-                        @click=${() => {
-                          const next = { ...value };
-                          delete next[key];
-                          onPatch(path, next);
-                        }}
-                      >
-                        ${icons.trash}
-                      </button>
+                      <openclaw-tooltip content="Remove entry">
+                        <button
+                          type="button"
+                          class="cfg-map__item-remove"
+                          aria-label="Remove entry"
+                          ?disabled=${disabled}
+                          @click=${() => {
+                            const next = { ...value };
+                            delete next[key];
+                            onPatch(path, next);
+                          }}
+                        >
+                          ${icons.trash}
+                        </button>
+                      </openclaw-tooltip>
                     </div>
                     <div class="cfg-map__item-value">
                       ${anySchema

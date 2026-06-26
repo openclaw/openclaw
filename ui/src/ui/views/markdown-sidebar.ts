@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import "../../components/tooltip.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
@@ -55,15 +56,11 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
     <div class="sidebar-panel">
       <div class="sidebar-header">
         <div class="sidebar-title">${title}</div>
-        <button
-          @click=${props.onClose}
-          class="btn"
-          type="button"
-          title="Close sidebar"
-          aria-label="Close sidebar"
-        >
-          ${icons.x}
-        </button>
+        <openclaw-tooltip content="Close sidebar">
+          <button @click=${props.onClose} class="btn" type="button" aria-label="Close sidebar">
+            ${icons.x}
+          </button>
+        </openclaw-tooltip>
       </div>
       <div class="sidebar-content">
         ${props.error

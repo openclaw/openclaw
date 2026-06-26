@@ -149,7 +149,6 @@ export function renderContextNotice(
                 ? "context-ring__action--busy"
                 : ""}"
               type="button"
-              title="Compact session context"
               aria-label="Compact recommended session context"
               ?disabled=${compactDisabled}
               @click=${(event: Event) => {

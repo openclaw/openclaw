@@ -12,6 +12,7 @@ import type {
   CronStatus,
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -105,7 +106,6 @@ function renderAgentContextCard(
               type="button"
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
-              title=${t("agents.context.openFilesTab")}
             >
               ${context.workspace}
             </button>
@@ -531,7 +531,6 @@ export function renderAgentFiles(params: {
                       <div class="agent-file-actions">
                         <button
                           class="btn btn--sm"
-                          title=${t("agents.files.previewMarkdownTitle")}
                           @click=${(e: Event) => {
                             const btn = e.currentTarget as HTMLElement;
                             const dialog = btn.closest(".card")?.querySelector("dialog");
@@ -618,52 +617,55 @@ export function renderAgentFiles(params: {
                             </div>
                           </div>
                           <div class="md-preview-dialog__actions">
-                            <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
-                              title=${t("agents.files.expandPreview")}
-                              aria-label=${t("agents.files.expandPreview")}
-                              aria-pressed="false"
-                              @click=${(e: Event) => {
-                                const btn = e.currentTarget as HTMLElement;
-                                const panel = btn.closest(".md-preview-dialog__panel");
-                                if (!panel) {
-                                  return;
-                                }
-                                const isFullscreen = panel.classList.toggle("fullscreen");
-                                setPreviewExpandButtonState(btn, isFullscreen);
-                              }}
-                            >
-                              <span class="when-normal" aria-hidden="true">${icons.maximize}</span
-                              ><span class="when-fullscreen" aria-hidden="true"
-                                >${icons.minimize}</span
+                            <openclaw-tooltip .content=${t("agents.files.expandPreview")}>
+                              <button
+                                type="button"
+                                class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
+                                aria-label=${t("agents.files.expandPreview")}
+                                aria-pressed="false"
+                                @click=${(e: Event) => {
+                                  const btn = e.currentTarget as HTMLElement;
+                                  const panel = btn.closest(".md-preview-dialog__panel");
+                                  if (!panel) {
+                                    return;
+                                  }
+                                  const isFullscreen = panel.classList.toggle("fullscreen");
+                                  setPreviewExpandButtonState(btn, isFullscreen);
+                                }}
                               >
-                            </button>
-                            <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn"
-                              title=${t("agents.files.editFile")}
-                              aria-label=${t("agents.files.editFile")}
-                              @click=${(e: Event) => {
-                                (e.currentTarget as HTMLElement).closest("dialog")?.close();
-                                const textarea =
-                                  document.querySelector<HTMLElement>(".agent-file-textarea");
-                                textarea?.focus();
-                              }}
-                            >
-                              <span aria-hidden="true">${icons.edit}</span>
-                            </button>
-                            <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn"
-                              title=${t("agents.files.closePreview")}
-                              aria-label=${t("agents.files.closePreview")}
-                              @click=${(e: Event) => {
-                                (e.currentTarget as HTMLElement).closest("dialog")?.close();
-                              }}
-                            >
-                              <span aria-hidden="true">${icons.x}</span>
-                            </button>
+                                <span class="when-normal" aria-hidden="true">${icons.maximize}</span
+                                ><span class="when-fullscreen" aria-hidden="true"
+                                  >${icons.minimize}</span
+                                >
+                              </button>
+                            </openclaw-tooltip>
+                            <openclaw-tooltip .content=${t("agents.files.editFile")}>
+                              <button
+                                type="button"
+                                class="btn btn--sm md-preview-icon-btn"
+                                aria-label=${t("agents.files.editFile")}
+                                @click=${(e: Event) => {
+                                  (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                  const textarea =
+                                    document.querySelector<HTMLElement>(".agent-file-textarea");
+                                  textarea?.focus();
+                                }}
+                              >
+                                <span aria-hidden="true">${icons.edit}</span>
+                              </button>
+                            </openclaw-tooltip>
+                            <openclaw-tooltip .content=${t("agents.files.closePreview")}>
+                              <button
+                                type="button"
+                                class="btn btn--sm md-preview-icon-btn"
+                                aria-label=${t("agents.files.closePreview")}
+                                @click=${(e: Event) => {
+                                  (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                }}
+                              >
+                                <span aria-hidden="true">${icons.x}</span>
+                              </button>
+                            </openclaw-tooltip>
                           </div>
                         </div>
                         <div class="md-preview-dialog__meta">

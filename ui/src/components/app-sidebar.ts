@@ -15,6 +15,7 @@ import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
+import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -254,7 +255,8 @@ export class AppSidebar extends LitElement {
       routeSessionKey && routeId === "chat"
         ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
         : pathForRoute(routeId as RouteId, this.basePath);
-    return html`
+    const label = titleForRoute(routeId);
+    const link = html`
       <a
         href=${href}
         class="nav-item ${active ? "nav-item--active" : ""}"
@@ -284,16 +286,16 @@ export class AppSidebar extends LitElement {
               : undefined,
           );
         }}
-        title=${titleForRoute(routeId)}
       >
         <span class="nav-item__icon" aria-hidden="true"
           >${icons[navigationIconForRoute(routeId)]}</span
         >
-        ${!this.collapsed
-          ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>`
-          : nothing}
+        ${!this.collapsed ? html`<span class="nav-item__text">${label}</span>` : nothing}
       </a>
     `;
+    return this.collapsed
+      ? html`<openclaw-tooltip .content=${label}>${link}</openclaw-tooltip>`
+      : link;
   }
 
   private renderRecentSession(session: SidebarRecentSession) {
@@ -302,7 +304,6 @@ export class AppSidebar extends LitElement {
         href=${session.href}
         class="sidebar-recent-session ${session.active ? "sidebar-recent-session--active" : ""}"
         data-session-key=${session.key}
-        title=${`${session.label} · ${session.key}`}
         @click=${(event: MouseEvent) => {
           if (
             event.defaultPrevented ||
@@ -343,23 +344,29 @@ export class AppSidebar extends LitElement {
       newSessionDisabled,
       newSessionTitle,
     } = this.getSessionNavigationState();
+    const newSessionButton = html`
+      <button
+        type="button"
+        class="sidebar-new-session"
+        aria-label=${t("chat.runControls.newSession")}
+        ?disabled=${newSessionDisabled}
+        @click=${this.createSession}
+      >
+        <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
+        ${this.collapsed
+          ? nothing
+          : html`<span class="sidebar-new-session__label"
+              >${t("chat.runControls.newSession")}</span
+            >`}
+      </button>
+    `;
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
-        <button
-          type="button"
-          class="sidebar-new-session"
-          title=${newSessionTitle}
-          aria-label=${t("chat.runControls.newSession")}
-          ?disabled=${newSessionDisabled}
-          @click=${this.createSession}
-        >
-          <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
-          ${this.collapsed
-            ? nothing
-            : html`<span class="sidebar-new-session__label"
-                >${t("chat.runControls.newSession")}</span
-              >`}
-        </button>
+        ${this.collapsed
+          ? html`<openclaw-tooltip .content=${newSessionTitle}
+              >${newSessionButton}</openclaw-tooltip
+            >`
+          : newSessionButton}
         <div
           class="sidebar-session-select ${this.collapsed
             ? "sidebar-session-select--collapsed"
@@ -425,17 +432,18 @@ export class AppSidebar extends LitElement {
                     </span>
                   `}
             </div>
-            <button
-              type="button"
-              class="nav-collapse-toggle"
-              @click=${() => this.onToggleCollapsed?.()}
-              title="${this.collapsed ? t("nav.expand") : t("nav.collapse")}"
-              aria-label="${this.collapsed ? t("nav.expand") : t("nav.collapse")}"
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
+            <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
+              <button
+                type="button"
+                class="nav-collapse-toggle"
+                @click=${() => this.onToggleCollapsed?.()}
+                aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
               >
-            </button>
+                <span class="nav-collapse-toggle__icon" aria-hidden="true"
+                  >${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
+                >
+              </button>
+            </openclaw-tooltip>
           </div>
           <div class="sidebar-shell__body">
             ${this.renderSessions()}
@@ -467,21 +475,33 @@ export class AppSidebar extends LitElement {
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-utility-group">
-              <a
-                class="nav-item nav-item--external sidebar-utility-link"
-                href="https://docs.openclaw.ai"
-                target=${EXTERNAL_LINK_TARGET}
-                rel=${buildExternalLinkRel()}
-                title=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
-                <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                ${!this.collapsed
-                  ? html`
+              ${this.collapsed
+                ? html`
+                    <openclaw-tooltip
+                      .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
+                    >
+                      <a
+                        class="nav-item nav-item--external sidebar-utility-link"
+                        href="https://docs.openclaw.ai"
+                        target=${EXTERNAL_LINK_TARGET}
+                        rel=${buildExternalLinkRel()}
+                      >
+                        <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+                      </a>
+                    </openclaw-tooltip>
+                  `
+                : html`
+                    <a
+                      class="nav-item nav-item--external sidebar-utility-link"
+                      href="https://docs.openclaw.ai"
+                      target=${EXTERNAL_LINK_TARGET}
+                      rel=${buildExternalLinkRel()}
+                    >
+                      <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                       <span class="nav-item__text">${t("common.docs")}</span>
                       <span class="nav-item__external-icon">${icons.externalLink}</span>
-                    `
-                  : nothing}
-              </a>
+                    </a>
+                  `}
               <div class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </div>

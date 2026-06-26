@@ -2,6 +2,7 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
@@ -293,14 +294,15 @@ function renderSessionDetailPanel(
               `
             : nothing}
         </div>
-        <button
-          class="btn btn--sm btn--ghost"
-          @click=${onClose}
-          title=${t("usage.details.close")}
-          aria-label=${t("usage.details.close")}
-        >
-          ×
-        </button>
+        <openclaw-tooltip .content=${t("usage.details.close")}>
+          <button
+            class="btn btn--sm btn--ghost"
+            @click=${onClose}
+            aria-label=${t("usage.details.close")}
+          >
+            ×
+          </button>
+        </openclaw-tooltip>
       </div>
       ${session.scope === "family" && session.includedSessionIds?.length
         ? html`

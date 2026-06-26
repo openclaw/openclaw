@@ -3,8 +3,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { clearActiveFloatingTooltips } from "../../lib/dom-tooltips.ts";
 import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import {
@@ -1201,13 +1201,11 @@ function renderCardActionSlot(content: TemplateResult | typeof nothing) {
 }
 
 function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
-  clearActiveFloatingTooltips();
   state.detailCardId = card.id;
   state.detailCommentBody = "";
 }
 
 function closeCardDetails(state: WorkboardUiState) {
-  clearActiveFloatingTooltips();
   state.detailCardId = null;
   state.detailCommentBody = "";
 }
@@ -1242,13 +1240,11 @@ function resetDraft(state: WorkboardUiState) {
 }
 
 function openCreateModal(state: WorkboardUiState) {
-  clearActiveFloatingTooltips();
   resetDraft(state);
   state.draftOpen = true;
 }
 
 function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
-  clearActiveFloatingTooltips();
   state.draftOpen = true;
   state.editingCardId = card.id;
   state.draftTitle = card.title;
@@ -1350,18 +1346,19 @@ function renderCardModal(props: WorkboardProps) {
               ${editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp")}
             </p>
           </div>
-          <button
-            class="btn btn--icon workboard-card__icon"
-            type="button"
-            title=${t("common.cancel")}
-            aria-label=${t("common.cancel")}
-            @click=${() => {
-              resetDraft(state);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.x}
-          </button>
+          <openclaw-tooltip .content=${t("common.cancel")}>
+            <button
+              class="btn btn--icon workboard-card__icon"
+              type="button"
+              aria-label=${t("common.cancel")}
+              @click=${() => {
+                resetDraft(state);
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
         </div>
         <div class="workboard-draft__body">
           ${!editing
@@ -1769,13 +1766,12 @@ function renderStartExecutionButton(
         ? t("workboard.runEngine", { engine: engineDisplayName(engine) })
         : t("workboard.openEngine", { engine: engineDisplayName(engine) })
       : t("workboard.runDefaultAgent");
-  return html`
+  const button = html`
     <button
       class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${options.iconOnly
         ? "workboard-card__start--icon"
         : ""} ${engine ? "" : "workboard-card__start--default"}"
       type="button"
-      title=${title}
       aria-label=${title}
       ?disabled=${disabled}
       @click=${async () => {
@@ -1803,6 +1799,9 @@ function renderStartExecutionButton(
             : html`<span>${t("workboard.start")}</span>`}`}
     </button>
   `;
+  return options.iconOnly
+    ? html`<openclaw-tooltip .content=${title}>${button}</openclaw-tooltip>`
+    : button;
 }
 
 function renderStartExecutionControls(props: WorkboardProps, card: WorkboardCard) {
@@ -1905,18 +1904,19 @@ function renderCardDetailsPanel(props: WorkboardProps) {
               <span class="workboard-sr-only">${t("workboard.detailTitle")}: </span>${card.title}
             </h2>
           </div>
-          <button
-            class="btn btn--icon workboard-card__icon"
-            type="button"
-            title=${t("common.cancel")}
-            aria-label=${t("common.cancel")}
-            @click=${() => {
-              closeCardDetails(state);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.x}
-          </button>
+          <openclaw-tooltip .content=${t("common.cancel")}>
+            <button
+              class="btn btn--icon workboard-card__icon"
+              type="button"
+              aria-label=${t("common.cancel")}
+              @click=${() => {
+                closeCardDetails(state);
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
         </header>
 
         <section class="workboard-detail__section">
@@ -2242,112 +2242,120 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const topEditAction =
     writable && !archived
       ? html`
-          <button
-            class="btn btn--icon workboard-card__icon"
-            type="button"
-            title=${t("workboard.editCard")}
-            aria-label=${t("workboard.editCard")}
-            aria-haspopup="dialog"
-            ?disabled=${state.dispatching}
-            @click=${(event: MouseEvent) => {
-              rememberWorkboardReturnFocus(event.currentTarget);
-              openEditModal(state, card);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.edit}
-          </button>
+          <openclaw-tooltip .content=${t("workboard.editCard")}>
+            <button
+              class="btn btn--icon workboard-card__icon"
+              type="button"
+              aria-label=${t("workboard.editCard")}
+              aria-haspopup="dialog"
+              ?disabled=${state.dispatching}
+              @click=${(event: MouseEvent) => {
+                rememberWorkboardReturnFocus(event.currentTarget);
+                openEditModal(state, card);
+                props.onRequestUpdate?.();
+              }}
+            >
+              ${icons.edit}
+            </button>
+          </openclaw-tooltip>
         `
       : nothing;
   const topArchiveAction = writable
     ? html`
-        <button
-          class="btn btn--icon workboard-card__icon"
-          type="button"
-          title=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
-          aria-label=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
-          ?disabled=${busy}
-          @click=${() =>
-            archiveWorkboardCard({
-              host: props.host,
-              client: props.client,
-              cardId: card.id,
-              archived: !archived,
-              requestUpdate: props.onRequestUpdate,
-            })}
+        <openclaw-tooltip
+          .content=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
         >
-          ${archived ? icons.archiveRestore : icons.archive}
-        </button>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            type="button"
+            aria-label=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
+            ?disabled=${busy}
+            @click=${() =>
+              archiveWorkboardCard({
+                host: props.host,
+                client: props.client,
+                cardId: card.id,
+                archived: !archived,
+                requestUpdate: props.onRequestUpdate,
+              })}
+          >
+            ${archived ? icons.archiveRestore : icons.archive}
+          </button>
+        </openclaw-tooltip>
       `
     : nothing;
   const detailAction = html`
-    <button
-      class="btn btn--icon workboard-card__icon"
-      title=${t("workboard.viewDetails")}
-      aria-label=${t("workboard.viewDetails")}
-      aria-haspopup="dialog"
-      aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
-      aria-controls=${workboardCardDetailDrawerId}
-      @click=${(event: MouseEvent) => {
-        rememberWorkboardReturnFocus(event.currentTarget);
-        openCardDetails(state, card);
-        props.onRequestUpdate?.();
-      }}
-    >
-      ${icons.panelRightOpen}
-    </button>
+    <openclaw-tooltip .content=${t("workboard.viewDetails")}>
+      <button
+        class="btn btn--icon workboard-card__icon"
+        aria-label=${t("workboard.viewDetails")}
+        aria-haspopup="dialog"
+        aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
+        aria-controls=${workboardCardDetailDrawerId}
+        @click=${(event: MouseEvent) => {
+          rememberWorkboardReturnFocus(event.currentTarget);
+          openCardDetails(state, card);
+          props.onRequestUpdate?.();
+        }}
+      >
+        ${icons.panelRightOpen}
+      </button>
+    </openclaw-tooltip>
   `;
   const sessionAction = linkedSessionKey
     ? html`
-        <button
-          class="btn btn--icon workboard-card__icon"
-          title=${t("workboard.openSession")}
-          aria-label=${t("workboard.openSession")}
-          @click=${() => props.onOpenSession(linkedSessionKey)}
-        >
-          ${icons.messageSquare}
-        </button>
+        <openclaw-tooltip .content=${t("workboard.openSession")}>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            aria-label=${t("workboard.openSession")}
+            @click=${() => props.onOpenSession(linkedSessionKey)}
+          >
+            ${icons.messageSquare}
+          </button>
+        </openclaw-tooltip>
       `
     : nothing;
   const stopAction =
     writable && (linkedSessionKey ? live : activeTask)
       ? html`
-          <button
-            class="btn btn--icon workboard-card__icon"
-            title=${t("workboard.stopSession")}
-            aria-label=${t("workboard.stopSession")}
-            ?disabled=${busy || !props.connected}
-            @click=${() =>
-              stopWorkboardCard({
-                host: props.host,
-                client: props.client,
-                card,
-                requestUpdate: props.onRequestUpdate,
-              })}
-          >
-            ${icons.stop}
-          </button>
+          <openclaw-tooltip .content=${t("workboard.stopSession")}>
+            <button
+              class="btn btn--icon workboard-card__icon"
+              aria-label=${t("workboard.stopSession")}
+              ?disabled=${busy || !props.connected}
+              @click=${() =>
+                stopWorkboardCard({
+                  host: props.host,
+                  client: props.client,
+                  card,
+                  requestUpdate: props.onRequestUpdate,
+                })}
+            >
+              ${icons.stop}
+            </button>
+          </openclaw-tooltip>
         `
       : nothing;
   const moveAction = writable ? renderCardMoveControl(props, card, busy) : nothing;
   const deleteAction = writable
     ? html`
-        <button
-          class="btn btn--icon workboard-card__icon workboard-card__delete"
-          type="button"
-          title=${t("workboard.deleteCard")}
-          aria-label=${t("workboard.deleteCard")}
-          ?disabled=${busy}
-          @click=${() =>
-            deleteWorkboardCard({
-              host: props.host,
-              client: props.client,
-              cardId: card.id,
-              requestUpdate: props.onRequestUpdate,
-            })}
-        >
-          ${icons.trash}
-        </button>
+        <openclaw-tooltip .content=${t("workboard.deleteCard")}>
+          <button
+            class="btn btn--icon workboard-card__icon workboard-card__delete"
+            type="button"
+            aria-label=${t("workboard.deleteCard")}
+            ?disabled=${busy}
+            @click=${() =>
+              deleteWorkboardCard({
+                host: props.host,
+                client: props.client,
+                cardId: card.id,
+                requestUpdate: props.onRequestUpdate,
+              })}
+          >
+            ${icons.trash}
+          </button>
+        </openclaw-tooltip>
       `
     : nothing;
   return html`
@@ -2684,9 +2692,6 @@ export function renderWorkboard(props: WorkboardProps) {
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"
               type="button"
-              title=${state.showArchived
-                ? t("workboard.hideArchived")
-                : t("workboard.showArchived")}
               aria-pressed=${state.showArchived}
               @click=${() => {
                 state.showArchived = !state.showArchived;
@@ -2700,32 +2705,34 @@ export function renderWorkboard(props: WorkboardProps) {
             </button>
             <div class="workboard-layout-controls">
               <div class="workboard-layout-toggle" role="group" aria-label=${t("workboard.layout")}>
-                <button
-                  class="btn btn--icon ${state.layout === "compact" ? "active" : ""}"
-                  type="button"
-                  data-tooltip=${t("workboard.layoutCompact")}
-                  aria-label=${t("workboard.layoutCompact")}
-                  aria-pressed=${state.layout === "compact"}
-                  @click=${() => {
-                    state.layout = "compact";
-                    props.onRequestUpdate?.();
-                  }}
-                >
-                  ${icons.layoutCompact}
-                </button>
-                <button
-                  class="btn btn--icon ${state.layout === "comfortable" ? "active" : ""}"
-                  type="button"
-                  data-tooltip=${t("workboard.layoutComfortable")}
-                  aria-label=${t("workboard.layoutComfortable")}
-                  aria-pressed=${state.layout === "comfortable"}
-                  @click=${() => {
-                    state.layout = "comfortable";
-                    props.onRequestUpdate?.();
-                  }}
-                >
-                  ${icons.layoutComfortable}
-                </button>
+                <openclaw-tooltip .content=${t("workboard.layoutCompact")}>
+                  <button
+                    class="btn btn--icon ${state.layout === "compact" ? "active" : ""}"
+                    type="button"
+                    aria-label=${t("workboard.layoutCompact")}
+                    aria-pressed=${state.layout === "compact"}
+                    @click=${() => {
+                      state.layout = "compact";
+                      props.onRequestUpdate?.();
+                    }}
+                  >
+                    ${icons.layoutCompact}
+                  </button>
+                </openclaw-tooltip>
+                <openclaw-tooltip .content=${t("workboard.layoutComfortable")}>
+                  <button
+                    class="btn btn--icon ${state.layout === "comfortable" ? "active" : ""}"
+                    type="button"
+                    aria-label=${t("workboard.layoutComfortable")}
+                    aria-pressed=${state.layout === "comfortable"}
+                    @click=${() => {
+                      state.layout = "comfortable";
+                      props.onRequestUpdate?.();
+                    }}
+                  >
+                    ${icons.layoutComfortable}
+                  </button>
+                </openclaw-tooltip>
               </div>
               ${renderRefreshStatus(state)}
             </div>
@@ -2749,7 +2756,6 @@ export function renderWorkboard(props: WorkboardProps) {
                   <button
                     class="btn"
                     type="button"
-                    title=${t("common.refresh")}
                     ?disabled=${state.loading ||
                     state.dispatching ||
                     workboardHasActiveWrites(state)}
@@ -2798,7 +2804,6 @@ export function renderWorkboard(props: WorkboardProps) {
                   <button
                     class="btn"
                     type="button"
-                    title=${t("workboard.dispatch")}
                     ?disabled=${state.dispatching || workboardHasActiveWrites(state)}
                     @click=${() =>
                       dispatchWorkboard({
@@ -2816,7 +2821,6 @@ export function renderWorkboard(props: WorkboardProps) {
                   <button
                     class="btn primary"
                     type="button"
-                    title=${t("workboard.newCard")}
                     aria-haspopup="dialog"
                     aria-expanded=${state.draftOpen ? "true" : "false"}
                     aria-controls=${workboardCardModalId}

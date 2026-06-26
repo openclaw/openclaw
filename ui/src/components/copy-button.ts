@@ -2,6 +2,7 @@
 import { html, type TemplateResult } from "lit";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
@@ -15,69 +16,69 @@ type CopyButtonOptions = {
 };
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
-  button.title = label;
   button.setAttribute("aria-label", label);
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {
   const idleLabel = options.label ?? COPY_LABEL;
   return html`
-    <button
-      class="btn btn--xs chat-copy-btn"
-      type="button"
-      title=${idleLabel}
-      aria-label=${idleLabel}
-      @click=${async (e: Event) => {
-        const btn = e.currentTarget as HTMLButtonElement | null;
+    <openclaw-tooltip .content=${idleLabel}>
+      <button
+        class="btn btn--xs chat-copy-btn"
+        type="button"
+        aria-label=${idleLabel}
+        @click=${async (e: Event) => {
+          const btn = e.currentTarget as HTMLButtonElement | null;
 
-        if (!btn || btn.dataset.copying === "1") {
-          return;
-        }
+          if (!btn || btn.dataset.copying === "1") {
+            return;
+          }
 
-        btn.dataset.copying = "1";
-        btn.setAttribute("aria-busy", "true");
-        btn.disabled = true;
+          btn.dataset.copying = "1";
+          btn.setAttribute("aria-busy", "true");
+          btn.disabled = true;
 
-        const copied = await copyToClipboard(options.text());
-        if (!btn.isConnected) {
-          return;
-        }
+          const copied = await copyToClipboard(options.text());
+          if (!btn.isConnected) {
+            return;
+          }
 
-        delete btn.dataset.copying;
-        btn.removeAttribute("aria-busy");
-        btn.disabled = false;
+          delete btn.dataset.copying;
+          btn.removeAttribute("aria-busy");
+          btn.disabled = false;
 
-        if (!copied) {
-          btn.dataset.error = "1";
-          setButtonLabel(btn, ERROR_LABEL);
+          if (!copied) {
+            btn.dataset.error = "1";
+            setButtonLabel(btn, ERROR_LABEL);
+
+            window.setTimeout(() => {
+              if (!btn.isConnected) {
+                return;
+              }
+              delete btn.dataset.error;
+              setButtonLabel(btn, idleLabel);
+            }, ERROR_FOR_MS);
+            return;
+          }
+
+          btn.dataset.copied = "1";
+          setButtonLabel(btn, COPIED_LABEL);
 
           window.setTimeout(() => {
             if (!btn.isConnected) {
               return;
             }
-            delete btn.dataset.error;
+            delete btn.dataset.copied;
             setButtonLabel(btn, idleLabel);
-          }, ERROR_FOR_MS);
-          return;
-        }
-
-        btn.dataset.copied = "1";
-        setButtonLabel(btn, COPIED_LABEL);
-
-        window.setTimeout(() => {
-          if (!btn.isConnected) {
-            return;
-          }
-          delete btn.dataset.copied;
-          setButtonLabel(btn, idleLabel);
-        }, COPIED_FOR_MS);
-      }}
-    >
-      <span class="chat-copy-btn__icon" aria-hidden="true">
-        <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
-        <span class="chat-copy-btn__icon-check">${icons.check}</span>
-      </span>
-    </button>
+          }, COPIED_FOR_MS);
+        }}
+      >
+        <span class="chat-copy-btn__icon" aria-hidden="true">
+          <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
+          <span class="chat-copy-btn__icon-check">${icons.check}</span>
+        </span>
+      </button>
+    </openclaw-tooltip>
   `;
 }
 

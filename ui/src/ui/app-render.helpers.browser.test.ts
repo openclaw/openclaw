@@ -106,35 +106,6 @@ describe("chat header controls (browser)", () => {
     expect(link.textContent?.trim()).toBe("Settings");
   });
 
-  it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
-    const container = document.createElement("div");
-    render(renderChatControls(createState()), container);
-    await Promise.resolve();
-
-    const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        ".chat-settings-popover__toggles .btn--icon[data-tooltip]",
-      ),
-    );
-
-    expect(buttons).toHaveLength(6);
-
-    const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
-    expect(labels).toEqual([
-      t("common.refresh"),
-      `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
-      t("chat.thinkingToggle"),
-      t("chat.toolCallsToggle"),
-      t("chat.commentaryToggle"),
-      t("chat.showCronSessions"),
-    ]);
-
-    for (const button of buttons) {
-      expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
-      expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
-    }
-  });
-
   // Proves the pill is wired into renderChatControls — the surface that actually ships — not the
   // orphaned session-select wrapper that chat.test.ts exercises. (Live re-render when authStatus
   // arrives is enforced by the renderGuardedChatControls dep list and verified via screenshot.)
@@ -215,7 +186,9 @@ describe("chat header controls (browser)", () => {
     const cronButton = requireButton(buttons.at(-1), "cron sessions");
     expect([...cronButton.classList]).toEqual(["btn", "btn--sm", "btn--icon", "active"]);
     expect(cronButton.getAttribute("aria-pressed")).toBe("true");
-    expect(cronButton.getAttribute("title")).toBe(t("chat.showCronSessionsHidden", { count: "1" }));
+    expect(cronButton.getAttribute("aria-label")).toBe(
+      t("chat.showCronSessionsHidden", { count: "1" }),
+    );
 
     cronButton.click();
 
@@ -236,7 +209,6 @@ describe("chat header controls (browser)", () => {
     expect(toggle.getAttribute("aria-label")).toBe(
       `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
     );
-    expect(toggle.getAttribute("data-tooltip")).toBe(toggle.getAttribute("aria-label"));
     expect(toggle.dataset.chatAutoScrollMode).toBe("near-bottom");
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
 

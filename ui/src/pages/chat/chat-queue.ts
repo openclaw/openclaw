@@ -1,6 +1,7 @@
 // Control UI chat module implements chat queue behavior.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "./types.ts";
 
@@ -60,7 +61,6 @@ export function renderChatQueue(props: ChatQueueProps) {
                       <button
                         class="btn chat-queue__retry"
                         type="button"
-                        title=${t("chat.queue.retrySend")}
                         aria-label=${t("chat.queue.retryQueuedMessage")}
                         @click=${() => props.onQueueRetry?.(item.id)}
                       >
@@ -78,7 +78,6 @@ export function renderChatQueue(props: ChatQueueProps) {
                       <button
                         class="btn chat-queue__steer"
                         type="button"
-                        title="Steer now"
                         aria-label="Steer queued message"
                         @click=${() => props.onQueueSteer?.(item.id)}
                       >
@@ -87,14 +86,16 @@ export function renderChatQueue(props: ChatQueueProps) {
                       </button>
                     `
                   : nothing}
-                <button
-                  class="btn chat-queue__remove"
-                  type="button"
-                  aria-label="Remove queued message"
-                  @click=${() => props.onQueueRemove(item.id)}
-                >
-                  ${icons.x}
-                </button>
+                <openclaw-tooltip content="Remove queued message">
+                  <button
+                    class="btn chat-queue__remove"
+                    type="button"
+                    aria-label="Remove queued message"
+                    @click=${() => props.onQueueRemove(item.id)}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
               </div>
             </div>
           `;

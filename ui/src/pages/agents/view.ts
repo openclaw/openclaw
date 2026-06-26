@@ -177,7 +177,6 @@ export function renderAgents(props: AgentsProps) {
                     type="button"
                     class="btn btn--sm btn--ghost"
                     @click=${() => void navigator.clipboard.writeText(selectedAgent.id)}
-                    title=${t("agents.copyIdTitle")}
                   >
                     ${t("agents.copyId")}
                   </button>
@@ -186,9 +185,6 @@ export function renderAgents(props: AgentsProps) {
                     class="btn btn--sm btn--ghost"
                     ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
                     @click=${() => props.onSetDefault(selectedAgent.id)}
-                    title=${defaultId && selectedAgent.id === defaultId
-                      ? t("agents.alreadyDefaultTitle")
-                      : t("agents.setDefaultTitle")}
                   >
                     ${defaultId && selectedAgent.id === defaultId
                       ? t("agents.default")
