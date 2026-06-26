@@ -183,7 +183,7 @@ describe("initNativeBridge", () => {
     navigateChatInputHistory(state, "up");
     expect(state.chatInputHistoryIndex).toBe(0);
 
-    // Host delegates to the real handleChatDraftChange — same path as app.ts.
+    // Host delegates to the real handleChatDraftChange implementation.
     const host = { handleChatDraftChange: (text: string) => applyDraftChange(state, text) };
     initNativeBridge(host);
 

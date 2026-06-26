@@ -30,7 +30,6 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { createRouterOutletSnapshot, type RouterOutletSnapshotStore } from "./router-outlet.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -324,7 +323,6 @@ function readSessionDefaults(
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
-  readonly routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
     readonly token: string;
@@ -365,7 +363,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const identity = loadLocalUserIdentity();
   const router = createApplicationRouter();
-  const routeSnapshot = createRouterOutletSnapshot(router);
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
       ? {
@@ -430,7 +427,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   return {
     context,
     router,
-    routeSnapshot,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
     },
@@ -441,7 +437,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       await startApplicationRouter(router, history, basePath, context);
     },
     stop: () => {
-      routeSnapshot.dispose();
       router.stop();
       gateway.stop();
       sessions.dispose();

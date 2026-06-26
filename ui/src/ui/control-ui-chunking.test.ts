@@ -23,7 +23,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiManualChunk("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js")).toBe(
       "gateway-runtime",
     );
-    expect(controlUiManualChunk("/repo/ui/src/ui/app-render.ts")).toBeUndefined();
+    expect(controlUiManualChunk("/repo/ui/src/app/app-host.ts")).toBeUndefined();
   });
 
   it("normalizes Windows module paths before package matching", () => {

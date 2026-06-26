@@ -34,18 +34,6 @@ export type RouterOutletSelection<
   showPending: boolean;
 };
 
-export type RouterOutletSnapshotStore<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = {
-  get: () => RouterOutletSelection<TRouteId, TModule, TData>;
-  subscribe: (
-    listener: (selection: RouterOutletSelection<TRouteId, TModule, TData>) => void,
-  ) => () => void;
-  dispose: () => void;
-};
-
 function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   state: RouterState<TRouteId, TModule, TData>,
 ): RouterOutletSelection<TRouteId, TModule, TData> {
@@ -54,44 +42,6 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
     active: state.matches[0],
     pending: state.pendingMatches[0],
     showPending: false,
-  };
-}
-
-export function createRouterOutletSnapshot<TRouteId extends string, TLoadContext, TModule, TData>(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-): RouterOutletSnapshotStore<TRouteId, TModule, TData> {
-  let selection = selectRouterOutletState(router.getState());
-  const listeners = new Set<(next: RouterOutletSelection<TRouteId, TModule, TData>) => void>();
-  let disposed = false;
-  const unsubscribe = router.subscribeSelector(
-    selectRouterOutletState,
-    (next) => {
-      selection = next;
-      for (const listener of listeners) {
-        listener(selection);
-      }
-    },
-    equalRouterOutletState,
-  );
-  return {
-    get: () => selection,
-    subscribe: (listener) => {
-      if (disposed) {
-        return () => undefined;
-      }
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    dispose: () => {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      listeners.clear();
-      unsubscribe();
-    },
   };
 }
 
@@ -214,7 +164,6 @@ export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModul
 }
 
 class RouterOutletDirective extends AsyncDirective {
-  private snapshot?: RouterOutletSnapshotStore;
   private router?: Router<string, unknown, unknown, unknown>;
   private retryContext: unknown;
   private unsubscribe?: () => void;
@@ -226,17 +175,16 @@ class RouterOutletDirective extends AsyncDirective {
   private showPending = false;
 
   override render(
-    snapshot: unknown,
     router: unknown,
     retryContext: unknown,
     boundaryOptions: RouterOutletBoundaryOptions,
   ) {
-    const routeSnapshot = snapshot as RouterOutletSnapshotStore;
-    this.updateSubscription(routeSnapshot);
-    this.router = router as Router<string, unknown, unknown, unknown>;
+    const nextRouter = router as Router<string, unknown, unknown, unknown>;
+    this.updateSubscription(nextRouter);
+    this.router = nextRouter;
     this.retryContext = retryContext;
     this.boundaryOptions = boundaryOptions;
-    return this.renderSelection(routeSnapshot.get());
+    return this.renderSelection(selectRouterOutletState(nextRouter.getState()));
   }
 
   override disconnected() {
@@ -245,28 +193,30 @@ class RouterOutletDirective extends AsyncDirective {
     this.clearPendingTimer();
     this.pendingSelection = undefined;
     this.boundaryOptions = undefined;
-    this.router = undefined;
     this.retryContext = undefined;
     this.notFoundScheduled = false;
   }
 
   override reconnected() {
-    if (this.snapshot) {
-      this.updateSubscription(this.snapshot);
+    if (this.router) {
+      this.updateSubscription(this.router);
     }
   }
 
-  private updateSubscription(snapshot: RouterOutletSnapshotStore) {
-    if (this.snapshot === snapshot && this.unsubscribe) {
+  private updateSubscription(router: Router<string, unknown, unknown, unknown>) {
+    if (this.router === router && this.unsubscribe) {
       return;
     }
     this.unsubscribe?.();
-    this.snapshot = snapshot;
-    this.unsubscribe = snapshot.subscribe((selection) => {
-      if (this.isConnected) {
-        this.setValue(this.renderSelection(selection));
-      }
-    });
+    this.unsubscribe = router.subscribeSelector(
+      selectRouterOutletState,
+      (selection) => {
+        if (this.isConnected) {
+          this.setValue(this.renderSelection(selection));
+        }
+      },
+      equalRouterOutletState,
+    );
   }
 
   private renderSelection(selection: RouterOutletSelection) {
@@ -327,12 +277,11 @@ class RouterOutletDirective extends AsyncDirective {
 const routerOutletDirective = directive(RouterOutletDirective);
 
 export function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
-  snapshot: RouterOutletSnapshotStore<TRouteId, TModule, TData>,
   router: Router<TRouteId, TContext, TModule, TData>,
   boundaryOptions: RouterOutletBoundaryOptions,
   options: RouterOutletOptions<TRouteId, TContext, TData> = {},
 ): unknown {
-  return routerOutletDirective(snapshot, router, options.retryContext, boundaryOptions);
+  return routerOutletDirective(router, options.retryContext, boundaryOptions);
 }
 
 export class OpenClawRouterOutlet<
@@ -342,7 +291,6 @@ export class OpenClawRouterOutlet<
   TData = unknown,
 > extends LitElement {
   @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  @property({ attribute: false }) snapshot?: RouterOutletSnapshotStore<TRouteId, TModule, TData>;
   @property({ attribute: false }) retryContext?: TLoadContext;
   @property({ attribute: false }) onNotFound?: () => void;
 
@@ -351,11 +299,10 @@ export class OpenClawRouterOutlet<
   }
 
   override render() {
-    if (!this.router || !this.snapshot) {
+    if (!this.router) {
       return nothing;
     }
     return routerOutlet(
-      this.snapshot,
       this.router,
       { onNotFound: this.onNotFound },
       {

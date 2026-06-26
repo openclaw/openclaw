@@ -21,17 +21,44 @@ import {
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
 } from "../lib/dom-tooltips.ts";
+import type { RouteLocation, RouterState } from "../router/types.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
-import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 import "./router-outlet.ts";
-import { type RouterOutletSelection } from "./router-outlet.ts";
+import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 
 const ACTIVE_ROUTE_IDS = ["chat"] as const;
+
+type ShellRouteState = {
+  routeId?: RouteId;
+  location?: RouteLocation;
+  data?: unknown;
+};
+
+function selectShellRouteState(state: RouterState<RouteId, unknown, unknown>): ShellRouteState {
+  const match = state.pendingMatches[0] ?? state.matches[0];
+  return match
+    ? {
+        routeId: match.routeId,
+        location: match.location,
+        data: match.data,
+      }
+    : {};
+}
+
+function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
+  return (
+    previous.routeId === next.routeId &&
+    previous.location?.pathname === next.location?.pathname &&
+    previous.location?.search === next.location?.search &&
+    previous.location?.hash === next.location?.hash &&
+    previous.data === next.data
+  );
+}
 
 function resolveRouteAgentLabel(data: unknown): string {
   if (!data || typeof data !== "object" || !("headerContext" in data)) {
@@ -199,12 +226,7 @@ class OpenClawShell extends LitElement {
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
   @state() private gatewayVersion = "";
-  @state() private routeSelection: RouterOutletSelection<RouteId, unknown, unknown> = {
-    status: "idle",
-    active: undefined,
-    pending: undefined,
-    showPending: false,
-  };
+  @state() private routeState: ShellRouteState = {};
   @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
@@ -277,13 +299,14 @@ class OpenClawShell extends LitElement {
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateGatewayStatus(snapshot);
     });
-    this.routeSelection = runtime.routeSnapshot.get();
-    this.stopRouteSubscription = runtime.routeSnapshot.subscribe((selection) => {
-      this.routeSelection = selection;
-      if (this.navDrawerOpen) {
-        this.closeNavDrawer({ restoreFocus: true });
-      }
-    });
+    this.routeState = selectShellRouteState(runtime.router.getState());
+    this.stopRouteSubscription = runtime.router.subscribeSelector(
+      selectShellRouteState,
+      (routeState) => {
+        this.routeState = routeState;
+      },
+      equalShellRouteState,
+    );
     this.overlaySnapshot = context.overlays.snapshot;
     this.stopOverlaySubscription = context.overlays.subscribe((snapshot) => {
       this.overlaySnapshot = snapshot;
@@ -325,9 +348,8 @@ class OpenClawShell extends LitElement {
     if (!context || routeId !== "chat") {
       return;
     }
-    const renderedMatch = this.routeSelection.pending ?? this.routeSelection.active;
     const sessionKey =
-      new URLSearchParams(renderedMatch?.location.search).get("session")?.trim() ||
+      new URLSearchParams(this.routeState.location?.search).get("session")?.trim() ||
       context.gateway.snapshot.sessionKey.trim();
     const navigationOptions =
       options ??
@@ -414,15 +436,13 @@ class OpenClawShell extends LitElement {
     if (!context || !runtime) {
       return nothing;
     }
-    const selection = this.routeSelection;
-    const renderedMatch = selection.pending ?? selection.active;
-    const activeRoute = (renderedMatch?.routeId ?? "chat") as RouteId;
+    const activeRoute = this.routeState.routeId ?? "chat";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
     const onSlashCommand = this.commandPaletteTarget?.owner.isConnected
       ? this.commandPaletteTarget.onSlashCommand
       : undefined;
-    const agentLabel = resolveRouteAgentLabel(renderedMatch?.data ?? selection.active?.data);
+    const agentLabel = resolveRouteAgentLabel(this.routeState.data);
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -462,7 +482,7 @@ class OpenClawShell extends LitElement {
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
             .enabledRouteIds=${ACTIVE_ROUTE_IDS}
-            .routeLocation=${renderedMatch?.location}
+            .routeLocation=${this.routeState.location}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
             .version=${this.gatewayVersion}
@@ -508,7 +528,6 @@ class OpenClawShell extends LitElement {
           ></openclaw-update-banner>
           <openclaw-router-outlet
             .router=${runtime.router}
-            .snapshot=${runtime.routeSnapshot}
             .retryContext=${context}
             .onNotFound=${() => context.replace("chat")}
           ></openclaw-router-outlet>

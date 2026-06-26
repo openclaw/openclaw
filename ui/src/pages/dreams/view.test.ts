@@ -877,5 +877,5 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  // Toggle lives in the page header (app-render.ts), not inside the dreaming view.
+  // Toggle lives in the route header, not inside the dreaming view.
 });
