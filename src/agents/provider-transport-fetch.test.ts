@@ -1371,7 +1371,9 @@ describe("buildGuardedModelFetch", () => {
     try {
       while (true) {
         const { done } = await reader!.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
       }
     } catch (e) {
       caught = e;
@@ -1421,7 +1423,9 @@ describe("buildGuardedModelFetch", () => {
     try {
       while (true) {
         const { done } = await reader!.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
       }
     } catch (e) {
       caught = e;
