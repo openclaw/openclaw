@@ -80,6 +80,7 @@ function armWorkTimer(sessionKey: string, fireAt: number): void {
       sessionKey,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
+      includeRunningIdleRetry: true,
     })
       .then(() => undefined)
       .catch((err: unknown) => {
@@ -523,6 +524,7 @@ export async function dispatchPendingContinuationWork(params: {
   recoverRunning?: boolean;
   includeRunningUpdatedAtOrBefore?: number;
   includeIdleRetry?: boolean;
+  includeRunningIdleRetry?: boolean;
 }): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const recoverRunning = params.recoverRunning === true;
   let runningRecoveryBlockedByActiveReply = false;
@@ -534,6 +536,7 @@ export async function dispatchPendingContinuationWork(params: {
     includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
     includeIdleRetry: params.includeIdleRetry === true,
+    includeRunningIdleRetry: params.includeRunningIdleRetry === true,
   });
   // #986 Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);
@@ -563,19 +566,16 @@ export async function dispatchPendingContinuationWork(params: {
     );
   }
   const soonestQueued = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
-  let soonestRunningRecovery: number | undefined;
-  if (recoverRunning) {
-    const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
-      params.sessionKey,
-      RUNNING_WORK_RECOVERY_STALE_MS,
-    );
-    soonestRunningRecovery =
-      runningRecoveryDueAt === undefined
-        ? undefined
-        : runningRecoveryBlockedByActiveReply
-          ? Date.now() + RUNNING_WORK_RECOVERY_STALE_MS
-          : runningRecoveryDueAt;
-  }
+  const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
+    params.sessionKey,
+    RUNNING_WORK_RECOVERY_STALE_MS,
+  );
+  const soonestRunningRecovery =
+    runningRecoveryDueAt === undefined
+      ? undefined
+      : recoverRunning && runningRecoveryBlockedByActiveReply
+        ? Date.now() + RUNNING_WORK_RECOVERY_STALE_MS
+        : runningRecoveryDueAt;
   const soonest = earlierDueAt(soonestQueued, soonestRunningRecovery);
   if (soonest !== undefined) {
     armWorkTimer(params.sessionKey, soonest);

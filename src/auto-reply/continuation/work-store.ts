@@ -216,6 +216,7 @@ export function consumePendingWork(
     includeRunning?: boolean;
     includeRunningUpdatedAtOrBefore?: number;
     includeIdleRetry?: boolean;
+    includeRunningIdleRetry?: boolean;
   } = {},
 ): PendingContinuationWork[] {
   const now = Date.now();
@@ -265,7 +266,10 @@ export function consumePendingWork(
     if (flow.status !== "queued" && !canConsumeRunning) {
       continue;
     }
-    const idleRetryReady = options.includeIdleRetry === true && state.idleRetry !== undefined;
+    const idleRetryReady =
+      state.idleRetry !== undefined &&
+      (options.includeIdleRetry === true ||
+        (options.includeRunningIdleRetry === true && flow.status === "running"));
     if (now < state.dueAt && !idleRetryReady) {
       continue;
     }

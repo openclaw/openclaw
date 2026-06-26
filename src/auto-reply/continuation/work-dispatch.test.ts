@@ -638,6 +638,101 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
+  it("lets the armed hedge timer recover running idle-retry rows before the future hedge", async () => {
+    const sessionKey = "agent:main:running-idle-retry-timer-recovery";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 300_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 300_000,
+      maxChainLength: 8,
+      reason: "running idle retry timer recovery",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    flow.stateJson = {
+      ...(flow.stateJson as object),
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    };
+    consumePendingWork(sessionKey, { includeIdleRetry: true });
+
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now() - 60_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAsyncWork();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("running idle retry timer recovery"),
+        }),
+      }),
+    ]);
+  });
+
+  it("does not let idle-event dispatch clear a running idle-retry recovery timer", async () => {
+    const sessionKey = "agent:main:idle-dispatch-preserves-running-recovery";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 300_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 300_000,
+      maxChainLength: 8,
+      reason: "preserved running recovery",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    flow.stateJson = {
+      ...(flow.stateJson as object),
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    };
+    consumePendingWork(sessionKey, { includeIdleRetry: true });
+
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now() - 60_000,
+    });
+    await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("preserved running recovery"),
+        }),
+      }),
+    ]);
+  });
+
   it("retries busy same-session work from the reply-run end event instead of near-1Hz polling", async () => {
     const sessionKey = "agent:main:busy";
     mockSessionStore[sessionKey] = { sessionKey };
