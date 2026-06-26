@@ -3,6 +3,7 @@
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import { promisify } from "node:util";
@@ -61,6 +62,8 @@ async function generateSelfSignedCert(params: {
     params.certPath,
     "-subj",
     "/CN=openclaw-gateway",
+    "-addext",
+    `subjectAltName=DNS:localhost,DNS:${os.hostname()},IP:127.0.0.1,IP:::1`,
   ]);
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});

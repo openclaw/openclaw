@@ -192,4 +192,29 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.certPath).not.toContain("gateway-cert.pem");
     expect(result.keyPath).not.toContain("gateway-key.pem");
   });
+
+  it("generates cert with subjectAltName for localhost and hostname", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: true,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+
+    const cert = new X509Certificate(
+      await (await import("node:fs/promises")).readFile(certPath, "utf8"),
+    );
+    const san = cert.subjectAltName;
+    expect(san).toBeTruthy();
+    expect(san).toContain("DNS:localhost");
+    expect(san).toContain("IP Address:127.0.0.1");
+    expect(san).toContain("IP Address:0:0:0:0:0:0:0:1");
+  });
 });
