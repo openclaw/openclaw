@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -102,6 +101,55 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
+  it("clears legacy embedded ACP metadata through the session accessor", async () => {
+    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+      await seedAcpSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "sess-acp",
+          updatedAt: 100,
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "legacy-embedded",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 120,
+          },
+        },
+      });
+
+      await upsertAcpSessionMeta({
+        cfg,
+        databasePath,
+        sessionKey,
+        now: () => 200,
+        mutate: () => ({
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-sqlite",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        }),
+      });
+
+      expect(readStoredAcpSessionEntry({ storePath, sessionKey })?.acp).toBeUndefined();
+      expect(
+        readAcpSessionEntry({
+          cfg,
+          databasePath,
+          sessionKey,
+        })?.acp?.runtimeSessionName,
+      ).toBe("codex-sqlite");
+    });
+  });
+
   it("creates a session-store row for new SQLite ACP sessions without embedding ACP metadata", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -187,8 +235,10 @@ describe("ACP session metadata SQLite store", () => {
       if (!legacyEmbeddedEntry) {
         throw new Error("expected normalized ACP session entry");
       }
-      await writeSessionStoreForTestAsync(storePath, {
-        [storeSessionKey]: {
+      await seedAcpSessionEntry({
+        storePath,
+        sessionKey: storeSessionKey,
+        entry: {
           ...legacyEmbeddedEntry,
           acp: {
             backend: "acpx",
@@ -218,7 +268,9 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: storeSessionKey,
         })?.acp,
       ).toBeUndefined();
-      expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
+      expect(
+        readStoredAcpSessionEntry({ storePath, sessionKey: storeSessionKey })?.acp,
+      ).toBeUndefined();
     });
   });
 
