@@ -9,7 +9,7 @@
  */
 import http from "node:http";
 import https from "node:https";
-import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isLoopbackHost } from "../gateway/net.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
