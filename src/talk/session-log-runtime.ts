@@ -107,7 +107,12 @@ function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[
     return false;
   }
   const assistantTokenSet = new Set(assistantTokens);
-  const overlap = uniqueUserTokens.filter((token) => assistantTokenSet.has(token)).length;
+  let overlap = 0;
+  for (const token of uniqueUserTokens) {
+    if (assistantTokenSet.has(token)) {
+      overlap += 1;
+    }
+  }
   return overlap / uniqueUserTokens.length >= 0.58;
 }
 
