@@ -191,6 +191,63 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     expect(payload.options).toEqual({ num_ctx: 131072 });
   });
 
+  it("preserves tool_calls.function.arguments as string for OpenAI-compatible payloads (regression test for #96441)", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({
+        model: "glm-5.2:cloud",
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_abc123",
+                type: "function",
+                function: {
+                  name: "config.get",
+                  // arguments as a JSON string — the OpenAI API spec requirement
+                  arguments: '{"path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 262144,
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    const toolCalls = messages[0]?.tool_calls as Array<Record<string, unknown>>;
+    const fn = toolCalls[0]?.function as Record<string, unknown>;
+    expect(typeof fn.arguments).toBe("string");
+    expect(fn.arguments).toBe('{"path":"gateway.port"}');
+  });
+
   it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
     await withMockNdjsonFetch(
       [

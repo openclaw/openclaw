@@ -247,7 +247,6 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-      normalizeOllamaCompatMessageToolArgs(payloadRecord);
     });
 }
 
@@ -736,45 +735,6 @@ function normalizeOllamaToolCallArguments(value: unknown): Record<string, unknow
   return ensureArgsObject(value);
 }
 
-function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
-  const messages = payloadRecord.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-
-  for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const messageRecord = message as Record<string, unknown>;
-
-    const functionCall = messageRecord.function_call;
-    if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
-      const functionCallRecord = functionCall as Record<string, unknown>;
-      if (Object.hasOwn(functionCallRecord, "arguments")) {
-        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
-      }
-    }
-
-    const toolCalls = messageRecord.tool_calls;
-    if (!Array.isArray(toolCalls)) {
-      continue;
-    }
-    for (const toolCall of toolCalls) {
-      if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
-        continue;
-      }
-      const functionSpec = (toolCall as Record<string, unknown>).function;
-      if (!functionSpec || typeof functionSpec !== "object" || Array.isArray(functionSpec)) {
-        continue;
-      }
-      const functionRecord = functionSpec as Record<string, unknown>;
-      if (Object.hasOwn(functionRecord, "arguments")) {
-        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
-      }
-    }
-  }
-}
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
   if (schema.properties && isRecord(schema.properties)) {
