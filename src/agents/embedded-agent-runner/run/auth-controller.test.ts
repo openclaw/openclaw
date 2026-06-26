@@ -2,7 +2,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
-import { FailoverError } from "../../failover-error.js";
+import { FailoverError, describeFailoverError, isFailoverError } from "../../failover-error.js";
 import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
 import { GEE_RUNTIME_CREDENTIAL_REF_MARKER } from "../../model-auth-markers.js";
 import type { RuntimeAuthState } from "./helpers.js";
@@ -220,9 +220,25 @@ describe("createEmbeddedRunAuthController", () => {
       }),
     });
 
-    await expect(controller.initializeAuthProfile()).rejects.toThrow(
-      'Gee-owned runtime auth for endpoints "telegram:geeclaw" is expired',
-    );
+    let thrown: unknown;
+    try {
+      await controller.initializeAuthProfile();
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(isFailoverError(thrown)).toBe(true);
+    expect(describeFailoverError(thrown)).toMatchObject({
+      message: expect.stringContaining(
+        'Gee-owned runtime auth for endpoints "telegram:geeclaw" is expired',
+      ),
+      reason: "auth",
+      status: 401,
+      code: "gee_runtime_auth_policy_ineligible",
+      provider: "custom-openai",
+      model: "test-model",
+      rawError: expect.stringContaining("OpenClaw will not fall back to standalone auth profiles"),
+    });
     expect(mocks.getApiKeyForModel).not.toHaveBeenCalled();
     expect(setRuntimeApiKey).not.toHaveBeenCalled();
   });

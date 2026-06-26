@@ -989,6 +989,16 @@ async function runEmbeddedAgentInternal(
         | undefined;
       const geeRuntimeProviderAuthPolicy =
         resolveGeeRuntimeProviderAuthPolicy(geeRuntimePreparedFacts);
+      const geeRuntimeFailoverObservation = geeRuntimeProviderAuthPolicy
+        ? {
+            runtimePolicyOwner: "gee" as const,
+            runtimePolicyEndpointIds: geeRuntimeProviderAuthPolicy.endpointIds,
+            runtimeRoutingPolicyIds: geeRuntimeProviderAuthPolicy.routingPolicyIds,
+            runtimeFallbackPolicyIds: geeRuntimeProviderAuthPolicy.fallbackPolicyIds,
+            runtimeCooldownPolicyIds: geeRuntimeProviderAuthPolicy.cooldownPolicyIds,
+            runtimeAuthEligibility: geeRuntimeProviderAuthPolicy.authEligibility,
+          }
+        : undefined;
       const fallbackConfigured = geeRuntimeProviderAuthPolicy
         ? false
         : hasEmbeddedRunConfiguredModelFallbacks({
@@ -3169,6 +3179,7 @@ async function runEmbeddedAgentInternal(
               sourceModel: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
+              ...geeRuntimeFailoverObservation,
               aborted,
             });
             if (promptFailoverReason === "rate_limit") {
@@ -3384,6 +3395,7 @@ async function runEmbeddedAgentInternal(
             sourceModel: assistantForFailover?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
+            ...geeRuntimeFailoverObservation,
             timedOut,
             aborted,
           });

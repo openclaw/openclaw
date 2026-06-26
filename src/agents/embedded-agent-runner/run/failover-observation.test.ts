@@ -174,4 +174,47 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });
+
+  it("records Gee-owned runtime policy context for surfaced hosted errors", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:gee-policy",
+      rawError: "401 unauthorized",
+      failoverReason: "auth",
+      profileFailureReason: null,
+      provider: "openai",
+      model: "gpt-5.4",
+      fallbackConfigured: false,
+      runtimePolicyOwner: "gee",
+      runtimePolicyEndpointIds: ["telegram:geeclaw"],
+      runtimeRoutingPolicyIds: ["gee-routing-main"],
+      runtimeFallbackPolicyIds: ["gee-fallback-main"],
+      runtimeCooldownPolicyIds: ["gee-cooldown-main"],
+      runtimeAuthEligibility: "expired",
+      timedOut: false,
+      aborted: false,
+    });
+
+    logDecision("surface_error", { status: 401 });
+
+    const observation = warnSpy.mock.calls[0]?.[1] as
+      | {
+          runtimePolicyOwner?: string;
+          runtimePolicyEndpointIds?: string[];
+          runtimeRoutingPolicyIds?: string[];
+          runtimeFallbackPolicyIds?: string[];
+          runtimeCooldownPolicyIds?: string[];
+          runtimeAuthEligibility?: string;
+          consoleMessage?: string;
+        }
+      | undefined;
+    expect(observation?.runtimePolicyOwner).toBe("gee");
+    expect(observation?.runtimePolicyEndpointIds).toHaveLength(1);
+    expect(observation?.runtimeRoutingPolicyIds).toEqual(["gee-routing-main"]);
+    expect(observation?.runtimeFallbackPolicyIds).toEqual(["gee-fallback-main"]);
+    expect(observation?.runtimeCooldownPolicyIds).toEqual(["gee-cooldown-main"]);
+    expect(observation?.runtimeAuthEligibility).toBe("expired");
+    expect(observation?.consoleMessage).toContain("runtimeOwner=gee auth=expired");
+  });
 });

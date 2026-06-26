@@ -164,9 +164,15 @@ export function createEmbeddedRunAuthController(params: {
     }
     const endpoints = policy.endpointIds.join('", "');
     if (policy.authEligibility !== "ok") {
-      throw new Error(
-        `Gee-owned runtime auth for endpoints "${endpoints}" is ${policy.authEligibility}; OpenClaw will not fall back to standalone auth profiles.`,
-      );
+      const message = `Gee-owned runtime auth for endpoints "${endpoints}" is ${policy.authEligibility}; OpenClaw will not fall back to standalone auth profiles.`;
+      throw new FailoverError(message, {
+        reason: "auth",
+        provider: params.getProvider(),
+        model: params.getModelId(),
+        status: resolveFailoverStatus("auth"),
+        code: "gee_runtime_auth_policy_ineligible",
+        rawError: message,
+      });
     }
     clearRuntimeAuthRefreshTimer();
     const runtimeModel = params.getRuntimeModel();
