@@ -544,6 +544,147 @@ describe("QmdMemoryManager", () => {
     expect(secondDebug.at(-1)?.qmd?.multiCollectionProbe).toBeUndefined();
   });
 
+  it("keeps concurrent search debug isolated on a shared qmd manager", async () => {
+    await configureMemoryCoreDreamingStateForTests();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    let firstSearchChild: MockChild | undefined;
+    let searchCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        searchCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (searchCalls === 1) {
+          firstSearchChild = child;
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      if (args[0] === "--version") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "qmd 1.0.0");
+        return child;
+      }
+      return createMockChild();
+    });
+    const { manager } = await createManager({ mode: "full" });
+    const firstDebug: MemorySearchRuntimeDebug[] = [];
+    const secondDebug: MemorySearchRuntimeDebug[] = [];
+
+    const firstSearch = manager.search("memory fact", {
+      sessionKey: "agent:main:slack:dm:u123",
+      sources: ["memory"],
+      onDebug: (entry) => {
+        firstDebug.push(entry);
+      },
+    });
+    await waitUntil(() => searchCalls === 1);
+    const secondSearch = manager.search("session fact", {
+      sessionKey: "agent:main:slack:dm:u123",
+      sources: ["sessions"],
+      onDebug: (entry) => {
+        secondDebug.push(entry);
+      },
+    });
+    await waitUntil(() => searchCalls === 2);
+    emitAndClose(requireValue(firstSearchChild, "first search child missing"), "stdout", "[]");
+
+    await Promise.all([firstSearch, secondSearch]);
+
+    expect(firstDebug.at(-1)?.qmd?.searchPlan?.sources).toEqual(["memory"]);
+    expect(secondDebug.at(-1)?.qmd?.searchPlan?.sources).toEqual(["sessions"]);
+  });
+
+  it("rewrites stale multi-collection probe cache when combined filters are rejected", async () => {
+    await configureMemoryCoreDreamingStateForTests();
+    const otherWorkspaceDir = path.join(tmpRoot, "other-workspace");
+    await fs.mkdir(otherWorkspaceDir, { recursive: true });
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: otherWorkspaceDir, pattern: "**/*.md", name: "other" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const isCombinedSearch = (args: string[]) =>
+      (args[0] === "search" || args[0] === "query") &&
+      args.filter((token) => token === "-c").length > 1;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "--version") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "qmd 1.0.0");
+        return child;
+      }
+      if (args[0] === "--help") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "Usage: qmd search -c one or more collections");
+        return child;
+      }
+      if (isCombinedSearch(args)) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", "unknown flag: -c", 1);
+        return child;
+      }
+      if (args[0] === "search" || args[0] === "query" || args[0] === "vsearch") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const first = await createManager({ mode: "cli" });
+    const firstDebug: MemorySearchRuntimeDebug[] = [];
+    await first.manager.search("fact", {
+      sessionKey: "agent:main:slack:dm:u123",
+      onDebug: (entry) => {
+        firstDebug.push(entry);
+      },
+    });
+    await first.manager.close();
+
+    expect(firstDebug.at(-1)?.qmd?.multiCollectionProbe).toMatchObject({
+      cacheState: "write",
+      supported: false,
+    });
+
+    spawnMock.mockClear();
+    const second = await createManager({ mode: "cli" });
+    const secondDebug: MemorySearchRuntimeDebug[] = [];
+    await second.manager.search("fact", {
+      sessionKey: "agent:main:slack:dm:u123",
+      onDebug: (entry) => {
+        secondDebug.push(entry);
+      },
+    });
+    await second.manager.close();
+
+    expect(countQmdCommand((args) => args[0] === "--help")).toBe(0);
+    expect(countQmdCommand(isCombinedSearch)).toBe(0);
+    expect(secondDebug.at(-1)?.qmd?.multiCollectionProbe).toMatchObject({
+      cacheState: "hit",
+      supported: false,
+    });
+  });
+
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {
       await fs.lstat(targetPath);

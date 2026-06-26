@@ -1,4 +1,5 @@
 // Memory Core tests cover tools plugin behavior.
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -379,6 +380,95 @@ describe("memory_search unavailable payloads", () => {
       "MEMORY.md",
     );
     expect(searchCalls).toBe(2);
+  });
+
+  it("merges qmd runtime debug across zero-hit retry attempts", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        opts?.onDebug?.({
+          backend: "qmd",
+          configuredMode: "search",
+          effectiveMode: "search",
+          qmd: {
+            collectionValidation: {
+              cacheState: "hit",
+              elapsedMs: 2,
+              collectionCount: 2,
+              listCalls: 0,
+              showCalls: 0,
+            },
+            multiCollectionProbe: {
+              cacheState: "hit",
+              elapsedMs: 1,
+              supported: true,
+            },
+          },
+        });
+        return [];
+      }
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "query",
+        fallback: "unsupported-search-flags",
+        qmd: {
+          searchPlan: {
+            command: "query",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
+      });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-debug-retry", {
+      query: "hidden thread codename",
+    });
+    const details = result.details as {
+      debug?: {
+        effectiveMode?: string;
+        fallback?: string;
+        qmd?: MemorySearchRuntimeDebug["qmd"];
+      };
+    };
+
+    expect(searchCalls).toBe(2);
+    expect(details.debug?.effectiveMode).toBe("query");
+    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.qmd?.collectionValidation).toMatchObject({
+      cacheState: "hit",
+      collectionCount: 2,
+    });
+    expect(details.debug?.qmd?.multiCollectionProbe).toMatchObject({
+      cacheState: "hit",
+      supported: true,
+    });
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "query",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
   });
 
   it("returns unavailable metadata when the index identity is paused", async () => {
