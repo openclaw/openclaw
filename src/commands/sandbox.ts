@@ -148,6 +148,9 @@ function createSessionMatcher(sessionKey: string) {
     if (item.sessionKey === rawSessionKey) {
       return true;
     }
+    if (!item.sessionKey.startsWith(`${rawSessionKey}:workspace:`)) {
+      return false;
+    }
     const workspaceSuffix = item.sessionKey.slice(rawSessionKey.length);
     // Non-shared session-scope runtimes append an internal workspace hash, but
     // CLI users still recreate them by the raw documented session key.

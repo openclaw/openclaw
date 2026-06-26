@@ -234,7 +234,11 @@ describe("sandboxRecreateCommand", () => {
         containerName: "container-workspace-b",
         sessionKey: "target-session:workspace:not-a-hash",
       });
-      mocks.listSandboxContainers.mockResolvedValue([container, noMatch]);
+      const sameLengthNoMatch = createContainer({
+        containerName: "container-workspace-c",
+        sessionKey: "otherx-session:workspace:5678abcd",
+      });
+      mocks.listSandboxContainers.mockResolvedValue([container, noMatch, sameLengthNoMatch]);
 
       await sandboxRecreateCommand(
         { session: "target-session", all: false, browser: false, force: true },
@@ -255,7 +259,11 @@ describe("sandboxRecreateCommand", () => {
         containerName: "browser-workspace-b",
         sessionKey: "target-session:workspace:not-a-hash",
       });
-      mocks.listSandboxBrowsers.mockResolvedValue([browser, noMatch]);
+      const sameLengthNoMatch = createBrowser({
+        containerName: "browser-workspace-c",
+        sessionKey: "otherx-session:workspace:1234abcd",
+      });
+      mocks.listSandboxBrowsers.mockResolvedValue([browser, noMatch, sameLengthNoMatch]);
 
       await sandboxRecreateCommand(
         { session: "target-session", all: false, browser: true, force: true },
