@@ -375,4 +375,29 @@ describe("google-shared convertMessages", () => {
     expect(asRecord(toolCall.functionCall).id).toBeUndefined();
     expect(asRecord(toolResponse.functionResponse).id).toBeUndefined();
   });
+
+  it("serializes structured tool results into function responses", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "session_status",
+          content: [{ type: "json", payload: { sessionKey: "current", status: "ok" } }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessagesForTest(model, context);
+    const toolResponsePart = contents[0]?.parts?.find(
+      (part) => typeof part === "object" && part !== null && "functionResponse" in part,
+    );
+    const toolResponse = requireRecordProperty(asRecord(toolResponsePart), "functionResponse");
+    expect(asRecord(toolResponse.response).output).toBe(
+      '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
+    );
+  });
 });

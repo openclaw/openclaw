@@ -527,6 +527,39 @@ describe("convertResponsesMessages", () => {
       summary: [],
     });
   });
+
+  it("serializes structured tool results as text instead of image placeholders", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_structured",
+            toolName: "session_status",
+            content: [
+              {
+                type: "json",
+                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
+              },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_structured",
+      output:
+        '{"type":"json","payload":{"sessionKey":"current","model":"openai/gpt-5.4","status":"ok"}}',
+    });
+  });
 });
 
 describe("processResponsesStream", () => {
