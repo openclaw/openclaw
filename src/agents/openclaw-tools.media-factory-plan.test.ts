@@ -47,6 +47,25 @@ function createAuthStore(providers: string[] = []): AuthProfileStore {
   };
 }
 
+function createGeeRuntimePreparedFacts(
+  allowedToolIds: string[],
+): NonNullable<CreateOpenClawToolsOptions>["geeRuntimePreparedFacts"] {
+  return {
+    "telegram:geeclaw": {
+      kind: "gee-runtime-prepared-facts",
+      version: 1,
+      hostMode: "gee-hosted",
+      envelope: {
+        tools: {
+          capabilityPlanId: "gee-capability-plan",
+          allowedToolIds,
+          policy: "gee-authorized",
+        },
+      },
+    },
+  } as NonNullable<CreateOpenClawToolsOptions>["geeRuntimePreparedFacts"];
+}
+
 function createPlugin(params: {
   id: string;
   origin?: PluginManifestRecord["origin"];
@@ -367,6 +386,45 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
       pdf: false,
     });
+  });
+
+  it("uses Gee prepared tool facts instead of standalone media tool allowlists", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+        },
+      },
+    };
+    installSnapshot(config, []);
+
+    const standaloneToolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate"],
+      })
+    ).map((tool) => tool.name);
+    expect(standaloneToolNames).toContain("image_generate");
+
+    const deniedToolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate"],
+        geeRuntimePreparedFacts: createGeeRuntimePreparedFacts(["message"]),
+      })
+    ).map((tool) => tool.name);
+    expect(deniedToolNames).not.toContain("image_generate");
+
+    const allowedToolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        authProfileStore: createAuthStore(),
+        geeRuntimePreparedFacts: createGeeRuntimePreparedFacts(["image_generate"]),
+      })
+    ).map((tool) => tool.name);
+    expect(allowedToolNames).toContain("image_generate");
   });
 
   it("skips tools that the resolved allowlist cannot expose", () => {

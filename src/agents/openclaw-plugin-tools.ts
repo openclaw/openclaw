@@ -15,6 +15,10 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  resolveGeeRuntimeToolAllowlist,
+  resolveGeeRuntimeToolPolicy,
+} from "./gee-runtime-prepared-facts.js";
+import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
@@ -77,6 +81,14 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     accountId: params.options?.agentAccountId,
     threadId: params.options?.agentThreadId,
   });
+  const geeRuntimeToolPolicy = resolveGeeRuntimeToolPolicy(params.options?.geeRuntimePreparedFacts);
+  const pluginToolAllowlist = resolveGeeRuntimeToolAllowlist(
+    geeRuntimeToolPolicy,
+    params.options?.pluginToolAllowlist,
+  );
+  if (geeRuntimeToolPolicy && pluginToolAllowlist?.length === 0) {
+    return [];
+  }
 
   const resolveCurrentRuntimeConfig = () => {
     // Re-resolve on demand so auth/profile lookups see the active runtime config
@@ -125,7 +137,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames: params.existingToolNames ?? new Set<string>(),
-    toolAllowlist: params.options?.pluginToolAllowlist,
+    toolAllowlist: pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
