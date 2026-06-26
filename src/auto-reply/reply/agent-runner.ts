@@ -27,6 +27,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -1141,6 +1145,28 @@ function refreshSessionEntryFromStore(params: {
   }
 }
 
+function resolveAdmittedRunSessionFile(params: {
+  agentId: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+}): string | undefined {
+  if (
+    params.sessionFile &&
+    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
+  ) {
+    return params.sessionFile;
+  }
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1479,8 +1505,14 @@ export async function runReplyAgent(params: {
       });
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        const admittedSessionFile = resolveAdmittedRunSessionFile({
+          agentId: followupRun.run.agentId,
+          sessionId: replyOperation.sessionId,
+          sessionFile: admittedSessionEntry.sessionFile,
+          storePath,
+        });
+        if (admittedSessionFile) {
+          followupRun.run.sessionFile = admittedSessionFile;
         }
       }
     }
