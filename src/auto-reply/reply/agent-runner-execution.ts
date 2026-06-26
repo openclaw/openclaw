@@ -38,6 +38,7 @@ import {
   isLikelyContextOverflowError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isConnectionError,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -3256,6 +3257,10 @@ export async function runAgentTurnWithFallback(params: {
       const providerRequestError =
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
+      // Bare connection errors (ECONNRESET, "socket hang up", "Connection
+      // error.") carry no leading HTTP status, so they need their own predicate
+      // alongside the status-based transient check below.
+      const isTransientConnection = isConnectionError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
@@ -3348,14 +3353,17 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && consumeTransientHttpRetry()) {
+      if ((isTransientHttp || isTransientConnection) && consumeTransientHttpRetry()) {
         pendingLifecycleTerminal = undefined;
         // Retry the full runWithModelFallback() cycle — transient errors
-        // (502/521/etc.) typically affect the whole provider, so falling
-        // back to an alternate model first would not help. Instead we wait
-        // and retry the complete primary→fallback chain.
+        // (502/521/etc.) and bare connection drops (ECONNRESET, socket hang up)
+        // typically affect the whole provider, so falling back to an alternate
+        // model first would not help. Instead we wait and retry the complete
+        // primary→fallback chain. The provider SDK would have retried these
+        // in-window, but the prompt-lock pins SDK retries to 0 (#87180), so the
+        // orchestrator owns this resilience where each retry re-acquires the lock.
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `Transient provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
         await new Promise<void>((resolve) => {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
