@@ -5,6 +5,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
@@ -30,6 +36,57 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-session";
+    const sessionKey = "agent:main:dashboard:sqlite";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        cwd: dir,
+        message: { role: "user", content: "question" },
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question", role: "user" }),
+    ]);
+
+    sessionManager.appendMessage({ role: "assistant", content: "answer", timestamp: Date.now() });
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "answer", role: "assistant" }),
+        type: "message",
+      }),
+    ]);
   });
 
   it("recovers a corrupted first-line header without truncating later messages", async () => {
