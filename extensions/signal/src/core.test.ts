@@ -23,6 +23,7 @@ import {
 import { probeSignal } from "./probe.js";
 import { clearSignalRuntime } from "./runtime.js";
 import {
+  createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   parseSignalAllowFromEntries,
   signalDmPolicy,
@@ -213,6 +214,13 @@ describe("probeSignal", () => {
     });
 
     expect(status.configured).toBe(true);
+  });
+
+  it("does not show a second missing-binary note before the cliPath prompt", () => {
+    const input = createSignalCliPathTextInput(async () => true);
+
+    expect(input.helpLines).toBeUndefined();
+    expect(input.helpTitle).toBeUndefined();
   });
 });
 

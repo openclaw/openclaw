@@ -40,6 +40,7 @@ openclaw doctor
 openclaw doctor --lint
 openclaw doctor --lint --json
 openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --deep
 openclaw doctor --fix
@@ -73,6 +74,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
 - `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
+- `--all`: with `--lint`, run all registered checks, including opt-in checks excluded from the default automation set
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
 
@@ -82,13 +84,14 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 It uses the structured health-check path, does not prompt, and does not repair
 or rewrite config/state. Use it in CI, preflight scripts, and review workflows
 when you want machine-readable findings instead of guided repair prompts.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and `--skip`
 are only accepted with `--lint`.
 
 ```bash
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --lint --only core/doctor/gateway-config --json
 ```
@@ -129,6 +132,13 @@ Exit behavior:
 `--severity-min` controls both visible findings and the exit threshold. For
 example, `openclaw doctor --lint --severity-min error` can print no findings and
 exit `0` even when lower-severity `info` or `warning` findings exist.
+
+`--all` controls which checks are selected before severity filtering. The
+default lint run is the stable automation gate and excludes checks that are
+intentionally opt-in because they are deep, historical, or more likely to
+surface repairable legacy residue. Use `--all` when you want the complete lint
+inventory without listing each check id. `--only <id>` remains the most precise
+selector and can run any registered check by id.
 
 ## Structured Health Checks
 
@@ -186,6 +196,7 @@ Use `--only` and `--skip` when a workflow wants a focused gate:
 ```bash
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
+openclaw doctor --lint --all --skip core/doctor/session-locks
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only`
