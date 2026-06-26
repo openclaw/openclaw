@@ -139,8 +139,16 @@ export async function noteSessionLockHealth(params?: {
     return;
   }
 
-  const staleCount = allLocks.filter((lock) => lock.stale).length;
-  const removedCount = allLocks.filter((lock) => lock.removed).length;
+  let staleCount = 0;
+  let removedCount = 0;
+  for (const lock of allLocks) {
+    if (lock.stale) {
+      staleCount += 1;
+    }
+    if (lock.removed) {
+      removedCount += 1;
+    }
+  }
   const lines: string[] = [
     `- Found ${allLocks.length} session lock file${allLocks.length === 1 ? "" : "s"}.`,
     ...allLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath)).map(formatLockLine),
