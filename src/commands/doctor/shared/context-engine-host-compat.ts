@@ -16,13 +16,16 @@ import {
   type ContextEngineHostSupport,
 } from "../../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
-import { getContextEngineFactory, resolveContextEngine } from "../../../context-engine/registry.js";
+import {
+  getContextEngineRegistration,
+  resolveContextEngine,
+} from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
-export type HostCandidate = {
+type HostCandidate = {
   /** Runtime or harness id that will host an agent run. */
   runtimeId: string;
   /** Context-engine host capability descriptor for the runtime. */
@@ -254,7 +257,7 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   ensureContextEnginesInitialized();
-  if (!getContextEngineFactory(engineId)) {
+  if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
     try {
       ensurePluginRegistryLoaded({
         scope: "all",
@@ -263,7 +266,7 @@ async function resolveSelectedContextEngineInfo(params: {
         onlyPluginIds: [engineId],
       });
     } catch (error) {
-      if (!getContextEngineFactory(engineId)) {
+      if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
         const message = error instanceof Error ? error.message : String(error);
         return {
           warnings: [
@@ -272,7 +275,7 @@ async function resolveSelectedContextEngineInfo(params: {
         };
       }
     }
-    if (!getContextEngineFactory(engineId)) {
+    if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
       return {
         warnings: [
           `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,

@@ -111,6 +111,10 @@ function whatsAppReplyDeliveryVisibilityFromDurableResult(result: {
   return whatsAppReplyDeliveryVisibility(result.visibleReplySent === true);
 }
 
+function readTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
   error: unknown,
   flushResult: WhatsAppMediaOnlyFlushResult,
@@ -139,6 +143,29 @@ function logWhatsAppReplyDeliveryError(params: {
     },
     "auto-reply delivery failed",
   );
+}
+
+function resolveWhatsAppDurableReplyToId(params: {
+  context: Record<string, unknown>;
+  info: ReplyDeliveryInfo;
+  msg: AdmittedWebInboundMessage;
+  payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
+}): string | null {
+  if (params.payload.replyToId === null) {
+    return null;
+  }
+  const explicitPayloadReplyToId = readTrimmedString(params.payload.replyToId);
+  if (explicitPayloadReplyToId) {
+    return explicitPayloadReplyToId;
+  }
+  const hasVisibleInboundReplyTarget =
+    Boolean(readTrimmedString(params.context.ReplyToId)) ||
+    Boolean(readTrimmedString(params.context.ReplyToIdFull));
+  const currentInboundMessageId = readTrimmedString(params.msg.event.id);
+  if (params.info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
+    return currentInboundMessageId;
+  }
+  return null;
 }
 
 function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
@@ -691,6 +718,12 @@ export async function dispatchWhatsAppBufferedReply(params: {
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
+              replyToId: resolveWhatsAppDurableReplyToId({
+                context: params.context,
+                info,
+                msg: params.msg,
+                payload: normalizedDeliveryPayload,
+              }),
               formatting: {
                 textLimit,
                 tableMode,

@@ -126,8 +126,9 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: undefined,
+        sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -192,8 +193,9 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: undefined,
+        sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -225,8 +227,9 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: undefined,
+        sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/openclaw-sessions.json",
       },
       {

@@ -5,6 +5,7 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
@@ -126,6 +127,7 @@ type OpenClawCompileCacheRespawnPlan = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
 type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
@@ -171,6 +173,9 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
       ...(params.argv ?? process.argv).slice(2),
     ],
     env: nextEnv,
+    detachForProcessTree:
+      (params.platform ?? process.platform) !== "win32" &&
+      !isTerminalInteractiveRespawnArgv(params.argv ?? process.argv),
   };
 }
 
@@ -203,6 +208,7 @@ export function runOpenClawCompileCacheRespawnPlan(
     command: plan.command,
     args: plan.args,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
       runtime.writeError(

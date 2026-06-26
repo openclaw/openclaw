@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRootPath } from "../../infra/boundary-path.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../../utils.js";
@@ -305,6 +306,60 @@ export function buildValidatedExecRemoteCommand(params: {
 }): string {
   assertValidExecRemoteCommand(params.command);
   return buildExecRemoteCommand(params);
+}
+
+export const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'root="$2"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+  'target="${target%/}"',
+  'root="${root%/}"',
+  '[ -n "$target" ] || target="/"',
+  '[ -n "$root" ] || root="/"',
+  'if [ "$root" != "/" ]; then',
+  '  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+  "fi",
+  'for path_to_check in "$target" "$root"; do',
+  '  relative="${path_to_check#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "  done",
+  "done",
+  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+  'if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi',
+  'canonical_root="$(cd "$root" && pwd -P)"',
+  'relative="${target#"$root"}"',
+  'relative="${relative#/}"',
+  'current="$canonical_root"',
+  'while [ -n "$relative" ]; do',
+  '  part="${relative%%/*}"',
+  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '  [ -n "$part" ] || continue',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi',
+  '  current="$next"',
+  "done",
+  'printf "%s\\n" "$current"',
+].join("\n");
+
+export function buildRemoteWorkdirValidationCommand(params: {
+  workdir: string;
+  root: string;
+}): string {
+  return buildRemoteCommand([
+    "/bin/sh",
+    "-c",
+    VALIDATE_REMOTE_WORKDIR_SCRIPT,
+    "openclaw-validate-workdir",
+    params.workdir,
+    params.root,
+  ]);
 }
 
 function createExecCommandFrame(kind: ExecCommandFrame["kind"], parenDepth = 0): ExecCommandFrame {
@@ -743,7 +798,7 @@ export async function uploadDirectoryToSshTarget(params: {
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
       ssh.kill("SIGKILL");
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
 
     tar.on("error", fail);
@@ -845,18 +900,4 @@ async function writeSecretMaterial(
   });
   await fs.chmod(pathname, 0o600);
   return pathname;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

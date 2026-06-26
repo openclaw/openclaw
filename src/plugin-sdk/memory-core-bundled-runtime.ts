@@ -4,7 +4,6 @@ import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderRuntime,
 } from "./memory-core-host-engine-embeddings.js";
@@ -29,9 +28,6 @@ type RuntimeFacadeModule = {
       fallback: string;
     },
   ) => Promise<EmbeddingProviderResult>;
-  registerBuiltInMemoryEmbeddingProviders: (register: {
-    registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
-  }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
   }) => Promise<{ removed: number; storePath: string }>;
@@ -244,13 +240,6 @@ export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvid
   loadRuntimeFacadeModule().createEmbeddingProvider(
     ...args,
   )) as RuntimeFacadeModule["createEmbeddingProvider"];
-
-/** Register all built-in memory embedding provider adapters with a host registry. */
-export const registerBuiltInMemoryEmbeddingProviders: RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().registerBuiltInMemoryEmbeddingProviders(
-      ...args,
-    )) as RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"];
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =

@@ -1,10 +1,25 @@
 // Doctor completion tests cover final doctor status summaries and completion messaging.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  checkShellCompletionStatus,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
+
+const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  originalEnv.restore();
+  for (const dir of tempDirs.splice(0)) {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
 function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletionStatus {
   return {
@@ -18,6 +33,22 @@ function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletion
 }
 
 describe("shell completion health mapping", () => {
+  it("checks an explicit shell instead of the detected environment shell", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/zsh");
+
+    const current = await checkShellCompletionStatus("openclaw", { shell: "fish" });
+
+    expect(current.shell).toBe("fish");
+    expect(current.cachePath).toBe(path.join(stateDir, "completions", "openclaw.fish"));
+    expect(current.profileInstalled).toBe(false);
+    expect(current.cacheExists).toBe(false);
+  });
+
   it("reports slow dynamic shell completion with dry-run effects", () => {
     const current = status({ usesSlowPattern: true, cacheExists: false });
 

@@ -34,6 +34,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
@@ -221,6 +222,47 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
     }
   }
   return { critical, warn, info };
+}
+
+function emitSecurityAuditReportEvent(params: {
+  summary: SecurityAuditSummary;
+  deep: boolean;
+  includeFilesystem: boolean;
+  includeChannelSecurity: boolean;
+  suppressedCount: number;
+}) {
+  const hasCritical = params.summary.critical > 0;
+  const hasWarnings = params.summary.warn > 0;
+  emitTrustedSecurityEvent({
+    category: "audit",
+    action: "security.audit.completed",
+    outcome: hasCritical || hasWarnings ? "failure" : "success",
+    severity: hasCritical ? "critical" : hasWarnings ? "medium" : "info",
+    actor: {
+      kind: "operator",
+    },
+    target: {
+      kind: "config",
+      name: "security.audit",
+    },
+    policy: {
+      id: "security.audit",
+      decision: "not_applicable",
+    },
+    control: {
+      id: "security.audit",
+      family: "authorization",
+    },
+    attributes: {
+      critical_count: params.summary.critical,
+      warn_count: params.summary.warn,
+      info_count: params.summary.info,
+      suppressed_count: params.suppressedCount,
+      deep: params.deep,
+      include_filesystem: params.includeFilesystem,
+      include_channel_security: params.includeChannelSecurity,
+    },
+  });
 }
 
 function normalizeSuppressionText(value: string | undefined): string {
@@ -1387,6 +1429,13 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         ]
       : filtered.findings;
   const summary = countBySeverity(activeFindings);
+  emitSecurityAuditReportEvent({
+    summary,
+    deep: context.deep,
+    includeFilesystem: context.includeFilesystem,
+    includeChannelSecurity: context.includeChannelSecurity,
+    suppressedCount: filtered.suppressedFindings.length,
+  });
   return {
     ts: Date.now(),
     summary,

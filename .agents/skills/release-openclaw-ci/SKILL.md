@@ -24,6 +24,25 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
+- In a sparse worktree or Testbox source sync, first confirm `package.json`,
+  `pnpm-lock.yaml`, and every source path the selected check reads. If any are
+  absent, that checkout cannot validate a release dependency or Docker lane:
+  stop and use the repo remote changed gate or a full task worktree. When the
+  inputs are present and a release fix changes `package.json` or
+  `pnpm-lock.yaml`, rebuild only the task-owned disposable box with
+  `CI=true pnpm install --frozen-lockfile`, then run an explicit
+  `require.resolve()` probe before Docker or focused tests. The CI flag permits
+  pnpm to recreate a prewarmed modules directory without an interactive
+  confirmation. Do not weaken the lockfile or label sparse-checkout failures
+  as product/Docker failures.
+- If the candidate is rebased or its base SHA changes after warmup, stop the
+  task-owned box and warm a fresh one before testing. Testbox source sync is
+  relative to the warmed source tree; continuing can mix an old base file with
+  a new candidate diff and produce false lockfile or Docker failures.
+- For a committed release candidate, warm the box with
+  `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
+  on source sync to overlay committed branch changes onto the workflow's
+  default ref.
 
 ## Preflight
 
@@ -57,7 +76,7 @@ gh workflow run openclaw-performance.yml \
   -f repeat=3 \
   -f deep_profile=false \
   -f live_openai_candidate=false \
-  -f fail_on_regression=false
+  -f fail_on_regression=true
 ```
 
 - Do not wait for full release validation to start this early perf signal.
@@ -66,8 +85,9 @@ gh workflow run openclaw-performance.yml \
 - Call out any regression in the release proof. Treat a major regression as a
   release blocker until it is fixed, waived by the operator, or proven to be
   infrastructure noise.
-- Full Release Validation also records advisory product-performance evidence;
-  the early standalone run is for overlap and faster regression discovery.
+- Full Release Validation records blocking product-performance evidence. The
+  early standalone run is for overlap and faster regression discovery, but a
+  regression or missing child run blocks the parent validation.
 
 Prefer the trusted workflow on `main`, target the exact release SHA:
 
@@ -89,7 +109,7 @@ gh workflow run full-release-validation.yml \
   -f rerun_group=all
 ```
 
-Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Use narrow `rerun_group` after focused fixes.
+Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Stable and full profiles force the release soak; the beta profile may opt in with `run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
@@ -125,6 +145,19 @@ Stop watchers before ending the turn or switching strategy.
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
 6. Fix narrowly, run local/changed proof, commit, push, rerun the smallest matching group.
+7. If a required PR CI run is capacity-stalled with queued jobs and no active
+   jobs, do not cancel unrelated work or accept a generic manual dispatch.
+   From the PR head branch, dispatch the explicit exact-SHA fallback:
+   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+   It runs on GitHub-hosted runners and is accepted only when its run title is
+   `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
+   fallback run in release evidence.
+   If `Blacksmith Build Artifacts Testbox` is the only remaining required gate
+   and remains queued without a runner, that completed exact fallback may cover
+   it because CI's `build-artifacts` job already builds, packages, and smoke
+   tests the artifacts. Do not use this coverage after the artifact workflow
+   starts or completes non-successfully.
 
 ## Evidence
 

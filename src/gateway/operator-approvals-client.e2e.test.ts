@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
@@ -63,23 +63,23 @@ describe("operator approval gateway client runtime token source", () => {
   it("uses runtime authority only for generated local gateway URLs", async () => {
     const envSnapshot = captureEnv(TEST_ENV_KEYS);
     cleanup.push(() => envSnapshot.restore());
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
 
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-approval-client-e2e-"));
     cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
 
     const stateDir = path.join(tempHome, ".openclaw");
     await fs.mkdir(stateDir, { recursive: true });
-    process.env.HOME = tempHome;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     const port = await getFreeGatewayPort();
     const token = "approval-client-e2e-token";
     const url = `ws://127.0.0.1:${port}`;
-    process.env.OPENCLAW_GATEWAY_PORT = String(port);
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
 
     const server = await startGatewayServer(port, {
       bind: "loopback",

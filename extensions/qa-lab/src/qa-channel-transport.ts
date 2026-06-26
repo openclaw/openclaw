@@ -91,6 +91,7 @@ export function createQaChannelGatewayConfig(params: {
       },
     },
     messages: {
+      visibleReplies: "automatic",
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
         visibleReplies: "automatic",

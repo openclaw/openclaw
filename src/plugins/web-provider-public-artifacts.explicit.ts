@@ -1,10 +1,7 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -17,7 +14,6 @@ const WEB_SEARCH_ARTIFACT_CANDIDATES = [
   "web-search-provider.js",
   "web-search.js",
 ] as const;
-const WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-search-provider.js", "web-search.js"] as const;
 const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-contract-api.js",
   "web-fetch-provider.js",
@@ -95,29 +91,6 @@ function unableToInitializeProviderError(params: {
   });
 }
 
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): Record<string, unknown> | null {
-  for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
-}
-
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
   return sortUniqueStrings(pluginIds);
 }
@@ -129,7 +102,7 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
 }): Array<TProvider & { pluginId: string }> | null {
-  const mod = tryLoadBundledPublicArtifactModule({
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: params.artifactCandidates,
   });
@@ -166,19 +139,6 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   });
 }
 
-function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
-  dirName: string;
-  pluginId: string;
-}): PluginWebSearchProviderEntry[] | null {
-  return loadBundledProviderEntriesFromDir<WebSearchProviderPlugin>({
-    dirName: params.dirName,
-    pluginId: params.pluginId,
-    artifactCandidates: WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES,
-    suffix: "WebSearchProvider",
-    isProvider: isWebSearchProviderPlugin,
-  });
-}
-
 export function loadBundledWebFetchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
@@ -209,23 +169,6 @@ export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(para
   return providers;
 }
 
-export function resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts(params: {
-  onlyPluginIds: readonly string[];
-}): PluginWebSearchProviderEntry[] | null {
-  const providers: PluginWebSearchProviderEntry[] = [];
-  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
-    const loadedProviders = loadBundledRuntimeWebSearchProviderEntriesFromDir({
-      dirName: pluginId,
-      pluginId,
-    });
-    if (!loadedProviders) {
-      return null;
-    }
-    providers.push(...loadedProviders);
-  }
-  return providers;
-}
-
 export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): PluginWebFetchProviderEntry[] | null {
@@ -241,27 +184,4 @@ export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(param
     providers.push(...loadedProviders);
   }
   return providers;
-}
-
-function hasBundledPublicArtifactCandidate(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): boolean {
-  return params.artifactCandidates.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: params.dirName, artifactBasename })),
-  );
-}
-
-export function hasBundledWebSearchProviderPublicArtifact(pluginId: string): boolean {
-  return hasBundledPublicArtifactCandidate({
-    dirName: pluginId,
-    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
-  });
-}
-
-export function hasBundledWebFetchProviderPublicArtifact(pluginId: string): boolean {
-  return hasBundledPublicArtifactCandidate({
-    dirName: pluginId,
-    artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
-  });
 }

@@ -23,7 +23,6 @@ import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profile
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
-import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -455,8 +454,6 @@ function findInlineModelMatch(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
   );
 }
-
-export { buildModelAliasLines, buildInlineProviderModels };
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,

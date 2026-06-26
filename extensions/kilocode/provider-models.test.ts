@@ -14,16 +14,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
 
-type MockKilocodeFetchResponse = {
-  ok: boolean;
-  status?: number;
-  json?: () => Promise<unknown>;
-};
-
-type MockKilocodeFetch = ((
-  url: string,
-  init?: RequestInit,
-) => Promise<MockKilocodeFetchResponse>) & {
+type MockKilocodeFetch = ((url: string, init?: RequestInit) => Promise<Response>) & {
   mock: { calls: unknown[][] };
 };
 
@@ -115,6 +106,14 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
 async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const release = vi.fn(async () => {});
   vi.stubEnv("NODE_ENV", "");
@@ -165,13 +164,11 @@ describe("discoverKilocodeModels", () => {
 
 describe("discoverKilocodeModels (fetch path)", () => {
   it("parses gateway models with correct pricing conversion", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [makeAutoModel(), makeGatewayModel()],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [makeAutoModel(), makeGatewayModel()],
+      }),
+    );
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
 
@@ -217,10 +214,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-    });
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
@@ -229,10 +223,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
 
   it("falls back to static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(payload),
-      });
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
       await withFetchPathTest(mockFetch, async () => {
         const models = await discoverKilocodeModels();
         expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
@@ -241,24 +232,22 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back from malformed live token metadata", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            makeGatewayModel({
-              id: "some/bad-window",
-              context_length: -1,
-              top_provider: { max_completion_tokens: 8192.5 },
-            }),
-            makeGatewayModel({
-              id: "some/bad-output",
-              context_length: Number.POSITIVE_INFINITY,
-              top_provider: { max_completion_tokens: 0 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          makeGatewayModel({
+            id: "some/bad-window",
+            context_length: -1,
+            top_provider: { max_completion_tokens: 8192.5 },
+          }),
+          makeGatewayModel({
+            id: "some/bad-output",
+            context_length: Number.POSITIVE_INFINITY,
+            top_provider: { max_completion_tokens: 0 },
+          }),
+        ],
+      }),
+    );
 
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
@@ -275,13 +264,11 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("ensures kilo/auto is present even when API doesn't return it", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [makeGatewayModel()],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [makeGatewayModel()],
+      }),
+    );
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
@@ -301,10 +288,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
       supported_parameters: ["max_tokens", "temperature"],
     });
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ data: [textOnlyModel] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ data: [textOnlyModel] }));
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       const textModel = requireModelById(models, "some/text-model");
@@ -319,13 +303,11 @@ describe("discoverKilocodeModels (fetch path)", () => {
       pricing: undefined,
     });
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [malformedAutoModel, makeAutoModel(), makeGatewayModel()],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [malformedAutoModel, makeAutoModel(), makeGatewayModel()],
+      }),
+    );
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       const auto = requireModelById(models, "kilo/auto");

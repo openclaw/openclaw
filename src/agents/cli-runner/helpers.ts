@@ -197,9 +197,6 @@ export function buildCliAgentSystemPrompt(params: {
   });
 }
 
-/** Alternate export name for the CLI system prompt builder. */
-export const buildSystemPrompt = buildCliAgentSystemPrompt;
-
 /** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();

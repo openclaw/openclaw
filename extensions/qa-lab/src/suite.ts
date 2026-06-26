@@ -2,6 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  createOpenClawCrablineChannelReportNotes,
+  runOpenClawCrablineChannelDriverSmoke,
+  type OpenClawCrablineChannelDriverSelection,
+} from "@openclaw/crabline";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -12,8 +17,12 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { QaSuiteArtifactError } from "./errors.js";
-import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
+import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
+import {
+  buildQaSuiteEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  type QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -27,6 +36,10 @@ import {
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import {
+  parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
@@ -51,7 +64,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -101,12 +114,34 @@ type QaSuiteEnvironment = {
 
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
+async function createQaSuiteTransportAdapter(params: {
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  outputDir: string;
+  state: QaLabServerHandle["state"];
+  transportId: QaTransportId;
+}) {
+  if (params.channelDriverSelection) {
+    const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
+    return await createQaCrablineTransportAdapter({
+      outputDir: params.outputDir,
+      selection: params.channelDriverSelection,
+      state: params.state,
+    });
+  }
+  return createQaTransportAdapter({
+    id: params.transportId,
+    state: params.state,
+  });
+}
+
 export type QaSuiteRunParams = {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -119,24 +154,14 @@ export type QaSuiteRunParams = {
   enabledPluginIds?: string[];
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
+  workerStartStaggerMs?: number;
   forcedRuntime?: RuntimeId;
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
+  // Unified suite partitions consume child evidence in memory; only the
+  // parent should write the aggregate qa-evidence.json artifact.
+  writeEvidenceFile?: boolean;
 };
-
-function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
-}
 
 function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
   const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
@@ -173,6 +198,29 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
     return;
   }
   process.stderr.write(`[qa-suite] ${message}\n`);
+}
+
+function formatQaSuiteRunStartProgress(params: {
+  selectedScenarioCount: number;
+  concurrency: number;
+  transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+}) {
+  const channelDriver = params.channelDriver ?? params.channelDriverSelection?.channelDriver;
+  const channel = params.channelDriverSelection?.channel;
+  const parts = [
+    `run start: scenarios=${params.selectedScenarioCount}`,
+    `concurrency=${params.concurrency}`,
+    `transport=${sanitizeQaSuiteProgressValue(params.transportId)}`,
+  ];
+  if (channelDriver) {
+    parts.push(`channelDriver=${sanitizeQaSuiteProgressValue(channelDriver)}`);
+  }
+  if (channel) {
+    parts.push(`channel=${sanitizeQaSuiteProgressValue(channel)}`);
+  }
+  return parts.join(" ");
 }
 
 async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
@@ -212,20 +260,6 @@ async function waitForQaLabReadyOrStopOwned(params: {
     }
     throw error;
   }
-}
-
-function sanitizeQaSuiteProgressValue(value: string): string {
-  let normalized = "";
-  for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === undefined) {
-      continue;
-    }
-    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-    normalized += isControl ? " " : char;
-  }
-  normalized = normalized.replace(/\s+/gu, " ").trim();
-  return normalized.length > 0 ? normalized : "<empty>";
 }
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
@@ -276,6 +310,7 @@ function liveTurnTimeoutMs(
 }
 
 export type QaSuiteResult = {
+  evidence?: QaEvidenceSummaryJson;
   outputDir: string;
   evidencePath: string;
   reportPath: string;
@@ -418,6 +453,7 @@ function buildRuntimeParityScenarioResult(params: {
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -425,7 +461,10 @@ function createQaSuiteReportNotes(params: {
   concurrency: number;
   isolatedWorkers?: boolean;
 }) {
-  return params.transport.createReportNotes(params);
+  return [
+    ...params.transport.createReportNotes(params),
+    ...createOpenClawCrablineChannelReportNotes(params.channelDriverSelection),
+  ];
 }
 
 function buildQaIsolatedScenarioWorkerParams(params: {
@@ -433,6 +472,8 @@ function buildQaIsolatedScenarioWorkerParams(params: {
   outputDir: string;
   providerMode: QaProviderMode;
   transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -445,6 +486,8 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
+    channelDriver: params.channelDriver,
+    channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
@@ -456,7 +499,9 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     startLab: params.startLab,
     controlUiEnabled: scenarioRequiresControlUi(params.scenario),
     transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
+    workerStartStaggerMs: params.input?.workerStartStaggerMs,
     forcedRuntime: params.input?.forcedRuntime,
+    writeEvidenceFile: params.input?.writeEvidenceFile,
   };
 }
 
@@ -550,6 +595,8 @@ export type QaSuiteSummaryJsonParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 };
@@ -609,6 +656,10 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
+      channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver ?? null,
+      channel: params.channelDriverSelection?.channel ?? null,
+      channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
+      channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
       runtimePair: params.runtimePair ?? null,
@@ -629,6 +680,8 @@ async function runQaRuntimeParitySuite(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   concurrency: number;
   selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   startLab?: QaSuiteStartLabFn;
@@ -647,9 +700,11 @@ async function runQaRuntimeParitySuite(params: {
       port: 0,
       embeddedGateway: "disabled",
     }));
-  const transport = createQaTransportAdapter({
-    id: params.transportId,
+  const transport = await createQaSuiteTransportAdapter({
+    channelDriverSelection: params.channelDriverSelection,
+    outputDir: params.outputDir,
     state: lab.state,
+    transportId: params.transportId,
   });
   const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedScenarios.map((scenario) => ({
     id: scenario.id,
@@ -701,6 +756,8 @@ async function runQaRuntimeParitySuite(params: {
               outputDir: cellOutputDir,
               providerMode: params.providerMode,
               transportId: params.transportId,
+              channelDriver: params.channelDriver ?? undefined,
+              channelDriverSelection: params.channelDriverSelection,
               primaryModel: remapModelRefForForcedRuntime({
                 modelRef: params.primaryModel,
                 providerMode: params.providerMode,
@@ -789,25 +846,30 @@ async function runQaRuntimeParitySuite(params: {
     );
 
     const finishedAt = new Date();
-    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-      outputDir: params.outputDir,
-      startedAt: params.startedAt,
-      finishedAt,
-      scenarios,
-      scenarioDefinitions: params.selectedScenarios,
-      evidenceMode: params.evidenceMode,
-      transport,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-      fastMode: params.fastMode,
-      concurrency: params.concurrency,
-      scenarioIds:
-        params.scenarioIds && params.scenarioIds.length > 0
-          ? params.selectedScenarios.map((scenario) => scenario.id)
-          : undefined,
-      runtimePair: params.runtimePair,
-    });
+    const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
+      {
+        repoRoot: params.repoRoot,
+        outputDir: params.outputDir,
+        startedAt: params.startedAt,
+        finishedAt,
+        scenarios,
+        scenarioDefinitions: params.selectedScenarios,
+        evidenceMode: params.evidenceMode,
+        transport,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        alternateModel: params.alternateModel,
+        fastMode: params.fastMode,
+        concurrency: params.concurrency,
+        channelDriver: params.channelDriver,
+        channelDriverSelection: params.channelDriverSelection,
+        scenarioIds:
+          params.scenarioIds && params.scenarioIds.length > 0
+            ? params.selectedScenarios.map((scenario) => scenario.id)
+            : undefined,
+        runtimePair: params.runtimePair,
+      },
+    );
     lab.setLatestReport({
       outputPath: reportPath,
       markdown: report,
@@ -822,6 +884,7 @@ async function runQaRuntimeParitySuite(params: {
     });
     return {
       outputDir: params.outputDir,
+      evidence,
       evidencePath,
       reportPath,
       summaryPath,
@@ -830,6 +893,7 @@ async function runQaRuntimeParitySuite(params: {
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
+    await transport.cleanup?.();
     if (ownsLab) {
       await lab.stop();
     }
@@ -837,6 +901,7 @@ async function runQaRuntimeParitySuite(params: {
 }
 
 async function writeQaSuiteArtifacts(params: {
+  repoRoot?: string;
   outputDir: string;
   startedAt: Date;
   finishedAt: Date;
@@ -854,13 +919,35 @@ async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
+  writeEvidenceFile?: boolean;
 }) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  const crablineChannelDriverSelection = params.channelDriverSelection;
+  const crablineChannelDriverSmoke = crablineChannelDriverSelection
+    ? await runOpenClawCrablineChannelDriverSmoke({
+        outputDir: params.outputDir,
+        selection: crablineChannelDriverSelection,
+      })
+    : undefined;
+  const crablineChannelDriverArtifactPaths = crablineChannelDriverSelection
+    ? [
+        {
+          kind: "channel-capability-matrix",
+          path: crablineChannelDriverSelection.capabilityMatrixPath,
+        },
+        {
+          kind: "channel-driver-smoke",
+          path: crablineChannelDriverSelection.smokeArtifactPath,
+        },
+      ]
+    : [];
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -880,19 +967,57 @@ async function writeQaSuiteArtifacts(params: {
           artifactPaths: [
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
+            ...crablineChannelDriverArtifactPaths,
           ],
           evidenceMode: params.evidenceMode,
-          channelId: params.transport.id,
+          channelId: params.channelDriverSelection?.channel ?? params.transport.id,
+          channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
           providerMode: params.providerMode,
+          repoRoot: params.repoRoot,
           scenarioDefinitions: params.scenarioDefinitions,
           scenarioResults: params.scenarios,
         })
       : undefined;
+  if (crablineChannelDriverSelection && crablineChannelDriverSmoke) {
+    await fs.writeFile(
+      path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          report: crablineChannelDriverSmoke.capabilityReport,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          smoke: crablineChannelDriverSmoke.smoke,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+  const writeEvidenceFile = params.writeEvidenceFile ?? true;
   await fs.writeFile(reportPath, report, "utf8");
-  if (evidence) {
+  if (evidence && writeEvidenceFile) {
     await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   await fs.writeFile(
@@ -902,25 +1027,10 @@ async function writeQaSuiteArtifacts(params: {
   );
   await assertQaSuiteArtifactWritten("report", reportPath);
   await assertQaSuiteArtifactWritten("summary", summaryPath);
-  if (evidence) {
+  if (evidence && writeEvidenceFile) {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
-  return { evidencePath, report, reportPath, summaryPath };
-}
-
-async function assertQaSuiteArtifactWritten(
-  kind: "evidence" | "report" | "summary",
-  filePath: string,
-) {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    throw new QaSuiteArtifactError(
-      `${kind}_missing`,
-      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
+  return { evidence, evidencePath, report, reportPath, summaryPath };
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1078,6 +1188,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     scenarioIds: params?.scenarioIds,
     providerMode,
     primaryModel,
+    channelDriver: params?.channelDriver ?? params?.channelDriverSelection?.channelDriver,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
   const enabledPluginIds = [
@@ -1094,13 +1205,19 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedScenarios.length,
-    defaultQaSuiteConcurrencyForTransport(transportId),
+    params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
   );
   const progressEnabled = shouldLogQaSuiteProgress();
   const gatewayHeapCheckpointsEnabled = shouldCaptureGatewayHeapCheckpoints();
   writeQaSuiteProgress(
     progressEnabled,
-    `run start: scenarios=${selectedScenarios.length} concurrency=${concurrency} transport=${transportId}`,
+    formatQaSuiteRunStartProgress({
+      selectedScenarioCount: selectedScenarios.length,
+      concurrency,
+      transportId,
+      channelDriver: params?.channelDriver,
+      channelDriverSelection: params?.channelDriverSelection,
+    }),
   );
   const useIsolatedScenarioWorkers = shouldRunQaSuiteWithIsolatedScenarioWorkers({
     scenarios: selectedScenarios,
@@ -1117,6 +1234,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       startedAt,
       providerMode,
       transportId,
+      channelDriverSelection: params?.channelDriverSelection,
+      channelDriver: params?.channelDriver,
       primaryModel,
       alternateModel,
       fastMode,
@@ -1144,9 +1263,11 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         port: 0,
         embeddedGateway: "disabled",
       }));
-    const transport = createQaTransportAdapter({
-      id: transportId,
+    const transport = await createQaSuiteTransportAdapter({
+      channelDriverSelection: params?.channelDriverSelection,
+      outputDir,
       state: lab.state,
+      transportId,
     });
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
       id: scenario.id,
@@ -1178,6 +1299,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         .then(async () => {
           const partialFinishedAt = new Date();
           const { report, reportPath } = await writeQaSuiteArtifacts({
+            repoRoot,
             outputDir,
             startedAt,
             finishedAt: partialFinishedAt,
@@ -1190,7 +1312,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             alternateModel,
             fastMode,
             concurrency,
+            channelDriver: params?.channelDriver,
+            channelDriverSelection: params?.channelDriverSelection,
             isolatedWorkers: true,
+            writeEvidenceFile: params?.writeEvidenceFile,
             scenarioIds:
               params?.scenarioIds && params.scenarioIds.length > 0
                 ? selectedScenarios.map((scenario) => scenario.id)
@@ -1212,7 +1337,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
     try {
       updateScenarioRun();
-      const workerStartStaggerMs = resolveQaSuiteWorkerStartStaggerMs(concurrency);
+      const workerStartStaggerMs =
+        params?.workerStartStaggerMs ?? resolveQaSuiteWorkerStartStaggerMs(concurrency);
       writeQaSuiteProgress(progressEnabled, `scenario start stagger=${workerStartStaggerMs}ms`);
       const scenarios: QaSuiteScenarioResult[] = await mapQaSuiteWithConcurrency(
         selectedScenarios,
@@ -1238,6 +1364,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
                 outputDir: scenarioOutputDir,
                 providerMode,
                 transportId,
+                channelDriver: params?.channelDriver,
+                channelDriverSelection: params?.channelDriverSelection,
                 primaryModel,
                 alternateModel,
                 fastMode,
@@ -1322,31 +1450,36 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         finishedAt: finishedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
-      const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-        outputDir,
-        startedAt,
-        finishedAt,
-        scenarios,
-        scenarioDefinitions: selectedScenarios,
-        evidenceMode: params?.evidenceMode,
-        transport,
-        providerMode,
-        primaryModel,
-        alternateModel,
-        fastMode,
-        concurrency,
-        isolatedWorkers: true,
-        // When the caller supplied an explicit non-empty --scenario filter,
-        // record the executed (post-selectQaFlowSuiteScenarios-normalized) ids
-        // so the summary matches what actually ran. When the caller passed
-        // nothing or an empty array ("no filter, full lane catalog"),
-        // preserve the unfiltered = null semantic so the summary stays
-        // distinguishable from an explicit all-scenarios selection.
-        scenarioIds:
-          params?.scenarioIds && params.scenarioIds.length > 0
-            ? selectedScenarios.map((scenario) => scenario.id)
-            : undefined,
-      });
+      const { evidence, evidencePath, report, reportPath, summaryPath } =
+        await writeQaSuiteArtifacts({
+          repoRoot,
+          outputDir,
+          startedAt,
+          finishedAt,
+          scenarios,
+          scenarioDefinitions: selectedScenarios,
+          evidenceMode: params?.evidenceMode,
+          transport,
+          providerMode,
+          primaryModel,
+          alternateModel,
+          fastMode,
+          concurrency,
+          channelDriver: params?.channelDriver,
+          channelDriverSelection: params?.channelDriverSelection,
+          isolatedWorkers: true,
+          writeEvidenceFile: params?.writeEvidenceFile,
+          // When the caller supplied an explicit non-empty --scenario filter,
+          // record the executed (post-selectQaFlowSuiteScenarios-normalized) ids
+          // so the summary matches what actually ran. When the caller passed
+          // nothing or an empty array ("no filter, full lane catalog"),
+          // preserve the unfiltered = null semantic so the summary stays
+          // distinguishable from an explicit all-scenarios selection.
+          scenarioIds:
+            params?.scenarioIds && params.scenarioIds.length > 0
+              ? selectedScenarios.map((scenario) => scenario.id)
+              : undefined,
+        });
       lab.setLatestReport({
         outputPath: reportPath,
         markdown: report,
@@ -1358,6 +1491,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       );
       return {
         outputDir,
+        evidence,
         evidencePath,
         reportPath,
         summaryPath,
@@ -1366,6 +1500,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
     } finally {
+      await transport.cleanup?.();
       await disposeRegisteredAgentHarnesses();
       if (ownsLab) {
         await lab.stop();
@@ -1386,9 +1521,11 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     }));
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
   await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
-  const transport = createQaTransportAdapter({
-    id: transportId,
+  const transport = await createQaSuiteTransportAdapter({
+    channelDriverSelection: params?.channelDriverSelection,
+    outputDir,
     state: lab.state,
+    transportId,
   });
   writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
   const mock = await startQaProviderServer(providerMode);
@@ -1573,7 +1710,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       gatewayHeapSnapshots,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
-    if (scenarios.some((scenario) => scenario.status === "fail")) {
+    if (
+      scenarios.some((scenario) => scenario.status === "fail") ||
+      gatewayRuntimeOptions?.preserveDebugArtifacts === true
+    ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
     lab.setScenarioRun({
@@ -1583,28 +1723,34 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-      outputDir,
-      startedAt,
-      finishedAt,
-      scenarios,
-      metrics,
-      scenarioDefinitions: selectedScenarios,
-      evidenceMode: params?.evidenceMode,
-      transport,
-      providerMode,
-      primaryModel,
-      alternateModel,
-      fastMode,
-      concurrency,
-      isolatedWorkers: false,
-      // Same "filtered → executed list, unfiltered → null" convention as
-      // the concurrent-path writeQaSuiteArtifacts call above.
-      scenarioIds:
-        params?.scenarioIds && params.scenarioIds.length > 0
-          ? selectedScenarios.map((scenario) => scenario.id)
-          : undefined,
-    });
+    const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
+      {
+        repoRoot,
+        outputDir,
+        startedAt,
+        finishedAt,
+        scenarios,
+        metrics,
+        scenarioDefinitions: selectedScenarios,
+        evidenceMode: params?.evidenceMode,
+        transport,
+        providerMode,
+        primaryModel,
+        alternateModel,
+        fastMode,
+        concurrency,
+        channelDriver: params?.channelDriver,
+        channelDriverSelection: params?.channelDriverSelection,
+        isolatedWorkers: false,
+        writeEvidenceFile: params?.writeEvidenceFile,
+        // Same "filtered → executed list, unfiltered → null" convention as
+        // the concurrent-path writeQaSuiteArtifacts call above.
+        scenarioIds:
+          params?.scenarioIds && params.scenarioIds.length > 0
+            ? selectedScenarios.map((scenario) => scenario.id)
+            : undefined,
+      },
+    );
     const latestReport = {
       outputPath: reportPath,
       markdown: report,
@@ -1618,6 +1764,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
     return {
       outputDir,
+      evidence,
       evidencePath,
       reportPath,
       summaryPath,
@@ -1636,6 +1783,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       keepTemp,
       preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
     });
+    await transport.cleanup?.();
     await disposeRegisteredAgentHarnesses();
     await mock?.stop();
     if (ownsLab) {
@@ -1654,6 +1802,7 @@ export const qaSuiteProgressTesting = {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
+  formatQaSuiteRunStartProgress,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,

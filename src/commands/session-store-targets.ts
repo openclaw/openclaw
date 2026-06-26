@@ -12,7 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-export { resolveSessionStoreTargets, type SessionStoreSelectionOptions, type SessionStoreTarget };
+export { resolveSessionStoreTargets };
 
 /** Resolves session store targets or exits the current command on validation errors. */
 export function resolveSessionStoreTargetsOrExit(params: {

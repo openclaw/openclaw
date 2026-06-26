@@ -140,6 +140,26 @@ describe("web auto-reply connection", () => {
     expect(formatEnvelopeTimestamp(d, " America/Los_Angeles ")).toBe("Tue 2024-12-31 16:00:00 PST");
   });
 
+  it("does not publish running status when config loading fails", async () => {
+    setLoadConfigMock(() => {
+      throw new Error("config snapshot failed");
+    });
+
+    const statuses: Array<{ running?: boolean }> = [];
+    const listenerFactory = vi.fn(async () => createMockWebListener());
+    const { run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep: vi.fn(async () => {}),
+      statusSink: (next) => statuses.push({ ...next }),
+    });
+
+    await expect(run).rejects.toThrow("config snapshot failed");
+
+    expect(listenerFactory).not.toHaveBeenCalled();
+    expect(statuses.some((status) => status.running === true)).toBe(false);
+  });
+
   it("handles reconnect progress and max-attempt stop behavior", async () => {
     for (const scenario of [
       {

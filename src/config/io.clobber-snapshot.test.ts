@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  CONFIG_CLOBBER_SNAPSHOT_LIMIT,
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 describe("config clobber snapshots", () => {
   let fixtureRoot = "";

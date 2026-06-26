@@ -96,32 +96,6 @@ type SigninVerifyStateValue = {
   state?: string;
 };
 
-/**
- * Extract and validate the `signin/tokenExchange` activity value. Teams
- * delivers `{ id, connectionName, token }`; any field may be missing on
- * malformed invocations, so callers should check the parsed result.
- */
-export function parseSigninTokenExchangeValue(value: unknown): SigninTokenExchangeValue | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const obj = value as Record<string, unknown>;
-  const id = typeof obj.id === "string" ? obj.id : undefined;
-  const connectionName = typeof obj.connectionName === "string" ? obj.connectionName : undefined;
-  const token = typeof obj.token === "string" ? obj.token : undefined;
-  return { id, connectionName, token };
-}
-
-/** Extract the `signin/verifyState` activity value `{ state }`. */
-export function parseSigninVerifyStateValue(value: unknown): SigninVerifyStateValue | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const obj = value as Record<string, unknown>;
-  const state = typeof obj.state === "string" ? obj.state : undefined;
-  return { state };
-}
-
 type UserTokenServiceCallParams = {
   baseUrl: string;
   path: string;

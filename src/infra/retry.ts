@@ -2,6 +2,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
+import { toErrorObject } from "./errors.js";
 import { generateSecureFraction } from "./secure-random.js";
 
 /** Retry timing knobs shared by generic retry runners and channel retry policies. */
@@ -123,7 +124,7 @@ export async function retryAsync<T>(
         await sleep(delay);
       }
     }
-    throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+    throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
   }
 
   const options = attemptsOrOptions;
@@ -197,19 +198,5 @@ export async function retryAsync<T>(
     }
   }
 
-  throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+  throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
 }

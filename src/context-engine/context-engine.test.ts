@@ -603,6 +603,32 @@ describe("Engine contract tests", () => {
     });
   });
 
+  it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
+    installCompactRuntimeSpy();
+    const controller = new AbortController();
+    await delegateCompactionToRuntime({
+      sessionId: "s-abort",
+      sessionFile: "/tmp/session-abort.json",
+      tokenBudget: 4096,
+      abortSignal: controller.signal,
+    });
+
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.abortSignal).toBe(controller.signal);
+  });
+
+  it("delegateCompactionToRuntime passes undefined abortSignal when none supplied", async () => {
+    installCompactRuntimeSpy();
+    await delegateCompactionToRuntime({
+      sessionId: "s-no-abort",
+      sessionFile: "/tmp/session-no-abort.json",
+      tokenBudget: 4096,
+    });
+
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.abortSignal).toBeUndefined();
+  });
+
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       "## Memory Recall",
@@ -1055,6 +1081,88 @@ describe("Factory context passing", () => {
     expect(context.config).toBeUndefined();
     expect(context.agentDir).toBeUndefined();
     expect(context.workspaceDir).toBeUndefined();
+  });
+});
+
+describe("Read-only plugin discovery registrations", () => {
+  beforeEach(() => {
+    registerLegacyContextEngine();
+    clearContextEngineRuntimeQuarantine();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not construct or quarantine read-only discovery context-engine factories", async () => {
+    const engineId = uniqueEngineId("lossless-readonly");
+    const owner = "plugin:lossless-claw";
+    let readOnlyFactoryCalls = 0;
+    let runtimeFactoryCalls = 0;
+
+    registerContextEngineForOwner(
+      engineId,
+      () => {
+        readOnlyFactoryCalls += 1;
+        throw new Error("Engine initialization is disabled during read-only plugin registration");
+      },
+      owner,
+      { allowSameOwnerRefresh: true, lifecycle: "readOnlyDiscovery" },
+    );
+
+    const discoveryFallback = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(discoveryFallback.info.id).toBe("legacy");
+    expect(readOnlyFactoryCalls).toBe(0);
+    expect(listContextEngineQuarantines().some((entry) => entry.engineId === engineId)).toBe(false);
+    expect(console.warn).toHaveBeenCalledWith(
+      `[context-engine] Context engine "${engineId}" owner=${owner} is registered for read-only discovery only; falling back to default engine "legacy" without quarantine until runtime activation registers it.`,
+    );
+
+    registerContextEngineForOwner(
+      engineId,
+      () => {
+        runtimeFactoryCalls += 1;
+        return {
+          info: { id: "lossless-claw", name: "Lossless Claw" },
+          async ingest() {
+            return { ingested: true };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        } satisfies ContextEngine;
+      },
+      owner,
+      { allowSameOwnerRefresh: true, lifecycle: "runtime" },
+    );
+
+    const runtimeEngine = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(runtimeEngine.info.id).toBe("lossless-claw");
+    expect(readOnlyFactoryCalls).toBe(0);
+    expect(runtimeFactoryCalls).toBe(1);
+    expect(listContextEngineQuarantines().some((entry) => entry.engineId === engineId)).toBe(false);
+
+    registerContextEngineForOwner(
+      engineId,
+      () => {
+        readOnlyFactoryCalls += 1;
+        throw new Error("read-only discovery should not replace runtime registration");
+      },
+      owner,
+      { allowSameOwnerRefresh: true, lifecycle: "readOnlyDiscovery" },
+    );
+
+    const stillRuntimeEngine = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(stillRuntimeEngine.info.id).toBe("lossless-claw");
+    expect(readOnlyFactoryCalls).toBe(0);
+    expect(runtimeFactoryCalls).toBe(2);
   });
 });
 
