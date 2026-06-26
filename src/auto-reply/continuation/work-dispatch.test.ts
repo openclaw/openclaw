@@ -110,6 +110,7 @@ async function waitForTurnGrantCount(count: number): Promise<void> {
     await vi.advanceTimersByTimeAsync(0);
     await flushAsyncWork();
   }
+  throw new Error(`expected at least ${count} turn grant(s), got ${turnGrants.length}`);
 }
 
 vi.mock("../../config/config.js", () => ({
