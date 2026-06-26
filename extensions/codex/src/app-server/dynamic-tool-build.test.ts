@@ -1294,7 +1294,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(true);
   });
 
-  it("keeps Codex native tool surfaces when workspace-only fs policy is active", () => {
+  it("disables Codex native tool surfaces when workspace-only fs policy is active", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -1322,7 +1322,7 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         agentId: "poly",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCodexWorkspaceOnlyFsPolicyActive(params, {
         agentId: "poly",
@@ -1341,7 +1341,7 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it("keeps Codex native tool surfaces for global workspace-only fs policy", () => {
+  it("disables Codex native tool surfaces for global workspace-only fs policy", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -1351,7 +1351,7 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
     expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
   });
 
@@ -1377,7 +1377,7 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         agentId: "missing",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCodexWorkspaceOnlyFsPolicyActive(params, {
         agentId: "missing",
@@ -1406,7 +1406,7 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
         runtimeSessionKey: "agent:runtime:session-1",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCodexWorkspaceOnlyFsPolicyActive(params, {
         runtimeSessionKey: "agent:runtime:session-1",
@@ -1467,7 +1467,7 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
     expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
 
     params.config = {

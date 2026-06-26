@@ -478,9 +478,14 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   } = {},
 ): boolean {
   // Policy priority: memory flush comes before sandbox/native allowlist checks.
-  // Workspace-only fs is enforced by constraining the Codex app-server sandbox
-  // at thread/turn start, leaving non-filesystem native features available.
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  // Codex native code mode owns shell and filesystem access as one surface.
+  // Until Codex exposes a true workspace-only read/write profile, OpenClaw
+  // workspace-only policy must keep that native surface disabled and rely on
+  // OpenClaw-owned workspace-scoped dynamic tools instead.
+  if (isCodexWorkspaceOnlyFsPolicyActive(params, options)) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);

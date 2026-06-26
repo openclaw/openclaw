@@ -488,7 +488,7 @@ describe("runCodexAppServerAttempt", () => {
     expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
-  it("keeps native Codex features while constraining workspace-only fs runs", async () => {
+  it("disables native Codex file/code mode for workspace-only fs runs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
@@ -511,22 +511,18 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
     const startConfig = startParams?.config as Record<string, unknown> | undefined;
-    expect(startParams?.sandbox).toBe("workspace-write");
-    expect(startConfig?.["features.code_mode"]).toBe(true);
+    expect(startParams?.sandbox).toBe("danger-full-access");
+    expect(startConfig?.["features.code_mode"]).toBe(false);
     expect(startConfig?.["features.code_mode_only"]).toBe(false);
-    expect(
-      (startConfig?.apps as Record<string, unknown> | undefined)?.["_default"],
-    ).toBeUndefined();
+    expect((startConfig?.apps as Record<string, unknown> | undefined)?.["_default"]).toEqual({
+      enabled: false,
+      destructive_enabled: false,
+      open_world_enabled: false,
+    });
 
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnParams?.sandboxPolicy).toEqual({
-      type: "workspaceWrite",
-      writableRoots: [workspaceDir],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
 
   it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
