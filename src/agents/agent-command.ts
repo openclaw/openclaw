@@ -2354,12 +2354,13 @@ async function agentCommandInternal(
       const resolveFreshSessionEntryForDelivery =
         sessionStore && sessionKey && !suppressVisibleSessionEffects
           ? async (): Promise<SessionEntry | undefined> => {
-              const { loadSessionStore } = await loadSessionStoreRuntime();
-              const freshStore = loadSessionStore(storePath, {
-                skipCache: true,
+              const { loadSessionEntry } = await loadSessionStoreRuntime();
+              const freshEntry = loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
                 clone: false,
               });
-              const freshEntry = freshStore[sessionKey];
               if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
                 return undefined;
               }
