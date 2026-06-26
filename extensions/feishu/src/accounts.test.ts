@@ -80,6 +80,23 @@ describe("resolveDefaultFeishuAccountId", () => {
     expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
   });
 
+  it("preserves top-level default account when appSecret is a SecretRef", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          appId: "cli_default",
+          appSecret: { source: "env", provider: "default", id: "FEISHU_APP_SECRET" },
+          accounts: {
+            work: { appId: "cli_work", appSecret: "secret_work" }, // pragma: allowlist secret
+          },
+        },
+      },
+    };
+
+    expect(listFeishuAccountIds(cfg as never)).toEqual(["default", "work"]);
+    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
+  });
+
   it("prefers channels.feishu.defaultAccount when configured", () => {
     const cfg = {
       channels: {
