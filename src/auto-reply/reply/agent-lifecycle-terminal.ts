@@ -21,6 +21,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "aborted",
   "livenessState",
   "replayInvalid",
+  "terminalError",
 ] as const;
 
 export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {

@@ -3691,6 +3691,7 @@ async function runEmbeddedAgentInternal(
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                ...(attempt.terminalError ? { terminalError: attempt.terminalError } : {}),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didDeliverSourceReplyViaMessageTool:
@@ -3902,6 +3903,7 @@ async function runEmbeddedAgentInternal(
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                ...(attempt.terminalError ? { terminalError: attempt.terminalError } : {}),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didDeliverSourceReplyViaMessageTool:
@@ -3993,6 +3995,7 @@ async function runEmbeddedAgentInternal(
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                ...(attempt.terminalError ? { terminalError: attempt.terminalError } : {}),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didDeliverSourceReplyViaMessageTool:

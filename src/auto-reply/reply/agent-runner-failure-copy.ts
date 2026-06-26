@@ -37,3 +37,16 @@ export function replaceGenericExternalRunFailureText(text: string): {
     replaced: true,
   };
 }
+
+export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+
+export const NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT =
+  "⚠️ The model stopped between tool calls without producing a reply. Please try the same message again — this usually resolves on retry. If it persists, use /new or a lighter model.";
+
+export function resolveExternalRunFailureTextForTerminalError(
+  terminalError: string | undefined,
+): string | undefined {
+  return terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON
+    ? NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT
+    : undefined;
+}

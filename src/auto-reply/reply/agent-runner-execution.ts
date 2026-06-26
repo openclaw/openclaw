@@ -120,6 +120,7 @@ import {
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  resolveExternalRunFailureTextForTerminalError,
 } from "./agent-runner-failure-copy.js";
 import {
   buildEmbeddedRunExecutionParams,
@@ -947,7 +948,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
 
 function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
-  options?: { includeDetails?: boolean; isHeartbeat?: boolean },
+  options?: { includeDetails?: boolean; isHeartbeat?: boolean; terminalError?: string },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
@@ -995,6 +996,10 @@ function buildExternalRunFailureReply(
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+  }
+  const terminalErrorText = resolveExternalRunFailureTextForTerminalError(options?.terminalError);
+  if (terminalErrorText) {
+    return { text: terminalErrorText, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
