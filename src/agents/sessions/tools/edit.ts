@@ -27,6 +27,7 @@ import {
   generateUnifiedPatch,
   normalizeToLF,
   restoreLineEndings,
+  splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
 } from "./edit-diff.js";
@@ -41,10 +42,6 @@ type EditPreview = EditDiffResult | EditDiffError;
 type EditRenderState = {
   callComponent?: EditCallRenderComponent;
 };
-
-function filterNoOpEdits(edits: Edit[]): Edit[] {
-  return edits.filter((edit) => edit.oldText !== edit.newText);
-}
 
 const replaceEditSchema = Type.Object(
   {
@@ -406,7 +403,7 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
-        const realEdits = filterNoOpEdits(originalEdits);
+        let realEdits: Edit[] = [];
 
         try {
           await ops.access(absolutePath);
@@ -430,7 +427,9 @@ export function createEditToolDefinition(
           const { bom, text: content } = stripBom(rawContent);
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
-          const noOpEdits = originalEdits.filter((edit) => edit.oldText === edit.newText);
+          const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
+          const noOpEdits = editSets.noOpEdits;
+          realEdits = editSets.realEdits;
           validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
           if (realEdits.length === 0) {
             return {

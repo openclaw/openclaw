@@ -423,6 +423,25 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
+  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+    const filePath = await createTempFile("foo  \nkeep  \n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "foo  ", newText: "foo" },
+          { oldText: "keep", newText: "changed" },
+        ],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+  });
+
   it("rejects duplicate no-op entries", async () => {
     const filePath = await createTempFile("foo\n");
     const tool = createEditTool(tmpDir);

@@ -455,6 +455,29 @@ export function validateNoOpEditTargets(
   }
 }
 
+export function splitNoOpEdits(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): { noOpEdits: Edit[]; realEdits: Edit[] } {
+  const noOpEdits: Edit[] = [];
+  const realEdits: Edit[] = [];
+  for (const edit of edits) {
+    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
+    if (edit.oldText === edit.newText || fuzzyNoOp) {
+      applyEditsToNormalizedContent(
+        normalizedContent,
+        [{ oldText: edit.oldText, newText: "" }],
+        path,
+      );
+      noOpEdits.push(edit);
+    } else {
+      realEdits.push(edit);
+    }
+  }
+  return { noOpEdits, realEdits };
+}
+
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -496,8 +519,7 @@ export async function computeEditsDiff(
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);
     const normalizedContent = normalizeToLF(content);
-    const noOpEdits = edits.filter((edit) => edit.oldText === edit.newText);
-    const realEdits = edits.filter((edit) => edit.oldText !== edit.newText);
+    const { noOpEdits, realEdits } = splitNoOpEdits(normalizedContent, edits, path);
     validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
     if (realEdits.length === 0) {
       return { diff: "", firstChangedLine: undefined };
