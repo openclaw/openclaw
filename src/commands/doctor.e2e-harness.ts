@@ -144,6 +144,12 @@ const autoMigrateLegacyState = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+const autoMigrateLegacyPluginDoctorState = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
 const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
@@ -211,7 +217,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       legacyKeys: [],
       preserveAmbiguousKeys: false,
       preserveForeignMainAliases: false,
-      targetStoreHasDistinctAlias: false,
+      targetStoreAliases: {
+        hasDistinctAliases: false,
+        hasFinalSymlink: false,
+        writePaths: ["/tmp/state/agents/main/sessions/sessions.json"],
+      },
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",
@@ -518,6 +528,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,
