@@ -49,6 +49,22 @@ describe("resolveExecWorkdir", () => {
     vi.restoreAllMocks();
   });
 
+  it("expands leading tilde in explicit local workdirs", async () => {
+    await withTempDir(async (root) => {
+      const homeDir = path.join(root, "home");
+      const workspace = path.join(homeDir, "workspace");
+      await mkdir(workspace, { recursive: true });
+      vi.stubEnv("HOME", homeDir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "~/workspace",
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspace });
+    });
+  });
+
   it("rejects blank explicit local workdirs", async () => {
     await expect(
       resolveExecWorkdir({
