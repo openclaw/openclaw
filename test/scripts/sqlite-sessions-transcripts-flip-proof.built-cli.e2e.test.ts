@@ -27,7 +27,9 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
         .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
         .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
     ).toBe(true);
-    expect(report.checkpoints.some((checkpoint) => checkpoint.doctor?.mode === "fix")).toBe(false);
+    expect(report.checkpoints.some((checkpoint) => checkpoint.label === "after-doctor-fix")).toBe(
+      false,
+    );
     expect(
       report.checkpoints.some(
         (checkpoint) =>
