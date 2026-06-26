@@ -211,6 +211,19 @@ const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = process.env.Path;
+const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setQmdStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreQmdStateDir(): void {
+  if (originalQmdStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalQmdStateDir);
+  }
+}
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -340,7 +353,7 @@ describe("QmdMemoryManager", () => {
     // Only workspace must exist for configured collection paths; state paths are
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir, { recursive: true });
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setQmdStateDir(stateDir);
     // Keep the default Windows path unresolved for most tests so spawn mocks can
     // match the logical package command. Tests that verify wrapper resolution
     // install explicit shim fixtures inline.
@@ -387,7 +400,7 @@ describe("QmdMemoryManager", () => {
     embedStartupJitterSpy?.mockRestore();
     embedStartupJitterSpy = null;
     vi.useRealTimers();
-    delete process.env.OPENCLAW_STATE_DIR;
+    restoreQmdStateDir();
     if (originalPath === undefined) {
       delete process.env.PATH;
     } else {
@@ -6450,7 +6463,7 @@ describe("QmdMemoryManager", () => {
       // directory instead of the real ~/.cache.
       savedXdgCacheHome = process.env.XDG_CACHE_HOME;
       const fakeCacheHome = path.join(tmpRoot, "fake-cache");
-      process.env.XDG_CACHE_HOME = fakeCacheHome;
+      Reflect.set(process.env, "XDG_CACHE_HOME", fakeCacheHome);
 
       defaultModelsDir = path.join(fakeCacheHome, "qmd", "models");
       await fs.mkdir(defaultModelsDir, { recursive: true });
@@ -6461,9 +6474,9 @@ describe("QmdMemoryManager", () => {
 
     afterEach(() => {
       if (savedXdgCacheHome === undefined) {
-        delete process.env.XDG_CACHE_HOME;
+        Reflect.deleteProperty(process.env, "XDG_CACHE_HOME");
       } else {
-        process.env.XDG_CACHE_HOME = savedXdgCacheHome;
+        Reflect.set(process.env, "XDG_CACHE_HOME", savedXdgCacheHome);
       }
     });
 
