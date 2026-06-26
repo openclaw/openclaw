@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "../activity-model.ts";
 import { formatTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
+import { parseSessionKey } from "../session-display.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
@@ -160,7 +161,9 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
           <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
           <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
           ${entry.sessionKey
-            ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
+            ? html`<span class="mono" title=${entry.sessionKey}
+                >${t("activity.session")}: ${parseSessionKey(entry.sessionKey).fallbackName}</span
+              >`
             : nothing}
         </div>
         ${entry.outputPreview

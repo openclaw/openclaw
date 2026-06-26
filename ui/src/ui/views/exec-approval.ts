@@ -9,6 +9,7 @@ import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../controllers/exec-approval.ts";
+import { parseSessionKey } from "../session-display.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -28,6 +29,13 @@ function formatRemaining(ms: number): string {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours}h`;
+}
+
+function formatSessionKey(key?: string | null): string {
+  if (!key) {
+    return "";
+  }
+  return parseSessionKey(key).fallbackName;
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
@@ -88,7 +96,7 @@ function renderExecBody(request: ExecApprovalRequestPayload) {
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.host"), request.host)}
       ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), request.sessionKey)}
+      ${renderMetaRow(t("execApproval.labels.session"), formatSessionKey(request.sessionKey))}
       ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, {
         path: true,
       })}
@@ -110,7 +118,10 @@ ${active.pluginDescription}</pre
       ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
       ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}
       ${renderMetaRow(t("execApproval.labels.agent"), active.request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}
+      ${renderMetaRow(
+        t("execApproval.labels.session"),
+        formatSessionKey(active.request.sessionKey),
+      )}
     </div>
   `;
 }

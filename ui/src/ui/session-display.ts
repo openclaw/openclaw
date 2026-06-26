@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./stri
 import type { SessionsListResult } from "./types.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
+  // Western platforms
   imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
@@ -12,6 +13,26 @@ const CHANNEL_LABELS: Record<string, string> = {
   matrix: "Matrix",
   email: "Email",
   sms: "SMS",
+  // Chinese platforms
+  feishu: "Feishu",
+  wechat: "WeChat",
+  wecom: "WeCom",
+  qqbot: "QQ",
+  dingtalk: "DingTalk",
+  // Other platforms
+  line: "LINE",
+  msteams: "Teams",
+  mattermost: "Mattermost",
+  "nextcloud-talk": "Nextcloud Talk",
+  irc: "IRC",
+  nostr: "Nostr",
+  "synology-chat": "Synology Chat",
+  tlon: "Tlon",
+  twitch: "Twitch",
+  zalo: "Zalo",
+  zalouser: "Zalo",
+  raft: "Raft",
+  googlechat: "Google Chat",
 };
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
@@ -56,7 +77,13 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     const channel = directMatch[1];
     const identifier = directMatch[2];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
+    // Truncate long machine-generated identifiers (e.g. ou_xxx open_ids)
+    // to keep the fallback display compact. The full key is still available
+    // via the raw session key for debugging.
+    const MAX_ID_DISPLAY = 20;
+    const displayId =
+      identifier.length > MAX_ID_DISPLAY ? identifier.slice(0, 12) + "…" : identifier;
+    return { prefix: "", fallbackName: `${channelLabel} · ${displayId}` };
   }
 
   // Group chat: agent:<x>:<channel>:group:<id>.
