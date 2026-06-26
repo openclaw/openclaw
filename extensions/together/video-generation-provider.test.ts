@@ -48,33 +48,56 @@ function streamingResponse(params: {
   return new Response(stream, { headers: params.headers });
 }
 
+function mockPostJsonResponse(value: unknown) {
+  return {
+    response: new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    release: vi.fn(async () => {}),
+  };
+}
+
+function mockFetchJsonResponse(value: unknown) {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function mockFetchBinaryResponse(params: { bytes: string; contentType: string }) {
+  return new Response(Buffer.from(params.bytes), {
+    status: 200,
+    headers: { "content-type": params.contentType },
+  });
+}
+
 describe("together video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildTogetherVideoGenerationProvider());
   });
 
   it("creates a video, polls completion, and downloads the output", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-          status: "in_progress",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(
+      mockPostJsonResponse({
+        id: "video_123",
+        status: "in_progress",
+      }),
+    );
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        mockFetchJsonResponse({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/webm" }),
-        arrayBuffer: async () => Buffer.from("webm-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        mockFetchBinaryResponse({
+          bytes: "webm-bytes",
+          contentType: "video/webm",
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -105,23 +128,20 @@ describe("together video generation provider", () => {
 
   it("bounds downloaded videos before materializing them", async () => {
     let canceled = false;
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_oversized",
-          status: "in_progress",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(
+      mockPostJsonResponse({
+        id: "video_oversized",
+        status: "in_progress",
+      }),
+    );
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        mockFetchJsonResponse({
           id: "video_oversized",
           status: "completed",
           outputs: { video_url: "https://example.com/oversized.mp4" },
         }),
-      })
+      )
       .mockResolvedValueOnce(
         streamingResponse({
           body: "x".repeat(32),
@@ -145,26 +165,25 @@ describe("together video generation provider", () => {
   });
 
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(
+      mockPostJsonResponse({
+        id: "video_123",
+      }),
+    );
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        mockFetchJsonResponse({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        mockFetchBinaryResponse({
+          bytes: "mp4-bytes",
+          contentType: "video/mp4",
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({
@@ -188,26 +207,25 @@ describe("together video generation provider", () => {
   });
 
   it("drops out-of-range duration values before creating videos", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(
+      mockPostJsonResponse({
+        id: "video_123",
+      }),
+    );
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        mockFetchJsonResponse({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        mockFetchBinaryResponse({
+          bytes: "mp4-bytes",
+          contentType: "video/mp4",
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({
@@ -245,26 +263,25 @@ describe("together video generation provider", () => {
   });
 
   it("sends reference images for the Together image-to-video model", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(
+      mockPostJsonResponse({
+        id: "video_123",
+      }),
+    );
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        mockFetchJsonResponse({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        mockFetchBinaryResponse({
+          bytes: "mp4-bytes",
+          contentType: "video/mp4",
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({
@@ -285,5 +302,49 @@ describe("together video generation provider", () => {
     const body = requireRecord(request.body, "Together request body");
     expect(body.model).toBe("Wan-AI/Wan2.2-I2V-A14B");
     expect(body.reference_images).toHaveLength(1);
+  });
+
+  it("bounds together video generation JSON response reads", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32;
+    const chunk = new Uint8Array(ONE_MIB);
+    let bytesPulled = 0;
+    let canceled = false;
+
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled / ONE_MIB >= TOTAL_CHUNKS) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "bound test",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/JSON response exceeds/);
+
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });

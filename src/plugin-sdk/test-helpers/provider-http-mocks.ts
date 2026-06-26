@@ -51,6 +51,9 @@ interface ProviderHttpMocks {
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
   >;
+  readProviderJsonResponseMock: Mock<
+    (response: Response, label: string, opts?: { maxBytes?: number }) => Promise<unknown>
+  >;
 }
 
 const providerHttpMocks = vi.hoisted(() => ({
@@ -75,6 +78,19 @@ const providerHttpMocks = vi.hoisted(() => ({
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
+  readProviderJsonResponseMock: vi.fn(
+    async (response: Response, label: string, opts?: { maxBytes?: number }) => {
+      const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+      const text =
+        typeof response.json === "function"
+          ? JSON.stringify(await response.json())
+          : await response.text();
+      if (text.length > maxBytes) {
+        throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+      }
+      return JSON.parse(text);
+    },
+  ),
 }));
 
 providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
@@ -237,6 +253,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   sanitizeConfiguredModelProviderRequest:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
   waitProviderOperationPollInterval: async () => {},
@@ -261,5 +278,6 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
   });
 }
