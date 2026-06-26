@@ -220,6 +220,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetStoreAliases: {
         hasDistinctAliases: false,
         hasFinalSymlink: false,
+        hasUnresolvedIdentity: false,
         writePaths: ["/tmp/state/agents/main/sessions/sessions.json"],
       },
     },

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as sessionStore from "../config/sessions.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -658,6 +659,97 @@ describe("state migrations", () => {
     expect(result.warnings).toContain(
       `Deferred legacy session migration in final-component symlink store ${targetStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
     );
+  });
+
+  it("defers legacy migration when configured store identity is inaccessible", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
+    await fs.writeFile(targetStorePath, "{}\n", "utf8");
+    const configuredStorePath = path.join(root, "configured-sessions.json");
+    await fs.writeFile(configuredStorePath, "{}\n", "utf8");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({ "agent:main:task": { sessionId: "legacy", updatedAt: 10 } }),
+      "utf8",
+    );
+    const cfg = {
+      session: { store: configuredStorePath },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const realStatSync = fsSync.statSync.bind(fsSync);
+    const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((candidate) => {
+      if (path.resolve(candidate.toString()) === configuredStorePath) {
+        throw Object.assign(new Error("inaccessible store"), { code: "EACCES" });
+      }
+      return realStatSync(candidate);
+    });
+    let detected: Awaited<ReturnType<typeof detectLegacyStateMigrations>>;
+    try {
+      detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    expect(detected.sessions.targetStoreAliases.hasUnresolvedIdentity).toBe(true);
+    const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("filesystem identity could not be established"),
+    );
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toContain("legacy");
+    await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe("{}\n");
+  });
+
+  it("keeps the legacy source when an aliased store write fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
+    await fs.writeFile(targetStorePath, "{}\n", "utf8");
+    const configuredStorePath = path.join(root, "configured-sessions.json");
+    await fs.link(targetStorePath, configuredStorePath);
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({ "agent:main:task": { sessionId: "legacy", updatedAt: 10 } }),
+      "utf8",
+    );
+    const cfg = {
+      session: { store: configuredStorePath },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const realSaveSessionStore = sessionStore.saveSessionStore;
+    let sawRequiredWrite = false;
+    const saveSpy = vi
+      .spyOn(sessionStore, "saveSessionStore")
+      .mockImplementation(async (storePath, store, options) => {
+        sawRequiredWrite ||= options?.requireWriteSuccess === true;
+        if (storePath === configuredStorePath) {
+          if (options?.requireWriteSuccess) {
+            throw new Error("simulated alias write failure");
+          }
+          return;
+        }
+        await realSaveSessionStore(storePath, store, options);
+      });
+    try {
+      await expect(
+        runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 }),
+      ).rejects.toThrow("simulated alias write failure");
+    } finally {
+      saveSpy.mockRestore();
+    }
+
+    expect(sawRequiredWrite).toBe(true);
+    await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toContain("legacy");
   });
 
   it("preserves shared ownership through missing parent-symlink store paths", async () => {

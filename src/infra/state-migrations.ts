@@ -100,6 +100,7 @@ import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 type SessionStoreAliasPlan = {
   hasDistinctAliases: boolean;
   hasFinalSymlink: boolean;
+  hasUnresolvedIdentity: boolean;
   writePaths: string[];
 };
 
@@ -3324,6 +3325,10 @@ function aliasedSessionStoreMigrationWarning(params: {
   return `Deferred ${params.subject} ${params.count} ambiguous session key(s) in aliased store ${params.storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
 }
 
+function unresolvedSessionStoreIdentityWarning(subject: string, storePath: string): string {
+  return `Deferred ${subject} for ${storePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+}
+
 function resolveStaleLegacySessionFile(params: {
   entry: unknown;
   legacyDir: string;
@@ -4383,6 +4388,15 @@ async function migrateLegacySessions(
     : { store: {}, ok: true };
   const legacyStore = legacyParsed.store;
   const targetStore = targetParsed.store;
+  if (detected.sessions.targetStoreAliases.hasUnresolvedIdentity) {
+    warnings.push(
+      unresolvedSessionStoreIdentityWarning(
+        "legacy session migration",
+        detected.sessions.targetStorePath,
+      ),
+    );
+    return { changes, warnings };
+  }
   if (detected.sessions.targetStoreAliases.hasFinalSymlink) {
     warnings.push(
       `Deferred legacy session migration in final-component symlink store ${detected.sessions.targetStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
@@ -5253,6 +5267,10 @@ export async function migrateOrphanedSessionKeys(params: {
     if (totalLegacy === 0) {
       continue;
     }
+    if (storeAliases.hasUnresolvedIdentity) {
+      warnings.push(unresolvedSessionStoreIdentityWarning("session key migration", storePath));
+      continue;
+    }
     if (storeAliases.hasFinalSymlink) {
       warnings.push(
         `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
@@ -5404,6 +5422,10 @@ async function migrateLegacyAcpSessionMetadata(params: {
     const hasLegacyAcpMetadata = Object.values(parsed.store).some(
       (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
     );
+    if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
+      warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));
+      continue;
+    }
     if (hasLegacyAcpMetadata && storeAliases.hasFinalSymlink) {
       warnings.push(
         `Deferred ACP metadata migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
@@ -5498,21 +5520,35 @@ function resolveStorePathFromTemplate(
   return path.resolve(expand(template));
 }
 
-function sessionStorePathsMatch(left: string, right: string): boolean {
+type SessionStorePathRelationship = "same" | "different" | "unknown";
+
+function resolveSessionStorePathRelationship(
+  left: string,
+  right: string,
+): SessionStorePathRelationship {
   if (left === right) {
-    return true;
+    return "same";
   }
   try {
-    return sameFileIdentity(fs.statSync(left), fs.statSync(right));
+    return sameFileIdentity(fs.statSync(left), fs.statSync(right)) ? "same" : "different";
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return false;
+      return "unknown";
     }
     const resolvedLeft = resolvePathThroughExistingParents(left);
     const resolvedRight = resolvePathThroughExistingParents(right);
-    return resolvedLeft !== undefined && resolvedLeft === resolvedRight;
+    if (resolvedLeft === undefined || resolvedRight === undefined) {
+      return "unknown";
+    }
+    return resolvedLeft === resolvedRight ? "same" : "different";
   }
+}
+
+function sessionStorePathsMatch(left: string, right: string): boolean {
+  // Ownership checks must fail closed: an inaccessible path may still alias the
+  // readable store, so preserve shared-owner policy until identity is known.
+  return resolveSessionStorePathRelationship(left, right) !== "different";
 }
 
 function resolvePathThroughExistingParents(filePath: string): string | undefined {
@@ -5575,8 +5611,14 @@ function resolveSessionStoreAliasPlan(
   const writePaths = new Set([storePath]);
   let hasDistinctEntries = false;
   let hasFinalSymlink = sessionStorePathIsFinalSymlink(storePath);
+  let hasUnresolvedIdentity = false;
   for (const candidatePath of candidatePaths) {
-    if (!sessionStorePathsMatch(storePath, candidatePath)) {
+    const relationship = resolveSessionStorePathRelationship(storePath, candidatePath);
+    if (relationship === "different") {
+      continue;
+    }
+    if (relationship === "unknown") {
+      hasUnresolvedIdentity = true;
       continue;
     }
     hasFinalSymlink ||= sessionStorePathIsFinalSymlink(candidatePath);
@@ -5586,8 +5628,9 @@ function resolveSessionStoreAliasPlan(
     }
   }
   return {
-    hasDistinctAliases: hasFinalSymlink || hasDistinctEntries,
+    hasDistinctAliases: hasFinalSymlink || hasDistinctEntries || hasUnresolvedIdentity,
     hasFinalSymlink,
+    hasUnresolvedIdentity,
     writePaths: [...writePaths],
   };
 }
@@ -5602,6 +5645,7 @@ function mergeSessionStoreAliasPlans(
   return {
     hasDistinctAliases: left.hasDistinctAliases || right.hasDistinctAliases,
     hasFinalSymlink: left.hasFinalSymlink || right.hasFinalSymlink,
+    hasUnresolvedIdentity: left.hasUnresolvedIdentity || right.hasUnresolvedIdentity,
     writePaths: [...new Set([...left.writePaths, ...right.writePaths])],
   };
 }
@@ -5611,7 +5655,10 @@ async function saveSessionStoreToPaths(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   for (const storePath of new Set(storePaths)) {
-    await saveSessionStore(storePath, store, { skipMaintenance: true });
+    await saveSessionStore(storePath, store, {
+      skipMaintenance: true,
+      requireWriteSuccess: true,
+    });
   }
 }
 
