@@ -98,7 +98,7 @@ function buildContextEngineCompactionSessionTarget(
 ): ContextEngineSessionTarget {
   const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
   const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
@@ -432,7 +432,7 @@ export async function compactEmbeddedAgentSession(
             contextEngine,
             {
               sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
+              sessionKey: hookSessionKey,
               ...(compactionSessionTarget.agentId
                 ? { agentId: compactionSessionTarget.agentId }
                 : {}),

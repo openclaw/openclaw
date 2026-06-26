@@ -71,7 +71,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
