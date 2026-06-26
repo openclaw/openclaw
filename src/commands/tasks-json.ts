@@ -7,6 +7,7 @@ import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
+import { summarizeTaskPressure } from "../tasks/task-registry.summary.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditJsonPayload,
@@ -67,6 +68,7 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
     count: tasks.length,
     runtime: runtimeFilter ?? null,
     status: statusFilter ?? null,
+    summary: summarizeTaskPressure(tasks),
     tasks,
   };
 }
