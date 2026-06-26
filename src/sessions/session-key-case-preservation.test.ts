@@ -58,6 +58,28 @@ describe("requiresFoldedSessionKeyAliasProof", () => {
   });
 });
 
+describe("parseRawSessionConversationRef", () => {
+  it("preserves empty segments inside opaque Matrix room ids", () => {
+    expect(parseRawSessionConversationRef("agent:main:matrix:channel:!room:[2001:db8::1]")).toEqual(
+      {
+        channel: "matrix",
+        kind: "channel",
+        rawId: "!room:[2001:db8::1]",
+        prefix: "agent:main:matrix:channel",
+      },
+    );
+  });
+
+  it.each([
+    "agent::matrix:channel:room",
+    "agent:voice::matrix:channel:room",
+    "agent:voice:matrix::room",
+    "agent:voice:matrix:channel::room",
+  ])("rejects empty structural segments in %s", (sessionKey) => {
+    expect(parseRawSessionConversationRef(sessionKey)).toBeNull();
+  });
+});
+
 describe("normalizeSessionPeerId (construction)", () => {
   it("preserves Matrix room ids for channel/group peers", () => {
     expect(normalizeSessionPeerId({ channel: "matrix", peerKind: "channel", peerId: ROOM_A })).toBe(

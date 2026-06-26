@@ -106,6 +106,12 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+      name: "chat-type deny applies to legacy channel keys",
+      cfg: cfgWithRules([{ action: "deny", match: { chatType: "channel" } }]),
+      sessionKey: "agent:main:channel:legacy-room",
+      expected: "deny",
+    },
+    {
       name: "ambiguous account and peer-kind tokens fail closed",
       cfg: cfgWithRules([{ action: "deny", match: { chatType: "direct" } }]),
       sessionKey: "agent:main:telegram:group:direct:user",

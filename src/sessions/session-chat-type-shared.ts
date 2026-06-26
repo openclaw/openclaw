@@ -74,6 +74,9 @@ function deriveBuiltInLegacySessionChatType(
   if (/^group:[^:]+$/.test(scopedSessionKey)) {
     return "group";
   }
+  if (/^channel:[^:]+$/.test(scopedSessionKey)) {
+    return "channel";
+  }
   if (/^(?:whatsapp:)?[^:]+@g\.us$/.test(scopedSessionKey)) {
     return "group";
   }

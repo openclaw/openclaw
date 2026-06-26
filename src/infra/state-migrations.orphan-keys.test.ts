@@ -430,7 +430,31 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("canonicalizes global main aliases in aliased stores without foreign owners", async () => {
+  it("defers an unambiguous rewrite through a singleton final symlink", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const outsideStorePath = path.join(tmpDir, "outside-sessions.json");
+      writeStore(outsideStorePath, {
+        "agent:main:main": { sessionId: "outside-global", updatedAt: 1000 },
+      });
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.symlinkSync(outsideStorePath, storePath);
+      const cfg = { session: { scope: "global" } } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      ]);
+      expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
+      expect(requireStoreEntry(readStore(outsideStorePath), "agent:main:main").sessionId).toBe(
+        "outside-global",
+      );
+    });
+  });
+
+  it("canonicalizes global main aliases at every hard-linked store path", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const standardStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       writeStore(standardStorePath, {
@@ -445,10 +469,10 @@ describe("migrateOrphanedSessionKeys", () => {
 
       const result = await migrateFixtureState(stateDir, cfg);
 
-      expect(requireStoreEntry(readStore(configuredStorePath), "global").sessionId).toBe(
-        "legacy-global",
-      );
-      expect(readStore(configuredStorePath)["agent:main:main"]).toBeUndefined();
+      for (const storePath of [configuredStorePath, standardStorePath]) {
+        expect(requireStoreEntry(readStore(storePath), "global").sessionId).toBe("legacy-global");
+        expect(readStore(storePath)["agent:main:main"]).toBeUndefined();
+      }
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
     });

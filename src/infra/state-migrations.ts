@@ -5096,13 +5096,25 @@ export async function migrateOrphanedSessionKeys(params: {
   // does not contain {agentId}.
   const storeMap = new Map<string, Set<string>>();
   const aliasedStorePaths = new Set<string>();
+  const distinctStoreAliasPaths = new Map<string, Set<string>>();
+  const finalSymlinkStorePaths = new Set<string>();
   const addToStoreMap = (p: string, id: string) => {
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
       [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
-    if (sessionStorePathIsFinalSymlink(p) || sessionStorePathsHaveDistinctEntries(storePath, p)) {
+    const isFinalSymlink = sessionStorePathIsFinalSymlink(p);
+    const hasDistinctEntry = sessionStorePathsHaveDistinctEntries(storePath, p);
+    if (isFinalSymlink || hasDistinctEntry) {
       aliasedStorePaths.add(storePath);
+    }
+    if (isFinalSymlink) {
+      finalSymlinkStorePaths.add(storePath);
+    }
+    if (hasDistinctEntry) {
+      const aliasPaths = distinctStoreAliasPaths.get(storePath) ?? new Set([storePath]);
+      aliasPaths.add(p);
+      distinctStoreAliasPaths.set(storePath, aliasPaths);
     }
     const existing = storeMap.get(storePath);
     if (existing) {
@@ -5233,6 +5245,12 @@ export async function migrateOrphanedSessionKeys(params: {
     if (totalLegacy === 0) {
       continue;
     }
+    if (finalSymlinkStorePaths.has(storePath)) {
+      warnings.push(
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      );
+      continue;
+    }
 
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
@@ -5242,7 +5260,10 @@ export async function migrateOrphanedSessionKeys(params: {
       }
     }
     try {
-      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      const writePaths = distinctStoreAliasPaths.get(storePath) ?? [storePath];
+      for (const writePath of writePaths) {
+        await saveSessionStore(writePath, normalized, { skipMaintenance: true });
+      }
       changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
       warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);

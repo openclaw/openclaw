@@ -344,13 +344,18 @@ export function parseRawSessionConversationRef(
     return null;
   }
 
-  const rawParts = raw.split(":").filter(Boolean);
+  const rawParts = raw.split(":");
   // Only the outer ownership wrapper is authoritative for routing. Any inner
   // agent-shaped identity is opaque plugin input and must not inherit policy.
-  const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  const hasAgentWrapper = normalizeOptionalLowercaseString(rawParts[0]) === "agent";
+  if (hasAgentWrapper && (!normalizeOptionalString(rawParts[1]) || rawParts.length < 3)) {
+    return null;
+  }
+  const bodyStartIndex = hasAgentWrapper ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
+  // Empty opaque tail segments are valid (for example compressed IPv6), but
+  // structural owner/channel/kind/first-id segments must be present.
+  if (parts.length < 3 || !normalizeOptionalString(parts[2])) {
     return null;
   }
 
