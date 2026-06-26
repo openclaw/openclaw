@@ -219,7 +219,8 @@ async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamSe
       if (!(await writeChunk(prefix))) {
         return;
       }
-      while (bodyBytesSent < plannedBodyBytes) {
+      const chunksToSend = Math.ceil((plannedBodyBytes - bodyBytesSent) / chunk.byteLength);
+      for (let i = 0; i < chunksToSend; i++) {
         if (!(await writeChunk(chunk))) {
           return;
         }
