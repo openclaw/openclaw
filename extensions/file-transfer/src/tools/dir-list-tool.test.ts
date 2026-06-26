@@ -24,6 +24,34 @@ afterEach(() => {
 });
 
 describe("dir_list tool", () => {
+  it("summarizes files and subdirectories from returned entries", async () => {
+    vi.mocked(listNodes).mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Studio Mac",
+      },
+    ]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: {
+        path: "/tmp/project",
+        entries: [{ isDir: false }, { isDir: true }, { isDir: false }],
+      },
+    });
+
+    const result = await createDirListTool().execute("tool-call-1", {
+      node: "Studio Mac",
+      path: "/tmp/project",
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "Listed /tmp/project: 2 files, 1 subdir",
+      },
+    ]);
+  });
+
   it("reports missing paired nodes before retrying guessed local node names", async () => {
     vi.mocked(listNodes).mockResolvedValue([]);
 
