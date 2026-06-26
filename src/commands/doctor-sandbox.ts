@@ -17,6 +17,7 @@ import {
 } from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -31,34 +32,22 @@ export function resolveSandboxScript(
   scriptRel: string,
   options: { argv1?: string; cwd?: string } = {},
 ): SandboxScriptInfo | null {
-  const cwd = options.cwd ?? process.cwd();
-  const argv1 = options.argv1 ?? process.argv[1];
-  const candidates = new Set<string>();
-  candidates.add(cwd);
-  if (argv1) {
-    // argv1 may be a symlinked launcher (e.g. ~/.openclaw/npm/bin/openclaw → <repo>/openclaw.mjs).
-    // path.resolve does NOT follow symlinks, so resolve the real path too and search both — otherwise
-    // scripts/ is looked for next to the launcher symlink instead of in the actual repo checkout.
-    const launchers = new Set<string>([path.resolve(argv1)]);
-    try {
-      launchers.add(fs.realpathSync(argv1));
-    } catch {
-      // argv1 is not a resolvable real path; keep the literal candidate only.
-    }
-    for (const launcher of launchers) {
-      candidates.add(path.resolve(path.dirname(launcher), ".."));
-      candidates.add(path.resolve(path.dirname(launcher)));
-    }
+  // Locate the openclaw package root via the shared resolver. It already follows a symlinked
+  // launcher (npm/pnpm global bin → repo checkout) through realpath and handles node_modules/.bin
+  // and version-manager links, so scripts/ is found in the real checkout instead of next to the
+  // launcher symlink. Duplicating that discovery here would drift from the canonical resolver.
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: options.cwd ?? process.cwd(),
+    argv1: options.argv1 ?? process.argv[1],
+  });
+  if (!packageRoot) {
+    return null;
   }
-
-  for (const root of candidates) {
-    const scriptPath = path.join(root, scriptRel);
-    if (fs.existsSync(scriptPath)) {
-      return { scriptPath, cwd: root };
-    }
+  const scriptPath = path.join(packageRoot, scriptRel);
+  if (!fs.existsSync(scriptPath)) {
+    return null;
   }
-
-  return null;
+  return { scriptPath, cwd: packageRoot };
 }
 
 async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
