@@ -169,72 +169,28 @@ describe("applyEditsToNormalizedContent", () => {
   });
 
   it("fuzzy match with length-neutral NFKC (mixed expansion + composition)", () => {
-    // ClawSweeper regression: ﬁ (U+FB01) expands to "fi" (+1 char),
-    // e+U+0301 composes to é (-1 char). Total length stays 6 but X
-    // shifts from original offset 2 to normalized offset 3.
-    //                           ^ ﬁ(1) (2) (3) e+acute(5) = 5 code units
-    // NFKC:                   "fi X é"  = 5 code units
-    // But wait — both are length 5 actually. The critical case is when
-    // total char count is equal but internal positions shift.
-    // ﬁ(1 char) + " " (1) + "X" (1) + " " (1) + é(1 char, 2 code units e+0301)
-    // = 5 chars original, but é is 2 code units = 6 code units total
-    // NFKC: fi(2) + " "(1) + X(1) + " "(1) + é(1 char, but é is precomposed = 1)
-    // = 5 code units. Not equal length.
-    // Use a case where length IS equal but positions shift:
-    // U+FB01 (ﬁ, 1 code unit) → "fi" (2 code units) = +1
-    // U+FB01 (ﬁ, 1 code unit) → "fi" (2 code units) = +1  (but we need -2)
-    // Actually use: ﬁ(1) + X(1) + ﬁ(1) = 3 code units → fi(2) + X(1) + fi(2) = 5
-    // Not equal. The real ClawSweeper example works with codepoints via Array.from:
-    // "ﬁ X é" where é is precomposed (1 codepoint, 1 code unit) = 5 codepoints/codeunits
-    // NFKC: "fi X é" = 5 codepoints/codeunits
-    // X shifts from codepoint index 1 to 2.
-    // However edit-diff operates on code unit (string index) offsets, not codepoints.
-    // Since Array.from is used in the mapper, the mapping is codepoint-based.
-    // Let me use the exact ClawSweeper example adapted for the tool's behavior.
+    // ﬁ (U+FB01) expands to "fi" under NFKC (+1 codepoint),
+    // e+U+0301 composes to é (-1 codepoint). Total codepoint count is
+    // preserved but internal positions shift.
     //
-    // The key: if we have ﬁ(expands+1) + Y + é(composes -1) on the same line,
-    // total length is preserved but Y's offset shifts.
-    // In code unit terms: U+FB01(1) + Y(1) + e(1)+\u0301(1) = 4 code units
-    // NFKC: fi(2) + Y(1) + é(1) = 4 code units. Y at offset 2 in both.
-    // But codepoint-wise: Array.from gives [ﬁ, Y, e, ́] = 4 codepoints
-    // NFKC segments: [fi, Y, é] = 3 segments, 4 codepoints
-    // Y maps from codepoint 1 → 1 in both. Still no shift in this case.
+    // Original:  [ﬁ][ ][X]['][e+\u0301]  = 5 segments, 6 codepoints
+    // NFKC:      [fi][ ][X]['][é]       = 5 segments, 6 codepoints
+    // X is at codepoint offset 2 in original, 3 in NFKC.
+    // A length-equality-only fast path would incorrectly use offset 2.
+    // The segment mapper correctly handles the shift.
     //
-    // The actual shifting case in code units with Array.from:
-    // ﬁ(1 cu, 1 cp) + space(1) + e(1)+\u0301(1) = 4 codepoints, 4 code units
-    // NFKC: fi(2 cu, 1 cp as segment "fi") but Array.from("fi") = [f,i] = 2 codepoints
-    // Hmm, the mapper works at codepoint level via Array.from segments.
-    // With segment "ﬁ" → NFKC "fi" = 2 codepoints. Segment "e\u0301" → "é" = 1 codepoint.
-    // So: segment [ﬁ] (1 cp) maps to 2 cps in NFKC. [e, ́] (2 cps) maps to [é] (1 cp).
-    // Net: 3 original codepoints → 3 NFKC codepoints. Length equal.
-    // But offsets within shift. If X is after ﬁ (cp index 1), in NFKC it's after "fi" (cp index 2).
-    // This is the real case. Let me construct it:
-    const line = "\uFB01 X e\u0301"; // ﬁ + space + X + space + e+combining-acute
-    // Array.from: [ﬁ, " ", X, " ", e, ́] — wait, \u0301 is a combining mark
-    // Actually the string is: U+FB01 U+0020 U+0058 U+0020 U+0065 U+0301
-    // edit-diff's normalizeForFuzzyMatch does NFKC + smart quotes etc.
-    // NFKC("\uFB01 X e\u0301") = "fi X é" (precomposed é)
-    // Both are 5 code units? Let me verify:
-    // Original: FB01(1) + 20(1) + 58(1) + 20(1) + 65(1) + 0301(1) = 6 code units, 6 codepoints
-    // NFKC:     66(1) + 69(1) + 20(1) + 58(1) + 20(1) + E9(1) = 6 code units, 6 codepoints
-    // But Array.from segments: [FB01][20][58][20][65+0301] = 5 segments, 6 codepoints
-    // NFKC segments: [fi][20][58][20][é] = 5 segments, but fi=2cps, é=1cp
-    // So: orig segments: [1cp][1cp][1cp][1cp][2cp] = 6cps total
-    //      NFKC segments: [2cp][1cp][1cp][1cp][1cp] = 6cps total
-    // X is in segment 2 (0-indexed) in both → offset 2 after segment 0 (ﬁ→fi = 1→2cps)
-    // In orig: after segment 0 (1cp), X at cp 2. In NFKC: after segment 0 (2cps), X at cp 3.
-    // Length check: 6 === 6 → old fast path would incorrectly return offset 2.
-    // New fast path: "fi X é" !== "ﬁ X e\u0301" → runs the mapper correctly.
+    // Use smart quotes (') around X to force the fuzzy-match path while
+    // keeping the match region AFTER the ligature, so ﬁ is unrelated content
+    // that must be preserved.
+    const line = "\uFB01 \u2018X\u2019 e\u0301"; // ﬁ + smart-quotes X + e+combining-acute
 
-    // Fuzzy-match using the NFKC-normalized form (fi) which differs from original (ﬁ).
-    // This forces the normalized-to-original offset mapper to run.
     const result = applyEditsToNormalizedContent(
       normalizeToLF(line),
-      [{ oldText: "fi X", newText: "FI Y" }],
+      [{ oldText: "'X'", newText: "'Y'" }],
       "test.ts",
     );
     // After mapping the NFKC match back to original offsets, ﬁ and e+acute must be preserved.
-    expect(result.newContent).toBe("\uFB01 Y e\u0301");
+    expect(result.newContent).toBe("\uFB01 \u2018Y\u2019 e\u0301");
   });
 
   it("baseContent is always the original content", () => {
