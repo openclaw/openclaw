@@ -107,13 +107,19 @@ function resolveSqliteMarkerSessionKey(
   if (explicitSessionKey) {
     return explicitSessionKey;
   }
-  const matchingEntry = listSessionEntries({
+  const entries = listSessionEntries({
     agentId: marker.agentId,
     storePath: marker.storePath,
-  }).find(({ entry }) => {
+  });
+  const exactEntry = entries.find(({ entry }) => {
     return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
   });
-  return matchingEntry?.sessionKey;
+  const sessionEntry =
+    exactEntry ??
+    entries.find(({ entry }) => {
+      return entry.sessionId === marker.sessionId;
+    });
+  return sessionEntry?.sessionKey;
 }
 
 function parseSqliteSessionFileMarker(
