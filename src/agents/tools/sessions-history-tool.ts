@@ -19,7 +19,13 @@ import {
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNumberParam,
+  readPositiveIntegerParam,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -32,12 +38,24 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: optionalPositiveIntegerSchema(),
+  offset: Type.Optional(Type.Integer({ minimum: 0 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 type GatewayCaller = typeof callGateway;
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNumberParam(params, "offset", {
+    integer: true,
+    nonNegativeInteger: true,
+  });
+  if (params.offset !== undefined && offset === undefined) {
+    throw new ToolInputError("offset must be a non-negative integer");
+  }
+  return offset;
+}
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
@@ -254,10 +272,21 @@ export function createSessionsHistoryTool(opts?: {
       }
 
       const limit = readPositiveIntegerParam(params, "limit");
+      const offset = readOffsetParam(params);
       const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{ messages: Array<unknown> }>({
+      const result = await gatewayCall<{
+        messages: Array<unknown>;
+        offset?: number;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      }>({
         method: "chat.history",
-        params: { sessionKey: resolvedKey, limit },
+        params: {
+          sessionKey: resolvedKey,
+          limit,
+          ...(offset !== undefined ? { offset } : {}),
+        },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
@@ -282,6 +311,16 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        ...(typeof result?.offset === "number"
+          ? { offset: result.offset }
+          : offset !== undefined
+            ? { offset }
+            : {}),
+        ...(typeof result?.nextOffset === "number" ? { nextOffset: result.nextOffset } : {}),
+        ...(typeof result?.hasMore === "boolean" ? { hasMore: result.hasMore } : {}),
+        ...(typeof result?.totalMessages === "number"
+          ? { totalMessages: result.totalMessages }
+          : {}),
       });
     },
   };

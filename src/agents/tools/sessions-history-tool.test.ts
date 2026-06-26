@@ -96,4 +96,65 @@ describe("sessions_history redaction", () => {
       "limit must be a positive integer",
     );
   });
+
+  it.each([-1, 1.5])("rejects invalid offset value %s", async (offset) => {
+    const tool = createHistoryToolWithMessage("hello");
+
+    await expect(tool.execute("call-1", { sessionKey: "main", offset })).rejects.toThrow(
+      "offset must be a non-negative integer",
+    );
+  });
+
+  it("preserves the bounded default history request", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [{ role: "assistant", content: "latest" }] } as T;
+      },
+    });
+
+    const result = await tool.execute("call-1", { sessionKey: "main", limit: 2 });
+
+    expect(requests[0]).toMatchObject({
+      method: "chat.history",
+      params: { sessionKey: "main", limit: 2 },
+    });
+    expect((requests[0].params as Record<string, unknown>).offset).toBeUndefined();
+    expect((result.details as Record<string, unknown>).offset).toBeUndefined();
+  });
+
+  it("requests explicit offset pages and returns continuation metadata", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return {
+          messages: [
+            { role: "user", content: "newer" },
+            { role: "assistant", content: "latest" },
+          ],
+          offset: 0,
+          nextOffset: 2,
+          hasMore: true,
+          totalMessages: 4,
+        } as T;
+      },
+    });
+
+    const result = await tool.execute("call-1", { sessionKey: "main", limit: 2, offset: 0 });
+
+    expect(requests[0]).toMatchObject({
+      method: "chat.history",
+      params: { sessionKey: "main", limit: 2, offset: 0 },
+    });
+    expect(result.details).toMatchObject({
+      offset: 0,
+      nextOffset: 2,
+      hasMore: true,
+      totalMessages: 4,
+    });
+  });
 });
