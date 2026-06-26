@@ -417,6 +417,7 @@ export function createWriteToolDefinition(
                   text: `No changes made to ${path}. File content is identical.`,
                 },
               ],
+              details: undefined,
             };
           }
           await ops.mkdir(dir);

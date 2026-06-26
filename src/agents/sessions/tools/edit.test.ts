@@ -191,7 +191,8 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("No changes made");
+    const textContent = result.content[0];
+    expect("text" in textContent ? textContent.text : "").toContain("No changes made");
     // File must not be rewritten
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
@@ -209,7 +210,8 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("Successfully replaced");
+    const textContent = result.content[0];
+    expect("text" in textContent ? textContent.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
 });

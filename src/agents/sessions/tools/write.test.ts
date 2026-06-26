@@ -134,8 +134,9 @@ describe("write tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("No changes made");
-    expect(result.content[0].text).toContain("identical");
+    const textContent = result.content[0];
+    expect("text" in textContent ? textContent.text : "").toContain("No changes made");
+    expect("text" in textContent ? textContent.text : "").toContain("identical");
     // File content must not change
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("hello\n");
   });
@@ -151,7 +152,8 @@ describe("write tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("Successfully wrote");
+    const textContent = result.content[0];
+    expect("text" in textContent ? textContent.text : "").toContain("Successfully wrote");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new\n");
   });
 });

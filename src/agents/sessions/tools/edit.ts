@@ -487,6 +487,7 @@ export function createEditToolDefinition(
                   text: `No changes made to ${path}. The replacement produced identical content.`,
                 },
               ],
+              details: undefined,
             };
           }
           throw normalizedError;
