@@ -253,6 +253,59 @@ function coverageFailureForRow(row: QaToolCoverageRow): string | undefined {
   return undefined;
 }
 
+function summarizeQaToolCoverageRows(rows: QaToolCoverageRow[], evaluated: boolean) {
+  const summary = {
+    requiredTools: 0,
+    reportOnlyTools: 0,
+    trackedTools: 0,
+    nativeWorkspaceTools: 0,
+    dynamicIntegrationTools: 0,
+    searchableDynamicTools: 0,
+    optionalTools: 0,
+    passingTools: 0,
+    failures: [] as string[],
+  };
+
+  for (const row of rows) {
+    if (row.required) {
+      summary.requiredTools += 1;
+    }
+    if (!row.required || Boolean(row.tracking)) {
+      summary.reportOnlyTools += 1;
+    }
+    if (row.tracking) {
+      summary.trackedTools += 1;
+    }
+    if (row.bucket === "codex-native-workspace") {
+      summary.nativeWorkspaceTools += 1;
+    } else if (row.bucket === "openclaw-dynamic-integration") {
+      summary.dynamicIntegrationTools += 1;
+    } else if (row.bucket === "optional-profile-or-plugin") {
+      summary.optionalTools += 1;
+    }
+    if (row.capabilityLayer === "openclaw-dynamic-searchable") {
+      summary.searchableDynamicTools += 1;
+    }
+
+    const failure = evaluated ? coverageFailureForRow(row) : undefined;
+    if (failure) {
+      summary.failures.push(failure);
+    }
+    if (
+      evaluated &&
+      row.required &&
+      !row.tracking &&
+      row.openclaw === "pass" &&
+      row.codex === "pass" &&
+      (isPassingToolCoverageDrift(row.drift, true) || !failure)
+    ) {
+      summary.passingTools += 1;
+    }
+  }
+
+  return summary;
+}
+
 export function buildQaToolCoverageReport(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   summary?: QaToolCoverageSuiteSummary;
@@ -267,38 +320,24 @@ export function buildQaToolCoverageReport(params: {
     }),
   );
   const evaluated = Boolean(params.summary);
-  const failures = evaluated
-    ? rows.map(coverageFailureForRow).filter((failure): failure is string => Boolean(failure))
-    : [];
+  const summary = summarizeQaToolCoverageRows(rows, evaluated);
   return {
     runtimePair: normalizeRuntimePair(params.runtimePair ?? params.summary?.run?.runtimePair),
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
-    requiredTools: rows.filter((row) => row.required).length,
-    reportOnlyTools: rows.filter((row) => !row.required || Boolean(row.tracking)).length,
-    trackedTools: rows.filter((row) => Boolean(row.tracking)).length,
-    nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
-    dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
-      .length,
-    searchableDynamicTools: rows.filter(
-      (row) => row.capabilityLayer === "openclaw-dynamic-searchable",
-    ).length,
-    optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
-    passingTools: evaluated
-      ? rows.filter(
-          (row) =>
-            row.required &&
-            !row.tracking &&
-            row.openclaw === "pass" &&
-            row.codex === "pass" &&
-            (isPassingToolCoverageDrift(row.drift, true) || !coverageFailureForRow(row)),
-        ).length
-      : 0,
-    failingTools: failures.length,
+    requiredTools: summary.requiredTools,
+    reportOnlyTools: summary.reportOnlyTools,
+    trackedTools: summary.trackedTools,
+    nativeWorkspaceTools: summary.nativeWorkspaceTools,
+    dynamicIntegrationTools: summary.dynamicIntegrationTools,
+    searchableDynamicTools: summary.searchableDynamicTools,
+    optionalTools: summary.optionalTools,
+    passingTools: summary.passingTools,
+    failingTools: summary.failures.length,
     rows,
-    pass: failures.length === 0,
-    failures,
+    pass: summary.failures.length === 0,
+    failures: summary.failures,
   };
 }
 
