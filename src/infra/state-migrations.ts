@@ -53,6 +53,7 @@ import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
+  isValidAgentId,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -3007,9 +3008,16 @@ function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
   );
 }
 
-function hasCanonicalAgentSessionOwner(key: string): boolean {
+function resolveCanonicalAgentSessionOwner(key: string): string | undefined {
   const parsed = parseAgentSessionKey(key);
-  return parsed !== null && normalizeAgentId(parsed.agentId) === parsed.agentId;
+  if (
+    parsed === null ||
+    !isValidAgentId(parsed.agentId) ||
+    normalizeAgentId(parsed.agentId) !== parsed.agentId
+  ) {
+    return undefined;
+  }
+  return parsed.agentId;
 }
 
 function canonicalizeSessionKeyForAgent(params: {
@@ -3050,7 +3058,7 @@ function canonicalizeSessionKeyForAgent(params: {
   // Keep it untouched instead of assigning another agent's history by iteration order.
   if (
     params.preserveAmbiguousKeys &&
-    (!hasCanonicalAgentSessionOwner(raw) || legacyDefaultMainAlias)
+    (!resolveCanonicalAgentSessionOwner(raw) || legacyDefaultMainAlias)
   ) {
     return params.key;
   }
@@ -3285,7 +3293,7 @@ function isAmbiguousSharedStoreKey(key: string, mainKey: string, scope?: Session
   ) {
     return false;
   }
-  return !hasCanonicalAgentSessionOwner(raw) || isLegacyDefaultMainAliasKey(lower, mainKey);
+  return !resolveCanonicalAgentSessionOwner(raw) || isLegacyDefaultMainAliasKey(lower, mainKey);
 }
 
 function aliasedSessionStoreMigrationWarning(params: {
@@ -5246,7 +5254,6 @@ async function migrateLegacyAcpSessionMetadata(params: {
   const now = params.now ?? (() => Date.now());
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
-  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
   const pluginAgentIds =
     params.pluginSessionStoreAgentIds ??
     listPluginDoctorSessionStoreAgentIds({
@@ -5271,19 +5278,27 @@ async function migrateLegacyAcpSessionMetadata(params: {
   const pluginTargets = declaredTargets.filter(
     ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
   );
-  // The generic target resolver deduplicates identical configured paths. Add
-  // every declared owner back before grouping so ownership is not discarded.
-  for (const declaredTarget of declaredTargets) {
-    if (
-      !targets.some(
-        (target) =>
-          target.agentId === declaredTarget.agentId &&
-          target.storePath === declaredTarget.storePath,
-      )
-    ) {
-      targets.push(declaredTarget);
-    }
-  }
+  const configuredAgents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const configuredAgentIds = new Set(
+    configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
+  );
+  const discoveryCfg = [...declaredAgentIds].some((agentId) => !configuredAgentIds.has(agentId))
+    ? ({
+        ...params.cfg,
+        agents: {
+          ...params.cfg.agents,
+          list: [
+            ...configuredAgents,
+            ...[...declaredAgentIds]
+              .filter((agentId) => !configuredAgentIds.has(agentId))
+              .map((id) => ({ id })),
+          ],
+        },
+      } as OpenClawConfig)
+    : params.cfg;
+  // Reuse the validated resolver for every declared owner. Owner multiplicity
+  // is restored below as metadata without re-adding rejected raw paths.
+  const targets = resolveAllAgentSessionStoreTargetsSync(discoveryCfg, { env });
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const fixedCustomStorePath =
@@ -5317,7 +5332,14 @@ async function migrateLegacyAcpSessionMetadata(params: {
     }
     storeGroups.push({
       target,
-      agentIds: new Set([normalizeAgentId(target.agentId)]),
+      agentIds: new Set([
+        normalizeAgentId(target.agentId),
+        ...declaredTargets
+          .filter((declaredTarget) =>
+            sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
+          )
+          .map((declaredTarget) => declaredTarget.agentId),
+      ]),
       hasDistinctAliases: false,
     });
   }
@@ -5379,9 +5401,10 @@ async function migrateLegacyAcpSessionMetadata(params: {
           normalized[sessionKey] = normalizedEntry;
           continue;
         }
+        const rowAgentId = resolveCanonicalAgentSessionOwner(sessionKey) ?? target.agentId;
         const canonicalSessionKey = canonicalizeSessionKeyForAgent({
           key: sessionKey,
-          agentId: target.agentId,
+          agentId: rowAgentId,
           mainKey,
           scope,
           skipCrossAgentRemap: true,

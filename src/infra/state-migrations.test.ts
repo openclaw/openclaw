@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -785,6 +786,18 @@ describe("state migrations", () => {
             lastActivityAt: 10,
           },
         },
+        "agent:_bad:opaque": {
+          sessionId: "invalid-owner",
+          updatedAt: 5,
+          acp: {
+            backend: "test",
+            agent: "voice",
+            runtimeSessionName: "invalid-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 5,
+          },
+        },
       }),
       "utf8",
     );
@@ -808,6 +821,8 @@ describe("state migrations", () => {
       "malformed-owner",
     );
     expect(store["agent:voice::matrix:channel:!room:example.org"]?.acp).toBeDefined();
+    expect(store["agent:_bad:opaque"]?.sessionId).toBe("invalid-owner");
+    expect(store["agent:_bad:opaque"]?.acp).toBeDefined();
     expect(store["agent:main:voice:15550001111"]).toBeUndefined();
     expect(store["agent:voice:voice:15550001111"]).toBeUndefined();
     expect(store["agent:main:agent:voice::matrix:channel:!room:example.org"]).toBeUndefined();
@@ -815,10 +830,111 @@ describe("state migrations", () => {
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
     const acpWarningPrefix =
-      "Preserved ACP metadata for 2 ambiguous session key(s) in potentially shared store ";
+      "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
       2,
     );
+  });
+
+  it("does not process ACP stores rejected by target validation", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const outsideStorePath = path.join(root, "outside-sessions.json");
+    await fs.writeFile(
+      outsideStorePath,
+      JSON.stringify({
+        "agent:main:opaque": {
+          sessionId: "outside-session",
+          updatedAt: 10,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "outside-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 10,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.symlink(outsideStorePath, storePath);
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
+    const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
+      string,
+      { acp?: unknown }
+    >;
+    expect(outsideStore["agent:main:opaque"]?.acp).toBeDefined();
+    expect(result.changes).not.toContain(
+      "Migrated 1 ACP session metadata row → shared SQLite state",
+    );
+  });
+
+  it("canonicalizes imported ACP aliases with their session row owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const storeTemplate = path.join(
+      stateDir,
+      "agents",
+      "{agentId}",
+      "..",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, "{}\n", "utf8");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "agent:voice:main": {
+          sessionId: "voice-main",
+          updatedAt: 10,
+          acp: {
+            backend: "test",
+            agent: "voice",
+            runtimeSessionName: "voice-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 10,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "desk", store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
+    } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: "agent:voice:desk",
+        entry: { sessionId: "voice-main" },
+        env,
+      })?.runtimeSessionName,
+    ).toBe("voice-runtime");
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: "agent:voice:main",
+        entry: { sessionId: "voice-main" },
+        env,
+      }),
+    ).toBeUndefined();
+    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
