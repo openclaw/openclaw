@@ -112,7 +112,12 @@ export function buildMSTeamsAttachmentPlaceholder(
   if (list.length === 0) {
     return "";
   }
-  const imageCount = list.filter(isLikelyImageAttachment).length;
+  let imageCount = 0;
+  for (const attachment of list) {
+    if (isLikelyImageAttachment(attachment)) {
+      imageCount += 1;
+    }
+  }
   const inlineCount = extractInlineImageCandidates(list, limits).length;
   const totalImages = imageCount + inlineCount;
   if (totalImages > 0) {

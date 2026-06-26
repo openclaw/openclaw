@@ -144,6 +144,13 @@ const ATTACHMENT_PLACEHOLDER_CASES = [
     attachments: createHtmlImageAttachments([TEST_URL_HTML_A, TEST_URL_HTML_B]),
     expected: formatImagePlaceholder(2),
   }),
+  withLabel("combines attachment images and inline html images", {
+    attachments: [
+      ...createImageAttachments(TEST_URL_IMAGE_PNG),
+      ...createHtmlImageAttachments([TEST_URL_HTML_A, TEST_URL_HTML_B]),
+    ],
+    expected: formatImagePlaceholder(3),
+  }),
 ];
 
 const GRAPH_URL_EXPECTATION_CASES = [
