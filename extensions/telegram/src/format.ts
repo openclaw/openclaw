@@ -1170,6 +1170,23 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
 }
 
+function countOpenTelegramRichTagScopes(tags: TelegramHtmlTag[]): {
+  blockCount: number;
+  mediaCount: number;
+} {
+  let blockCount = 0;
+  let mediaCount = 0;
+  for (const tag of tags) {
+    if (tag.richBlock) {
+      blockCount += 1;
+    }
+    if (tag.richMedia) {
+      mediaCount += 1;
+    }
+  }
+  return { blockCount, mediaCount };
+}
+
 function isTelegramRichBlockHtmlTag(rawTag: string, tagName: string): boolean {
   return (
     TELEGRAM_RICH_BLOCK_HTML_TAGS.has(tagName) ||
@@ -1295,8 +1312,9 @@ export function splitTelegramHtmlChunks(
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
-    currentBlockCount = openTags.filter((tag) => tag.richBlock).length;
-    currentMediaCount = openTags.filter((tag) => tag.richMedia).length;
+    const openRichScopes = countOpenTelegramRichTagScopes(openTags);
+    currentBlockCount = openRichScopes.blockCount;
+    currentMediaCount = openRichScopes.mediaCount;
     chunkHasPayload = false;
   };
 
