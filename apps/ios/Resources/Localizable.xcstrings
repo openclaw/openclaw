@@ -1,0 +1,118 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Agent" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Agent" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "एजेंट" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Агент" } }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "रद्द करें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Отмена" } }
+      }
+    },
+    "Chat" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Chat" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "चैट" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Чат" } }
+      }
+    },
+    "Close" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Close" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "बंद करें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Закрыть" } }
+      }
+    },
+    "Connect" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "कनेक्ट करें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Подключить" } }
+      }
+    },
+    "Connect to a Gateway?" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect to a Gateway?" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "गेटवे से कनेक्ट करें?" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Подключиться к шлюзу?" } }
+      }
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connecting…" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "कनेक्ट हो रहा है…" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Подключение…" } }
+      }
+    },
+    "Control" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Control" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "कंट्रोल" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Управление" } }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Done" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "पूर्ण" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Готово" } }
+      }
+    },
+    "Not now" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not now" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "अभी नहीं" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Не сейчас" } }
+      }
+    },
+    "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled." } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "अभी कोई गेटवे नहीं मिला। सुनिश्चित करें कि आपका गेटवे चल रहा है और Bonjour खोज सक्षम है।" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Шлюзы пока не найдены. Убедитесь, что шлюз запущен и обнаружение Bonjour включено." } }
+      }
+    },
+    "Quick Setup" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quick Setup" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "त्वरित सेटअप" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Быстрая настройка" } }
+      }
+    },
+    "Settings" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "सेटिंग्स" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Настройки" } }
+      }
+    },
+    "Trust and connect" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Trust and connect" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "भरोसा करें और कनेक्ट करें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Доверять и подключиться" } }
+      }
+    },
+    "Trust this gateway?" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Trust this gateway?" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "इस गेटवे पर भरोसा करें?" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Доверять этому шлюзу?" } }
+      }
+    },
+    "Writing" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Writing" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "लिख रहा है" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Пишет" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}
