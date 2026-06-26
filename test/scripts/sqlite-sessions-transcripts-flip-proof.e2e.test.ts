@@ -17,6 +17,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
+      "after-concurrent-multi-client",
       "after-sessions-reset",
       "after-transcript-append",
       "after-sessions-delete",
@@ -71,6 +72,24 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           ),
       ),
     ).toBe(true);
+    const concurrentCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-concurrent-multi-client",
+    );
+    expect(concurrentCheckpoint).toBeDefined();
+    const concurrentSend = concurrentCheckpoint?.sqlite.trackedEntries.find(
+      (entry) => entry.sessionKey === report.concurrentSendSessionKey,
+    );
+    expect(concurrentSend?.transcriptEvents).toBeGreaterThanOrEqual(2);
+    expect(
+      concurrentCheckpoint?.sqlite.trackedEntries.some(
+        (entry) => entry.sessionKey === report.concurrentResetSessionKey && entry.sessionId,
+      ),
+    ).toBe(true);
+    expect(
+      concurrentCheckpoint?.sqlite.trackedEntries.some(
+        (entry) => entry.sessionKey === report.concurrentDeleteSessionKey,
+      ),
+    ).toBe(false);
     expect(
       report.checkpoints.some(
         (checkpoint) =>

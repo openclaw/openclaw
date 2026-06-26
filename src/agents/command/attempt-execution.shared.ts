@@ -38,6 +38,10 @@ export async function persistSessionEntry(
   const persisted = await patchSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
+      if (!context.existingEntry && params.sessionStore[params.sessionKey]) {
+        rejectedMissingEntry = true;
+        return null;
+      }
       if (params.shouldPersist && !params.shouldPersist(context.existingEntry)) {
         rejectedMissingEntry = !context.existingEntry;
         return null;
