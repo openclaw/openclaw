@@ -25,7 +25,7 @@ openclaw gateway restart
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
-openclaw workboard move <id> --status <status> [--json]
+openclaw workboard move <id> --status <status> [--token <claim-token>]
 openclaw workboard dispatch [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 

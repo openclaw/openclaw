@@ -173,7 +173,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
-      const scope = options.token ? { ownerId: "cli", token: options.token } : undefined;
+      const scope = options.token ? { ownerId: "cli", token: options.token } : { ownerId: "cli" };
       const updated = await params.store.move(card.id, options.status, undefined, scope);
       if (options.json) {
         writeJson({ card: redactClaimToken(updated) });

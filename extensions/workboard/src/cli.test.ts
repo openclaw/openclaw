@@ -258,6 +258,25 @@ describe("registerWorkboardCli", () => {
     expect(moved.status).toBe("running");
   });
 
+  it("rejects CLI move of claimed card without matching token", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed CLI", status: "todo" });
+    await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    // CLI without token should fail - scope { ownerId: "cli" } doesn't match claim
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "running"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/card is claimed by agent-a/);
+    // CLI with correct token should succeed
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "done", "--token", "tok-a"], {
+        from: "user",
+      }),
+    ).resolves.toBeUndefined();
+    expect(await store.get(card.id)).toMatchObject({ status: "done" });
+  });
+
   it("uses canonical WORKBOARD_STATUSES in move command validation", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Status check", status: "todo" });
