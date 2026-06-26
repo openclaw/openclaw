@@ -282,9 +282,7 @@ describe("runQaCharacterEval", () => {
     });
 
     expect(path.dirname(result.outputDir)).toBe(path.join(tempRoot, ".artifacts", "qa-e2e"));
-    expect(path.basename(result.outputDir)).toMatch(
-      /^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u,
-    );
+    expect(path.basename(result.outputDir)).toMatch(/^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u);
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
   });
 
@@ -696,6 +694,7 @@ describe("runQaCharacterEval", () => {
   });
 
   it("keeps failed model runs in the report for grader context", async () => {
+    const progress = vi.fn();
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
       if (params.primaryModel === "codex-cli/test-model") {
         throw new Error("backend unavailable");
@@ -717,13 +716,38 @@ describe("runQaCharacterEval", () => {
       outputDir: path.join(tempRoot, "character"),
       models: ["openai/gpt-5.5", "codex-cli/test-model"],
       judgeModels: ["openai/gpt-5.5"],
+      progress,
       runSuite,
       runJudge,
     });
 
     expect(result.runs.map((run) => run.status)).toEqual(["pass", "fail"]);
     expect(result.runs[1]?.error).toContain("backend unavailable");
+    expect(progress.mock.calls.map(([line]) => line)).toEqual(
+      expect.arrayContaining([expect.stringContaining("candidates done pass=1 fail=1")]),
+    );
     const report = await fs.readFile(result.reportPath, "utf8");
     expect(report).toContain("backend unavailable");
+  });
+
+  it("reports failed judge summaries when a judge returns no rankings", async () => {
+    const progress = vi.fn();
+    const runSuite = makeRunSuite();
+    const runJudge = vi.fn(async () => JSON.stringify({ rankings: [] }));
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.5"],
+      judgeModels: ["openai/gpt-5.5", "codex-cli/judge"],
+      progress,
+      runSuite,
+      runJudge,
+    });
+
+    expect(result.judgments.map((judgment) => judgment.rankings)).toEqual([[], []]);
+    expect(progress.mock.calls.map(([line]) => line)).toEqual(
+      expect.arrayContaining([expect.stringContaining("judges done ranked=0 failed=2")]),
+    );
   });
 });

@@ -606,7 +606,12 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       return run;
     }
   });
-  const failedCandidateCount = runs.filter((run) => run.status === "fail").length;
+  let failedCandidateCount = 0;
+  for (const run of runs) {
+    if (run.status === "fail") {
+      failedCandidateCount += 1;
+    }
+  }
   logCharacterEvalProgress(
     params.progress,
     `candidates done pass=${runs.length - failedCandidateCount} fail=${failedCandidateCount} duration=${formatDuration(Date.now() - candidatesStartedAt)}`,
@@ -687,7 +692,12 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       return judgment;
     },
   );
-  const failedJudgeCount = judgments.filter((judgment) => judgment.rankings.length === 0).length;
+  let failedJudgeCount = 0;
+  for (const judgment of judgments) {
+    if (judgment.rankings.length === 0) {
+      failedJudgeCount += 1;
+    }
+  }
   logCharacterEvalProgress(
     params.progress,
     `judges done ranked=${judgments.length - failedJudgeCount} failed=${failedJudgeCount} duration=${formatDuration(Date.now() - judgesStartedAt)}`,
