@@ -1,0 +1,34 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Logout" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Logout" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "लॉग आउट" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Выйти" } }
+      }
+    },
+    "Refresh" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Refresh" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "रिफ्रेश करें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Обновить" } }
+      }
+    },
+    "Run now" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Run now" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "अभी चलाएँ" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Запустить сейчас" } }
+      }
+    },
+    "Save" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Save" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "सहेजें" } },
+        "ru" : { "stringUnit" : { "state" : "translated", "value" : "Сохранить" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

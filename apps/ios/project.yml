@@ -60,6 +60,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - target: OpenClawShareExtension
         embed: true

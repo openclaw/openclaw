@@ -63,6 +63,7 @@ let package = Package(
             resources: [
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/DeviceModels"),
+                .process("Resources/Localizable.xcstrings"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
