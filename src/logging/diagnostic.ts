@@ -500,14 +500,16 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
-  ageMs: number;
+  activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
-    params.ageMs >= params.stuckSessionAbortMs
+    typeof lastProgressAgeMs === "number" &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
   );
 }
 
@@ -565,7 +567,6 @@ function isOrphanedActiveWorkRecoveryEligible(params: {
 function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
-  ageMs: number;
   stuckSessionAbortMs: number;
 }): boolean {
   return (
@@ -1036,7 +1037,6 @@ export function logSessionAttention(
     isActiveAbortRecoveryEligible({
       classification,
       activity,
-      ageMs: params.ageMs,
       stuckSessionAbortMs,
     });
   // The warning backoff throttles repeated log lines/events only. It must never
@@ -1340,7 +1340,6 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
-            ageMs: attentionAgeMs,
             stuckSessionAbortMs,
           })
         ) {

@@ -63,7 +63,6 @@ export const ar: TranslationMap = {
     docs: "المستندات",
     theme: "السمة",
     colorMode: "وضع اللون",
-    colorModeOption: "وضع اللون: {mode}",
     resources: "الموارد",
     search: "بحث",
     save: "حفظ",

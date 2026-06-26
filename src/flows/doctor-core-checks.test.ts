@@ -13,14 +13,29 @@ import {
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
+  detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
+  extraGatewayServiceToHealthFinding: vi.fn(
+    (service: { label: string }): HealthFinding => ({
+      checkId: "core/doctor/gateway-services/extra",
+      severity: "warning",
+      message: service.label,
+    }),
+  ),
+  extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
+  extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
+  extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
@@ -113,7 +128,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
 
     await check.detect({
-      mode: "lint",
+      mode: "lint" as const,
       runtime,
       cfg,
     });
@@ -128,6 +143,10 @@ describe("CORE_HEALTH_CHECKS", () => {
   beforeEach(() => {
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.detectExtraGatewayServiceIssues.mockClear();
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
+    mocks.extraGatewayServiceToHealthFinding.mockClear();
+    mocks.extraGatewayServiceToRepairEffects.mockClear();
     tmp = undefined;
   });
 
@@ -143,6 +162,73 @@ describe("CORE_HEALTH_CHECKS", () => {
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("threads deep mode into structured extra gateway service detection", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "custom-gateway.service",
+      },
+    ]);
+
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: {},
+      deep: true,
+    };
+
+    await check.detect(ctx);
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(mocks.extraGatewayServiceToHealthFinding).toHaveBeenCalledWith(
+      {
+        label: "custom-gateway.service",
+      },
+      0,
+      [{ label: "custom-gateway.service" }],
+    );
+  });
+
+  it("threads deep mode into structured extra gateway service repair previews", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/gateway-services/extra",
+    );
+    mocks.detectExtraGatewayServiceIssues.mockResolvedValueOnce([
+      {
+        label: "legacy-gateway.service",
+      },
+    ]);
+    mocks.extraGatewayServiceToRepairEffects.mockReturnValueOnce([
+      {
+        kind: "service",
+        action: "would-remove-legacy-gateway-service",
+        target: "legacy-gateway.service",
+        dryRunSafe: false,
+      },
+    ]);
+
+    const ctx = {
+      mode: "fix" as const,
+      runtime,
+      cfg: {},
+      deep: true,
+      dryRun: true,
+    };
+
+    const result = await check.repair?.(ctx, []);
+
+    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(result?.effects).toContainEqual(
+      expect.objectContaining({
+        target: "legacy-gateway.service",
+      }),
+    );
   });
 
   it("converts unavailable skills into repair-capable health findings", async () => {
@@ -659,6 +745,30 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
+      }),
+    );
+  });
+
+  it("registers stale session locks as a legacy-owned structured check", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
+
+    if (typeof check.repair !== "function") {
+      throw new Error("expected session lock check repair");
+    }
+    await expect(
+      check.repair(
+        {
+          mode: "fix",
+          runtime,
+          cfg: {},
+          cwd: "/tmp/openclaw-test-workspace",
+        },
+        [],
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "skipped",
+        reason: "legacy doctor session lock contribution owns cleanup",
       }),
     );
   });

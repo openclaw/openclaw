@@ -5269,6 +5269,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-1",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -5689,6 +5690,7 @@ describe("dispatchReplyFromConfig", () => {
       CommandBody: "hello",
       RawBody: "hello",
       Body: "hello",
+      AccountId: "default",
       MessageSid: "wa-msg-1",
       SessionKey: "agent:main:whatsapp:+15555550123",
       SuppressMessageReceivedHooks: true,
@@ -7038,6 +7040,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-dup",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -7063,6 +7066,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-dup-trace",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);

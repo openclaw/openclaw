@@ -3,8 +3,10 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
 import type {
   PluginHookAgentContext,
+  PluginHookChannelContext,
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
 
@@ -25,15 +27,16 @@ export type AgentHarnessHookContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
-  channel?: string;
-  chatId?: string;
-  senderId?: string;
   trigger?: string;
   channelId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
   config?: OpenClawConfig;
+  senderId?: string;
+  chatId?: string;
+  channel?: string;
+  channelContext?: PluginHookChannelContext;
 };
 
 /** Builds the sparse hook context object passed to agent harness plugin hooks. */
@@ -50,8 +53,6 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.modelId ? { modelId: params.modelId } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
-    ...(params.chatId ? { chatId: params.chatId } : {}),
-    ...(params.senderId ? { senderId: params.senderId } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
@@ -59,5 +60,11 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+    }),
   };
 }

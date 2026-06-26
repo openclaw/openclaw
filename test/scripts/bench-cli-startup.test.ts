@@ -1,7 +1,8 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -52,6 +53,60 @@ describe("bench-cli-startup", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("--output requires a value");
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects duplicate benchmark cases before running benchmarks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-cli-startup.ts",
+        "--case",
+        "version",
+        "--case",
+        "version",
+      ],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('Duplicate --case "version"');
+    expect(result.stderr).not.toContain("Node.js");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("rejects duplicate single-value controls before running benchmarks", () => {
+    expect(() =>
+      testing.validateCliArgs(["--output", "one.json", "--output", "two.json"]),
+    ).toThrow("--output was provided more than once");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-cli-startup.ts",
+        "--output",
+        "one.json",
+        "--output",
+        "two.json",
+      ],
+      {
+        cwd: join(__dirname, "../.."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--output was provided more than once");
     expect(result.stderr).not.toContain("Node.js");
     expect(result.stderr).not.toContain("\n    at ");
   });
@@ -185,6 +240,12 @@ describe("bench-cli-startup", () => {
     } finally {
       tempDirs.cleanup();
     }
+  });
+
+  it("passes generated import hook paths as file URL specifiers", () => {
+    const hookPath = resolve("measure-rss.mjs");
+
+    expect(testing.nodeImportSpecifierForPath(hookPath)).toBe(pathToFileURL(hookPath).href);
   });
 
   it("fails reports with no measured samples", () => {

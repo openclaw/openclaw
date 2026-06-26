@@ -10,6 +10,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
@@ -39,15 +40,9 @@ afterEach(async () => {
 });
 
 function setEnvForTest(name: string, value: string) {
-  const previous = process.env[name];
-  process.env[name] = value;
-  cleanupEnv.push(() => {
-    if (previous === undefined) {
-      delete process.env[name];
-      return;
-    }
-    process.env[name] = previous;
-  });
+  const envSnapshot = captureEnv([name]);
+  setTestEnvValue(name, value);
+  cleanupEnv.push(() => envSnapshot.restore());
 }
 
 function setGatewayAuthNoneForTest() {

@@ -14,7 +14,46 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const checkOnly = process.argv.includes("--check");
+function usage() {
+  return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
+
+Reports plugin SDK export surface metadata.
+
+Options:
+  --check     Fail when SDK surface budgets are exceeded.
+  -h, --help  Show this help.
+`;
+}
+
+function parseArgs(argv) {
+  const args = { check: false, help: false };
+  for (const arg of argv) {
+    if (arg === "--check") {
+      args.check = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+      continue;
+    }
+    throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+  }
+  return args;
+}
+
+let cliArgs;
+try {
+  cliArgs = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+if (cliArgs.help) {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+
+const checkOnly = cliArgs.check;
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
@@ -99,7 +138,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "secret-file-runtime": 1,
   "security-runtime": 7,
   "agent-harness": 7,
-  "agent-harness-runtime": 7,
+  "agent-harness-runtime": 11,
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
@@ -162,16 +201,16 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 321),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10329),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5186),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10388),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5214),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3247,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      215,
+      214,
     ),
   };
   publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
