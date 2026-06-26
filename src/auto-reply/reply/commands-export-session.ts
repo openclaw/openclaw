@@ -2,6 +2,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
@@ -30,6 +31,11 @@ interface SessionData {
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
+
+type SessionExportEventWarning = {
+  code: "invalid-session-row";
+  row: number;
+};
 
 type SessionExportWarningSummary = {
   code: "invalid-session-json" | "invalid-session-row";
@@ -154,6 +160,55 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
 
+function isSessionFileEntry(value: unknown): value is SessionFileEntry {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  if (value.type !== "message") {
+    return true;
+  }
+  const message = value.message;
+  return isRecord(message) && typeof message.role === "string";
+}
+
+function filterSessionEntriesWithWarnings(events: unknown[]): {
+  entries: SessionFileEntry[];
+  warnings: SessionExportEventWarning[];
+} {
+  const entries: SessionFileEntry[] = [];
+  const warnings: SessionExportEventWarning[] = [];
+  for (const [index, event] of events.entries()) {
+    if (isSessionFileEntry(event)) {
+      entries.push(event);
+      continue;
+    }
+    warnings.push({ code: "invalid-session-row", row: index + 1 });
+  }
+  return { entries, warnings };
+}
+
+function summarizeSessionExportWarnings(
+  warnings: SessionExportEventWarning[],
+): SessionExportWarningSummary[] {
+  const summaries = new Map<SessionExportEventWarning["code"], SessionExportWarningSummary>();
+  for (const warning of warnings) {
+    const summary = summaries.get(warning.code);
+    if (summary) {
+      summary.count += 1;
+      if (summary.rows.length < 20) {
+        summary.rows.push(warning.row);
+      }
+      continue;
+    }
+    summaries.set(warning.code, {
+      code: warning.code,
+      count: 1,
+      rows: [warning.row],
+    });
+  }
+  return [...summaries.values()];
+}
+
 function formatSkippedRows(count: number): string {
   return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
 }
@@ -186,7 +241,8 @@ async function readSessionDataFromIdentity(params: {
   warnings: SessionExportWarningSummary[];
 }> {
   const events = await loadTranscriptEvents(params);
-  return readSessionDataFromEntries(events as SessionFileEntry[], []);
+  const { entries, warnings } = filterSessionEntriesWithWarnings(events);
+  return readSessionDataFromEntries(entries, summarizeSessionExportWarnings(warnings));
 }
 
 function readSessionDataFromEntries(

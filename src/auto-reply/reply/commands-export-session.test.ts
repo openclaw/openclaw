@@ -550,4 +550,34 @@ describe("buildExportSessionReply", () => {
       storePath: "/tmp/target-store/sessions.json",
     });
   });
+
+  it("skips invalid loaded transcript events before exporting", async () => {
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "valid user" },
+      },
+      {
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { content: "missing role" },
+      },
+      {
+        type: "message",
+        id: "entry-3",
+        timestamp: "2026-05-16T00:00:02.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("📊 Entries: 2");
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 2",
+    );
+  });
 });
