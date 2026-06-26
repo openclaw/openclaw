@@ -5,6 +5,29 @@ import { fileURLToPath } from "node:url";
 
 export type NativeI18nSurface = "android" | "apple";
 
+export const NATIVE_I18N_LOCALES = [
+  "zh-CN",
+  "zh-TW",
+  "pt-BR",
+  "de",
+  "es",
+  "ja-JP",
+  "ko",
+  "fr",
+  "hi",
+  "ar",
+  "it",
+  "tr",
+  "uk",
+  "id",
+  "pl",
+  "th",
+  "vi",
+  "nl",
+  "fa",
+  "ru",
+] as const;
+
 export type NativeI18nEntry = {
   id: string;
   kind: string;
