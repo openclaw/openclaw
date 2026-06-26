@@ -776,22 +776,19 @@ export function ensurePageState(page: Page): PageState {
         return;
       }
       const managedSave = saveUnmanagedDownload(download);
-      const captures = state.actionDownloadCaptures;
-      if (captures.length > 0) {
-        // Push to all active captures so no action loses its
-        // download when concurrent /act calls overlap on the
-        // same page. Each managedSave resolves once (single
-        // file I/O); multiple captures sharing the promise is
-        // safe — extra download info is harmless.
-        for (const capture of captures) {
-          capture.promises.push(managedSave);
-          for (const notify of capture.waiters.splice(0)) {
-            notify();
-          }
-        }
-        return;
-      }
       managedSave.catch(() => {});
+      // Push to all active captures so no action loses its
+      // download when concurrent /act calls overlap on the
+      // same page. Each managedSave resolves once (single
+      // file I/O); multiple captures sharing the promise is
+      // safe — extra download info is harmless.
+      const captures = state.actionDownloadCaptures;
+      for (const capture of captures) {
+        capture.promises.push(managedSave);
+        for (const notify of capture.waiters.splice(0)) {
+          notify();
+        }
+      }
     });
     page.on("close", () => {
       clearArmedDialogResponse(state);
