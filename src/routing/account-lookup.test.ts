@@ -95,6 +95,15 @@ describe("resolveNormalizedAccountEntry", () => {
       expected: undefined,
     },
     {
+      name: "does not resolve invalid raw keys through the default account fallback",
+      accounts: {
+        "constructor ": { id: "blocked" },
+      } as Record<string, { id: string }>,
+      resolve: (accounts: Record<string, { id: string }>) =>
+        resolveNormalizedAccountEntry(accounts, "default", normalizeRoutingAccountId),
+      expected: undefined,
+    },
+    {
       name: "ignores prototype-chain values",
       resolve: () => undefined,
       expected: undefined,
