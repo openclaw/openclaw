@@ -303,13 +303,14 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   if (!registry) {
     return undefined;
   }
-  const loaded = registry.plugins
-    .filter((plugin) => plugin.status === "loaded")
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-  const errors = registry.plugins
-    .filter((plugin) => plugin.status === "error")
-    .map((plugin) => {
+  const loaded: string[] = [];
+  const errors: PluginHealthErrorSummary[] = [];
+  for (const plugin of registry.plugins) {
+    if (plugin.status === "loaded") {
+      loaded.push(plugin.id);
+      continue;
+    }
+    if (plugin.status === "error") {
       const error: PluginHealthErrorSummary = {
         id: plugin.id,
         origin: plugin.origin,
@@ -325,9 +326,11 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
       if (plugin.failurePhase) {
         error.failurePhase = plugin.failurePhase;
       }
-      return error;
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+      errors.push(error);
+    }
+  }
+  loaded.sort((left, right) => left.localeCompare(right));
+  errors.sort((left, right) => left.id.localeCompare(right.id));
   if (loaded.length === 0 && errors.length === 0) {
     return undefined;
   }
