@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
@@ -11,9 +12,9 @@ const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
 
 function restoreProcessState() {
   if (originalStateDirEnv === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
   } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDirEnv;
+    setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDirEnv);
   }
 }
 
@@ -33,7 +34,7 @@ describe("resolveCurrentTurnImages", () => {
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
       await fs.mkdir(cwd, { recursive: true });
       await fs.writeFile(attachmentPath, imageBytes);
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
       const result = await resolveCurrentTurnImages({

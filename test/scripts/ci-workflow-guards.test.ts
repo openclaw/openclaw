@@ -224,6 +224,18 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
+    const source = readCriticalQualityWorkflow();
+    const workflow = parse(source);
+    const blacksmithJobs = Object.entries(workflow.jobs)
+      .filter(([, job]) => job && typeof job === "object")
+      .filter(([, job]) => (job as Record<string, unknown>)["runs-on"] !== "ubuntu-24.04")
+      .map(([name]) => name);
+
+    expect(blacksmithJobs).toEqual([]);
+    expect(source).not.toContain("blacksmith-");
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -386,7 +398,7 @@ describe("ci workflow guards", () => {
   it("bounds platform checkout fetches without GNU timeout", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
@@ -583,6 +595,7 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "ios-build",
       "android",
     ]);
     expect(timingJob.if).toContain("always()");
@@ -651,6 +664,7 @@ describe("ci workflow guards", () => {
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
       (step) => step.name === "Validate QA profile input",
@@ -669,7 +683,7 @@ describe("ci workflow guards", () => {
       // Keep the caller's ref while the callee verifies it against expected_sha.
       ref: "${{ inputs.ref }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "release",
+      qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
@@ -700,6 +714,8 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Validate QA evidence manifest",
     );
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
+    expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
@@ -782,13 +798,55 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
+    const preflightStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Build CI manifest",
+    );
+    const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
+      profiles: Array<{ id: string; categoryIds: string[] }>;
+    };
+    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
+    if (!smokeProfile) {
+      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
+    }
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    const uploadStep = fastCoreJob.steps.find(
+      (step) => step.name === "Upload QA smoke profile evidence",
+    );
 
+    const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(preflightStep.run).not.toContain("qa-smoke-profile");
+    expect(preflightStep.run).not.toContain("qa_category");
+    expect(smokeProfile.categoryIds).toHaveLength(30);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+    }
+    expect(runStep.run).toContain("bundled-protocol)");
+    expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(ciWorkflowText).toContain(
+      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
+    );
+    expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain("--concurrency 8");
+    expect(runStep.run).not.toContain("--category");
+    expect(runStep.run).not.toContain("--allow-failures");
+    expect(runStep.run).toContain("qa_exit_code=0");
+    expect(runStep.run).toContain('exit "$qa_exit_code"');
+    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).not.toContain("OPENAI_API_KEY");
+    expect(runStep.run).toMatch(
+      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
+    );
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
+    expect(uploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+      "if-no-files-found": "warn",
+    });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

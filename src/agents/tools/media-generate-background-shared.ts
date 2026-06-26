@@ -34,6 +34,7 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
+import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-generation-task-status-shared.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -447,7 +448,7 @@ export function scheduleMediaGenerationTaskCompletion<
     try {
       params.lifecycle.recordTaskProgress({
         handle: params.handle,
-        progressSummary: "Generated media; delivering completion",
+        progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
       });
     } catch (error) {
       params.onWakeFailure(`${params.toolName} completion progress update failed`, {

@@ -13,6 +13,7 @@ type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
   failurePrompt?: unknown;
   promptSnippet?: unknown;
   failurePromptSnippet?: unknown;
+  happyPathOutputRequired?: unknown;
   ensureImageGeneration?: unknown;
   expectedAvailable?: unknown;
   toolCoverage?: unknown;
@@ -627,6 +628,7 @@ export async function runRuntimeToolFixture(
     config.failurePromptSnippet,
     `failure target=${toolName}`,
   );
+  const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
   const requestCountBefore = env.mock
     ? readQaRuntimeToolFixtureRequests(await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`))
         .length
@@ -650,16 +652,22 @@ export async function runRuntimeToolFixture(
       toolName,
     });
     if (!happyRequest.outputRequest) {
-      if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return formatKnownHarnessGapDetails(toolName, config);
+      const happyPlannedOnly = happyRequest.plannedRequest && !happyPathOutputRequired;
+      if (happyPlannedOnly) {
+        // Async runtime tools prove the start call here; completion is covered
+        // by their task lifecycle scenarios.
+      } else {
+        if (isKnownHarnessGap(config.knownHarnessGap)) {
+          return formatKnownHarnessGapDetails(toolName, config);
+        }
+        throw new Error(
+          happyRequest.plannedRequest
+            ? `expected live happy-path tool output for ${toolName}`
+            : `expected live happy-path tool call for ${toolName}`,
+        );
       }
-      throw new Error(
-        happyRequest.plannedRequest
-          ? `expected live happy-path tool output for ${toolName}`
-          : `expected live happy-path tool call for ${toolName}`,
-      );
     }
-    if (happyRequest.outputRequest.structuredFailure) {
+    if (happyRequest.outputRequest?.structuredFailure) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
         return formatKnownHarnessGapDetails(toolName, config);
       }
@@ -688,8 +696,13 @@ export async function runRuntimeToolFixture(
     }
     return [
       `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,
+      happyPathOutputRequired
+        ? undefined
+        : `${toolName} live provider happy direct output not required for this async fixture`,
       `${toolName} live provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest?.args ?? {})}`,
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const requests = readQaRuntimeToolFixtureRequests(
@@ -709,7 +722,10 @@ export async function runRuntimeToolFixture(
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
-  if (!happyRequest) {
+  // Async runtime tools prove the start call here; completion is covered by
+  // their task lifecycle scenarios.
+  const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
+  if (!happyRequest && !happyPlannedOnly) {
     if (dynamicExposureIntentionallyExcluded) {
       return formatCodexNativeWorkspaceDetails({
         toolName,
@@ -727,7 +743,7 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
-  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+  if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
@@ -776,13 +792,18 @@ export async function runRuntimeToolFixture(
       toolName,
       tools,
       reason: metadata.reason,
-      happyRequest: happyRequest.plannedRequest,
+      happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
       failureRequest: failureRequest.plannedRequest,
     });
   }
 
   return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
+    happyPathOutputRequired
+      ? undefined
+      : `${toolName} mock provider happy direct output not required for this async fixture`,
     `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
