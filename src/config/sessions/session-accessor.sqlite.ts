@@ -438,8 +438,8 @@ export async function resetSqliteSessionEntryLifecycle(
         ? archiveSqliteSessionStateAfterEntryRemoval({
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             database,
+            entry: current.entry,
             reason: "reset",
-            sessionId: current.entry.sessionId,
           })
         : [];
     }, toDatabaseOptions(resolved));
@@ -471,8 +471,8 @@ export async function deleteSqliteSessionEntryLifecycle(
         ? archiveSqliteSessionStateAfterEntryRemoval({
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             database,
+            entry: current.entry,
             reason: "deleted",
-            sessionId: current.entry.sessionId,
           })
         : [];
       result = {
@@ -1611,7 +1611,9 @@ function applySqliteSessionEntryMaintenance(
   const removedSessionIds = new Set<string>();
   const rememberRemovedEntry = (removed: { key: string; entry: SessionEntry }) => {
     removedKeys.add(removed.key);
-    removedSessionIds.add(removed.entry.sessionId);
+    for (const sessionId of collectSqliteSessionStateIdsForEntry(removed.entry)) {
+      removedSessionIds.add(sessionId);
+    }
   };
   const preserveKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
   pruneStaleEntries(store, maintenance.pruneAfterMs, {
@@ -1712,9 +1714,20 @@ function readReferencedSqliteSessionIds(database: OpenClawAgentDatabase): Set<st
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_entries").select("session_id"),
+    db.selectFrom("session_entries").select(["entry_json", "session_id"]),
   ).rows;
-  return new Set(rows.map((row) => row.session_id));
+  const sessionIds = new Set<string>();
+  for (const row of rows) {
+    sessionIds.add(row.session_id);
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
+      continue;
+    }
+    for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
+      sessionIds.add(sessionId);
+    }
+  }
+  return sessionIds;
 }
 
 function readSqliteTranscriptArchiveLines(
@@ -1848,18 +1861,44 @@ function archiveSqliteTranscriptRows(params: {
 function archiveSqliteSessionStateAfterEntryRemoval(params: {
   archiveDirectory: string;
   database: OpenClawAgentDatabase;
+  entry: SessionEntry;
   reason: "deleted" | "reset";
-  sessionId: string;
 }): SessionLifecycleArchivedTranscript[] {
   const referencedSessionIds = readReferencedSqliteSessionIds(params.database);
-  const archived = deleteSqliteSessionStateIfUnreferenced({
-    archiveDirectory: params.archiveDirectory,
-    database: params.database,
-    reason: params.reason,
-    referencedSessionIds,
-    sessionId: params.sessionId,
-  });
-  return archived ? [archived] : [];
+  const archived: SessionLifecycleArchivedTranscript[] = [];
+  for (const sessionId of collectSqliteSessionStateIdsForEntry(params.entry)) {
+    const transcript = deleteSqliteSessionStateIfUnreferenced({
+      archiveDirectory: params.archiveDirectory,
+      database: params.database,
+      reason: params.reason,
+      referencedSessionIds,
+      sessionId,
+    });
+    if (transcript) {
+      archived.push(transcript);
+    }
+  }
+  return archived;
+}
+
+function collectSqliteSessionStateIdsForEntry(entry: SessionEntry): string[] {
+  const sessionIds: string[] = [];
+  const add = (sessionId: string | undefined) => {
+    const normalized = sessionId?.trim();
+    if (normalized) {
+      sessionIds.push(normalized);
+    }
+  };
+  add(entry.sessionId);
+  for (const sessionId of entry.usageFamilySessionIds ?? []) {
+    add(sessionId);
+  }
+  for (const checkpoint of entry.compactionCheckpoints ?? []) {
+    add(checkpoint.sessionId);
+    add(checkpoint.preCompaction.sessionId);
+    add(checkpoint.postCompaction.sessionId);
+  }
+  return uniqueStrings(sessionIds);
 }
 
 function emitArchivedSqliteTranscriptUpdates(
@@ -1994,7 +2033,12 @@ function cleanupSqliteSessionLifecycleArtifactsInTransaction(
       database.db,
       db.deleteFrom("session_entries").where("session_key", "=", row.session_key),
     );
-    removedSessionIds.add(row.session_id);
+    const entry = parseSessionEntryRow(row);
+    for (const sessionId of entry
+      ? collectSqliteSessionStateIdsForEntry(entry)
+      : [row.session_id]) {
+      removedSessionIds.add(sessionId);
+    }
     removedEntries += 1;
   }
 
