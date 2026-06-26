@@ -979,7 +979,7 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
   });
 
-  it("does not retry DM topic sends without the topic id when the topic is missing", async () => {
+  it("logs DM topic context when the topic is missing", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
@@ -996,9 +996,12 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("sendMessage threadId=42 threadScope=dm failed"),
+    );
   });
 
-  it("does not retry forum sends without message_thread_id", async () => {
+  it("logs forum topic context when the topic is missing", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockRejectedValue(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
@@ -1014,6 +1017,9 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("sendMessage threadId=42 threadScope=forum failed"),
+    );
   });
 
   it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
