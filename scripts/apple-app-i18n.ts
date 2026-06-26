@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -8,6 +9,7 @@ const CATALOGS = [
   path.join(ROOT, "apps", "ios", "Resources", "Localizable.xcstrings"),
   path.join(ROOT, "apps", "macos", "Sources", "OpenClaw", "Resources", "Localizable.xcstrings"),
 ];
+const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 
 type Catalog = {
   sourceLanguage?: string;
@@ -27,7 +29,7 @@ export async function checkAppleAppI18n() {
       throw new Error(`invalid Apple string catalog: ${path.relative(ROOT, catalogPath)}`);
     }
     for (const [key, entry] of Object.entries(catalog.strings)) {
-      for (const locale of ["en", "ru", "hi"]) {
+      for (const locale of REQUIRED_LOCALES) {
         const value = entry.localizations?.[locale]?.stringUnit?.value?.trim();
         if (!value) {
           throw new Error(
@@ -39,7 +41,7 @@ export async function checkAppleAppI18n() {
     }
   }
   process.stdout.write(
-    `apple-app-i18n: catalogs=${CATALOGS.length} keys=${checked} locales=ru,hi\n`,
+    `apple-app-i18n: catalogs=${CATALOGS.length} keys=${checked} locales=${NATIVE_I18N_LOCALES.join(",")}\n`,
   );
 }
 
