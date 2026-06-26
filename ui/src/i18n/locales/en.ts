@@ -1381,6 +1381,8 @@ export const en: TranslationMap = {
       sessionSearch: "Search sessions",
       clearSessionSearch: "Clear session search",
       loadMoreSessions: "Load more sessions",
+      renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

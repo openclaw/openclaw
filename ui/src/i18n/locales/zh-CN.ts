@@ -1354,6 +1354,8 @@ export const zh_CN: TranslationMap = {
       sessionSearch: "搜索会话",
       clearSessionSearch: "清除会话搜索",
       loadMoreSessions: "加载更多会话",
+      renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
     },

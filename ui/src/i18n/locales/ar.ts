@@ -1375,6 +1375,8 @@ export const ar: TranslationMap = {
       sessionSearch: "البحث في الجلسات",
       clearSessionSearch: "مسح البحث في الجلسات",
       loadMoreSessions: "تحميل المزيد من الجلسات",
+      renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
