@@ -81,14 +81,31 @@ const providerHttpMocks = vi.hoisted(() => ({
   readProviderJsonResponseMock: vi.fn(
     async (response: Response, label: string, opts?: { maxBytes?: number }) => {
       const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
-      const text =
-        typeof response.json === "function"
-          ? JSON.stringify(await response.json())
-          : await response.text();
-      if (text.length > maxBytes) {
-        throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let totalBytes = 0;
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        chunks.push(value);
+        if (totalBytes >= maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
       }
-      return JSON.parse(text);
+      const full = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        full.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        return JSON.parse(decoder.decode(full));
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
     },
   ),
 }));
