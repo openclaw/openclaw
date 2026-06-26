@@ -9,6 +9,7 @@ import {
   patchSessionEntryWithKey,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import {
   mergeSessionEntry,
   type AcpSessionRuntimeOptions,
@@ -481,6 +482,41 @@ function sessionStoreUpdateOptions(params: {
   };
 }
 
+async function clearLegacyEmbeddedAcpMetadata(params: {
+  storePath: string;
+  sessionKeys: Iterable<string | null | undefined>;
+}): Promise<void> {
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => sessionKey?.trim()).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  if (sessionKeys.size === 0) {
+    return;
+  }
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      let changed = false;
+      for (const sessionKey of sessionKeys) {
+        const entry = store[sessionKey];
+        if (!entry?.acp) {
+          continue;
+        }
+        const next = { ...entry };
+        delete next.acp;
+        store[sessionKey] = next;
+        changed = true;
+      }
+      return changed;
+    },
+    {
+      skipMaintenance: true,
+      skipSaveWhenResult: (changed) => !changed,
+    },
+  );
+}
+
 export async function upsertAcpSessionMeta(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
@@ -561,6 +597,10 @@ export async function upsertAcpSessionMeta(params: {
       },
       { env: params.env, path: params.databasePath },
     );
+    await clearLegacyEmbeddedAcpMetadata({
+      storePath: storeEntry.storePath,
+      sessionKeys: [storageSessionKey, patched?.sessionKey],
+    });
     return patched?.entry ?? null;
   }
   const persisted = await patchSessionEntryWithKey(
@@ -581,6 +621,10 @@ export async function upsertAcpSessionMeta(params: {
   if (!persisted) {
     return null;
   }
+  await clearLegacyEmbeddedAcpMetadata({
+    storePath: storeEntry.storePath,
+    sessionKeys: [storageSessionKey, persisted.sessionKey],
+  });
   runOpenClawStateWriteTransaction(
     (database) => {
       upsertAcpSessionMetaRow(
