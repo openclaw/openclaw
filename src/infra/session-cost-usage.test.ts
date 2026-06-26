@@ -334,24 +334,17 @@ describe("session cost usage", () => {
 
     // Configure a known non-zero pricing for DeepSeek — $0.14/M input, $0.28/M output
     // (representative of deepseek-chat at the time of the bug report).
-    const config = {
-      models: {
-        providers: {
-          deepseek: {
-            models: [
-              {
-                id: "deepseek-chat",
-                cost: { input: 0.00000014, output: 0.00000028, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
     clearGatewayModelPricingCacheState();
+    setGatewayModelPricingForTest([
+      {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        pricing: { input: 0.00000014, output: 0.00000028, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({ days: 30 });
       expect(summary.totals.totalTokens).toBe(1500);
       // The API returned 0 but pricing is known, so the cost must be estimated:
       // 1000 * 0.00000014 + 500 * 0.00000028 = 0.00014 + 0.00014 = 0.00028
