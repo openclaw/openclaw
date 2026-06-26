@@ -721,18 +721,20 @@ export async function runPreparedReply(
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const inboundUserContext = buildInboundUserContextPrefix(
-    isNewSession
-      ? {
-          ...sessionCtx,
-          ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
-            ? { InboundHistory: undefined, ThreadStarterBody: undefined }
-            : {}),
-        }
-      : { ...sessionCtx, ThreadStarterBody: undefined },
-    envelopeOptions,
-    { sourceReplyDeliveryMode },
-  );
+  const inboundUserContext = isHeartbeat
+    ? ""
+    : buildInboundUserContextPrefix(
+        isNewSession
+          ? {
+              ...sessionCtx,
+              ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
+                ? { InboundHistory: undefined, ThreadStarterBody: undefined }
+                : {}),
+            }
+          : { ...sessionCtx, ThreadStarterBody: undefined },
+        envelopeOptions,
+        { sourceReplyDeliveryMode },
+      );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||

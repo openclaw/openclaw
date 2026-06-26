@@ -2359,6 +2359,8 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "heartbeat",
           Surface: "heartbeat",
           ChatType: "direct",
+          OriginatingChannel: "qqbot",
+          OriginatingTo: "c2c:683F2ADDE4414658153CECAC0F93EDDE",
         },
         sessionCtx: {
           Body: heartbeatPrompt,
@@ -2366,13 +2368,20 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "heartbeat",
           Surface: "heartbeat",
           ChatType: "direct",
+          OriginatingChannel: "qqbot",
+          OriginatingTo: "c2c:683F2ADDE4414658153CECAC0F93EDDE",
         },
       }),
     );
 
     const call = requireLastRunReplyAgentCall();
+    expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
     expect(call?.commandBody).toContain(heartbeatPrompt);
+    expect(call?.commandBody).not.toContain("Conversation info (untrusted metadata):");
+    expect(call?.commandBody).not.toContain("c2c:683F2ADDE4414658153CECAC0F93EDDE");
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+    expect(call?.followupRun.prompt).not.toContain("Conversation info (untrusted metadata):");
+    expect(call?.followupRun.prompt).not.toContain("c2c:683F2ADDE4414658153CECAC0F93EDDE");
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
   });
