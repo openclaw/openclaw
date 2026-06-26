@@ -1707,17 +1707,18 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
+    const sessionEffectsSource = resolveInternalSessionEffectsSource({
+      agentId: sessionAgentId,
+      sessionId,
+      sessionFile,
+      storePath,
+    });
     const attemptSessionFile = suppressVisibleSessionEffects
       ? await prepareInternalSessionEffectsTranscript({
-          sessionFile: resolveInternalSessionEffectsSource({
-            agentId: sessionAgentId,
-            sessionId,
-            sessionFile,
-            storePath,
-          }),
+          sessionFile: sessionEffectsSource,
           runId,
         })
-      : sessionFile;
+      : (sessionEffectsSource ?? sessionFile);
 
     const startedAt = Date.now();
     const attemptLifecycleState: AgentAttemptLifecycleState = {
