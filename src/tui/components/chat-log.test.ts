@@ -105,6 +105,20 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(3);
   });
 
+  it("clears replay marker after a non-matching live final so later same-text finals are not hidden", () => {
+    const chatLog = new ChatLog(40);
+
+    // History replay: no runId.
+    chatLog.finalizeAssistant("Hello from Telegram");
+    // First live final: different text, does not match the history row.
+    chatLog.finalizeAssistant("Different reply", "run-alpha");
+    // Second live final: same text as original history, but the replay
+    // marker was already cleared by the preceding mismatch.
+    chatLog.finalizeAssistant("Hello from Telegram", "run-beta");
+
+    expect(chatLog.children.length).toBe(3);
+  });
+
   it("allows sequential live finals with different runIds", () => {
     const chatLog = new ChatLog(40);
 
