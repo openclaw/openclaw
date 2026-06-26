@@ -339,7 +339,7 @@ describe("session cost usage", () => {
       {
         provider: "deepseek",
         model: "deepseek-chat",
-        pricing: { input: 0.00000014, output: 0.00000028, cacheRead: 0, cacheWrite: 0 },
+        pricing: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
       },
     ]);
 
