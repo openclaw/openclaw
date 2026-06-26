@@ -29,6 +29,7 @@ import type {
 import type {
   ContextEngine,
   ContextEngineInfo,
+  ContextEngineSessionTarget,
   AssembleResult,
   CompactResult,
   ContextEngineMaintenanceResult,
@@ -160,7 +161,8 @@ class MockContextEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -236,7 +238,8 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
   async compact(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -305,7 +308,8 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -367,7 +371,8 @@ class LegacyAssembleStrictEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -458,7 +463,8 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
   async compact(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: unknown;
   }): Promise<CompactResult> {
     this.compactCalls.push({ ...params });
@@ -524,7 +530,8 @@ class LegacyRuntimeThenAssembleStrictEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
   }): Promise<CompactResult> {
     return { ok: true, compacted: false };
   }
@@ -559,7 +566,8 @@ describe("Engine contract tests", () => {
 
     await engine.compact({
       sessionId: "s1",
-      sessionFile: "/tmp/session.json",
+      sessionKey: "agent:main:s1",
+      sessionTarget: { agentId: "main", sessionId: "s1", sessionKey: "agent:main:s1" },
       runtimeContext: {
         workspaceDir: "/tmp/workspace",
         currentTokenCount: 277403,
@@ -572,9 +580,16 @@ describe("Engine contract tests", () => {
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
     const compactRuntimeSpy = installCompactRuntimeSpy();
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "s2",
+      sessionKey: "agent:main:s2",
+      storePath: "/tmp/openclaw-agent.sqlite",
+    };
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
-      sessionFile: "/tmp/session.json",
+      sessionKey: "agent:main:s2",
+      sessionTarget,
       tokenBudget: 4096,
       runtimeContext: {
         workspaceDir: "/tmp/workspace",
@@ -585,7 +600,9 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
     const compactRuntimeParams = requireCompactRuntimeParams(0);
     expect(compactRuntimeParams.sessionId).toBe("s2");
-    expect(compactRuntimeParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactRuntimeParams.sessionKey).toBe("agent:main:s2");
+    expect(compactRuntimeParams.sessionTarget).toEqual(sessionTarget);
+    expect(compactRuntimeParams).not.toHaveProperty("sessionFile");
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
@@ -608,7 +625,7 @@ describe("Engine contract tests", () => {
     const controller = new AbortController();
     await delegateCompactionToRuntime({
       sessionId: "s-abort",
-      sessionFile: "/tmp/session-abort.json",
+      sessionKey: "agent:main:s-abort",
       tokenBudget: 4096,
       abortSignal: controller.signal,
     });
@@ -621,7 +638,7 @@ describe("Engine contract tests", () => {
     installCompactRuntimeSpy();
     await delegateCompactionToRuntime({
       sessionId: "s-no-abort",
-      sessionFile: "/tmp/session-no-abort.json",
+      sessionKey: "agent:main:s-no-abort",
       tokenBudget: 4096,
     });
 
@@ -792,7 +809,6 @@ describe("Legacy sessionKey compatibility", () => {
     const compacted = await engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:test",
-      sessionFile: "/tmp/session.json",
     });
 
     expect(firstAssembled.estimatedTokens).toBe(7);
@@ -1386,7 +1402,7 @@ describe("Invalid engine fallback", () => {
     await expect(
       engine.compact({
         sessionId: "s1",
-        sessionFile: "/tmp/session.json",
+        sessionKey: "agent:main:s1",
       }),
     ).rejects.toThrow("plugin compaction failed");
 
@@ -1452,7 +1468,7 @@ describe("Invalid engine fallback", () => {
     await expect(
       engine.compact({
         sessionId: "s1",
-        sessionFile: "/tmp/session.json",
+        sessionKey: "agent:main:s1",
         abortSignal: controller.signal,
       }),
     ).rejects.toThrow("compaction aborted");
@@ -1752,7 +1768,6 @@ describe("assemble() prompt forwarding", () => {
     await compact.engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:test",
-      sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
     });
 

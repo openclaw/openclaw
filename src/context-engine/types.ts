@@ -137,8 +137,6 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
-    /** Session file after compaction, when the runtime rotated transcripts. */
-    sessionFile?: string;
   };
 };
 
@@ -269,6 +267,19 @@ export type ContextEngineTranscriptStorageInfo = {
   kind: "sqlite";
 };
 
+export type ContextEngineSessionTarget = {
+  /** Agent that owns the session in the runtime store. */
+  agentId?: string;
+  /** Runtime session id to compact. */
+  sessionId?: string;
+  /** Stable session key used for aliases, policy, and store resolution. */
+  sessionKey?: string;
+  /** Session store path that scopes the SQLite-backed runtime session. */
+  storePath?: string;
+  /** Optional transport thread identity for session target resolution. */
+  threadId?: string | number;
+};
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -287,6 +298,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   promptCache?: ContextEnginePromptCacheInfo;
   /** Authoritative transcript backend for this turn. */
   transcriptStorage?: ContextEngineTranscriptStorageInfo;
+  /** Storage-neutral runtime session target for compaction delegation. */
+  sessionTarget?: ContextEngineSessionTarget;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *
@@ -417,7 +430,10 @@ export interface ContextEngine {
   compact(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    /** Caller-resolved owner agent for global session aliases. */
+    agentId?: string;
+    /** Storage-neutral runtime session target for delegated compaction. */
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;
