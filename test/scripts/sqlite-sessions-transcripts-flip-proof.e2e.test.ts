@@ -17,6 +17,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
+      "after-plugin-sdk-consumer",
       "after-concurrent-multi-client",
       "after-sessions-reset",
       "after-transcript-append",
@@ -69,6 +70,27 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.sqlite.trackedEntries.some(
             (entry) =>
               entry.sessionKey === report.fullTurnSessionKey && entry.transcriptEvents >= 2,
+          ),
+      ),
+    ).toBe(true);
+    expect(report.pluginSdkConsumer).toMatchObject({
+      activeJsonlForSessionExists: false,
+      latestAssistantTextBeforeAppend: report.fullTurnAssistantText,
+      latestAssistantTextAfterAppend: "sqlite sdk consumer appended by identity",
+      sessionKey: report.pluginSdkSessionKey,
+    });
+    expect(report.pluginSdkConsumer?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
+    expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
+    expect(report.pluginSdkConsumer?.transcriptEventsAfterAppend).toBeGreaterThan(
+      report.pluginSdkConsumer?.transcriptEventsBeforeAppend ?? 0,
+    );
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-plugin-sdk-consumer" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === report.pluginSdkSessionKey && entry.transcriptEvents >= 3,
           ),
       ),
     ).toBe(true);

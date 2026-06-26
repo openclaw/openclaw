@@ -18,6 +18,17 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import {
+  getSessionEntry as getSdkSessionEntry,
+  listSessionEntries as listSdkSessionEntries,
+  loadTranscriptEventsSync as loadSdkTranscriptEventsSync,
+} from "../../src/plugin-sdk/session-store-runtime.js";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readLatestAssistantTextByIdentity,
+  readSessionTranscriptEvents,
+  resolveSessionTranscriptIdentity,
+} from "../../src/plugin-sdk/session-transcript-runtime.js";
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
@@ -63,6 +74,21 @@ type ProofCheckpoint = {
   sqlite: SqliteEvidence;
 };
 
+type PluginSdkConsumerEvidence = {
+  activeJsonlForSessionExists: boolean;
+  appendedMessageId: string;
+  identityMemoryKey: string;
+  latestAssistantTextBeforeAppend: string;
+  latestAssistantTextAfterAppend: string;
+  listedSessionKeys: string[];
+  sessionFileMarker: string;
+  sessionId: string;
+  sessionKey: string;
+  storeTranscriptEvents: number;
+  transcriptEventsAfterAppend: number;
+  transcriptEventsBeforeAppend: number;
+};
+
 export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
@@ -78,6 +104,8 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   legacySessionId: string;
   mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
+  pluginSdkConsumer?: PluginSdkConsumerEvidence;
+  pluginSdkSessionKey: string;
   resetSessionKey: string;
   sharedSessionKeys: string[];
   stateDir: string;
@@ -98,6 +126,8 @@ type ProofContext = {
   legacySessionId: string;
   mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
+  pluginSdkAppendText: string;
+  pluginSdkSessionKey: string;
   resetSessionKey: string;
   sharedSessionKeys: string[];
   stateDir: string;
@@ -120,6 +150,8 @@ const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
 const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
 const FULL_TURN_SESSION_KEY = "agent:main:dashboard:sqlite-full-turn";
+const PLUGIN_SDK_APPEND_TEXT = "sqlite sdk consumer appended by identity";
+const PLUGIN_SDK_SESSION_KEY = "agent:main:dashboard:sqlite-sdk-consumer";
 const SHARED_SESSION_KEYS = [
   "agent:main:dashboard:sqlite-shared-a",
   "agent:main:dashboard:sqlite-shared-b",
@@ -151,6 +183,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   const failures: string[] = [];
   let gatewayEntrypoint: string[] = [];
   let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
+  let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -261,6 +294,31 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
       await record("after-full-agent-turn");
 
+      const pluginSdkRunId = await sendGatewayUserMessage(
+        restartedClient,
+        context.pluginSdkSessionKey,
+        `Reply with exactly ${context.fullTurnAssistantText}. SDK consumer proof.`,
+      );
+      await waitForAgentRunOk(restartedClient, pluginSdkRunId);
+      const pluginSdkSessionId = await waitForSqliteSessionId(
+        context.agentDbPath,
+        context.pluginSdkSessionKey,
+      );
+      await waitForSqliteMessageContains(
+        context.agentDbPath,
+        pluginSdkSessionId,
+        "assistant",
+        context.fullTurnAssistantText,
+      );
+      pluginSdkConsumer = await runPluginSdkConsumerProbe(context, pluginSdkSessionId);
+      await waitForSqliteMessageContains(
+        context.agentDbPath,
+        pluginSdkSessionId,
+        "assistant",
+        context.pluginSdkAppendText,
+      );
+      await record("after-plugin-sdk-consumer");
+
       await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
       await record("after-concurrent-multi-client");
 
@@ -315,6 +373,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     legacySessionId: context.legacySessionId,
     mockOpenAiRequestLog: context.mockOpenAiRequestLog,
     oldStateSessionKeys: [...context.oldStateSessionKeys],
+    ...(pluginSdkConsumer ? { pluginSdkConsumer } : {}),
+    pluginSdkSessionKey: context.pluginSdkSessionKey,
     resetSessionKey: context.resetSessionKey,
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
@@ -349,6 +409,8 @@ function buildProofContext(stateDir: string): ProofContext {
     legacySessionId: "sqlite-legacy-main",
     mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
+    pluginSdkAppendText: PLUGIN_SDK_APPEND_TEXT,
+    pluginSdkSessionKey: PLUGIN_SDK_SESSION_KEY,
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
     stateDir,
@@ -360,6 +422,7 @@ function buildProofContext(stateDir: string): ProofContext {
       CONCURRENT_RESET_SESSION_KEY,
       CONCURRENT_DELETE_SESSION_KEY,
       FULL_TURN_SESSION_KEY,
+      PLUGIN_SDK_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
       ...OLD_STATE_SESSION_KEYS,
     ],
@@ -690,6 +753,109 @@ async function appendProofMessage(
   if (!result?.appended || !result.messageId) {
     throw new Error(`appendTranscriptMessage failed for ${sessionKey}`);
   }
+}
+
+async function runPluginSdkConsumerProbe(
+  context: ProofContext,
+  sessionId: string,
+): Promise<PluginSdkConsumerEvidence> {
+  const scope = {
+    agentId: context.agentId,
+    sessionId,
+    sessionKey: context.pluginSdkSessionKey,
+    storePath: context.storePath,
+  };
+  const sessionEntry = getSdkSessionEntry({
+    agentId: context.agentId,
+    readConsistency: "latest",
+    sessionKey: context.pluginSdkSessionKey,
+    storePath: context.storePath,
+  });
+  if (sessionEntry?.sessionId !== sessionId) {
+    throw new Error(
+      `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
+    );
+  }
+  const expectedMarker = formatSqliteSessionFileMarker({
+    agentId: context.agentId,
+    sessionId,
+    storePath: context.storePath,
+  });
+  if (sessionEntry.sessionFile !== expectedMarker) {
+    throw new Error(
+      `SDK session store exposed unexpected transcript marker for ${context.pluginSdkSessionKey}: ${String(
+        sessionEntry.sessionFile,
+      )}`,
+    );
+  }
+  if (fsSync.existsSync(sessionEntry.sessionFile)) {
+    throw new Error(`SDK session marker unexpectedly resolves to an active file path`);
+  }
+
+  const listedSessionKeys = listSdkSessionEntries({
+    agentId: context.agentId,
+    storePath: context.storePath,
+  }).map((entry) => entry.sessionKey);
+  if (!listedSessionKeys.includes(context.pluginSdkSessionKey)) {
+    throw new Error(`SDK session list omitted ${context.pluginSdkSessionKey}`);
+  }
+
+  const identity = await resolveSessionTranscriptIdentity(scope);
+  const latestBefore = await readLatestAssistantTextByIdentity(scope);
+  if (latestBefore?.text !== context.fullTurnAssistantText) {
+    throw new Error(
+      `SDK latest assistant read returned ${JSON.stringify(latestBefore)} for ${context.pluginSdkSessionKey}`,
+    );
+  }
+  const transcriptEventsBeforeAppend = (await readSessionTranscriptEvents(scope)).length;
+  const storeTranscriptEvents = loadSdkTranscriptEventsSync(scope).length;
+  const activeJsonlPath = path.join(context.activeSessionsDir, `${sessionId}.jsonl`);
+  const activeJsonlForSessionExists = fsSync.existsSync(activeJsonlPath);
+  if (activeJsonlForSessionExists) {
+    throw new Error(`SDK probe found active JSONL for SQLite session at ${activeJsonlPath}`);
+  }
+
+  const appended = await appendSessionTranscriptMessageByIdentity({
+    ...scope,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: context.pluginSdkAppendText }],
+      timestamp: Date.now(),
+    },
+  });
+  if (!appended?.appended || !appended.messageId) {
+    throw new Error(`SDK transcript append failed for ${context.pluginSdkSessionKey}`);
+  }
+
+  const latestAfter = await readLatestAssistantTextByIdentity(scope);
+  if (latestAfter?.text !== context.pluginSdkAppendText) {
+    throw new Error(
+      `SDK latest assistant after append returned ${JSON.stringify(latestAfter)} for ${
+        context.pluginSdkSessionKey
+      }`,
+    );
+  }
+  const transcriptEventsAfterAppend = (await readSessionTranscriptEvents(scope)).length;
+  if (transcriptEventsAfterAppend <= transcriptEventsBeforeAppend) {
+    throw new Error(
+      `SDK transcript append did not increase event count for ${context.pluginSdkSessionKey}`,
+    );
+  }
+
+  return {
+    activeJsonlForSessionExists,
+    appendedMessageId: appended.messageId,
+    identityMemoryKey: identity.memoryKey,
+    latestAssistantTextBeforeAppend: latestBefore.text,
+    latestAssistantTextAfterAppend: latestAfter.text,
+    listedSessionKeys,
+    sessionFileMarker: sessionEntry.sessionFile,
+    sessionId,
+    sessionKey: context.pluginSdkSessionKey,
+    storeTranscriptEvents,
+    transcriptEventsAfterAppend,
+    transcriptEventsBeforeAppend,
+  };
 }
 
 async function runConcurrentMultiClientLifecycle(
