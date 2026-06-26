@@ -267,7 +267,15 @@ export function aggregateOAuthStatus(
     void exhaustive;
     status = "static";
   }
-  const expirable = oauth
+  // When status was overridden to healthy, only use expiry from non-expired
+  // OAuth profiles so the UI shows the correct remaining time instead of a
+  // stale expired timestamp.  Otherwise use all OAuth profiles.
+  const healthyOAuth =
+    status === "ok" || status === "expiring"
+      ? oauth.filter((p) => p.status !== "expired" && p.status !== "missing")
+      : null;
+  const expirySource = healthyOAuth ?? oauth;
+  const expirable = expirySource
     .map((p) => p.expiresAt)
     .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
