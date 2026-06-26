@@ -12,6 +12,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -319,7 +320,7 @@ async function readJsonResponse<T>(params: {
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
     try {
-      return (await response.json()) as T;
+      return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
     } catch (cause) {
       throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
     }
