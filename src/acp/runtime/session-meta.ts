@@ -364,6 +364,7 @@ function readSessionEntryFromStore(params: {
   clone?: boolean;
 }): {
   cfg: OpenClawConfig;
+  agentId?: string;
   storePath: string;
   storeSessionKey: string;
   entry?: SessionEntry;
