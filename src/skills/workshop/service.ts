@@ -668,9 +668,18 @@ function scanProposalBundle(
       ...scanSource(file.content, file.path),
     ]),
   ];
-  const critical = findings.filter((finding) => finding.severity === "critical").length;
-  const warn = findings.filter((finding) => finding.severity === "warn").length;
-  const info = findings.filter((finding) => finding.severity === "info").length;
+  let critical = 0;
+  let warn = 0;
+  let info = 0;
+  for (const finding of findings) {
+    if (finding.severity === "critical") {
+      critical += 1;
+    } else if (finding.severity === "warn") {
+      warn += 1;
+    } else if (finding.severity === "info") {
+      info += 1;
+    }
+  }
   return {
     state: critical > 0 ? "failed" : "clean",
     scannedAt,
