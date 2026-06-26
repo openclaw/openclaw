@@ -23,6 +23,10 @@ import {
   readCronRunLogEntriesPageAll,
 } from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
+import type {
+  CronListPageOptions,
+  CronListPageResult,
+} from "../../cron/service/list-page-types.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
@@ -32,7 +36,11 @@ import {
   resolveTargetPrefixedChannel,
   validateTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  isSubagentSessionKey,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
@@ -40,7 +48,16 @@ import {
 } from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-type CronJobIdParams = { id?: string; jobId?: string };
+type CronCallerScope = {
+  kind: "agentTool";
+  agentId: string;
+};
+
+type CronCallerScopeParams = {
+  callerScope?: CronCallerScope;
+};
+
+type CronJobIdParams = { id?: string; jobId?: string } & CronCallerScopeParams;
 
 type CronRunsRequestParams = CronJobIdParams & {
   scope?: "job" | "all";
@@ -55,6 +72,13 @@ type CronRunsRequestParams = CronJobIdParams & {
   sortDir?: "asc" | "desc";
 };
 
+type CronListCallerScopeContext = {
+  cron: {
+    getDefaultAgentId(): string | undefined;
+    listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
+  };
+};
+
 function compactCronListJob(job: CronJob) {
   return {
     id: job.id,
@@ -63,6 +87,160 @@ function compactCronListJob(job: CronJob) {
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+  };
+}
+
+function readCronCallerScope(params: unknown): CronCallerScope | undefined {
+  const callerScope = (params as { callerScope?: unknown } | null)?.callerScope;
+  if (!callerScope || typeof callerScope !== "object") {
+    return undefined;
+  }
+  const raw = callerScope as { kind?: unknown; agentId?: unknown };
+  if (raw.kind !== "agentTool" || typeof raw.agentId !== "string") {
+    return undefined;
+  }
+  return { kind: "agentTool", agentId: normalizeAgentId(raw.agentId) };
+}
+
+function resolveCronJobEffectiveAgentId(job: CronJob, defaultAgentId?: string): string {
+  return normalizeAgentId(job.agentId ?? defaultAgentId ?? DEFAULT_AGENT_ID);
+}
+
+function parseAgentIdFromSessionRef(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return parseAgentSessionKey(trimmed)?.agentId;
+}
+
+function parseAgentIdFromCronSessionTarget(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed?.startsWith("session:")) {
+    return undefined;
+  }
+  return parseAgentIdFromSessionRef(trimmed.slice("session:".length));
+}
+
+function cronJobSessionRefsMatchCaller(job: CronJob, callerScope: CronCallerScope): boolean {
+  const sessionAgentId = parseAgentIdFromSessionRef(job.sessionKey);
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
+    return false;
+  }
+  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(job.sessionTarget);
+  return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
+}
+
+function cronJobMatchesCallerScope(params: {
+  job: CronJob;
+  callerScope: CronCallerScope | undefined;
+  defaultAgentId?: string;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  if (
+    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId) !== params.callerScope.agentId
+  ) {
+    return false;
+  }
+  return cronJobSessionRefsMatchCaller(params.job, params.callerScope);
+}
+
+function cronCreateMatchesCallerScope(params: {
+  job: CronJobCreate;
+  callerScope: CronCallerScope | undefined;
+  defaultAgentId?: string;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  const effectiveAgentId = normalizeAgentId(
+    params.job.agentId ?? params.defaultAgentId ?? DEFAULT_AGENT_ID,
+  );
+  if (effectiveAgentId !== params.callerScope.agentId) {
+    return false;
+  }
+  const sessionAgentId = parseAgentIdFromSessionRef(params.job.sessionKey);
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== params.callerScope.agentId) {
+    return false;
+  }
+  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(params.job.sessionTarget);
+  return (
+    !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === params.callerScope.agentId
+  );
+}
+
+function cronPatchSessionRefsMatchCaller(
+  patch: CronJobPatch,
+  callerScope: CronCallerScope | undefined,
+): boolean {
+  if (!callerScope) {
+    return true;
+  }
+  const sessionAgentId =
+    "sessionKey" in patch && typeof patch.sessionKey === "string"
+      ? parseAgentIdFromSessionRef(patch.sessionKey)
+      : undefined;
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
+    return false;
+  }
+  const sessionTargetAgentId =
+    "sessionTarget" in patch && typeof patch.sessionTarget === "string"
+      ? parseAgentIdFromCronSessionTarget(patch.sessionTarget)
+      : undefined;
+  return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
+}
+
+async function listCronPageForCallerScope({
+  callerScope,
+  context,
+  options,
+}: {
+  callerScope: CronCallerScope;
+  context: CronListCallerScopeContext;
+  options: CronListPageOptions;
+}): Promise<CronListPageResult> {
+  const scopedJobs: CronJob[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const sourcePage = await context.cron.listPage({
+      ...options,
+      agentId: callerScope.agentId,
+      limit: 200,
+      offset,
+    });
+
+    scopedJobs.push(
+      ...sourcePage.jobs.filter((job) =>
+        cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId: context.cron.getDefaultAgentId(),
+        }),
+      ),
+    );
+
+    if (!sourcePage.hasMore || sourcePage.nextOffset === null || sourcePage.nextOffset <= offset) {
+      break;
+    }
+    offset = sourcePage.nextOffset;
+  }
+
+  const total = scopedJobs.length;
+  const pageOffset = Math.max(0, Math.min(total, Math.floor(options.offset ?? 0)));
+  const defaultLimit = total === 0 ? 50 : total;
+  const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? defaultLimit)));
+  const jobs = scopedJobs.slice(pageOffset, pageOffset + limit);
+  const nextOffset = pageOffset + jobs.length;
+  return {
+    jobs,
+    total,
+    offset: pageOffset,
+    limit,
+    hasMore: nextOffset < total,
+    nextOffset: nextOffset < total ? nextOffset : null,
   };
 }
 
@@ -374,8 +552,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir?: "asc" | "desc";
       agentId?: string;
       compact?: boolean;
-    };
-    const page = await context.cron.listPage({
+    } & CronCallerScopeParams;
+    const callerScope = readCronCallerScope(p);
+    const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
+    if (callerScope && requestedAgentId && requestedAgentId !== callerScope.agentId) {
+      respondInvalidCronParams(respond, "cron.list", "agentId outside caller scope");
+      return;
+    }
+    const listOptions = {
       includeDisabled: p.includeDisabled,
       limit: p.limit,
       offset: p.offset,
@@ -385,8 +569,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       lastRunStatus: p.lastRunStatus,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
-      agentId: p.agentId,
-    });
+      agentId: callerScope?.agentId ?? p.agentId,
+    };
+    const page = callerScope
+      ? await listCronPageForCallerScope({
+          callerScope,
+          context,
+          options: listOptions,
+        })
+      : await context.cron.listPage(listOptions);
     if (p.compact === true) {
       respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
       return;
@@ -427,8 +618,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondMissingCronJobId(respond, "cron.get");
       return;
     }
+    const callerScope = readCronCallerScope(params);
     const job = await context.cron.readJob(jobId);
-    if (!job) {
+    if (
+      !job ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
       respond(
         false,
         undefined,
@@ -461,7 +660,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!validateCronAddParams(normalized)) {
+    const candidate =
+      normalized && typeof params === "object" && params !== null && "callerScope" in params
+        ? { ...normalized, callerScope: (params as { callerScope?: unknown }).callerScope }
+        : normalized;
+    if (!validateCronAddParams(candidate)) {
       respond(
         false,
         undefined,
@@ -472,8 +675,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const jobCreate = normalized as unknown as CronJobCreate;
+    const callerScope = readCronCallerScope(candidate);
+    const { callerScope: _callerScope, ...jobCreate } = candidate as CronJobCreate &
+      CronCallerScopeParams;
     const cfg = context.getRuntimeConfig();
+    if (
+      !cronCreateMatchesCallerScope({
+        job: jobCreate,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
+      respondInvalidCronParams(respond, "cron.add", "job agentId outside caller scope");
+      return;
+    }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -560,7 +775,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       id?: string;
       jobId?: string;
       patch: Record<string, unknown>;
-    };
+    } & CronCallerScopeParams;
+    const callerScope = readCronCallerScope(p);
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -573,8 +789,23 @@ export const cronHandlers: GatewayRequestHandlers = {
     const patch = p.patch as unknown as CronJobPatch;
     const cfg = context.getRuntimeConfig();
     const currentJob = await context.cron.readJob(jobId);
-    if (!currentJob) {
+    if (
+      !currentJob ||
+      !cronJobMatchesCallerScope({
+        job: currentJob,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
       respondInvalidCronParams(respond, "cron.update", "id not found");
+      return;
+    }
+    if (callerScope && "agentId" in patch) {
+      respondInvalidCronParams(respond, "cron.update", "agentId cannot be changed by caller scope");
+      return;
+    }
+    if (!cronPatchSessionRefsMatchCaller(patch, callerScope)) {
+      respondInvalidCronParams(respond, "cron.update", "session target outside caller scope");
       return;
     }
     if (patch.schedule) {
@@ -644,6 +875,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondMissingCronJobId(respond, "cron.remove");
       return;
     }
+    const callerScope = readCronCallerScope(params);
+    const job = await context.cron.readJob(jobId);
+    if (
+      !job ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: id not found"),
+      );
+      return;
+    }
     const result = await context.cron.remove(jobId);
     if (!result.removed) {
       respond(
@@ -666,9 +914,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as CronJobIdParams & { mode?: "due" | "force" };
+    const callerScope = readCronCallerScope(p);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
       respondMissingCronJobId(respond, "cron.run");
+      return;
+    }
+    const job = await context.cron.readJob(jobId);
+    if (
+      !job ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
+      respondInvalidCronParams(respond, "cron.run", "id not found");
       return;
     }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
@@ -697,6 +958,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as CronRunsRequestParams;
+    const callerScope = readCronCallerScope(p);
     const explicitScope = p.scope;
     const jobId = resolveCronJobId(p);
     const scope: "job" | "all" = explicitScope ?? (jobId ? "job" : "all");
@@ -705,6 +967,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
+      if (callerScope) {
+        respondInvalidCronParams(respond, "cron.runs", "scope all is not allowed by caller scope");
+        return;
+      }
       const jobs = await context.cron.list({ includeDisabled: true });
       const jobNameById = Object.fromEntries(
         jobs
@@ -721,7 +987,19 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     try {
       const jobs = await context.cron.list({ includeDisabled: true });
-      const matchedJob = jobs.find((job) => job.id === jobId);
+      const matchedJob = jobs.find(
+        (job) =>
+          job.id === jobId &&
+          cronJobMatchesCallerScope({
+            job,
+            callerScope,
+            defaultAgentId: context.cron.getDefaultAgentId(),
+          }),
+      );
+      if (callerScope && !matchedJob) {
+        respondInvalidCronParams(respond, "cron.runs", "id not found");
+        return;
+      }
       const jobNameById =
         matchedJob && typeof matchedJob.name === "string"
           ? { [jobId as string]: matchedJob.name }

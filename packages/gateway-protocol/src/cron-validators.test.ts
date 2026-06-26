@@ -26,9 +26,44 @@ const minimalAddParams = {
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
 
+const agentToolCallerScope = {
+  kind: "agentTool",
+  agentId: "ops",
+} as const;
+
 describe("cron protocol validators", () => {
   it("accepts minimal add params", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
+  });
+
+  it("accepts agent tool caller scope on cron admin params", () => {
+    expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(true);
+    expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
+    expect(validateCronAddParams({ ...minimalAddParams, callerScope: agentToolCallerScope })).toBe(
+      true,
+    );
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { enabled: false },
+        callerScope: agentToolCallerScope,
+      }),
+    ).toBe(true);
+    expect(validateCronRemoveParams({ jobId: "job-1", callerScope: agentToolCallerScope })).toBe(
+      true,
+    );
+    expect(validateCronRunParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
+    expect(validateCronRunsParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
+  });
+
+  it("rejects malformed agent tool caller scope", () => {
+    expect(validateCronGetParams({ id: "job-1", callerScope: { kind: "agentTool" } })).toBe(false);
+    expect(
+      validateCronGetParams({ id: "job-1", callerScope: { kind: "operator", agentId: "ops" } }),
+    ).toBe(false);
+    expect(
+      validateCronGetParams({ id: "job-1", callerScope: { kind: "agentTool", agentId: "" } }),
+    ).toBe(false);
   });
 
   it("accepts current and custom session targets", () => {

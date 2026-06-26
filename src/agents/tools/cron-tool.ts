@@ -5,13 +5,14 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
@@ -350,6 +351,11 @@ type CronToolOptions = {
   selfRemoveOnlyJobId?: string;
 };
 
+type CronToolCallerScope = {
+  kind: "agentTool";
+  agentId: string;
+};
+
 export type CronCreatorToolAllowlistEntry =
   | string
   | {
@@ -517,6 +523,7 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
+  callerScope: CronToolCallerScope;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
 }): Promise<void> {
@@ -541,7 +548,10 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
     return;
   }
 
-  const existing = await params.callGateway("cron.get", params.gatewayOpts, { id: params.id });
+  const existing = await params.callGateway("cron.get", params.gatewayOpts, {
+    id: params.id,
+    callerScope: params.callerScope,
+  });
   const existingPayload = isRecord(existing) ? existing.payload : undefined;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
   if (!patchRequestsAgentTurn && existingPayloadKind !== "agentTurn") {
@@ -574,6 +584,66 @@ function truncateText(input: string, maxLen: number) {
 
 function readCronJobIdParam(params: Record<string, unknown>) {
   return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+}
+
+function resolveCronToolCallerScope(
+  opts: CronToolOptions | undefined,
+  cfg: OpenClawConfig,
+): CronToolCallerScope {
+  return {
+    kind: "agentTool",
+    agentId: resolveSessionAgentId({ sessionKey: opts?.agentSessionKey, config: cfg }),
+  };
+}
+
+function readCronToolAgentId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? normalizeAgentId(value) : undefined;
+}
+
+function readAgentIdFromCronToolSessionRef(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim()
+    ? parseAgentSessionKey(value.trim())?.agentId
+    : undefined;
+}
+
+function readAgentIdFromCronToolSessionTarget(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("session:")) {
+    return undefined;
+  }
+  return readAgentIdFromCronToolSessionRef(trimmed.slice("session:".length));
+}
+
+function assertCronToolAgentFieldMatchesScope(params: {
+  value: unknown;
+  field: string;
+  callerScope: CronToolCallerScope;
+}): void {
+  if (params.value === undefined) {
+    return;
+  }
+  const agentId = readCronToolAgentId(params.value);
+  if (agentId && agentId === params.callerScope.agentId) {
+    return;
+  }
+  throw new Error(`${params.field} must match the calling agent`);
+}
+
+function assertCronToolSessionRefsMatchScope(
+  value: Record<string, unknown>,
+  callerScope: CronToolCallerScope,
+): void {
+  const sessionAgentId = readAgentIdFromCronToolSessionRef(value.sessionKey);
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
+    throw new Error("cron sessionKey must match the calling agent");
+  }
+  const sessionTargetAgentId = readAgentIdFromCronToolSessionTarget(value.sessionTarget);
+  if (sessionTargetAgentId && normalizeAgentId(sessionTargetAgentId) !== callerScope.agentId) {
+    throw new Error("cron sessionTarget must match the calling agent");
+  }
 }
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
@@ -859,6 +929,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
         ...parsedGatewayOpts,
         timeoutMs: parsedGatewayOpts.timeoutMs ?? 60_000,
       };
+      const resolveScopedCronContext = () => {
+        const cfg = getRuntimeConfig();
+        return { cfg, callerScope: resolveCronToolCallerScope(opts, cfg) };
+      };
 
       switch (action) {
         case "status": {
@@ -868,17 +942,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           );
         }
         case "list": {
-          const cfg = getRuntimeConfig();
+          const { callerScope } = resolveScopedCronContext();
           const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-          const listAgentId = selfRemoveOnlyJobId
-            ? opts?.agentSessionKey?.trim()
-              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-              : undefined
-            : typeof params.agentId === "string" && params.agentId.trim()
-              ? params.agentId.trim()
-              : opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
+          const explicitAgentId = readCronToolAgentId(params.agentId);
+          if (explicitAgentId && explicitAgentId !== callerScope.agentId) {
+            throw new Error("cron list agentId must match the calling agent");
+          }
           const includeDisabled = Boolean(params.includeDisabled);
           let offset = 0;
           let result: unknown;
@@ -889,7 +958,8 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               result = await callGateway("cron.list", gatewayOpts, {
                 includeDisabled,
                 ...(useCompactList ? { compact: true } : {}),
-                agentId: listAgentId,
+                agentId: callerScope.agentId,
+                callerScope,
                 ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
               });
             } catch (error) {
@@ -917,13 +987,15 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           );
         }
         case "get": {
+          const { callerScope } = resolveScopedCronContext();
           const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.get", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.get", gatewayOpts, { id, callerScope }));
         }
         case "add": {
+          const { cfg, callerScope } = resolveScopedCronContext();
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
           // them inside `job`. When `params.job` is missing or empty, reconstruct
@@ -950,20 +1022,18 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? canonicalJob;
           capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
-          const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            if (!("agentId" in job) || (job as { agentId?: unknown }).agentId === undefined) {
-              const agentId = opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
-              if (agentId) {
-                (job as { agentId?: string }).agentId = agentId;
-              }
-            }
+            assertCronToolAgentFieldMatchesScope({
+              value: (job as { agentId?: unknown }).agentId,
+              field: "cron job agentId",
+              callerScope,
+            });
+            (job as { agentId?: string }).agentId = callerScope.agentId;
+            assertCronToolSessionRefsMatchScope(job as Record<string, unknown>, callerScope);
             const sessionTarget = normalizeLowercaseStringOrEmpty(
               (job as { sessionTarget?: unknown }).sessionTarget,
             );
@@ -1038,9 +1108,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               }
             }
           }
-          return jsonResult(await callGateway("cron.add", gatewayOpts, job));
+          return jsonResult(await callGateway("cron.add", gatewayOpts, { ...job, callerScope }));
         }
         case "update": {
+          const { callerScope } = resolveScopedCronContext();
           const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
@@ -1068,10 +1139,15 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }
+          if ("agentId" in patch) {
+            throw new Error("cron patch agentId cannot be changed by the agent cron tool");
+          }
+          assertCronToolSessionRefsMatchScope(patch, callerScope);
           await capCronAgentTurnUpdatePatchToolsAllow({
             id,
             patch,
             creatorToolAllowlist: opts?.creatorToolAllowlist,
+            callerScope,
             gatewayOpts,
             callGateway,
           });
@@ -1079,31 +1155,37 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
+              callerScope,
             }),
           );
         }
         case "remove": {
+          const { callerScope } = resolveScopedCronContext();
           const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id, callerScope }));
         }
         case "run": {
+          const { callerScope } = resolveScopedCronContext();
           const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
-          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
+          return jsonResult(
+            await callGateway("cron.run", gatewayOpts, { id, mode: runMode, callerScope }),
+          );
         }
         case "runs": {
+          const { callerScope } = resolveScopedCronContext();
           const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id, callerScope }));
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });

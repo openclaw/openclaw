@@ -80,7 +80,8 @@ function setCronValidationTestRegistry(): void {
   );
 }
 
-function createCronContext(currentJob?: CronJob) {
+function createCronContext(currentJobs?: CronJob | CronJob[]) {
+  const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
   return {
     cron: {
       add: vi.fn(async () => ({ id: "cron-1" })),
@@ -88,9 +89,30 @@ function createCronContext(currentJob?: CronJob) {
       remove: vi.fn(async () => ({ ok: true, removed: true })),
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
-      getJob: vi.fn(() => currentJob),
+      getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       wake: vi.fn(() => ({ ok: true }) as const),
-      readJob: vi.fn(async (id: string) => (id === currentJob?.id ? currentJob : undefined)),
+      readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
+      list: vi.fn(async () => jobs),
+      listPage: vi.fn(async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
+        const requestedAgentId = opts?.agentId?.trim().toLowerCase();
+        const filteredJobs = requestedAgentId
+          ? jobs.filter((job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId)
+          : jobs;
+        const total = filteredJobs.length;
+        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+        const defaultLimit = total === 0 ? 50 : total;
+        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+        const pageJobs = filteredJobs.slice(offset, offset + limit);
+        const nextOffset = offset + pageJobs.length;
+        return {
+          jobs: pageJobs,
+          total,
+          offset,
+          limit,
+          hasMore: nextOffset < total,
+          nextOffset: nextOffset < total ? nextOffset : null,
+        };
+      }),
     },
     logGateway: {
       info: vi.fn(),
@@ -174,6 +196,10 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     state: {},
     ...overrides,
   };
+}
+
+function callerScope(agentId: string) {
+  return { kind: "agentTool", agentId };
 }
 
 function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
@@ -392,6 +418,35 @@ describe("cron method validation", () => {
     });
   });
 
+  it("allows caller-scoped cron.remove for the same agent", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.remove",
+      { id: "cron-1", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.remove).toHaveBeenCalledWith("cron-1");
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+  });
+
+  it("hides caller-scoped cron.remove for a foreign agent", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
+
+    const { respond } = await invokeCron(
+      "cron.remove",
+      { jobId: "cron-1", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.remove).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.remove params: id not found",
+    });
+  });
+
   it("returns a single cron job for cron.get", async () => {
     const job = createCronJob({ id: "cron-42", name: "single job" });
 
@@ -401,12 +456,188 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(true, job, undefined);
   });
 
+  it("allows caller-scoped cron.get for the same agent", async () => {
+    const job = createCronJob({ id: "cron-42", agentId: "ops" });
+
+    const { respond } = await invokeCronGet(
+      { id: "cron-42", callerScope: callerScope("ops") },
+      job,
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, job, undefined);
+  });
+
+  it("hides caller-scoped cron.get for a foreign agent", async () => {
+    const job = createCronJob({ id: "cron-42", agentId: "ops" });
+
+    const { respond } = await invokeCronGet(
+      { jobId: "cron-42", callerScope: callerScope("worker") },
+      job,
+    );
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "cron job not found: cron-42",
+    });
+  });
+
+  it("hides caller-scoped cron.get when stored sessionTarget points at a foreign agent", async () => {
+    const job = createCronJob({
+      id: "cron-42",
+      agentId: "ops",
+      sessionTarget: "session:agent:worker:telegram:direct:alice",
+    });
+
+    const { respond } = await invokeCronGet(
+      { id: "cron-42", callerScope: callerScope("ops") },
+      job,
+    );
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "cron job not found: cron-42",
+    });
+  });
+
   it("returns INVALID_REQUEST when cron.get cannot find the job", async () => {
     const { respond } = await invokeCronGet({ jobId: "missing" });
 
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: missing",
+    });
+  });
+
+  it("scopes cron.list to the caller agent", async () => {
+    const context = createCronContext(createCronJob({ agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true, callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.listPage).toHaveBeenCalledWith(
+      expect.objectContaining({ includeDisabled: true, agentId: "ops" }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
+    const context = createCronContext(createCronJob({ agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { agentId: "worker", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.listPage).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agentId outside caller scope",
+    });
+  });
+
+  it("keeps unscoped cron.list agentId filtering global for operator callers", async () => {
+    const context = createCronContext(createCronJob({ agentId: "worker" }));
+
+    const { respond } = await invokeCron("cron.list", { agentId: "worker" }, { context });
+
+    expect(context.cron.listPage).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker" }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("filters caller-scoped cron.list jobs with foreign session targets before pagination", async () => {
+    const foreignSessionJob = createCronJob({
+      id: "cron-foreign",
+      agentId: "ops",
+      sessionTarget: "session:agent:worker:telegram:direct:alice",
+    });
+    const firstSafeJob = createCronJob({
+      id: "cron-safe-1",
+      agentId: "ops",
+      sessionTarget: "session:agent:ops:telegram:direct:bob",
+    });
+    const secondSafeJob = createCronJob({
+      id: "cron-safe-2",
+      agentId: "ops",
+    });
+    const context = createCronContext([foreignSessionJob, firstSafeJob, secondSafeJob]);
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { compact: true, limit: 1, callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.listPage).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        total: 2,
+        offset: 0,
+        limit: 1,
+        hasMore: true,
+        nextOffset: 1,
+        jobs: [expect.objectContaining({ id: "cron-safe-1" })],
+      }),
+      undefined,
+    );
+  });
+
+  it("allows caller-scoped cron.add for the same agent without persisting callerScope", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        agentId: "ops",
+        callerScope: callerScope("ops"),
+      }),
+    );
+
+    const payload = requireCronAddPayload(context);
+    expect(payload.agentId).toBe("ops");
+    expect(payload).not.toHaveProperty("callerScope");
+    expectCronSuccess(respond);
+  });
+
+  it("rejects caller-scoped cron.add for a foreign agent", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        agentId: "worker",
+        callerScope: callerScope("ops"),
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "outside caller scope",
+    });
+  });
+
+  it("rejects caller-scoped cron.add with a foreign agent-prefixed session target", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        agentId: "ops",
+        sessionTarget: "session:agent:worker:telegram:direct:alice",
+        callerScope: callerScope("ops"),
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "outside caller scope",
     });
   });
 
@@ -437,6 +668,84 @@ describe("cron method validation", () => {
       to: "-1001234567890",
       threadId: "456",
     });
+    expectCronSuccess(respond);
+  });
+
+  it("allows caller-scoped cron.update for the same agent", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { enabled: false },
+        callerScope: callerScope("ops"),
+      },
+      createCronJob({ agentId: "ops" }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expectCronSuccess(respond);
+  });
+
+  it("hides caller-scoped cron.update for a foreign agent", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { enabled: false },
+        callerScope: callerScope("ops"),
+      },
+      createCronJob({ agentId: "worker" }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.update params: id not found",
+    });
+  });
+
+  it("rejects caller-scoped cron.update agentId retargeting", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { agentId: "worker" },
+        callerScope: callerScope("ops"),
+      },
+      createCronJob({ agentId: "ops" }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agentId cannot be changed",
+    });
+  });
+
+  it("rejects caller-scoped cron.update with a foreign sessionTarget", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
+        callerScope: callerScope("ops"),
+      },
+      createCronJob({ agentId: "ops" }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "session target outside caller scope",
+    });
+  });
+
+  it("keeps unscoped cron.update agentId retargeting available for operator callers", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { agentId: "worker" },
+      },
+      createCronJob({ agentId: "ops" }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { agentId: "worker" });
     expectCronSuccess(respond);
   });
 
@@ -1071,9 +1380,74 @@ describe("cron method validation", () => {
     context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown cron job id: missing"));
     const { respond } = await invokeCron("cron.run", { id: "missing" }, { context });
 
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "unknown cron job id: missing",
+      messageIncludes: "invalid cron.run params: id not found",
+    });
+  });
+
+  it("allows caller-scoped cron.run for the same agent", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", mode: "due", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, enqueued: true, runId: "run-1" },
+      undefined,
+    );
+  });
+
+  it("hides caller-scoped cron.run for a foreign agent", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { jobId: "cron-1", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.run params: id not found",
+    });
+  });
+
+  it("rejects caller-scoped cron.runs all-scope history", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { scope: "all", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "scope all is not allowed by caller scope",
+    });
+  });
+
+  it("hides caller-scoped cron.runs for a foreign job", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { id: "cron-1", callerScope: callerScope("ops") },
+      { context },
+    );
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: id not found",
     });
   });
 
