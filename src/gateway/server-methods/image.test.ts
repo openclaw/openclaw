@@ -19,7 +19,6 @@ vi.mock("../../image-generation/provider-registry.js", () => ({
       id: "gemini",
       label: "Google Gemini",
       models: ["imagen-3"],
-      isConfigured: vi.fn(() => true),
       capabilities: {
         generate: { maxCount: 4 },
         edit: true,
@@ -34,10 +33,6 @@ vi.mock("../../image-generation/provider-registry.js", () => ({
       capabilities: { generate: true, edit: false, geometry: false, output: true },
     },
   ]),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main"),
 }));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
@@ -132,19 +127,6 @@ describe("imageHandlers", () => {
     expect((openai as { configured: boolean }).configured).toBe(true);
   });
 
-  it("uses provider isConfigured override when available", async () => {
-    const { respond, invoke } = createInvokeParams({
-      models: { providers: {} },
-      plugins: { entries: {} },
-      auth: { profiles: {} },
-      agents: {},
-    });
-    await invoke();
-    const result = expectSuccess(respond);
-    const gemini = result.providers.find((p) => (p as { id: string }).id === "gemini");
-    expect((gemini as { configured: boolean }).configured).toBe(true);
-  });
-
   it("resolves active from string format imageGenerationModel", async () => {
     const { respond, invoke } = createInvokeParams({
       models: { providers: {} },
@@ -169,7 +151,7 @@ describe("imageHandlers", () => {
     expect(result.active).toBe("gemini");
   });
 
-  it("sets active to first configured when no config primary", async () => {
+  it("returns null active when no explicit imageGenerationModel config", async () => {
     const { respond, invoke } = createInvokeParams({
       models: { providers: {} },
       plugins: { entries: {} },
@@ -178,10 +160,10 @@ describe("imageHandlers", () => {
     });
     await invoke();
     const result = expectSuccess(respond);
-    expect(result.active).toBe("openai");
+    expect(result.active).toBe(null);
   });
 
-  it("sets active to first provider when none configured", async () => {
+  it("returns null active when no providers configured", async () => {
     const { respond, invoke } = createInvokeParams({
       models: { providers: {} },
       plugins: { entries: {} },
@@ -190,7 +172,7 @@ describe("imageHandlers", () => {
     });
     await invoke();
     const result = expectSuccess(respond);
-    expect(result.active).toBe("gemini");
+    expect(result.active).toBe(null);
   });
 
   it("returns null active when config primary is not configured", async () => {

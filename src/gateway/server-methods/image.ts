@@ -4,7 +4,6 @@ import {
   validateImageProvidersResult,
   formatValidationErrors,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 // Gateway RPC handlers for image generation provider inventory.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listImageGenerationProviders } from "../../image-generation/provider-registry.js";
@@ -63,13 +62,11 @@ export const imageHandlers: GatewayRequestHandlers = {
   "image.providers": async ({ respond, context }) => {
     try {
       const cfg = context.getRuntimeConfig();
-      // Use default agent directory for provider readiness checks
-      const agentDir = resolveDefaultAgentDir(cfg);
 
       const providers = listImageGenerationProviders(cfg).map((provider) => {
-        // Use provider's isConfigured with agentDir, fallback to generic config check
-        const isConfigured =
-          provider.isConfigured?.({ cfg, agentDir }) ?? providerHasGenericConfig(cfg, provider.id);
+        // Only check config presence, avoid calling provider.isConfigured which may
+        // trigger disk I/O or auth store operations. This keeps the RPC read-only.
+        const isConfigured = providerHasGenericConfig(cfg, provider.id);
         return {
           id: provider.id,
           label: provider.label ?? provider.id,
@@ -84,18 +81,15 @@ export const imageHandlers: GatewayRequestHandlers = {
           },
         };
       });
-      // Use config primary as active, fallback to first configured provider, then first provider
+
+      // Only return active provider when explicitly configured via imageGenerationModel.
+      // Do not fallback to first configured or first provider to avoid reporting
+      // an arbitrary provider as active when the user has not made a selection.
       const configActive = resolveActiveImageProvider(cfg);
-      const configuredProvider = providers.find((p) => p.configured);
-      const firstProvider = providers[0];
       let activeProvider: string | null = null;
       if (configActive) {
         const matched = providers.find((p) => p.id === configActive && p.configured);
         activeProvider = matched?.id ?? null;
-      } else if (configuredProvider) {
-        activeProvider = configuredProvider.id;
-      } else if (firstProvider) {
-        activeProvider = firstProvider.id;
       }
 
       const result = { providers, active: activeProvider };
