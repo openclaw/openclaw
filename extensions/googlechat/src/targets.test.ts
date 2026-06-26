@@ -600,7 +600,6 @@ describe("verifyGoogleChatRequest", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
       const release = vi.fn(async () => {});
-      const oversizedBodyFetch = vi.fn().mockResolvedValue({ response: oversizedJson, release });
       mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
         response: oversizedJson,
         release,
