@@ -2938,6 +2938,27 @@ describe("resolveSubagentSpawnModelSelection", () => {
     ).toBe("openai/gpt-5.4");
   });
 
+  it("keeps exact built-in provider/model overrides before slash-form aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openrouter/openai/gpt-5.4": { alias: "openai/gpt-5.4" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
   it("resolves slash-form alias overrides before provider/model passthrough", () => {
     const cfg = {
       agents: {

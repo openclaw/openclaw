@@ -90,6 +90,15 @@ export {
 };
 export { isCliProvider } from "./model-selection-cli.js";
 
+const BUILT_IN_EXACT_REF_PROVIDER_IDS = new Set([
+  "anthropic",
+  "azure-openai",
+  "google",
+  "google-vertex",
+  "mistral",
+  "openai",
+]);
+
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
 }
@@ -341,12 +350,18 @@ export function resolveSubagentConfiguredModelSelection(params: {
  * a fully qualified `provider/model` string.  If the value is already qualified
  * or not a known alias, returns it unchanged.
  */
-function hasExactConfiguredProviderModelRef(cfg: OpenClawConfig, raw: string): boolean {
+function hasExactKnownProviderModelRef(cfg: OpenClawConfig, raw: string): boolean {
   if (!hasExplicitProviderModelRef(raw)) {
     return false;
   }
   const providerRaw = raw.slice(0, raw.indexOf("/")).trim();
-  if (!providerRaw || !cfg.models?.providers) {
+  if (!providerRaw) {
+    return false;
+  }
+  if (BUILT_IN_EXACT_REF_PROVIDER_IDS.has(normalizeProviderId(providerRaw))) {
+    return true;
+  }
+  if (!cfg.models?.providers) {
     return false;
   }
   const providerKey = normalizeLowercaseStringOrEmpty(providerRaw);
@@ -360,7 +375,7 @@ function resolveModelThroughAliases(
   aliasIndex: ModelAliasIndex,
   cfg: OpenClawConfig,
 ): string {
-  if (hasExactConfiguredProviderModelRef(cfg, value)) {
+  if (hasExactKnownProviderModelRef(cfg, value)) {
     return value;
   }
   const aliasKey = normalizeLowercaseStringOrEmpty(value);
