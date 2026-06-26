@@ -573,7 +573,11 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("childEnv[key] = value");
   });
 
-  it("uploads a CI timing summary after the run lanes finish", () => {
+  it("keeps the CI timing summary parked for timing optimization work", () => {
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "Re-enable this job when we want to collect CI timing data for timing optimization.",
+    );
+
     const workflow = readCiWorkflow();
     const timingJob = workflow.jobs["ci-timings-summary"];
 
@@ -598,6 +602,7 @@ describe("ci workflow guards", () => {
       "ios-build",
       "android",
     ]);
+    expect(timingJob.if).toContain("false");
     expect(timingJob.if).toContain("always()");
     expect(timingJob.if).toContain("!cancelled()");
 
