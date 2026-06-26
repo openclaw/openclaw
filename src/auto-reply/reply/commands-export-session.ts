@@ -292,7 +292,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { entry, sessionFile } = sessionTarget;
+  const { entry } = sessionTarget;
 
   // 2. Load session entries
   const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
