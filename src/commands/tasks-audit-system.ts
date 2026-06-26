@@ -89,6 +89,15 @@ export function buildTaskSystemAuditFindings(params: {
     .toSorted(compareSystemAuditFindings);
   // Keep summary counts based on the full sorted set; filters only affect displayed findings.
   const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
+  let errorCount = 0;
+  let warningCount = 0;
+  for (const finding of sortedAllFindings) {
+    if (finding.severity === "error") {
+      errorCount += 1;
+    } else {
+      warningCount += 1;
+    }
+  }
   return {
     allFindings: sortedAllFindings,
     filteredFindings,
@@ -96,8 +105,8 @@ export function buildTaskSystemAuditFindings(params: {
     flowFindings: params.flowFindings,
     summary: {
       total: sortedAllFindings.length,
-      errors: sortedAllFindings.filter((finding) => finding.severity === "error").length,
-      warnings: sortedAllFindings.filter((finding) => finding.severity !== "error").length,
+      errors: errorCount,
+      warnings: warningCount,
       tasks: summarizeTaskAuditFindings(params.taskFindings),
       taskFlows: summarizeTaskFlowAuditFindings(params.flowFindings),
     },
