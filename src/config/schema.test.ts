@@ -870,6 +870,38 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
   });
 
+  it("normalizes models.providers.*.baseURL to baseUrl", () => {
+    const result = OpenClawSchema.parse({
+      models: {
+        providers: {
+          openai: { baseURL: "http://127.0.0.1:11434/v1" },
+        },
+      },
+    });
+    const openai = result.models?.providers?.openai;
+    expect(openai?.baseUrl).toBe("http://127.0.0.1:11434/v1");
+  });
+
+  it("keeps baseUrl when already set and ignores baseURL", () => {
+    const result = OpenClawSchema.parse({
+      agents: {
+        defaults: {
+          memorySearch: { provider: "openai" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://my-proxy.example.com/v1",
+            baseURL: "http://127.0.0.1:11434/v1",
+          },
+        },
+      },
+    });
+    const openai = result.models?.providers?.openai;
+    expect(openai?.baseUrl).toBe("https://my-proxy.example.com/v1");
+  });
+
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
     const result = ToolsSchema.safeParse({
       media: {

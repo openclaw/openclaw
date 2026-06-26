@@ -519,6 +519,7 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
 const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1).optional(),
+    baseURL: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -544,6 +545,12 @@ const ModelProvidersSchema = z
   .record(z.string(), ModelProviderSchema)
   .superRefine((providers, ctx) => {
     for (const [providerId, provider] of Object.entries(providers)) {
+      // Normalize baseURL alias → canonical baseUrl (mutate in-place;
+      // downstream code only reads baseUrl, never the untyped baseURL).
+      const raw = provider as Record<string, unknown>;
+      if (typeof raw.baseURL === "string" && !provider.baseUrl) {
+        raw.baseUrl = raw.baseURL;
+      }
       if (isBuiltInModelProviderOverlayId(providerId)) {
         continue;
       }
