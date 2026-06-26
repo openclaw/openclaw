@@ -1821,6 +1821,9 @@ importers:
       '@openclaw/llm-core':
         specifier: workspace:*
         version: link:../llm-core
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       typebox:
         specifier: 1.1.39
         version: 1.1.39

@@ -1,10 +1,8 @@
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
+
 /** Parse an ISO-like session timestamp to milliseconds. */
 export function parseSessionTimestampMs(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictTimestampStringMs(value);
 }
 
 /** Parse a required timestamp or throw a labeled validation error. */

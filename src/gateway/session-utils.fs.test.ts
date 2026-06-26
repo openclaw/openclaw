@@ -691,6 +691,33 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("omits loose and Date-invalid outer JSONL record timestamps", async () => {
+    const sessionId = "test-session-invalid-record-timestamp";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { timestamp: "01/02/03", message: { role: "user", content: "loose turn" } },
+      {
+        timestamp: "+275760-09-13T00:00:00.001Z",
+        message: { role: "assistant", content: "range turn" },
+      },
+    ]);
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+    expect(result).toHaveLength(2);
+    const firstMetadata = requireRecord(
+      requireRecord(result[0], "message")["__openclaw"],
+      "message metadata",
+    );
+    const secondMetadata = requireRecord(
+      requireRecord(result[1], "message")["__openclaw"],
+      "message metadata",
+    );
+    expect(firstMetadata).not.toHaveProperty("recordTimestampMs");
+    expect(secondMetadata).not.toHaveProperty("recordTimestampMs");
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

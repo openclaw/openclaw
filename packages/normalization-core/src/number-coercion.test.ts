@@ -28,6 +28,7 @@ import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  parseStrictTimestampStringMs,
   resolveTimerTimeoutMs,
   resolveTimestampMsToIsoString,
   timestampMsToIsoFileStamp,
@@ -136,6 +137,18 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test("strict timestamp string parser rejects loose and Date-invalid strings", () => {
+    expect(parseStrictTimestampStringMs("2026-01-02T03:04:05.006Z")).toBe(
+      Date.parse("2026-01-02T03:04:05.006Z"),
+    );
+    expect(parseStrictTimestampStringMs("2026-01-02T03:04:05+08:00")).toBe(
+      Date.parse("2026-01-02T03:04:05+08:00"),
+    );
+    expect(parseStrictTimestampStringMs("01/02/03")).toBeUndefined();
+    expect(parseStrictTimestampStringMs("9999-12-31")).toBeUndefined();
+    expect(parseStrictTimestampStringMs("+275760-09-13T00:00:00.001Z")).toBeUndefined();
   });
 
   test("future timestamp helper rejects invalid Date timestamps", () => {

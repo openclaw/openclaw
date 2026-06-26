@@ -106,8 +106,22 @@ export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
 /** Largest timestamp accepted by JavaScript Date. */
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+const STRICT_TIMESTAMP_STRING_RE =
+  /^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 /** Fallback ISO value for invalid timestamp inputs. */
 export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
+
+/** Parses a strict ISO/RFC3339 timestamp string to a Date-valid millisecond timestamp. */
+export function parseStrictTimestampStringMs(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!STRICT_TIMESTAMP_STRING_RE.test(normalized)) {
+    return undefined;
+  }
+  return asDateTimestampMs(Date.parse(normalized));
+}
 
 /** Returns a Date-valid millisecond timestamp. */
 export function asDateTimestampMs(value: unknown): number | undefined {
