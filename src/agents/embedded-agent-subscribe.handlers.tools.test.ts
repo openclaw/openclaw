@@ -1547,6 +1547,74 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
   });
 
+  it("renders policy explanation when ask=always and allow-always is filtered on embedded path", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-ask-always-policy",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            command: "npm view diver name version description",
+            ask: "always",
+          },
+        },
+      } as never,
+    );
+
+    const result = requireMockCallArg(onToolResult, 0, "tool result");
+    expect(requireString(result.text, "tool result text")).toContain(
+      "The effective approval policy requires approval every time",
+    );
+    expect(requireString(result.text, "tool result text")).not.toContain("cannot be persisted");
+  });
+
+  it("renders non-persistable explanation when ask=on-miss and allow-always is filtered on embedded path", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-ask-on-miss-nonpersist",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            command: "rm -rf /tmp/$(date +%s)",
+            ask: "on-miss",
+          },
+        },
+      } as never,
+    );
+
+    const result = requireMockCallArg(onToolResult, 0, "tool result");
+    expect(requireString(result.text, "tool result text")).toContain("cannot be persisted");
+    expect(requireString(result.text, "tool result text")).not.toContain(
+      "approval policy requires approval every time",
+    );
+  });
+
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
