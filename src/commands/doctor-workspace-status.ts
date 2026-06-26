@@ -117,14 +117,26 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     workspaceDir,
   });
   if (pluginRegistry.plugins.length > 0) {
-    const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
-    const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
-    const imported = pluginRegistry.plugins.filter((p) => p.imported);
+    const loaded: typeof pluginRegistry.plugins = [];
+    const disabled: typeof pluginRegistry.plugins = [];
+    const errored: typeof pluginRegistry.plugins = [];
+    let imported = 0;
+    for (const plugin of pluginRegistry.plugins) {
+      if (plugin.status === "loaded") {
+        loaded.push(plugin);
+      } else if (plugin.status === "disabled") {
+        disabled.push(plugin);
+      } else if (plugin.status === "error") {
+        errored.push(plugin);
+      }
+      if (plugin.imported) {
+        imported += 1;
+      }
+    }
 
     const lines = [
       `Loaded: ${loaded.length}`,
-      `Imported: ${imported.length}`,
+      `Imported: ${imported}`,
       `Disabled: ${disabled.length}`,
       `Errors: ${errored.length}`,
       errored.length > 0
