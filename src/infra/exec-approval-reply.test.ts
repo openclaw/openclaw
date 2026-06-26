@@ -368,6 +368,20 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("shows one-shot reason when allow-always excluded but ask is not always", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      ask: "on-miss",
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(payload.text).toContain("cannot be saved for future use");
+    expect(payload.text).not.toContain("requires approval every time");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",
