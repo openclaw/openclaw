@@ -320,6 +320,39 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.snippet).toContain("Teams");
   });
 
+  it("surfaces pages when a query token matches the title or id but other tokens are absent", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "fanos.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.fanos",
+          title: "FANOS",
+          sourceIds: ["source.relationship-tools"],
+        },
+        body: [
+          "# FANOS",
+          "",
+          "A structured check-in framework covering Feelings, Appreciation, Needs, Ownership, and Struggles.",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "FANOS Exercise",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toContain("concepts/fanos.md");
+    expect(results.find((result) => result.path === "concepts/fanos.md")!.score).toBeGreaterThan(0);
+  });
+
   it("supports people-routing search modes and claim evidence drilldown metadata", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

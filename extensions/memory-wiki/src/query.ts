@@ -802,8 +802,14 @@ function buildDigestCandidatePaths(params: {
       const metadataLower = normalizeLowercaseStringOrEmpty(
         buildDigestPageSearchText(page, claims),
       );
+      const titleLower = normalizeLowercaseStringOrEmpty(page.title);
+      const idLower = normalizeLowercaseStringOrEmpty(page.id);
+      const hasAnyTitleOrIdToken =
+        queryTokens.length > 0 &&
+        queryTokens.some((token) => titleLower.includes(token) || idLower.includes(token));
       if (
         !metadataLower.includes(queryLower) &&
+        !hasAnyTitleOrIdToken &&
         !(
           params.mode === "route-question" &&
           hasRouteQuestionMatch(buildDigestRouteQuestionFields(page), queryLower)
@@ -914,10 +920,13 @@ function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode)
     rawLower.includes(queryLower);
   const hasAllTokens =
     queryTokens.length > 0 && queryTokens.every((token) => combinedLower.includes(token));
+  const hasAnyTitleOrIdToken =
+    queryTokens.length > 0 &&
+    queryTokens.some((token) => titleLower.includes(token) || idLower.includes(token));
   const hasModeMatch =
     mode === "route-question" &&
     hasRouteQuestionMatch(buildPageRouteQuestionFields(page), queryLower);
-  if (!hasExactMatch && !hasAllTokens && !hasModeMatch) {
+  if (!hasExactMatch && !hasAllTokens && !hasAnyTitleOrIdToken && !hasModeMatch) {
     return 0;
   }
 
