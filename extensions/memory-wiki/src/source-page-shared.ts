@@ -12,6 +12,32 @@ import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 
+export type ImportedSourceWriteResult = {
+  pagePath: string;
+  changed: boolean;
+  created: boolean;
+};
+
+export function countImportedSourceWriteResults(results: ImportedSourceWriteResult[]): {
+  importedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+} {
+  let importedCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  for (const result of results) {
+    if (!result.changed) {
+      skippedCount += 1;
+    } else if (result.created) {
+      importedCount += 1;
+    } else {
+      updatedCount += 1;
+    }
+  }
+  return { importedCount, updatedCount, skippedCount };
+}
+
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
@@ -23,7 +49,7 @@ export async function writeImportedSourcePage(params: {
   group: MemoryWikiImportedSourceGroup;
   state: ImportedSourceState;
   buildRendered: (raw: string, updatedAt: string) => string;
-}): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+}): Promise<ImportedSourceWriteResult> {
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
     if (

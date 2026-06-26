@@ -12,7 +12,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
-import { writeImportedSourcePage } from "./source-page-shared.js";
+import { countImportedSourceWriteResults, writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
@@ -243,9 +243,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     state,
   });
   await writeMemoryWikiSourceSyncState(config.vault.path, state);
-  const importedCount = results.filter((result) => result.changed && result.created).length;
-  const updatedCount = results.filter((result) => result.changed && !result.created).length;
-  const skippedCount = results.filter((result) => !result.changed).length;
+  const { importedCount, updatedCount, skippedCount } = countImportedSourceWriteResults(results);
   const pagePaths = results
     .map((result) => result.pagePath)
     .toSorted((left, right) => left.localeCompare(right));

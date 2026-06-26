@@ -16,7 +16,11 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
-import { writeImportedSourcePage } from "./source-page-shared.js";
+import {
+  countImportedSourceWriteResults,
+  writeImportedSourcePage,
+  type ImportedSourceWriteResult,
+} from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
@@ -238,7 +242,7 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
 
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
-  const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
+  const results: ImportedSourceWriteResult[] = [];
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(
     params.config.bridge,
@@ -284,9 +288,7 @@ export async function syncMemoryWikiBridgeSources(params: {
       })
     : 0;
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);
-  const importedCount = results.filter((result) => result.changed && result.created).length;
-  const updatedCount = results.filter((result) => result.changed && !result.created).length;
-  const skippedCount = results.filter((result) => !result.changed).length;
+  const { importedCount, updatedCount, skippedCount } = countImportedSourceWriteResults(results);
   const pagePaths = results
     .map((result) => result.pagePath)
     .toSorted((left, right) => left.localeCompare(right));
