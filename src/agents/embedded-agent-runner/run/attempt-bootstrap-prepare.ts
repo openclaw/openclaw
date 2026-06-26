@@ -5,7 +5,7 @@ import {
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
-  resolveBootstrapFilesForRun,
+  resolveBootstrapFilesForRunWithTiming,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
@@ -100,7 +100,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
-    preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
+    preloadedBootstrapFiles = await resolveBootstrapFilesForRunWithTiming({
       workspaceDir: params.resolvedWorkspace,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
@@ -131,7 +131,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
         preloadedBootstrapFiles ??
-        (await resolveBootstrapFilesForRun({
+        (await resolveBootstrapFilesForRunWithTiming({
           workspaceDir: params.resolvedWorkspace,
           config: attempt.config,
           sessionKey: attempt.sessionKey,
