@@ -131,11 +131,14 @@ const TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS = 5_000;
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
+const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS = 5_000;
+const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS = 60_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
@@ -167,6 +170,24 @@ function resolveNonRetryableSpooledUpdateFailure(
     }
   }
   return null;
+}
+
+function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = Date.now()): number {
+  const attempts = update.attempts ?? 0;
+  if (
+    !update.lastError ||
+    !REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(update.lastError) ||
+    update.lastAttemptAt === undefined ||
+    attempts <= 0
+  ) {
+    return 0;
+  }
+  const exponent = Math.min(attempts - 1, 8);
+  const delayMs = Math.min(
+    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS,
+    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS * 2 ** exponent,
+  );
+  return Math.max(0, update.lastAttemptAt + delayMs - now);
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -777,7 +798,9 @@ export class TelegramPollingSession {
       }
     }
     try {
-      await releaseTelegramSpooledUpdateClaim(params.update);
+      await releaseTelegramSpooledUpdateClaim(params.update, {
+        lastError: formatErrorMessage(params.err),
+      });
     } catch (releaseErr) {
       this.opts.log(
         `[telegram][diag] spooled update ${params.update.updateId} failed and could not be requeued: ${formatErrorMessage(releaseErr)}`,
@@ -864,6 +887,10 @@ export class TelegramPollingSession {
       const laneKey = this.#spooledUpdateLaneKey(update);
       if (this.opts.abortSignal?.aborted) {
         break;
+      }
+      if (resolveSpooledUpdateRetryDelayMs(update) > 0) {
+        claimedLaneKeys.add(laneKey);
+        continue;
       }
       const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
       if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
@@ -1533,6 +1560,7 @@ export const testing = {
   createTelegramRestartBackoffState,
   resetTelegramRestartBackoffState,
   resolveTelegramRestartDelayMs,
+  resolveSpooledUpdateRetryDelayMs,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };
