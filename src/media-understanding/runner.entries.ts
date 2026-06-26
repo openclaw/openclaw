@@ -805,9 +805,7 @@ export async function runProviderEntry(params: {
 
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
-      throw new Error(
-        `Audio transcription provider "${providerId}" not available.${formatMissingProviderHint(providerId)}`,
-      );
+      throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
     const requestOverrides = resolveMediaRequestOverrides(params.config);
@@ -884,9 +882,7 @@ export async function runProviderEntry(params: {
   }
 
   if (!provider.describeVideo) {
-    throw new Error(
-      `Video understanding provider "${providerId}" not available.${formatMissingProviderHint(providerId)}`,
-    );
+    throw new Error(`Video understanding provider "${providerId}" not available.`);
   }
   const describeVideo = provider.describeVideo;
   const media = await params.cache.getBuffer({
