@@ -9,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -200,7 +201,10 @@ async function pollMinimaxVideo(params: {
       provider: "minimax",
       requestFailedMessage: "MiniMax video status request failed",
     });
-    const payload = (await response.json()) as MinimaxQueryResponse;
+    const payload = await readProviderJsonResponse<MinimaxQueryResponse>(
+      response,
+      "MiniMax video generation failed",
+    );
     assertMinimaxBaseResp(payload.base_resp, "MiniMax video generation failed");
     switch (normalizeOptionalString(payload.status)) {
       case "Success":
@@ -404,7 +408,10 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "MiniMax video generation failed");
-        const submitted = (await response.json()) as MinimaxCreateResponse;
+        const submitted = await readProviderJsonResponse<MinimaxCreateResponse>(
+          response,
+          "MiniMax video generation failed",
+        );
         assertMinimaxBaseResp(submitted.base_resp, "MiniMax video generation failed");
         const taskId = normalizeOptionalString(submitted.task_id);
         if (!taskId) {

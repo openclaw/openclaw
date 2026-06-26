@@ -27,6 +27,7 @@ interface MinimaxProviderHttpMocks {
   fetchWithTimeoutMock: AnyMock;
   fetchProviderOperationResponseMock: AnyMock;
   fetchProviderDownloadResponseMock: AnyMock;
+  readProviderJsonResponseMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
@@ -39,6 +40,9 @@ const minimaxProviderHttpMocks = vi.hoisted(() => ({
   fetchWithTimeoutMock: vi.fn(),
   fetchProviderOperationResponseMock: vi.fn(),
   fetchProviderDownloadResponseMock: vi.fn(),
+  readProviderJsonResponseMock: vi.fn(async (response: { json: () => Promise<unknown> }) =>
+    response.json(),
+  ),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
@@ -112,6 +116,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   fetchProviderOperationResponse: minimaxProviderHttpMocks.fetchProviderOperationResponseMock,
   fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
   postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
+  readProviderJsonResponse: minimaxProviderHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
@@ -129,6 +134,7 @@ export function installMinimaxProviderHttpMockCleanup(): void {
     minimaxProviderHttpMocks.fetchWithTimeoutMock.mockReset();
     minimaxProviderHttpMocks.fetchProviderOperationResponseMock.mockClear();
     minimaxProviderHttpMocks.fetchProviderDownloadResponseMock.mockClear();
+    minimaxProviderHttpMocks.readProviderJsonResponseMock.mockClear();
     minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
     minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });
