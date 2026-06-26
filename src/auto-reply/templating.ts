@@ -23,11 +23,13 @@ export type MentionSource =
   | "command_bypass"
   | "none";
 
+export type SourceActorRole = "operator" | "participant" | "self" | "system" | "external";
+
 export type SourceActorContext = {
   id: string;
   peerId?: string;
   displayName?: string;
-  role?: string;
+  role?: SourceActorRole;
   context?: string;
 };
 
@@ -265,7 +267,7 @@ export type MsgContext = {
   SourceActorId?: string;
   SourceActorPeerId?: string;
   SourceActorDisplayName?: string;
-  SourceActorRole?: string;
+  SourceActorRole?: SourceActorRole;
   SourceActorContext?: string;
   Timestamp?: number;
   LocationLat?: number;

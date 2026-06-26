@@ -220,6 +220,13 @@ describe("buildChannelInboundEventContext", () => {
     for (const [key, value] of Object.entries(expectedFields)) {
       expect(ctx[key as keyof typeof ctx]).toEqual(value);
     }
+
+    expect(ctx.SourceActor).toBeDefined();
+    expect(ctx.SourceActorId).toBe(ctx.SourceActor?.id);
+    expect(ctx.SourceActorPeerId).toBe(ctx.SourceActor?.peerId);
+    expect(ctx.SourceActorDisplayName).toBe(ctx.SourceActor?.displayName);
+    expect(ctx.SourceActorRole).toBe(ctx.SourceActor?.role);
+    expect(ctx.SourceActorContext).toBe(ctx.SourceActor?.context);
   });
 
   it("preserves channel-owned hook context without rendering it as prompt text", () => {

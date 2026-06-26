@@ -376,6 +376,12 @@ sent a turn, pass a stable `sender.sourceActor` into
 `SourceActorDisplayName`, `SourceActorRole`, and `SourceActorContext` fields for
 hooks, diagnostics, prompt templates, and memory integrations.
 
+`SourceActor` is the canonical structured value. The flattened
+`SourceActor*` fields mirror it for prompt templates and integrations that only
+accept scalar context fields; keep them in sync with the structured object. Use
+one of `operator`, `participant`, `self`, `system`, or `external` for
+`role`.
+
 Use channel-native stable identifiers for `id`/`peerId` and keep private display
 names in `displayName`. Do not hardcode product- or deployment-specific people
 in a channel plugin; map those identities in the owning integration if needed.
