@@ -1269,6 +1269,7 @@ export async function dispatchReplyFromConfig(
     if (sessionKeysMatch(binding.sessionKey, sessionStoreEntry.sessionKey)) {
       preparedSessionBinding = binding;
     }
+    params.replyOptions?.onSessionPrepared?.(binding);
   };
   const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) => {
     if (
