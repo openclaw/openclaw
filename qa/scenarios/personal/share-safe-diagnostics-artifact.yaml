@@ -31,7 +31,6 @@ scenario:
     kind: flow
     summary: Verify personal diagnostics handoffs produce useful redacted artifacts instead of raw transcript dumps.
     config:
-      sessionKey: agent:qa:personal-share-safe-diagnostics
       artifactName: personal-diagnostics-summary.txt
       safeMarker: PERSONAL-DIAGNOSTICS-SAFE-OK
       workspaceFiles:
@@ -109,11 +108,17 @@ flow:
         - set: requestCountBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:personal-share-safe-diagnostics:${randomUUID().slice(0, 8)}`"
+        - set: beforeDiagnosticsCursor
+          value:
+            expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
           args:
             - ref: env
             - sessionKey:
-                expr: config.sessionKey
+                ref: sessionKey
               message:
                 expr: config.prompt
               timeoutMs:
@@ -137,14 +142,11 @@ flow:
             expr: "!config.forbiddenNeedles.some((needle) => artifact.includes(needle))"
             message:
               expr: "`share-safe diagnostics artifact leaked unsafe source material: ${artifact}`"
-        - call: waitForAgentHistoryReply
+        - call: waitForCondition
           saveAs: outbound
           args:
-            - ref: env
-            - expr: config.sessionKey
             - lambda:
-                params: [text]
-                expr: "text.includes(config.safeMarker) && text.includes(config.artifactName)"
+                expr: "state.getSnapshot().messages.slice(beforeDiagnosticsCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.safeMarker) && candidate.text.includes(config.artifactName)).at(-1)"
             - expr: liveTurnTimeoutMs(env, 30000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:

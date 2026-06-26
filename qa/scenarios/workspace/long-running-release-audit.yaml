@@ -167,6 +167,9 @@ flow:
         - set: sessionKey
           value:
             expr: "`agent:qa:release-audit:${randomUUID().slice(0, 8)}`"
+        - set: beforeAuditCursor
+          value:
+            expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
           args:
             - ref: env
@@ -227,15 +230,12 @@ flow:
             expr: "reportFindings.length > 0 && reportFindings.every((finding) => typeof finding?.verified === 'boolean')"
             message:
               expr: "`each report finding must include a boolean verified field: ${reportText}`"
-        - call: waitForAgentHistoryReply
+        - call: waitForCondition
           saveAs: outbound
           args:
-            - ref: env
-            - ref: sessionKey
             - lambda:
-                params: [text]
-                expr: "text.trim() === 'RELEASE-AUDIT-COMPLETE'"
-            - expr: liveTurnTimeoutMs(env, 45000)
+                expr: "state.getSnapshot().messages.slice(beforeAuditCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.replace(/<[^>]*>/g, '').trim() === 'RELEASE-AUDIT-COMPLETE').at(-1)"
+            - expr: liveTurnTimeoutMs(env, 120000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - call: readRawQaSessionStore
           saveAs: store

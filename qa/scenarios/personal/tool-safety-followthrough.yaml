@@ -58,6 +58,9 @@ flow:
         - set: requestCountBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+        - set: beforePreActionCursor
+          value:
+            expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
           args:
             - ref: env
@@ -67,14 +70,13 @@ flow:
                 expr: config.preActionPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 20000)
-        - call: waitForOutboundMessage
+        - call: waitForCondition
           saveAs: preActionOutbound
           args:
-            - ref: state
             - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator'"
+                expr: "state.getSnapshot().messages.slice(beforePreActionCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && /^ready$/i.test(candidate.text.replace(/<[^>]*>/g, '').trim())).at(-1)"
             - expr: liveTurnTimeoutMs(env, 20000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
             expr: "/\\bready\\b/i.test(preActionOutbound.text) && preActionOutbound.text.trim().split(/\\s+/).filter(Boolean).length <= 6"
             message:
