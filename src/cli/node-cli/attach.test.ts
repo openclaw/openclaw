@@ -37,6 +37,7 @@ vi.mock("../../gateway/client-start-readiness.js", () => ({
 }));
 vi.mock("../../node-host/attach.js", () => ({ prepareNodeAttach: prepareNodeAttachMock }));
 
+import { GatewayClient } from "../../gateway/client.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeAttach } from "./attach.js";
 
@@ -46,6 +47,7 @@ describe("runNodeAttach (node conduit launcher)", () => {
     mockClient.close.mockClear();
     forwarderClose.mockClear();
     prepareNodeAttachMock.mockClear();
+    vi.mocked(GatewayClient).mockClear();
   });
 
   it("throws when there is no node-host config (not run on a paired node)", async () => {
@@ -63,6 +65,18 @@ describe("runNodeAttach (node conduit launcher)", () => {
     expect(prepareNodeAttachMock).toHaveBeenCalledWith(
       expect.objectContaining({ client: mockClient, cwd: "/work", nowMs: 1_000 }),
     );
+    // connects as the paired node over its own link: url from the node-host config (ws + default
+    // host/port), the node's token as auth, role node, identity from the config — not re-declared.
+    expect(vi.mocked(GatewayClient)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "node-token",
+        role: "node",
+        instanceId: "node-1",
+        clientDisplayName: "node-1",
+        scopes: [],
+      }),
+    );
     await plan.close();
     // close() revokes the node-minted grant (symmetry with the gateway-host path), then tears down
     expect(mockClient.request).toHaveBeenCalledWith("node.attachRevoke", {
@@ -70,6 +84,17 @@ describe("runNodeAttach (node conduit launcher)", () => {
     });
     expect(forwarderClose).toHaveBeenCalledTimes(1);
     expect(mockClient.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses wss + the configured host/port when the node-host gateway uses TLS", async () => {
+    vi.mocked(loadNodeHostConfig).mockResolvedValueOnce({
+      nodeId: "n",
+      gateway: { tls: true, host: "gw.example", port: 8443 },
+    } as never);
+    await runNodeAttach({ cwd: "/work", nowMs: 0 });
+    expect(vi.mocked(GatewayClient)).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "wss://gw.example:8443" }),
+    );
   });
 
   it("fails fast and surfaces the real error on a non-transient connectivity failure", async () => {
