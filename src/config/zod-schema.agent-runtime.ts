@@ -1030,6 +1030,17 @@ export const AgentModelRuntimeEntrySchema = z
   })
   .strict();
 
+const AgentPluginSlotsSchema = z
+  .object({
+    memory: z.string().optional(),
+    "memory.recall": z.string().optional(),
+    "memory.compaction": z.string().optional(),
+    "memory.capture": z.string().optional(),
+    "memory.dreaming": z.string().optional(),
+    "memory.userModel": z.string().optional(),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -1080,6 +1091,12 @@ export const AgentEntrySchema = z
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
+    plugins: z
+      .object({
+        slots: AgentPluginSlotsSchema.optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,

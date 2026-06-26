@@ -9,6 +9,10 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-policy.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  listConfiguredMemoryRolePluginIds,
+  listMemoryRoleSlotDecisionValues,
+} from "../plugins/slot-resolution.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
@@ -42,7 +46,19 @@ export function resolvePluginHookDirs(params: {
     params.config?.plugins,
     metadataSnapshot.normalizePluginId,
   );
-  const memorySlot = normalizedPlugins.slots.memory;
+  const config = params.config ?? {};
+  const selectedMemoryRolePluginIds = new Set(listConfiguredMemoryRolePluginIds({ cfg: config }));
+  const memorySlots = listMemoryRoleSlotDecisionValues({
+    cfg: config,
+    includeConfiguredAgentSlots: true,
+    slotValues: [
+      normalizedPlugins.slots["memory.recall"],
+      normalizedPlugins.slots["memory.compaction"],
+      normalizedPlugins.slots["memory.capture"],
+      normalizedPlugins.slots["memory.dreaming"],
+      normalizedPlugins.slots["memory.userModel"],
+    ],
+  });
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
@@ -55,16 +71,23 @@ export function resolvePluginHookDirs(params: {
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: params.config,
+      rootConfig: config,
     });
     if (!activationState.activated) {
-      continue;
+      if (
+        !selectedMemoryRolePluginIds.has(record.id) ||
+        !normalizedPlugins.enabled ||
+        normalizedPlugins.deny.includes(record.id) ||
+        normalizedPlugins.entries[record.id]?.enabled === false
+      ) {
+        continue;
+      }
     }
 
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

@@ -6,6 +6,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
+  resolveMemoryPluginStatus,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
@@ -457,6 +458,37 @@ describe("buildTailscaleHttpsUrl", () => {
         serviceName: "svc:openclaw",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveMemoryPluginStatus", () => {
+  it("prefers the granular recall slot over the legacy memory slot", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: "legacy-memory",
+            "memory.recall": "recall-memory",
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "recall-memory" });
+  });
+
+  it("reports granular recall disablement", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            "memory.recall": "none",
+          },
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      slot: null,
+      reason: 'plugins.slots.memory.recall="none"',
+    });
   });
 });
 

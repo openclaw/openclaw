@@ -312,6 +312,74 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("uses the memory.recall slot instead of other memory roles for harness scoped loads", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      config: {
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          slots: {
+            memory: "capture-memory",
+            "memory.recall": "memory-core",
+          },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "memory-core": { enabled: true },
+            "capture-memory": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "memory-core"],
+      }),
+    );
+  });
+
+  it("uses agent memory.recall overrides for harness scoped loads", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      agentId: "agent-a",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "agent-a",
+              plugins: { slots: { "memory.recall": "memory-core" } },
+            },
+          ],
+        },
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          slots: { "memory.recall": "other-memory" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "memory-core": { enabled: true },
+            "other-memory": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "memory-core"],
+      }),
+    );
+  });
+
   it("does not auto-activate an untrusted workspace memory slot plugin", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",

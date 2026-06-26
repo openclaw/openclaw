@@ -5,7 +5,10 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
   hasMemoryRuntime,
+  listMemoryCapabilityRegistrations,
+  listMemoryRuntimeRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
@@ -48,13 +51,16 @@ function expectClearedMemoryState() {
     [],
   );
   expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+  expect(listMemoryRuntimeRegistrations()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
 function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
+    capabilities: listMemoryCapabilityRegistrations(),
     corpusSupplements: listMemoryCorpusSupplements(),
+    runtimes: listMemoryRuntimeRegistrations(),
     promptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -109,6 +115,7 @@ describe("memory plugin state", () => {
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("legacy-memory-v1")).toBe(runtime);
     expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "legacy-memory-v1",
       capability: {
@@ -149,6 +156,7 @@ describe("memory plugin state", () => {
       }),
     ).resolves.toEqual({ manager: null, error: "missing" });
     expect(hasMemoryRuntime()).toBe(true);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
     expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "memory-core",
       capability: {
@@ -185,7 +193,11 @@ describe("memory plugin state", () => {
       },
     });
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: {} as never,
+      }),
+    ).resolves.toEqual([
       {
         kind: "memory-root",
         workspaceDir: "/tmp/workspace-a",
@@ -261,8 +273,14 @@ describe("memory plugin state", () => {
 
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBeUndefined();
     expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: { plugins: { slots: { memory: "memory-lancedb" } } } as never,
+      }),
+    ).resolves.toEqual([
       {
         kind: "memory-root",
         workspaceDir: "/tmp/workspace",
@@ -272,6 +290,188 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("routes prompt, flush, and public artifacts through the selected recall plugin", async () => {
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["core prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/core.md"),
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "core",
+              workspaceDir: "/tmp/core",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/core/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    registerMemoryCapability("openclaw-honcho", {
+      promptBuilder: () => ["honcho prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/honcho.md"),
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "honcho",
+              workspaceDir: "/tmp/honcho",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/honcho/MEMORY.md",
+              agentIds: ["honcho-agent"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "honcho-agent",
+            plugins: {
+              slots: {
+                "memory.recall": "openclaw-honcho",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        agentId: "main",
+        availableTools: new Set(),
+      }),
+    ).toEqual(["core prompt"]);
+    expect(resolveMemoryFlushPlan({ cfg: cfg as never, agentId: "main" })?.relativePath).toBe(
+      "memory/core.md",
+    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: cfg as never, agentId: "main" }),
+    ).resolves.toEqual([
+      {
+        kind: "core",
+        workspaceDir: "/tmp/core",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/core/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    expect(
+      getMemoryCapabilityRegistration({
+        cfg: cfg as never,
+        agentId: "main",
+      })?.pluginId,
+    ).toBe("memory-core");
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        agentId: "honcho-agent",
+        availableTools: new Set(),
+      }),
+    ).toEqual(["honcho prompt"]);
+    expect(
+      resolveMemoryFlushPlan({ cfg: cfg as never, agentId: "honcho-agent" })?.relativePath,
+    ).toBe("memory/honcho.md");
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: cfg as never, agentId: "honcho-agent" }),
+    ).resolves.toEqual([
+      {
+        kind: "honcho",
+        workspaceDir: "/tmp/honcho",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/honcho/MEMORY.md",
+        agentIds: ["honcho-agent"],
+        contentType: "markdown",
+      },
+    ]);
+    expect(
+      getMemoryCapabilityRegistration({
+        cfg: cfg as never,
+        agentId: "honcho-agent",
+      })?.pluginId,
+    ).toBe("openclaw-honcho");
+  });
+
+  it("returns no selected capability when the recall slot is disabled", () => {
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["core prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/core.md"),
+    });
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "none",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual([]);
+    expect(resolveMemoryFlushPlan({ cfg: cfg as never })).toBeNull();
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
+  });
+
+  it("falls back to legacy prompt registration when config selects a plugin without a capability", () => {
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual(["legacy prompt"]);
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })?.pluginId).toBe(
+      "legacy-memory-v1",
+    );
+  });
+
+  it("does not fall back to legacy prompt registration when recall is disabled", () => {
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "none",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual([]);
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
   });
 
   it("passes citations mode through to the prompt builder", () => {
@@ -340,6 +540,7 @@ describe("memory plugin state", () => {
     registerMemoryRuntime(runtime);
 
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("legacy-memory-v1")).toBe(runtime);
     await expect(
       getMemoryRuntime()?.getMemorySearchManager({
         cfg: {} as never,
@@ -373,6 +574,30 @@ describe("memory plugin state", () => {
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/first.md");
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+  });
+
+  it("keeps plugin-id keyed runtimes for multiple recall-capable plugins", async () => {
+    const coreRuntime = createMemoryRuntime();
+    const lancedbRuntime = createMemoryRuntime();
+
+    registerMemoryCapability("memory-core", {
+      runtime: coreRuntime,
+    });
+    registerMemoryCapability("memory-lancedb", {
+      runtime: lancedbRuntime,
+    });
+
+    expect(getMemoryRuntime()).toBe(lancedbRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(coreRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBe(lancedbRuntime);
+    expect(listMemoryRuntimeRegistrations()).toEqual([
+      { pluginId: "memory-core", runtime: coreRuntime },
+      { pluginId: "memory-lancedb", runtime: lancedbRuntime },
+    ]);
+    expect(
+      listMemoryCapabilityRegistrations().map((registration) => registration.pluginId),
+    ).toEqual(["memory-core", "memory-lancedb"]);
   });
 
   it("clearMemoryPluginState resets both registries", () => {

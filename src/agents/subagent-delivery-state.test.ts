@@ -87,6 +87,44 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.lastAnnounceRetryAt).toBeUndefined();
   });
 
+  it("does not restore non-required live legacy rows as pending delivery", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        completion: { required: false },
+        expectsCompletionMessage: true,
+      }),
+    );
+
+    expect(entry.completion?.required).toBe(false);
+    expect(entry.delivery?.status).toBe("not_required");
+  });
+
+  it("restores terminal legacy cleanup rows without explicit completion state as pending delivery", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        endedAt: 300,
+        expectsCompletionMessage: undefined,
+        outcome: { status: "ok" },
+      }),
+    );
+
+    expect(entry.completion?.required).toBe(true);
+    expect(entry.delivery?.status).toBe("pending");
+  });
+
+  it("does not restore explicitly non-required terminal rows as pending delivery", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        completion: { required: false },
+        endedAt: 300,
+        expectsCompletionMessage: true,
+        outcome: { status: "ok" },
+      }),
+    );
+
+    expect(entry.delivery?.status).toBe("not_required");
+  });
+
   it("migrates in-progress handoff leases to steering leases", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

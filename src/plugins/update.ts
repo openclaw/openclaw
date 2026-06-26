@@ -67,7 +67,7 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { MEMORY_PLUGIN_SLOT_KEYS, PLUGIN_SLOT_KEYS, resetPluginSlotReferences } from "./slots.js";
 
 /** Logger surface used by plugin update flows. */
 export type PluginUpdateLogger = {
@@ -1063,15 +1063,60 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
   }
 
   const slots = plugins.slots;
-  if (slots?.memory === fromId || slots?.contextEngine === fromId) {
-    ensureNextPlugins().slots = {
-      ...slots,
-      ...(slots.memory === fromId ? { memory: toId } : {}),
-      ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
-    };
+  const nextSlots = slots ? { ...slots } : undefined;
+  let slotsChanged = false;
+  if (nextSlots) {
+    for (const slotKey of PLUGIN_SLOT_KEYS) {
+      if (nextSlots[slotKey] === fromId) {
+        nextSlots[slotKey] = toId;
+        slotsChanged = true;
+      }
+    }
+  }
+  if (slotsChanged) {
+    ensureNextPlugins().slots = nextSlots;
   }
 
-  return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
+  const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : undefined;
+  let nextAgentList: typeof agentList | undefined;
+  if (agentList) {
+    for (const [agentIndex, agent] of agentList.entries()) {
+      const agentSlots = agent?.plugins?.slots;
+      if (!agentSlots) {
+        continue;
+      }
+      let nextAgentSlots: typeof agentSlots | undefined;
+      for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+        if (agentSlots[slotKey] !== fromId) {
+          continue;
+        }
+        nextAgentSlots ??= { ...agentSlots };
+        nextAgentSlots[slotKey] = toId;
+      }
+      if (!nextAgentSlots) {
+        continue;
+      }
+      nextAgentList ??= [...agentList];
+      nextAgentList[agentIndex] = {
+        ...agent,
+        plugins: {
+          ...agent.plugins,
+          slots: nextAgentSlots,
+        },
+      };
+    }
+  }
+
+  const nextConfig = nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
+  return nextAgentList
+    ? {
+        ...nextConfig,
+        agents: {
+          ...cfg.agents,
+          list: nextAgentList,
+        },
+      }
+    : nextConfig;
 }
 
 function withoutPluginInstallRecord(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -1130,23 +1175,44 @@ function resetDisabledPluginSlots(
   slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
   pluginId: string,
 ): NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined {
-  if (!slots) {
-    return slots;
+  return resetPluginSlotReferences(slots, pluginId).slots;
+}
+
+function resetDisabledPluginAgentSlots(
+  agents: OpenClawConfig["agents"],
+  pluginId: string,
+): OpenClawConfig["agents"] {
+  const agentList = Array.isArray(agents?.list) ? agents.list : undefined;
+  if (!agentList) {
+    return agents;
   }
-  let next = slots;
-  if (next.memory === pluginId) {
-    next = {
-      ...next,
-      memory: defaultSlotIdForKey("memory"),
+
+  let nextAgentList: typeof agentList | undefined;
+  for (const [agentIndex, agent] of agentList.entries()) {
+    const agentSlots = agent?.plugins?.slots;
+    if (!agentSlots) {
+      continue;
+    }
+    const reset = resetPluginSlotReferences(agentSlots, pluginId, MEMORY_PLUGIN_SLOT_KEYS);
+    if (!reset.changed) {
+      continue;
+    }
+    nextAgentList ??= [...agentList];
+    nextAgentList[agentIndex] = {
+      ...agent,
+      plugins: {
+        ...agent.plugins,
+        slots: reset.slots,
+      },
     };
   }
-  if (next.contextEngine === pluginId) {
-    next = {
-      ...next,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
-  }
-  return next;
+
+  return nextAgentList
+    ? {
+        ...agents,
+        list: nextAgentList,
+      }
+    : agents;
 }
 
 function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -1154,6 +1220,7 @@ function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): Ope
   const existingEntry = pluginsConfig.entries?.[pluginId];
   return {
     ...config,
+    agents: resetDisabledPluginAgentSlots(config.agents, pluginId),
     plugins: {
       ...pluginsConfig,
       allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),

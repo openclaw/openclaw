@@ -1,7 +1,9 @@
 // Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyTestPluginDefaults,
   createPluginActivationSource,
+  isTestDefaultMemorySlotDisabled,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
@@ -251,6 +253,47 @@ describe("normalizePluginsConfig", () => {
     expect(result.deny).toEqual(["anthropic"]);
     expect(discoverPlugins).not.toHaveBeenCalled();
     expect(loadManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyTestPluginDefaults", () => {
+  const vitestEnv = { VITEST: "true" } as NodeJS.ProcessEnv;
+
+  it("keeps canonical memory.recall test configs explicit", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+    };
+
+    expect(applyTestPluginDefaults(cfg, vitestEnv)).toEqual(cfg);
+  });
+
+  it("does not reject canonical memory.recall as a disabled test default", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+    };
+
+    expect(isTestDefaultMemorySlotDisabled(cfg, vitestEnv)).toBe(false);
+  });
+
+  it("still disables memory by default when test plugin config omits recall slots", () => {
+    const cfg = {
+      plugins: {
+        allow: ["browser"],
+      },
+    };
+
+    expect(applyTestPluginDefaults(cfg, vitestEnv).plugins?.slots).toEqual({
+      memory: "none",
+    });
+    expect(isTestDefaultMemorySlotDisabled(cfg, vitestEnv)).toBe(true);
   });
 });
 
@@ -567,6 +610,32 @@ describe("resolveEffectivePluginActivationState", () => {
       explicitlyEnabled: true,
       source: "explicit",
       reason: "selected context engine slot",
+    });
+  });
+
+  it("treats an explicitly selected workspace memory role as explicit activation", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-lancedb",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "memory-lancedb",
+        origin: "workspace",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected memory slot",
     });
   });
 });

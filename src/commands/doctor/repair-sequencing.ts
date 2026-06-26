@@ -32,6 +32,7 @@ import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engi
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
+import { maybeRepairLegacyMemorySlotConfig } from "./shared/legacy-memory-slot.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
@@ -154,6 +155,7 @@ export async function runDoctorRepairSequence(params: {
     );
   }
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
+  applyMutation(maybeRepairLegacyMemorySlotConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairGroupAllowFromFallback(state.candidate));

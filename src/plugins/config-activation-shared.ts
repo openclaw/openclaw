@@ -1,4 +1,6 @@
 // Shares plugin activation state helpers across config and registry code.
+import { MEMORY_PLUGIN_SLOT_KEYS, defaultSlotIdForKey } from "./slots.js";
+
 type EnableStateLike = {
   enabled: boolean;
   reason?: string;
@@ -45,6 +47,11 @@ type PluginActivationConfigLike = {
   deny: readonly string[];
   slots: {
     memory?: string | null;
+    "memory.recall"?: string | null;
+    "memory.compaction"?: string | null;
+    "memory.capture"?: string | null;
+    "memory.dreaming"?: string | null;
+    "memory.userModel"?: string | null;
     contextEngine?: string | null;
   };
   entries: Record<string, { enabled?: boolean } | undefined>;
@@ -94,6 +101,10 @@ export function toPluginActivationState(
   };
 }
 
+function isSelectedMemorySlot(config: PluginActivationConfigLike, id: string): boolean {
+  return MEMORY_PLUGIN_SLOT_KEYS.some((slotKey) => config.slots[slotKey] === id);
+}
+
 function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   id: string;
   origin: string;
@@ -113,7 +124,7 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   ) {
     return { explicitlyEnabled: true, cause: "bundled-channel-enabled-in-config" };
   }
-  if (params.config.slots.memory === params.id) {
+  if (isSelectedMemorySlot(params.config, params.id)) {
     return { explicitlyEnabled: true, cause: "selected-memory-slot" };
   }
   if (params.config.slots.contextEngine === params.id) {
@@ -180,10 +191,14 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     };
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
+  const explicitNonDefaultMemorySlot =
+    explicitSelection.cause === "selected-memory-slot" &&
+    params.id !== defaultSlotIdForKey("memory.recall");
   if (
     params.origin === "workspace" &&
     !explicitlyAllowed &&
     entry?.enabled !== true &&
+    !explicitNonDefaultMemorySlot &&
     explicitSelection.cause !== "selected-context-engine-slot"
   ) {
     return {
@@ -194,7 +209,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: "workspace-disabled-by-default",
     };
   }
-  if (params.config.slots.memory === params.id) {
+  if (isSelectedMemorySlot(params.config, params.id)) {
     return {
       enabled: true,
       activated: true,
@@ -342,7 +357,7 @@ function hasKind(kind: PluginKindLike, target: string): boolean {
 export function resolveMemorySlotDecisionShared(params: {
   id: string;
   kind?: PluginKindLike;
-  slot: string | null | undefined;
+  slot: string | null | undefined | readonly (string | null | undefined)[];
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   if (!hasKind(params.kind, "memory")) {
@@ -351,16 +366,21 @@ export function resolveMemorySlotDecisionShared(params: {
   // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
   // memory slot must stay enabled so its other slot role can still load.
   const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
-  if (params.slot === null) {
+  const slots = Array.isArray(params.slot) ? params.slot : [params.slot];
+  if (slots.some((slot) => slot === params.id)) {
+    return { enabled: true, selected: true };
+  }
+  const configuredSlots = slots.filter(
+    (slot): slot is string | null => slot === null || typeof slot === "string",
+  );
+  if (configuredSlots.length > 0 && configuredSlots.every((slot) => slot === null)) {
     return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
   }
-  if (typeof params.slot === "string") {
-    if (params.slot === params.id) {
-      return { enabled: true, selected: true };
-    }
+  const selectedSlots = configuredSlots.filter((slot): slot is string => typeof slot === "string");
+  if (selectedSlots.length > 0) {
     return isMultiKind
       ? { enabled: true }
-      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
+      : { enabled: false, reason: `memory slot set to "${selectedSlots.join(", ")}"` };
   }
   if (params.selectedId && params.selectedId !== params.id) {
     return isMultiKind

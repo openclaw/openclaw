@@ -1376,7 +1376,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Legacy shorthand for selecting the active factual memory recall plugin by id, or "none" to disable memory plugins.',
+  "plugins.slots.memory.recall":
+    'Selects the plugin that owns factual memory search and retrieval, or "none" to disable recall for that scope.',
+  "plugins.slots.memory.compaction":
+    'Selects the plugin that owns memory-aware context compaction, or "none" when no memory compaction provider is active.',
+  "plugins.slots.memory.capture":
+    'Selects the plugin that owns automatic memory capture and extraction, or "none" when no capture provider is active.',
+  "plugins.slots.memory.dreaming":
+    'Selects the plugin that owns background memory consolidation, promotion, and dream diary behavior, or "none" to use the recall/default dreaming fallback.',
+  "plugins.slots.memory.userModel":
+    'Selects the plugin that owns inferred user/profile modeling, or "none" when no user-model provider is active.',
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.entries":

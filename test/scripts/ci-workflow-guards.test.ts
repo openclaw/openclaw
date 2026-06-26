@@ -551,8 +551,9 @@ describe("ci workflow guards", () => {
     expect(run.indexOf('for index in "${!pids[@]}"')).toBeLessThan(
       run.indexOf('if [ "$RUN_GATEWAY_WATCH" = "true" ]; then'),
     );
+    expect(run).toContain('node_cmd="${NODE_BIN:?}/node"');
     expect(run).toContain(
-      'node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1',
+      '"$node_cmd" scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1',
     );
   });
 

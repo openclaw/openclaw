@@ -802,8 +802,9 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
             log="${RUNNER_TEMP}/gateway-watch.log"
-            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build"
-            if node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
+            node_cmd="${NODE_BIN:?}/node"
+            echo "starting gateway-watch: $node_cmd scripts/check-gateway-watch-regression.mjs --skip-build"
+            if "$node_cmd" scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
               result="success"
             else
               result="failure"

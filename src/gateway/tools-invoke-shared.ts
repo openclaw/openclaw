@@ -8,7 +8,8 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import { ToolInputError } from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -71,7 +72,7 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
   }
   const reasons: string[] = [];
   const plugins = cfg.plugins;
-  const slotRaw = plugins?.slots?.memory;
+  const slotRaw = plugins?.slots?.["memory.recall"] ?? plugins?.slots?.memory;
   const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
@@ -80,7 +81,11 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
     reasons.push("plugins.enabled=false");
   }
   if (slotDisabled) {
-    reasons.push(slotRaw === null ? "plugins.slots.memory=null" : 'plugins.slots.memory="none"');
+    const slotPath =
+      plugins?.slots?.["memory.recall"] !== undefined
+        ? "plugins.slots.memory.recall"
+        : "plugins.slots.memory";
+    reasons.push(slotRaw === null ? `${slotPath}=null` : `${slotPath}="none"`);
   }
   if (!pluginsDisabled && !slotDisabled && defaultDisabled) {
     reasons.push("memory plugin disabled by test default");
@@ -180,7 +185,7 @@ export async function invokeGatewayTool(params: {
           type: "invalid_request",
           message:
             `memory tools are disabled in tests${suffix}. ` +
-            `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
+            `Enable by setting plugins.slots.memory.recall="${defaultSlotIdForKey("memory.recall")}" (and ensure plugins.enabled is not false).`,
         },
       };
     }

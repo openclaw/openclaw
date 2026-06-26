@@ -96,10 +96,13 @@ export function createPluginActivationSource(params: {
 }
 
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.slots && Object.hasOwn(plugins.slots, "memory"));
+  Boolean(
+    plugins?.slots &&
+    (Object.hasOwn(plugins.slots, "memory") || Object.hasOwn(plugins.slots, "memory.recall")),
+  );
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.entries && Object.hasOwn(plugins.entries, defaultSlotIdForKey("memory")));
+  Boolean(plugins?.entries && Object.hasOwn(plugins.entries, defaultSlotIdForKey("memory.recall")));
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);
@@ -216,7 +219,7 @@ export function resolveEffectivePluginActivationState(params: {
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: string | string[];
-  slot: string | null | undefined;
+  slot: string | null | undefined | readonly (string | null | undefined)[];
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   return resolveMemorySlotDecisionShared(params);

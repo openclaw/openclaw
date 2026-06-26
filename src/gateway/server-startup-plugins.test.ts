@@ -640,6 +640,21 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("does not warn for memory embedding providers when the canonical recall slot is disabled", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+        plugins: { slots: { "memory.recall": "none" } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   function customOllamaConfig(source: "provider" | "fallback" = "provider"): OpenClawConfig {
     const memorySearch =
       source === "provider"
