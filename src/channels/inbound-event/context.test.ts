@@ -178,7 +178,6 @@ describe("buildChannelInboundEventContext", () => {
       ImplicitMentionKinds: ["reply_to_bot"],
       RequireMention: true,
       EffectiveWasMentioned: true,
-      MentionShouldSkip: false,
       MentionSource: "explicit_bot",
       CommandAuthorized: true,
       CommandSource: "text",

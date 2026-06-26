@@ -130,7 +130,6 @@ describe("createPluginRuntimeMock", () => {
     expect(ctx.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
     expect(ctx.RequireMention).toBe(true);
     expect(ctx.EffectiveWasMentioned).toBe(true);
-    expect(ctx.MentionShouldSkip).toBe(false);
     expect(ctx.MentionSource).toBe("mention_pattern");
   });
 

@@ -12,7 +12,6 @@ type SignalMsgContext = Pick<
   | "HasAnyMention"
   | "RequireMention"
   | "EffectiveWasMentioned"
-  | "MentionShouldSkip"
   | "MentionSource"
 > & {
   Body?: string;
@@ -21,7 +20,6 @@ type SignalMsgContext = Pick<
   HasAnyMention?: boolean;
   RequireMention?: boolean;
   EffectiveWasMentioned?: boolean;
-  MentionShouldSkip?: boolean;
   MentionSource?: string;
 };
 
@@ -163,7 +161,6 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
     expect(getCapturedCtx().RequireMention).toBe(true);
     expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
-    expect(getCapturedCtx().MentionShouldSkip).toBe(false);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
@@ -344,7 +341,6 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().HasAnyMention).toBe(true);
     expect(getCapturedCtx().RequireMention).toBe(true);
     expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
-    expect(getCapturedCtx().MentionShouldSkip).toBe(false);
     expect(getCapturedCtx().MentionSource).toBe("native");
   });
 
