@@ -3246,6 +3246,100 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("routes typed stop to the only active channel session when the local chat run id is not set", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: false, status: "done" }),
+        row("agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat", {
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat",
+    });
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("routes typed stop to active channel sessions without direct or group markers", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:telegram:8661849123:topic:4052", {
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main:telegram:8661849123:topic:4052",
+    });
+  });
+
+  it("does not guess a channel session when several channel runs are active", async () => {
+    const request = vi.fn(async () => ({ aborted: false }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:openclaw-weixin:direct:user-a", {
+          hasActiveRun: true,
+          status: "running",
+        }),
+        row("agent:main:telegram:direct:user-b", {
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main",
+    });
+  });
+
+  it("does not fallback to a channel run owned by another agent", async () => {
+    const request = vi.fn(async () => ({ aborted: false }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:work:openclaw-weixin:direct:user-a", {
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main",
+    });
+  });
+
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({
       connected: false,

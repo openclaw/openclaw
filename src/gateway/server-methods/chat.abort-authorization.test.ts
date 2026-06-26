@@ -151,6 +151,30 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-wechat")).toBe(false);
   });
 
+  it("aborts hidden channel runs whose session key omits direct or group markers", async () => {
+    const sessionKey = "agent:main:telegram:8661849123:topic:4052";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-telegram-topic", createActiveRun(sessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+      },
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-telegram-topic"] });
+    expect(context.chatAbortControllers.has("run-telegram-topic")).toBe(false);
+  });
+
   it("clears agent text throttle state through the real abort caller", async () => {
     const context = createChatAbortContext({
       chatAbortControllers: new Map([

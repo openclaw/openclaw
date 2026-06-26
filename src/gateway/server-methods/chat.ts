@@ -616,7 +616,7 @@ function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
   if (!sessionScopeHead || CHANNEL_AGNOSTIC_SESSION_SCOPES.has(sessionScopeHead)) {
     return false;
   }
-  return parts.slice(1).some((part) => CHANNEL_SCOPED_SESSION_SHAPES.has(part));
+  return parts.length > 1;
 }
 
 type ChatSendDeliveryEntry = {

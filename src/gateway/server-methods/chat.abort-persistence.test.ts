@@ -926,6 +926,45 @@ describe("chat abort transcript persistence", () => {
     );
   });
 
+  it("aborts hidden pending channel agent runs whose session key omits direct or group markers", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:telegram:8661849123:topic:4052";
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-telegram-topic-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-telegram-topic-hidden",
+        sessionKey,
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-hidden",
+      },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: {
+        sessionKey,
+      },
+      client: { connId: "conn-hidden" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-telegram-topic-hidden"] });
+    expect(context.dedupe.get("agent:run-telegram-topic-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: "timeout",
+          controlUiVisible: false,
+        }),
+      }),
+    );
+  });
+
   it("aborts hidden pending internal agent runs by explicit owner run id", async () => {
     const respond = vi.fn();
     const context = createChatAbortContext();
