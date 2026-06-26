@@ -65,7 +65,9 @@ describe("preflightCronModelProvider", () => {
 
     // Default: sanitizeConfiguredProviderRequest replicates the real sanitization
     sanitizeConfiguredProviderRequestMock.mockImplementation((request: any) => {
-      if (!request || typeof request !== "object" || Array.isArray(request)) return undefined;
+      if (!request || typeof request !== "object" || Array.isArray(request)) {
+        return undefined;
+      }
       let hasContent = false;
       const result: any = {};
       if (request.auth) {
@@ -96,7 +98,9 @@ describe("preflightCronModelProvider", () => {
 
     // Default: resolveProviderRequestHeaders builds headers from auth config
     resolveProviderRequestHeadersMock.mockImplementation((params: any) => {
-      if (!params.request?.auth) return undefined;
+      if (!params.request?.auth) {
+        return undefined;
+      }
       const auth = params.request.auth;
       if (auth.mode === "authorization-bearer") {
         return { Authorization: `Bearer ${auth.token}` };
@@ -1088,8 +1092,14 @@ describe("preflightCronModelProvider", () => {
 
       // resolveApiKeyForProvider should NOT be called when header mode configured
       expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
-      // resolveProviderRequestHeaders should NOT be called (sanitization drops empty auth)
-      expect(resolveProviderRequestHeadersMock).not.toHaveBeenCalled();
+      // resolveProviderRequestHeaders is called (we always delegate) but returns undefined
+      // for empty auth since the mock only handles valid auth configs
+      expect(resolveProviderRequestHeadersMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "test",
+          request: undefined,
+        }),
+      );
       const request = requireFetchPreflightRequest();
       expect(request.init?.headers).toBeUndefined();
     });

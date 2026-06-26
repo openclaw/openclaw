@@ -231,40 +231,22 @@ export async function preflightCronModelProvider(params: {
   }
 
   // Auth resolution for preflight probe via shared resolveProviderRequestHeaders
+  // Always delegate — handles auth, request.headers, and provider-level headers
+  // in a single call, matching the normal model request path.
   const requestOverrides = sanitizeConfiguredProviderRequest(providerConfig.request);
   let headers: Record<string, string> | undefined;
 
+  headers = resolveProviderRequestHeaders({
+    provider: params.provider,
+    api,
+    baseUrl,
+    request: requestOverrides,
+  });
+
+  // Fall through to resolveApiKeyForProvider when resolveProviderRequestHeaders
+  // returned nothing (no auth/headers configured on the provider).
+  // Skip when mode is "header" — already handled by resolveProviderRequestHeaders above.
   const headerModeConfigured = providerConfig?.request?.auth?.mode === "header";
-  let headerModeWithEmptyFields = false;
-  if (headerModeConfigured) {
-    const headerAuth = providerConfig?.request?.auth;
-    if (headerAuth?.mode === "header") {
-      headerModeWithEmptyFields =
-        !headerAuth.headerName?.trim() ||
-        typeof headerAuth.value !== "string" ||
-        !headerAuth.value.trim();
-    }
-  }
-
-  // 1. Check request.auth config override via resolveProviderRequestHeaders
-  if (requestOverrides?.auth) {
-    headers = resolveProviderRequestHeaders({
-      provider: params.provider,
-      api,
-      baseUrl,
-      request: requestOverrides,
-    });
-  }
-
-  // Debug log for misconfigured header mode (headerName or value is empty)
-  if (headerModeWithEmptyFields) {
-    logDebug(
-      `[preflight] request.auth.mode is "header" but headerName or value is empty for provider ${params.provider}; skipping auth`,
-    );
-  }
-
-  // 2. Fall through to resolveApiKeyForProvider (full credential chain, handles SecretRef/profile/env/markers)
-  // Skip when mode is "header" — custom headers already handle auth, no Bearer needed
   if (!headers && !headerModeConfigured) {
     try {
       const resolved = await resolveApiKeyForProvider({
@@ -288,6 +270,21 @@ export async function preflightCronModelProvider(params: {
     } catch (err) {
       logDebug(
         `[preflight] resolveApiKeyForProvider failed: ${String(err)} (non-fatal for preflight)`,
+      );
+    }
+  }
+
+  // Debug log for misconfigured header mode (headerName or value is empty)
+  if (headerModeConfigured) {
+    const headerAuth = providerConfig?.request?.auth;
+    if (
+      headerAuth?.mode === "header" &&
+      (!headerAuth.headerName?.trim() ||
+        typeof headerAuth.value !== "string" ||
+        !headerAuth.value.trim())
+    ) {
+      logDebug(
+        `[preflight] request.auth.mode is "header" but headerName or value is empty for provider ${params.provider}; skipping auth`,
       );
     }
   }
