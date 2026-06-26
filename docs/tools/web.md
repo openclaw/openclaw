@@ -368,20 +368,21 @@ show the `x_search` prompt.
 
 ## Tool parameters
 
-| Parameter             | Description                                           |
-| --------------------- | ----------------------------------------------------- |
-| `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g. "US", "DE")           |
-| `language`            | ISO 639-1 language code (e.g. "en", "de")             |
-| `search_lang`         | Search-language code (Brave only)                     |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
-| `date_after`          | Results after this date (YYYY-MM-DD)                  |
-| `date_before`         | Results before this date (YYYY-MM-DD)                 |
-| `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+| Parameter             | Description                                            |
+| --------------------- | ------------------------------------------------------ |
+| `query`               | Search query (required)                                |
+| `count`               | Results to return (1-10, default: 5)                   |
+| `country`             | 2-letter ISO country code (e.g. "US", "DE")            |
+| `language`            | ISO 639-1 language code (e.g. "en", "de")              |
+| `search_lang`         | Search-language code (Brave only)                      |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`         |
+| `date_after`          | Results after this date (YYYY-MM-DD)                   |
+| `date_before`         | Results before this date (YYYY-MM-DD)                  |
+| `ui_lang`             | UI language code (Brave only)                          |
+| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)      |
+| `search_context_size` | `low`, `medium`, or `high` content budget (Perplexity) |
+| `max_tokens`          | Total content budget, default 25000 (Perplexity only)  |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)   |
 
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
@@ -393,7 +394,10 @@ show the `x_search` prompt.
   freshness values and explicit dates set Google Search grounding time ranges.
   Perplexity behaves the same way when you use the Sonar/OpenRouter
   compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
-  `model` or `OPENROUTER_API_KEY`).
+  `model` or `OPENROUTER_API_KEY`), except that `search_context_size` remains
+  available as a `low` / `medium` / `high` content extraction hint. Do not
+  combine `search_context_size` with Perplexity's explicit `max_tokens` or
+  `max_tokens_per_page` budgets.
   SearXNG accepts `http://` only for trusted private-network or loopback hosts;
   public SearXNG endpoints must use `https://`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
@@ -501,6 +505,12 @@ await web_search({
 await web_search({
   query: "product reviews",
   domain_filter: ["-reddit.com", "-pinterest.com"],
+});
+
+// Perplexity content extraction budget
+await web_search({
+  query: "detailed AI research",
+  search_context_size: "high",
 });
 ```
 

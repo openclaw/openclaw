@@ -28,6 +28,18 @@ describe("web_search tool schema", () => {
 
     expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
+
+  it("advertises Perplexity search context size choices", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as
+      | { properties?: { search_context_size?: { enum?: unknown; type?: unknown } } }
+      | undefined;
+
+    expect(parameters?.properties?.search_context_size).toMatchObject({
+      type: "string",
+      enum: ["low", "medium", "high"],
+    });
+  });
 });
 
 describe("web_search freshness normalization", () => {
