@@ -75,6 +75,45 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("suppresses adjacent history replay / live final duplicate (#96967)", () => {
+    const chatLog = new ChatLog(40);
+
+    // History replay: no runId.
+    chatLog.finalizeAssistant("Hello from Telegram");
+    // Live final: same text, has runId, immediately after replay.
+    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
+
+    expect(chatLog.children.length).toBe(1);
+  });
+
+  it("allows live final after history replay when text differs", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.finalizeAssistant("Old reply");
+    chatLog.finalizeAssistant("New reply", "run-telegram");
+
+    expect(chatLog.children.length).toBe(2);
+  });
+
+  it("allows live final after history replay when a non-assistant row separates them", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.finalizeAssistant("Hello from Telegram");
+    chatLog.addUser("next prompt");
+    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
+
+    expect(chatLog.children.length).toBe(3);
+  });
+
+  it("allows sequential live finals with different runIds", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.finalizeAssistant("result", "run-one");
+    chatLog.finalizeAssistant("result", "run-two");
+
+    expect(chatLog.children.length).toBe(2);
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");

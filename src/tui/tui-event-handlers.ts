@@ -102,6 +102,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
+  // Persists across clearTrackedRunState so late chat deltas/errors for a
+  // previously finalized run are still deduplicated after a sessions.changed
+  // reload (#96967). chatFinalizedRunsWithDisplay is cleared together with
+  // finalizedRunsWithDisplay because a sessions.changed reload clears the
+  // chat log and loadHistory() may not have replayed the just-finalized
+  // assistant row — prior display is not proof of current visibility.
+  const chatFinalizedRuns = new Map<string, number>();
+  const chatFinalizedRunsWithDisplay = new Map<string, number>();
   const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
@@ -166,6 +174,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const clearTrackedRunState = () => {
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
+    chatFinalizedRunsWithDisplay.clear();
     completedRuns.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
@@ -309,14 +318,18 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    chatFinalizedRuns.set(runId, Date.now());
     completedRuns.set(runId, Date.now());
     if (opts?.displayedFinal === true) {
       finalizedRunsWithDisplay.set(runId, Date.now());
+      chatFinalizedRunsWithDisplay.set(runId, Date.now());
     }
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
     pruneRunMap(finalizedRunsWithDisplay);
+    pruneRunMap(chatFinalizedRuns);
+    pruneRunMap(chatFinalizedRunsWithDisplay);
     pruneRunMap(completedRuns);
   };
 
@@ -613,17 +626,21 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
-    if (finalizedRuns.has(evt.runId)) {
+    if (finalizedRuns.has(evt.runId) || chatFinalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
       }
-      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
+      if (
+        evt.state === "error" &&
+        (finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId))
+      ) {
         clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
       if (evt.state === "final") {
         const hasLateDisplayableFinal =
-          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
+          hasDisplayableFinalEvent(evt) &&
+          !(finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId));
         if (!hasLateDisplayableFinal) {
           clearStaleStreamingIfNoTrackedRunRemains();
           return;
