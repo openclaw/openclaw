@@ -49,7 +49,9 @@ final class ShareViewController: UIViewController {
         self.draftTextView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
 
         self.sendButton.translatesAutoresizingMaskIntoConstraints = false
-        self.sendButton.setTitle(NSLocalizedString("Send to OpenClaw", comment: "Share extension send action"), for: .normal)
+        self.sendButton.setTitle(
+            NSLocalizedString("Send to OpenClaw", comment: "Share extension send action"),
+            for: .normal)
         self.sendButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         self.sendButton.addTarget(self, action: #selector(self.handleSendTap), for: .touchUpInside)
         self.sendButton.isEnabled = false
@@ -102,7 +104,9 @@ final class ShareViewController: UIViewController {
         }
         if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
-            self.showStatus(NSLocalizedString("Add a message, then tap Send.", comment: "Share extension empty draft guidance"))
+            self.showStatus(NSLocalizedString(
+                "Add a message, then tap Send.",
+                comment: "Share extension empty draft guidance"))
         } else {
             ShareGatewayRelaySettings.saveLastEvent("Share ready: draft prepared.")
             self.showStatus(NSLocalizedString("Edit text, then tap Send.", comment: "Share extension draft guidance"))
