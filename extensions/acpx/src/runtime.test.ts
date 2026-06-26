@@ -192,6 +192,76 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
+  it("adds the OpenClaw session key to the managed OpenClaw tools MCP bridge", () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+
+    const readScopedMcpEnv = (sessionKey: string) => {
+      const delegate = (
+        runtime as unknown as {
+          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+        }
+      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+        options: {
+          mcpServers?: Array<{
+            env?: Array<{ name: string; value: string }>;
+            name: string;
+          }>;
+        };
+      };
+      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-tools")?.env;
+    };
+
+    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:worker:main",
+    });
+    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:research:main",
+    });
+  });
+
+  it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
+    const safeProbe = vi
+      .spyOn(bridgeSafeDelegate, "probeAvailability")
+      .mockResolvedValue(undefined);
+
+    await runtime.probeAvailability();
+
+    expect(safeProbe).toHaveBeenCalledTimes(1);
+    expect(defaultProbe).not.toHaveBeenCalled();
+  });
+
   it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

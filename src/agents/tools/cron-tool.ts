@@ -523,7 +523,7 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
-  callerScope: CronToolCallerScope;
+  callerScope?: CronToolCallerScope;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
 }): Promise<void> {
@@ -550,7 +550,7 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
 
   const existing = await params.callGateway("cron.get", params.gatewayOpts, {
     id: params.id,
-    callerScope: params.callerScope,
+    ...(params.callerScope ? { callerScope: params.callerScope } : {}),
   });
   const existingPayload = isRecord(existing) ? existing.payload : undefined;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
@@ -589,10 +589,14 @@ function readCronJobIdParam(params: Record<string, unknown>) {
 function resolveCronToolCallerScope(
   opts: CronToolOptions | undefined,
   cfg: OpenClawConfig,
-): CronToolCallerScope {
+): CronToolCallerScope | undefined {
+  const sessionKey = opts?.agentSessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
   return {
     kind: "agentTool",
-    agentId: resolveSessionAgentId({ sessionKey: opts?.agentSessionKey, config: cfg }),
+    agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
   };
 }
 
@@ -945,9 +949,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const { callerScope } = resolveScopedCronContext();
           const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
           const explicitAgentId = readCronToolAgentId(params.agentId);
-          if (explicitAgentId && explicitAgentId !== callerScope.agentId) {
+          if (callerScope && explicitAgentId && explicitAgentId !== callerScope.agentId) {
             throw new Error("cron list agentId must match the calling agent");
           }
+          const listAgentId = callerScope?.agentId ?? explicitAgentId;
           const includeDisabled = Boolean(params.includeDisabled);
           let offset = 0;
           let result: unknown;
@@ -958,8 +963,8 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               result = await callGateway("cron.list", gatewayOpts, {
                 includeDisabled,
                 ...(useCompactList ? { compact: true } : {}),
-                agentId: callerScope.agentId,
-                callerScope,
+                ...(listAgentId ? { agentId: listAgentId } : {}),
+                ...(callerScope ? { callerScope } : {}),
                 ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
               });
             } catch (error) {
@@ -992,7 +997,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.get", gatewayOpts, { id, callerScope }));
+          return jsonResult(
+            await callGateway("cron.get", gatewayOpts, {
+              id,
+              ...(callerScope ? { callerScope } : {}),
+            }),
+          );
         }
         case "add": {
           const { cfg, callerScope } = resolveScopedCronContext();
@@ -1027,13 +1037,15 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            assertCronToolAgentFieldMatchesScope({
-              value: (job as { agentId?: unknown }).agentId,
-              field: "cron job agentId",
-              callerScope,
-            });
-            (job as { agentId?: string }).agentId = callerScope.agentId;
-            assertCronToolSessionRefsMatchScope(job as Record<string, unknown>, callerScope);
+            if (callerScope) {
+              assertCronToolAgentFieldMatchesScope({
+                value: (job as { agentId?: unknown }).agentId,
+                field: "cron job agentId",
+                callerScope,
+              });
+              (job as { agentId?: string }).agentId = callerScope.agentId;
+              assertCronToolSessionRefsMatchScope(job as Record<string, unknown>, callerScope);
+            }
             const sessionTarget = normalizeLowercaseStringOrEmpty(
               (job as { sessionTarget?: unknown }).sessionTarget,
             );
@@ -1108,7 +1120,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               }
             }
           }
-          return jsonResult(await callGateway("cron.add", gatewayOpts, { ...job, callerScope }));
+          return jsonResult(
+            await callGateway("cron.add", gatewayOpts, {
+              ...job,
+              ...(callerScope ? { callerScope } : {}),
+            }),
+          );
         }
         case "update": {
           const { callerScope } = resolveScopedCronContext();
@@ -1142,12 +1159,14 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if ("agentId" in patch) {
             throw new Error("cron patch agentId cannot be changed by the agent cron tool");
           }
-          assertCronToolSessionRefsMatchScope(patch, callerScope);
+          if (callerScope) {
+            assertCronToolSessionRefsMatchScope(patch, callerScope);
+          }
           await capCronAgentTurnUpdatePatchToolsAllow({
             id,
             patch,
             creatorToolAllowlist: opts?.creatorToolAllowlist,
-            callerScope,
+            ...(callerScope ? { callerScope } : {}),
             gatewayOpts,
             callGateway,
           });
@@ -1155,7 +1174,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
-              callerScope,
+              ...(callerScope ? { callerScope } : {}),
             }),
           );
         }
@@ -1165,7 +1184,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id, callerScope }));
+          return jsonResult(
+            await callGateway("cron.remove", gatewayOpts, {
+              id,
+              ...(callerScope ? { callerScope } : {}),
+            }),
+          );
         }
         case "run": {
           const { callerScope } = resolveScopedCronContext();
@@ -1176,7 +1200,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
           return jsonResult(
-            await callGateway("cron.run", gatewayOpts, { id, mode: runMode, callerScope }),
+            await callGateway("cron.run", gatewayOpts, {
+              id,
+              mode: runMode,
+              ...(callerScope ? { callerScope } : {}),
+            }),
           );
         }
         case "runs": {
@@ -1185,7 +1213,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id, callerScope }));
+          return jsonResult(
+            await callGateway("cron.runs", gatewayOpts, {
+              id,
+              ...(callerScope ? { callerScope } : {}),
+            }),
+          );
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });

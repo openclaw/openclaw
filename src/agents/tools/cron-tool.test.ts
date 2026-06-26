@@ -186,7 +186,10 @@ describe("cron tool", () => {
   it("allows scoped isolated cron runs to remove the current job", async () => {
     // Self-removal scope lets a cron-triggered run clean up its own schedule
     // without granting broad cron mutation access.
-    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+    const tool = createTestCronTool({
+      agentSessionKey: "main",
+      selfRemoveOnlyJobId: "job-current",
+    });
 
     await tool.execute("call-self-remove", {
       action: "remove",
@@ -198,7 +201,10 @@ describe("cron tool", () => {
   });
 
   it("denies scoped isolated cron runs from removing another job", async () => {
-    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+    const tool = createTestCronTool({
+      agentSessionKey: "main",
+      selfRemoveOnlyJobId: "job-current",
+    });
 
     await expect(
       tool.execute("call-remove-other", {
@@ -219,7 +225,10 @@ describe("cron tool", () => {
       hasMore: false,
       nextOffset: null,
     });
-    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+    const tool = createTestCronTool({
+      agentSessionKey: "main",
+      selfRemoveOnlyJobId: "job-current",
+    });
 
     const result = await tool.execute("call-self-runs", {
       action: "runs",
@@ -242,7 +251,10 @@ describe("cron tool", () => {
     ["another job", { action: "runs", jobId: "job-other" }],
     ["missing job id", { action: "runs" }],
   ])("denies scoped isolated cron runs from reading %s run history", async (_label, args) => {
-    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+    const tool = createTestCronTool({
+      agentSessionKey: "main",
+      selfRemoveOnlyJobId: "job-current",
+    });
 
     await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
       "Cron tool is restricted to the current cron job.",
@@ -285,7 +297,10 @@ describe("cron tool", () => {
 
   it("allows scoped isolated cron runs to get the current job", async () => {
     callGatewayMock.mockResolvedValueOnce({ id: "job-current", name: "current" });
-    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+    const tool = createTestCronTool({
+      agentSessionKey: "main",
+      selfRemoveOnlyJobId: "job-current",
+    });
 
     const result = await tool.execute("call-get", {
       action: "get",
@@ -476,6 +491,23 @@ describe("cron tool", () => {
     ).rejects.toThrow("cron list agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit agentId for sessionless cron list callers", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-sessionless-list", {
+      action: "list",
+      agentId: "worker",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({
+      includeDisabled: true,
+      compact: true,
+      agentId: "worker",
+    });
   });
 
   it("retries cron.list without compact for older gateways", async () => {
@@ -734,49 +766,21 @@ describe("cron tool", () => {
     [
       "update",
       { action: "update", jobId: "job-1", patch: { foo: "bar" } },
-      { id: "job-1", patch: { foo: "bar" }, callerScope: cronCallerScope("main") },
+      { id: "job-1", patch: { foo: "bar" } },
     ],
     [
       "update",
       { action: "update", id: "job-2", patch: { foo: "bar" } },
-      { id: "job-2", patch: { foo: "bar" }, callerScope: cronCallerScope("main") },
+      { id: "job-2", patch: { foo: "bar" } },
     ],
-    [
-      "remove",
-      { action: "remove", jobId: "job-1" },
-      { id: "job-1", callerScope: cronCallerScope("main") },
-    ],
-    [
-      "remove",
-      { action: "remove", id: "job-2" },
-      { id: "job-2", callerScope: cronCallerScope("main") },
-    ],
-    [
-      "run",
-      { action: "run", jobId: "job-1" },
-      { id: "job-1", mode: "due", callerScope: cronCallerScope("main") },
-    ],
-    [
-      "run",
-      { action: "run", id: "job-2" },
-      { id: "job-2", mode: "due", callerScope: cronCallerScope("main") },
-    ],
-    [
-      "get",
-      { action: "get", jobId: "job-1" },
-      { id: "job-1", callerScope: cronCallerScope("main") },
-    ],
-    ["get", { action: "get", id: "job-2" }, { id: "job-2", callerScope: cronCallerScope("main") }],
-    [
-      "runs",
-      { action: "runs", jobId: "job-1" },
-      { id: "job-1", callerScope: cronCallerScope("main") },
-    ],
-    [
-      "runs",
-      { action: "runs", id: "job-2" },
-      { id: "job-2", callerScope: cronCallerScope("main") },
-    ],
+    ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
+    ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "due" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "due" }],
+    ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
+    ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
+    ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
+    ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
     const tool = createTestCronTool();
     await tool.execute("call1", args);
@@ -796,7 +800,6 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       id: "job-primary",
       mode: "due",
-      callerScope: cronCallerScope("main"),
     });
   });
 
@@ -811,7 +814,6 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       id: "job-due",
       mode: "due",
-      callerScope: cronCallerScope("main"),
     });
   });
 
@@ -826,7 +828,6 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       id: "job-force",
       mode: "force",
-      callerScope: cronCallerScope("main"),
     });
   });
 
@@ -852,8 +853,6 @@ describe("cron tool", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
-      agentId: "main",
-      callerScope: cronCallerScope("main"),
     });
   });
 
@@ -872,6 +871,28 @@ describe("cron tool", () => {
     ).rejects.toThrow("cron job agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit agentId for sessionless cron add callers", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-sessionless-add", {
+      action: "add",
+      job: {
+        name: "worker job",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        agentId: "worker",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toMatchObject({
+      name: "worker job",
+      agentId: "worker",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(params).not.toHaveProperty("callerScope");
   });
 
   it("infers session agentId when job.agentId is omitted", async () => {
@@ -1199,8 +1220,6 @@ describe("cron tool", () => {
     expect(params).toEqual({
       delivery: { mode: "none" },
       enabled: true,
-      agentId: "main",
-      callerScope: cronCallerScope("main"),
       name: "evidence-test",
       payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
       schedule: { everyMs: 999_999, kind: "every" },
@@ -1224,8 +1243,6 @@ describe("cron tool", () => {
     expect(params).toEqual({
       delivery: { mode: "none" },
       enabled: true,
-      agentId: "main",
-      callerScope: cronCallerScope("main"),
       name: "evidence-test",
       payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
       schedule: { everyMs: 999_999, kind: "every" },
@@ -1900,7 +1917,6 @@ describe("cron tool", () => {
           completionDestination: null,
         },
       },
-      callerScope: cronCallerScope("main"),
     });
   });
 
