@@ -530,6 +530,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 cwd: params.cwd,
                 host: params.host,
                 nodeId: params.nodeId,
+                ask: params.ask,
               }),
       },
     ],

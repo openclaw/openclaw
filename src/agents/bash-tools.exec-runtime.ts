@@ -17,6 +17,7 @@ import {
   type ExecHost,
   type ExecApprovalDecision,
   type ExecTarget,
+  type ExecAsk,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
@@ -372,6 +373,7 @@ export function buildApprovalPendingMessage(params: {
   cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
+  ask?: ExecAsk;
 }) {
   let fence = "```";
   while (params.command.includes(fence)) {
@@ -402,7 +404,9 @@ export function buildApprovalPendingMessage(params: {
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      params.ask !== undefined && params.ask !== "always"
+        ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
+        : "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
