@@ -1,6 +1,8 @@
 // Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const FEISHU_REG_JSON_MAX = 1 * 1024 * 1024;
+
 /**
  * Feishu app registration via OAuth device-code flow.
  *

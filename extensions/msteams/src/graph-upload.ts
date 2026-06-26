@@ -11,7 +11,10 @@
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { buildUserAgent } from "./user-agent.js";
+
+const MSTEAMS_UPLOAD_JSON_MAX = 1 * 1024 * 1024;
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";

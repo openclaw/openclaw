@@ -4,6 +4,8 @@
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const BEDROCK_MANTLE_JSON_MAX = 1 * 1024 * 1024;
+
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isFutureDateTimestampMs,

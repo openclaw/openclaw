@@ -26,6 +26,8 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const PERPLEXITY_JSON_MAX = 1 * 1024 * 1024;
+
 import {
   DEFAULT_PERPLEXITY_BASE_URL,
   inferPerplexityBaseUrlFromApiKey,

@@ -1,6 +1,8 @@
 // Msteams plugin module implements graph behavior.
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const MSTEAMS_GRAPH_JSON_MAX = 1 * 1024 * 1024;
+
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

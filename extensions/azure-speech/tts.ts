@@ -4,6 +4,8 @@
  */
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const AZURE_SPEECH_JSON_MAX = 1 * 1024 * 1024;
+
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {

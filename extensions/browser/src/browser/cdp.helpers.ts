@@ -6,6 +6,8 @@
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const BROWSER_CDP_JSON_MAX = 1 * 1024 * 1024;
+
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";

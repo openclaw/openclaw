@@ -1,6 +1,8 @@
 // Msteams plugin module implements bot framework behavior.
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const MSTEAMS_BF_JSON_MAX = 1 * 1024 * 1024;
+
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {

@@ -26,8 +26,11 @@
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { readMSTeamsHttpErrorDetail } from "./http-error.js";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { buildUserAgent } from "./user-agent.js";
+
+const MSTEAMS_SSO_JSON_MAX = 1 * 1024 * 1024;
 
 /** Scope used to obtain a Bot Framework service token. */
 const BOT_FRAMEWORK_TOKEN_SCOPE = "https://api.botframework.com/.default";

@@ -6,6 +6,8 @@
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+const BROWSER_CLIENT_JSON_MAX = 1 * 1024 * 1024;
+
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
