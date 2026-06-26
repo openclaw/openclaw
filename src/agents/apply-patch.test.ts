@@ -202,6 +202,26 @@ describe("applyPatch", () => {
     }
   });
 
+  it("preserves formatting for same-path move no-op hunks", async () => {
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: ./source.txt
+@@
+ foo
+-bar
++bar
+*** End Patch`;
+    for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
+      const memory = createMemoryPatchSandbox({ "source.txt": initial });
+
+      const result = await applyPatch(patch, memory.options);
+
+      expect(result.noOp).toBe(true);
+      expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
+      expect(memory.writeFile.mock.calls).toHaveLength(0);
+    }
+  });
+
   it("applies context-only insertions at the requested context", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "alpha\nanchor\nomega\n",
