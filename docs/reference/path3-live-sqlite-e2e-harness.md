@@ -37,6 +37,19 @@ later. A CI or isolated-local variant can use
 `test/helpers/openclaw-test-instance.ts`, but the live proof path should inspect
 the actual operator Gateway and its real per-agent SQLite database.
 
+## Isolated built-CLI proof
+
+The built-CLI proof runner seeds an isolated legacy session store, starts the
+rebuilt Gateway, and proves that startup imports hot legacy sessions into
+SQLite before runtime reads begin. It must not run `openclaw doctor --fix`
+before the first Gateway start, because that would prove the manual migration
+path instead of the upgrade path users receive on first boot after the flip.
+
+After startup import, the isolated proof may run
+`openclaw doctor --session-sqlite inspect` and
+`openclaw doctor --session-sqlite validate` as diagnostic evidence. Those
+doctor commands are not the migration driver for the startup-upgrade proof.
+
 ## Preflight
 
 Preflight collects a baseline and fails before sending a proof turn if the
