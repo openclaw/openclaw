@@ -1033,6 +1033,10 @@
   color: var(--muted);
 }
 
+.agent-chat__talk-field > :last-child {
+  margin-top: auto;
+}
+
 .agent-chat__talk-options input,
 .agent-chat__talk-options select {
   width: 100%;
