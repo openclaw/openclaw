@@ -5246,23 +5246,34 @@ async function migrateLegacyAcpSessionMetadata(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
     });
-  const pluginTargets = pluginAgentIds
-    .map((id) => normalizeAgentId(id))
-    .filter((id) => id !== DEFAULT_AGENT_ID)
-    .map((agentId) => ({
-      agentId,
-      storePath: storeConfig
-        ? resolveStorePathFromTemplate(storeConfig, agentId, env)
-        : path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
-    }));
-  for (const pluginTarget of pluginTargets) {
+  const normalizedPluginAgentIds = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
+  const declaredAgentIds = new Set([
+    normalizeAgentId(resolveDefaultAgentId(params.cfg)),
+    ...(params.cfg.agents?.list ?? []).flatMap((entry) =>
+      entry?.id ? [normalizeAgentId(entry.id)] : [],
+    ),
+    ...normalizedPluginAgentIds,
+  ]);
+  const declaredTargets = [...declaredAgentIds].map((agentId) => ({
+    agentId,
+    storePath: storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, agentId, env)
+      : path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
+  }));
+  const pluginTargets = declaredTargets.filter(
+    ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
+  );
+  // The generic target resolver deduplicates identical configured paths. Add
+  // every declared owner back before grouping so ownership is not discarded.
+  for (const declaredTarget of declaredTargets) {
     if (
       !targets.some(
         (target) =>
-          target.agentId === pluginTarget.agentId && target.storePath === pluginTarget.storePath,
+          target.agentId === declaredTarget.agentId &&
+          target.storePath === declaredTarget.storePath,
       )
     ) {
-      targets.push(pluginTarget);
+      targets.push(declaredTarget);
     }
   }
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);

@@ -781,12 +781,7 @@ describe("state migrations", () => {
     await fs.writeFile(legacyStorePath, "{}\n", "utf8");
     const cfg = {
       session: { store: storeTemplate },
-      agents: { list: [{ id: "main", default: true }] },
-      plugins: {
-        entries: {
-          "voice-call": { config: { agentId: "voice" } },
-        },
-      },
+      agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
     } as OpenClawConfig;
 
     const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
