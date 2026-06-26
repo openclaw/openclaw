@@ -560,9 +560,23 @@ describeNonWin("exec script preflight", () => {
   // When security is "full" the operator trusts the agent completely. The
   // fail-closed interpreter heuristic should not fire — file content checks
   // still run when a target path can be extracted, but the heuristic only
-  // applies to lower-trust configurations.
+  // applies to lower-trust configurations. This holds regardless of ask mode:
+  // ask controls approval UX, not trust level.
   it.each(failClosedCases)(
-    "does not fail closed for %s when security is full",
+    "does not fail closed for %s when security is full (ask=on-miss)",
+    async (_name, command) => {
+      await expect(
+        validateExecScriptPreflight({
+          command,
+          workdir: process.cwd(),
+          security: "full",
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(failClosedCases)(
+    "does not fail closed for %s when security is full (ask=always)",
     async (_name, command) => {
       await expect(
         validateExecScriptPreflight({
