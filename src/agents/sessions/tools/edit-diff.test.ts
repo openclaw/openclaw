@@ -186,10 +186,12 @@ describe("applyEditsToNormalizedContent", () => {
 
     const result = applyEditsToNormalizedContent(
       normalizeToLF(line),
-      [{ oldText: "'X'", newText: "'Y'" }],
+      [{ oldText: "'X'", newText: "\u2018Y\u2019" }],
       "test.ts",
     );
     // After mapping the NFKC match back to original offsets, ﬁ and e+acute must be preserved.
+    // The smart quotes are restored because the match consumed them and newText provides
+    // the smart-quote form.
     expect(result.newContent).toBe("\uFB01 \u2018Y\u2019 e\u0301");
   });
 
