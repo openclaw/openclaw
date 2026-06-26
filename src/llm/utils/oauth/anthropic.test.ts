@@ -96,7 +96,7 @@ describe("Anthropic OAuth callback host", () => {
     );
   });
 
-  it("defaults callback host to 127.0.0.1 when env var is unset", () => {
-    expect(testing.resolveCallbackHost({})).toBe("127.0.0.1");
+  it("defaults callback host to localhost when env var is unset", () => {
+    expect(testing.resolveCallbackHost({})).toBe("localhost");
   });
 });
