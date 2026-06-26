@@ -1,5 +1,6 @@
 // Tests session update fanout and persisted lifecycle records.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 
@@ -134,9 +135,15 @@ describe("ensureSkillSnapshot", () => {
       updatedAt: 10,
     };
     const sessionStore = { [sessionKey]: sessionEntry };
+    const sessionEntryHandle = createReplySessionEntryHandle({
+      sessionEntry,
+      sessionKey,
+      sessionStore,
+    });
 
     const result = await ensureSkillSnapshot({
       sessionEntry,
+      sessionEntryHandle,
       sessionStore,
       sessionKey,
       sessionId: "deleted-session",
@@ -155,7 +162,8 @@ describe("ensureSkillSnapshot", () => {
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);
-    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+    expect(sessionEntryHandle.getCurrent()).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBeUndefined();
   });
 
   it("adopts a rebound first-turn session entry instead of overwriting it", async () => {

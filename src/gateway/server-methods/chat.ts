@@ -4018,15 +4018,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             store: latestStore,
             entry: latestEntry,
           } = loadSessionEntry(sessionKey, sessionLoadOptions);
-          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
-          if (!resolvedSessionId) {
+          if (!latestEntry?.sessionId) {
             return undefined;
           }
           return {
-            sessionId: resolvedSessionId,
-            ...(latestEntry?.sessionId ? { expectedSessionId: latestEntry.sessionId } : {}),
+            sessionId: latestEntry.sessionId,
+            expectedSessionId: latestEntry.sessionId,
             sessionKey,
-            sessionEntry: latestEntry ?? entry,
+            sessionEntry: latestEntry,
             sessionStore: latestStore,
             storePath: latestStorePath,
             agentId,
