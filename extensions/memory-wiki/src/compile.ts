@@ -404,13 +404,17 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
 }
 
 function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
-  return {
-    entity: pages.filter((page) => page.kind === "entity").length,
-    concept: pages.filter((page) => page.kind === "concept").length,
-    source: pages.filter((page) => page.kind === "source").length,
-    synthesis: pages.filter((page) => page.kind === "synthesis").length,
-    report: pages.filter((page) => page.kind === "report").length,
+  const counts: Record<WikiPageKind, number> = {
+    entity: 0,
+    concept: 0,
+    source: 0,
+    synthesis: 0,
+    report: 0,
   };
+  for (const page of pages) {
+    counts[page.kind] += 1;
+  }
+  return counts;
 }
 
 function formatPageLink(
