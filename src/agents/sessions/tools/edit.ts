@@ -41,6 +41,10 @@ type EditRenderState = {
   callComponent?: EditCallRenderComponent;
 };
 
+function filterNoOpEdits(edits: Edit[]): Edit[] {
+  return edits.filter((edit) => edit.oldText !== edit.newText);
+}
+
 const replaceEditSchema = Type.Object(
   {
     oldText: Type.String({
@@ -401,7 +405,7 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
-        const realEdits = originalEdits.filter((e) => e.oldText !== e.newText);
+        const realEdits = filterNoOpEdits(originalEdits);
 
         try {
           await ops.access(absolutePath);
@@ -542,14 +546,17 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
-          (preview) => {
-            if (component.previewArgsKey === requestKey) {
-              setEditPreview(component, preview, requestKey);
-              context.invalidate();
-            }
-          },
-        );
+        void computeEditsDiff(
+          previewInput.path,
+          filterNoOpEdits(previewInput.edits),
+          context.cwd,
+          ops,
+        ).then((preview) => {
+          if (component.previewArgsKey === requestKey) {
+            setEditPreview(component, preview, requestKey);
+            context.invalidate();
+          }
+        });
       }
 
       return buildEditCallComponent(component, args, theme);
