@@ -521,7 +521,7 @@ describe("handleCommands reset hooks", () => {
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });
 
-  it("names a fresh session for single-token /new tails", async () => {
+  it("keeps free-text /new tails available for the existing fallthrough path", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
       storePath,
@@ -545,12 +545,73 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
+    expect(result).toBeNull();
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+  });
+
+  it("names a fresh session for explicit /new --name tails", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:main",
+      entry: { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildResetParams("/new --name Beispielsessionname", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "✅ New session started as “Beispielsessionname”." },
     });
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
       "Beispielsessionname",
+    );
+  });
+
+  it("names a fresh session for explicit /new name: tails", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:main",
+      entry: { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildResetParams("/new name:Planning notes", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Planning notes”." },
+    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Planning notes",
     );
   });
 

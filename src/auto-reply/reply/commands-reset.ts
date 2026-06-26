@@ -120,10 +120,6 @@ function parseExplicitNamedNewSessionTail(tail: string): string | undefined {
   if (prefixMatch?.[1]) {
     return prefixMatch[1].trim();
   }
-  const quotedMatch = tail.match(/^"([^"]+)"$|^'([^']+)'$/);
-  if (quotedMatch?.[1] || quotedMatch?.[2]) {
-    return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim();
-  }
   return undefined;
 }
 
@@ -149,9 +145,6 @@ function parseNamedNewSessionTail(
   }
   if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
     return undefined;
-  }
-  if (!tail.startsWith("-") && !/\s/.test(tail) && !isModelRefTail(params, tail)) {
-    return tail;
   }
   return undefined;
 }
