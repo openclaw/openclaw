@@ -63,10 +63,10 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
-// Streams a JSON body through a real ReadableStream so create/poll reads exercise
-// the byte-bounded reader (readResponseWithLimit) instead of an unbounded res.json().
+// Response.json keeps object fixtures on the standard Response body path so create/poll
+// reads exercise the byte-bounded reader instead of an unbounded res.json().
 function streamedJsonResponse(payload: unknown): Response {
-  return streamedRawResponse(JSON.stringify(payload));
+  return Response.json(payload);
 }
 
 function streamedRawResponse(text: string): Response {
