@@ -164,6 +164,120 @@ describe("agentLoop streaming updates", () => {
       expect(update.assistantMessageEvent).not.toHaveProperty("partial");
     }
   });
+
+  it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "should not run" }],
+        details: {},
+      }),
+    );
+    const contexts: Context[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = async (_model, context) => {
+      contexts.push(context);
+      streamCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      if (streamCalls > 1) {
+        const message: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: "continued" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: TEST_USAGE,
+          stopReason: "stop",
+          timestamp: 2,
+        };
+        queueMicrotask(() => {
+          stream.push({ type: "done", reason: "stop", message });
+        });
+        return stream;
+      }
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "call-truncated-spawn",
+        name: "sessions_spawn",
+        arguments: {},
+      };
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "spawning" }, toolCall],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: TEST_USAGE,
+        stopReason: "length",
+        timestamp: 1,
+      };
+
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: { ...message, content: [] } });
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+        stream.push({
+          type: "toolcall_end",
+          contentIndex: 1,
+          toolCall,
+          partial: message,
+        });
+        stream.push({ type: "done", reason: "length", message });
+      });
+
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "spawn specialists", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            name: "sessions_spawn",
+            label: "sessions_spawn",
+            description: "Spawn a child session",
+            parameters: Type.Object({}, { additionalProperties: false }),
+            execute,
+          },
+        ],
+      },
+      {
+        ...config,
+        getFollowUpMessages: async () =>
+          streamCalls === 1 ? [{ role: "user", content: "continue", timestamp: 2 }] : [],
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    const messages = await stream.result();
+    const truncatedMessageEnd = events.find(
+      (event): event is Extract<AgentEvent, { type: "message_end" }> =>
+        event.type === "message_end" &&
+        event.message.role === "assistant" &&
+        event.message.stopReason === "length",
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(messages[1]).toMatchObject({ role: "assistant", stopReason: "length" });
+    expect(messages[1]).not.toMatchObject({
+      content: expect.arrayContaining([expect.objectContaining({ type: "toolCall" })]),
+    });
+    expect(truncatedMessageEnd?.message).not.toMatchObject({
+      content: expect.arrayContaining([expect.objectContaining({ type: "toolCall" })]),
+    });
+    expect(contexts[1]?.messages[1]).not.toMatchObject({
+      content: expect.arrayContaining([expect.objectContaining({ type: "toolCall" })]),
+    });
+  });
 });
 
 describe("runAgentLoop deferred tool hydration", () => {
@@ -936,7 +1050,7 @@ describe("agentLoop thinking state", () => {
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: "stop",
+      stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
       timestamp: 1,
     };
   }
@@ -968,7 +1082,7 @@ describe("agentLoop thinking state", () => {
             : [{ type: "text", text: "done" }];
         stream.push({
           type: "done",
-          reason: "stop",
+          reason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
           message: makeAssistantMessage(activeModel, content),
         });
         stream.end();
