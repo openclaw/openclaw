@@ -3582,9 +3582,10 @@ export function sessionStoreTextMayNeedCanonicalization(params: {
     if (!lowerKey.startsWith("agent:")) {
       return true;
     }
-    for (const storeAgentId of storeAgentIds) {
-      const agentMainAlias = `agent:${storeAgentId}:${DEFAULT_MAIN_KEY}`;
-      const agentMainKey = `agent:${storeAgentId}:${params.mainKey}`;
+    const rowOwner = resolveCanonicalAgentSessionOwner(rawKey);
+    if (rowOwner) {
+      const agentMainAlias = `agent:${rowOwner}:${DEFAULT_MAIN_KEY}`;
+      const agentMainKey = `agent:${rowOwner}:${params.mainKey}`;
       if (
         lowerKey === agentMainAlias &&
         (params.mainKey !== DEFAULT_MAIN_KEY || params.scope === "global")

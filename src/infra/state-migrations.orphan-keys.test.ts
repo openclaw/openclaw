@@ -92,6 +92,15 @@ describe("migrateOrphanedSessionKeys", () => {
     expect(
       sessionStoreTextMayNeedCanonicalization({
         raw: JSON.stringify({
+          "agent:archive:main": { sessionId: "retired-main", updatedAt: 1 },
+        }),
+        storeAgentIds: ["main"],
+        mainKey: "work",
+      }),
+    ).toBe(true);
+    expect(
+      sessionStoreTextMayNeedCanonicalization({
+        raw: JSON.stringify({
           main: { sessionId: "legacy-main", updatedAt: 1 },
         }),
         storeAgentIds: ["main"],
@@ -672,6 +681,27 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(requireStoreEntry(store, "agent:research:work").sessionId).toBe("research-session");
       expect(store["agent:ops:main"]).toBeUndefined();
       expect(store["agent:research:main"]).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it("canonicalizes main aliases for unlisted shared-store owners", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        "agent:archive:main": { sessionId: "archive-session", updatedAt: 1000 },
+      });
+      const cfg = {
+        session: { mainKey: "work", store: sharedStorePath },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:archive:work").sessionId).toBe("archive-session");
+      expect(store["agent:archive:main"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
     });
