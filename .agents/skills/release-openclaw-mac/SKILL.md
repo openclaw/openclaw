@@ -49,6 +49,10 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 - Real mac publish must reuse:
   - a successful release-ops mac preflight run for the same tag/source SHA
   - a successful release-ops mac validation run for the same tag/source SHA
+- Release-ops preflight and real publish enter the protected `mac-release`
+  environment in the `build_sign_and_package` job. Operators may be able to
+  trigger the workflow while Vincent or another environment reviewer approves
+  the paused deployment before signing/notarization/promotion proceeds.
 - If preflight source SHA differs from tag SHA, validation must also use the same `source_ref`; promotion rejects mismatched proof.
 
 ## Notarization
@@ -87,6 +91,10 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
+Wait for the run to reach the `mac-release` environment approval if GitHub
+pauses it, then get approval from Vincent or another configured environment
+reviewer. Record the successful preflight run id.
+
 Release-ops validation for a branch-variation preflight:
 
 ```bash
@@ -94,6 +102,8 @@ gh workflow run openclaw-macos-validate.yml --repo openclaw/releases --ref main 
   -f tag=vYYYY.M.PATCH \
   -f source_ref=release/YYYY.M.PATCH
 ```
+
+Record the successful validation run id.
 
 Real publish:
 
@@ -107,6 +117,9 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f allow_late_calver_recovery=false \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
+
+Wait for the `mac-release` environment approval again if GitHub pauses the real
+publish run before it promotes assets.
 
 - Release-ops `openclaw/releases` publish/validate workflows run from their own
   trusted `main` workflow ref. Real publish has a guard that rejects any other
