@@ -235,8 +235,8 @@ async function fetchLiveProviderModelCatalogPage(
     url: string;
     timeoutMs: number;
   },
-): Promise<{ body: unknown; rows: readonly unknown[] }> {
-  const { response, release } = await params.fetchGuard({
+): Promise<{ body: unknown; finalUrl: string; rows: readonly unknown[] }> {
+  const { response, finalUrl, release } = await params.fetchGuard({
     url: params.url,
     init: {
       headers: buildHeaders(params),
@@ -254,7 +254,7 @@ async function fetchLiveProviderModelCatalogPage(
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
     const body = await readLiveModelCatalogJson(response, params.timeoutMs);
-    return { body, rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body) };
+    return { body, finalUrl, rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body) };
   } finally {
     await release();
   }
@@ -287,7 +287,7 @@ export async function fetchLiveProviderModelRows(
       timeoutMs: remainingTimeoutMs,
     });
     rows.push(...result.rows);
-    const nextPage = resolveLiveModelCatalogNextPage(pageUrl, result.body);
+    const nextPage = resolveLiveModelCatalogNextPage(result.finalUrl, result.body);
     if (nextPage.status === "incomplete") {
       throw new Error(
         `${params.providerId} model discovery did not include a supported next page before the catalog completed`,

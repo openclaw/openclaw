@@ -248,6 +248,39 @@ describe("provider-catalog-live-runtime", () => {
     );
   });
 
+  it("resolves relative pagination links against the guarded fetch final URL", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            links: { next: "?page=2" },
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models/",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models/?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models/?page=2",
+    );
+  });
+
   it("follows nextPageToken pagination before projecting model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
