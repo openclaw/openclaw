@@ -424,16 +424,30 @@ export function createEditToolDefinition(
           const { bom, text: content } = stripBom(rawContent);
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
-          // Validate no-op targets independently so one fuzzy match cannot
-          // normalize away distinctions needed by real sibling edits.
-          for (const edit of originalEdits) {
-            if (edit.oldText === edit.newText) {
-              applyEditsToNormalizedContent(
-                normalizedContent,
-                [{ oldText: edit.oldText, newText: "" }],
-                path,
-              );
-            }
+          const noOpEdits = originalEdits.filter((edit) => edit.oldText === edit.newText);
+          if (noOpEdits.length > 0) {
+            // Validate no-op targets together so duplicate/overlapping no-ops
+            // still fail, without letting fuzzy matches affect real edits.
+            applyEditsToNormalizedContent(
+              normalizedContent,
+              noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
+              path,
+            );
+          }
+          const exactNoOpEdits = noOpEdits.filter((edit) =>
+            normalizedContent.includes(normalizeToLF(edit.oldText)),
+          );
+          if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
+            // Preserve the documented overlap contract for exact no-op
+            // targets while keeping fuzzy no-ops out of this pass.
+            applyEditsToNormalizedContent(
+              normalizedContent,
+              [...exactNoOpEdits, ...realEdits].map((edit) => ({
+                oldText: edit.oldText,
+                newText: "",
+              })),
+              path,
+            );
           }
           if (realEdits.length === 0) {
             return {

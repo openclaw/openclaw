@@ -249,6 +249,44 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
+  it("rejects duplicate no-op entries", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "foo", newText: "foo" },
+            { oldText: "foo", newText: "foo" },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/overlap/);
+  });
+
+  it("rejects an exact no-op overlapping a real edit", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "foo", newText: "foo" },
+            { oldText: "foo", newText: "bar" },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/overlap/);
+  });
+
   it("preserves valid sibling edits when batch contains a no-op entry", async () => {
     const filePath = await createTempFile("alpha beta gamma\n");
     const tool = createEditTool(tmpDir);
