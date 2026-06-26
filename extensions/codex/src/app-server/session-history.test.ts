@@ -61,7 +61,10 @@ function mirroredTarget(sessionFile: string) {
   };
 }
 
-async function writeSqliteSession(): Promise<{ marker: string; sessionKey: string }> {
+async function writeSqliteSession(params: { storedSessionFile?: string } = {}): Promise<{
+  marker: string;
+  sessionKey: string;
+}> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
   tempDirs.push(dir);
   const storePath = path.join(dir, "openclaw-agent.sqlite");
@@ -77,7 +80,7 @@ async function writeSqliteSession(): Promise<{ marker: string; sessionKey: strin
   await upsertSessionEntry({
     ...scope,
     entry: {
-      sessionFile: marker,
+      sessionFile: params.storedSessionFile ?? marker,
       sessionId,
       updatedAt: 1,
     },
@@ -112,6 +115,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
 
   it("resolves SQLite marker history when the caller has no session key", async () => {
     const { marker } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("resolves synthesized SQLite markers for stale file-backed session metadata", async () => {
+    const { marker } = await writeSqliteSession({
+      storedSessionFile: "/tmp/legacy-session.jsonl",
+    });
 
     await expect(
       readCodexMirroredSessionHistoryMessages({
