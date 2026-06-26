@@ -14,7 +14,8 @@ const FORMATTER_OUTPUT_TAIL_BYTES = 16 * 1024;
 export function resolveGeneratedModuleFormatter(params) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
-  const directFormatterPath = path.join(
+  const pathPlatform = platform === "win32" ? path.win32 : path;
+  const directFormatterPath = pathPlatform.join(
     params.repoRoot,
     "node_modules",
     ".bin",
