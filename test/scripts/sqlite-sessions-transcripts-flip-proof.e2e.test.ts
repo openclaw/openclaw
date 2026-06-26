@@ -16,6 +16,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "gateway-started",
       "after-gateway-restart",
       "after-chat-send",
+      "after-full-agent-turn",
       "after-sessions-reset",
       "after-transcript-append",
       "after-sessions-delete",
@@ -57,6 +58,16 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.label === "after-chat-send" &&
           checkpoint.sqlite.trackedEntries.some(
             (entry) => entry.sessionKey === report.resetSessionKey && entry.transcriptEvents >= 3,
+          ),
+      ),
+    ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-full-agent-turn" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === report.fullTurnSessionKey && entry.transcriptEvents >= 2,
           ),
       ),
     ).toBe(true);

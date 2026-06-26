@@ -20,6 +20,15 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
 import {
+  appendTranscriptMessageSync,
+  loadTranscriptEventsSync,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../../config/sessions/session-accessor.js";
+import {
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
+import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
   serializeJsonlEntry,
@@ -158,6 +167,10 @@ type PromptReleasedSessionMergeResult = {
   sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
+};
+
+type SqliteSessionManagerPersistence = SqliteSessionFileMarker & {
+  sessionKey: string;
 };
 
 /**
@@ -1470,6 +1483,7 @@ export class SessionManager {
   private promptReleasedSideBranchParentId: string | null | undefined;
   private recoveredCorruptHeader = false;
   private sessionFileSnapshot: SessionFileSnapshot | undefined;
+  private sqlitePersistence: SqliteSessionManagerPersistence | undefined;
 
   private constructor(
     cwd: string,
@@ -1480,19 +1494,28 @@ export class SessionManager {
       entries: FileEntry[];
       snapshot: SessionFileSnapshot | undefined;
     },
+    sqlitePersistence?: SqliteSessionManagerPersistence,
   ) {
     this.cwd = cwd;
     this.sessionDir = sessionDir;
     this.shouldPersist = persist;
+    this.sqlitePersistence = sqlitePersistence;
     if (persist && sessionDir && !existsSync(sessionDir)) {
       mkdirSync(sessionDir, { recursive: true });
     }
 
     if (sessionFile) {
-      this.setLoadedSessionFile(
-        sessionFile,
-        loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
-      );
+      if (sqlitePersistence) {
+        this.setLoadedSqliteSessionFile(
+          sessionFile,
+          loadedSessionFile ?? { entries: [], snapshot: undefined },
+        );
+      } else {
+        this.setLoadedSessionFile(
+          sessionFile,
+          loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
+        );
+      }
     } else {
       this.newSession();
     }
@@ -1563,6 +1586,31 @@ export class SessionManager {
       this.newSession();
       this.sessionFile = explicitPath; // preserve explicit path from --session flag
     }
+  }
+
+  private setLoadedSqliteSessionFile(
+    sessionFile: string,
+    loaded: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
+  ): void {
+    this.sessionFile = sessionFile;
+    this.sessionFileSnapshot = undefined;
+    this.recoveredCorruptHeader = false;
+    const partitioned = partitionSessionFileEntries(loaded.entries);
+    if (partitioned.fileEntries.length === 0) {
+      this.newSession({ id: this.sqlitePersistence?.sessionId });
+      this.sessionFile = sessionFile;
+      return;
+    }
+    this.fileEntries = partitioned.fileEntries;
+    this.opaqueFileEntries = partitioned.opaqueEntries;
+    const header = this.fileEntries.find((e) => e.type === "session");
+    this.sessionId = header?.id ?? this.sqlitePersistence?.sessionId ?? createSessionId();
+    migrateToCurrentVersion(this.fileEntries, partitioned.fileEntriesByOriginalIndex);
+    this.buildIndex();
+    this.flushed = true;
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
@@ -2096,6 +2144,10 @@ export class SessionManager {
     options?: AppendPersistenceOptions,
     publishSnapshot = true,
   ): void {
+    if (this.sqlitePersistence) {
+      this.persistSqliteRecord(entry);
+      return;
+    }
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -2165,6 +2217,36 @@ export class SessionManager {
 
   persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     this.persistRecord(entry, options);
+  }
+
+  private persistSqliteRecord(entry: unknown): void {
+    if (!isIndexedSessionEntry(entry) || entry.type !== "message") {
+      return;
+    }
+    const role = (entry.message as { role?: unknown }).role;
+    if (role === "user") {
+      // Gateway-owned SQLite turns have already persisted the user message
+      // before the agent loop opens SessionManager. Re-appending here would
+      // duplicate the model-visible user turn in chat.history.
+      return;
+    }
+    const persistence = this.sqlitePersistence;
+    if (!persistence) {
+      return;
+    }
+    appendTranscriptMessageSync(
+      {
+        agentId: persistence.agentId,
+        sessionId: persistence.sessionId,
+        sessionKey: persistence.sessionKey,
+        storePath: persistence.storePath,
+      },
+      {
+        cwd: this.cwd,
+        message: entry.message,
+        now: Date.parse(entry.timestamp),
+      },
+    );
   }
 
   /**
@@ -2915,6 +2997,28 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+    const sqliteMarker = parseSqliteSessionFileMarker(path);
+    if (sqliteMarker) {
+      const sessionKey = resolveTranscriptSessionKeyBySessionId(sqliteMarker);
+      if (!sessionKey) {
+        throw new Error(
+          `Cannot open SQLite session without session entry: ${sqliteMarker.sessionId}`,
+        );
+      }
+      const entries = loadTranscriptEventsSync(sqliteMarker) as FileEntry[];
+      const header = entries.find((e) => isJsonRecord(e) && e.type === "session") as
+        | SessionHeader
+        | undefined;
+      const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
+      return new SessionManager(
+        cwd,
+        sessionDir ?? "",
+        path,
+        true,
+        { entries, snapshot: undefined },
+        { ...sqliteMarker, sessionKey },
+      );
+    }
     // Re-stat before construction so the single parsed load cannot become
     // stale while deriving cwd/session metadata. Stable warm opens pay only
     // the extra stat; changed files retry through the normal loader.

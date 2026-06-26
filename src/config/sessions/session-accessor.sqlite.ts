@@ -214,6 +214,26 @@ export function loadExactSqliteSessionEntry(
   return row ? { sessionKey, entry: row.entry } : undefined;
 }
 
+/** Resolves the persisted session key for a SQLite transcript session id. */
+export function resolveSqliteSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select("session_key")
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("updated_at", "desc")
+      .orderBy("session_key", "asc")
+      .limit(1),
+  );
+  return row?.session_key;
+}
+
 /** Lists session entries from the additive SQLite session store. */
 export function listSqliteSessionEntries(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
@@ -1042,6 +1062,23 @@ export async function appendSqliteTranscriptMessage<TMessage>(
     }, toDatabaseOptions(resolved));
     return result;
   });
+}
+
+/** Appends one transcript message synchronously for sync session runtimes. */
+export function appendSqliteTranscriptMessageSync<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): TranscriptMessageAppendResult<TMessage> | undefined {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  let result: TranscriptMessageAppendResult<TMessage> | undefined;
+  runOpenClawAgentWriteTransaction((database) => {
+    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
+      return;
+    }
+    result = appendSqliteTranscriptMessageInTransaction(database, resolved, options);
+  }, toDatabaseOptions(resolved));
+  return result;
 }
 
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */

@@ -1,7 +1,9 @@
 // SQLite sessions/transcripts flip proof runner exercises an isolated live gateway lifecycle.
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -66,8 +68,11 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   checkpoints: ProofCheckpoint[];
   deleteSessionKey: string;
   failures: string[];
+  fullTurnAssistantText: string;
+  fullTurnSessionKey: string;
   gatewayEntrypoint: string[];
   legacySessionId: string;
+  mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
   resetSessionKey: string;
   sharedSessionKeys: string[];
@@ -80,8 +85,11 @@ type ProofContext = {
   agentId: string;
   archiveRoots: string[];
   deleteSessionKey: string;
+  fullTurnAssistantText: string;
+  fullTurnSessionKey: string;
   legacySessionsDir: string;
   legacySessionId: string;
+  mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
   resetSessionKey: string;
   sharedSessionKeys: string[];
@@ -98,6 +106,8 @@ type RunOptions = {
 const AGENT_ID = "main";
 const RESET_SESSION_KEY = "agent:main:main";
 const DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-delete";
+const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
+const FULL_TURN_SESSION_KEY = "agent:main:dashboard:sqlite-full-turn";
 const SHARED_SESSION_KEYS = [
   "agent:main:dashboard:sqlite-shared-a",
   "agent:main:dashboard:sqlite-shared-b",
@@ -113,8 +123,14 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   options: RunOptions = {},
 ): Promise<SqliteSessionsTranscriptsFlipProofReport> {
   const print = options.print ?? false;
+  const mockOpenAiPort = await getFreeTcpPort();
   const inst = await createOpenClawTestInstance({
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
+    config: buildMockOpenAiConfig(mockOpenAiPort),
+    env: {
+      OPENAI_API_KEY: "sk-openclaw-e2e-mock",
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+    },
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
   });
@@ -122,6 +138,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
   let gatewayEntrypoint: string[] = [];
+  let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -141,6 +158,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
       throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
     }
+
+    mockOpenAi = await startMockOpenAiServer({
+      port: mockOpenAiPort,
+      requestLogPath: context.mockOpenAiRequestLog,
+      responseText: context.fullTurnAssistantText,
+    });
 
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
@@ -196,6 +219,36 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       );
       await record("after-chat-send");
 
+      const fullTurnRunId = await sendGatewayUserMessage(
+        restartedClient,
+        context.fullTurnSessionKey,
+        `Reply with exactly ${context.fullTurnAssistantText}.`,
+      );
+      await waitForAgentRunOk(restartedClient, fullTurnRunId);
+      const fullTurnSessionId = await waitForSqliteSessionId(
+        context.agentDbPath,
+        context.fullTurnSessionKey,
+      );
+      await waitForSqliteMessageContains(
+        context.agentDbPath,
+        fullTurnSessionId,
+        "user",
+        context.fullTurnAssistantText,
+      );
+      await waitForSqliteMessageContains(
+        context.agentDbPath,
+        fullTurnSessionId,
+        "assistant",
+        context.fullTurnAssistantText,
+      );
+      await waitForHistoryContains(
+        restartedClient,
+        context.fullTurnSessionKey,
+        context.fullTurnAssistantText,
+      );
+      await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
+      await record("after-full-agent-turn");
+
       const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
       await record("after-sessions-reset");
 
@@ -228,6 +281,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     failures.push(error instanceof Error ? error.message : String(error));
     await record("failure");
   } finally {
+    await stopChildProcess(mockOpenAi);
     await inst.cleanup();
   }
 
@@ -237,8 +291,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     checkpoints,
     deleteSessionKey: context.deleteSessionKey,
     failures,
+    fullTurnAssistantText: context.fullTurnAssistantText,
+    fullTurnSessionKey: context.fullTurnSessionKey,
     gatewayEntrypoint,
     legacySessionId: context.legacySessionId,
+    mockOpenAiRequestLog: context.mockOpenAiRequestLog,
     oldStateSessionKeys: [...context.oldStateSessionKeys],
     resetSessionKey: context.resetSessionKey,
     sharedSessionKeys: [...context.sharedSessionKeys],
@@ -265,8 +322,11 @@ function buildProofContext(stateDir: string): ProofContext {
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
     deleteSessionKey: DELETE_SESSION_KEY,
+    fullTurnAssistantText: FULL_TURN_ASSISTANT_TEXT,
+    fullTurnSessionKey: FULL_TURN_SESSION_KEY,
     legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
+    mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
@@ -275,10 +335,132 @@ function buildProofContext(stateDir: string): ProofContext {
     trackedSessionKeys: [
       RESET_SESSION_KEY,
       DELETE_SESSION_KEY,
+      FULL_TURN_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
       ...OLD_STATE_SESSION_KEYS,
     ],
   };
+}
+
+function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
+  const modelRef = "openai/gpt-5.5";
+  const modelId = "gpt-5.5";
+  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  return {
+    agents: {
+      defaults: {
+        model: { primary: modelRef },
+        models: {
+          [modelRef]: {
+            agentRuntime: { id: "openclaw" },
+            params: { openaiWsWarmup: false, transport: "sse" },
+          },
+        },
+      },
+    },
+    models: {
+      mode: "merge",
+      providers: {
+        openai: {
+          agentRuntime: { id: "openclaw" },
+          api: "openai-responses",
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+          models: [
+            {
+              agentRuntime: { id: "openclaw" },
+              api: "openai-responses",
+              contextTokens: 96_000,
+              contextWindow: 128_000,
+              cost,
+              id: modelId,
+              input: ["text", "image"],
+              maxTokens: 4_096,
+              name: modelId,
+              reasoning: false,
+            },
+          ],
+          request: { allowPrivateNetwork: true },
+        },
+      },
+    },
+    plugins: { enabled: true },
+  };
+}
+
+async function getFreeTcpPort(): Promise<number> {
+  const srv = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", resolve);
+  });
+  const addr = srv.address();
+  if (!addr || typeof addr === "string") {
+    srv.close();
+    throw new Error("failed to bind ephemeral mock OpenAI port");
+  }
+  await new Promise<void>((resolve) => {
+    srv.close(() => resolve());
+  });
+  return addr.port;
+}
+
+async function startMockOpenAiServer(params: {
+  port: number;
+  requestLogPath: string;
+  responseText: string;
+}): Promise<ChildProcessWithoutNullStreams> {
+  const child = spawn("node", ["scripts/e2e/mock-openai-server.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      MOCK_PORT: String(params.port),
+      MOCK_REQUEST_LOG: params.requestLogPath,
+      SUCCESS_MARKER: params.responseText,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let output = "";
+  child.stdout.on("data", (chunk) => {
+    output += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    output += String(chunk);
+  });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `mock OpenAI exited before listening (code=${String(child.exitCode)} signal=${String(
+          child.signalCode,
+        )})\n${tail(output)}`,
+      );
+    }
+    if (output.includes("mock-openai listening")) {
+      return child;
+    }
+    await sleep(25);
+  }
+  await stopChildProcess(child);
+  throw new Error(`timeout waiting for mock OpenAI server\n${tail(output)}`);
+}
+
+async function stopChildProcess(child: ChildProcessWithoutNullStreams | undefined): Promise<void> {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  child.kill("SIGTERM");
+  const exited = await Promise.race([
+    new Promise<boolean>((resolve) => {
+      child.once("exit", () => resolve(true));
+    }),
+    sleep(2_000).then(() => false),
+  ]);
+  if (!exited && child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+  }
 }
 
 async function seedLegacySessionStore(context: ProofContext): Promise<void> {
@@ -502,6 +684,20 @@ async function sendGatewayUserMessage(
   return result.runId;
 }
 
+async function waitForAgentRunOk(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  runId: string,
+): Promise<void> {
+  const result: { error?: unknown; status?: string } = await client.request(
+    "agent.wait",
+    { runId, timeoutMs: 60_000 },
+    { timeoutMs: 65_000 },
+  );
+  if (result?.status !== "ok") {
+    throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
+  }
+}
+
 async function deleteSession(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   key: string,
@@ -574,6 +770,20 @@ async function waitForSqliteEvents(
   throw new Error(`timed out waiting for ${minEvents} SQLite events for ${sessionId}`);
 }
 
+async function waitForSqliteSessionId(dbPath: string, sessionKey: string): Promise<string> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
+      (entry) => entry.sessionKey === sessionKey && entry.sessionId,
+    );
+    if (row?.sessionId) {
+      return row.sessionId;
+    }
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for SQLite session entry for ${sessionKey}`);
+}
+
 async function waitForSqliteMessageContains(
   dbPath: string,
   sessionId: string,
@@ -597,6 +807,13 @@ async function waitForSqliteMessageContains(
       expected,
     )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
   );
+}
+
+async function requireMockOpenAiRequest(requestLogPath: string): Promise<void> {
+  const text = await fs.readFile(requestLogPath, "utf8").catch(() => "");
+  if (!text.includes('"/v1/responses"')) {
+    throw new Error(`mock OpenAI request log did not include /v1/responses: ${tail(text)}`);
+  }
 }
 
 function readSqliteTranscriptMessages(

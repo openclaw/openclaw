@@ -35,6 +35,7 @@ import {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
+  appendSqliteTranscriptMessageSync,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
   loadLatestSqliteAssistantMessage,
@@ -48,6 +49,7 @@ import {
   readSqliteSessionUpdatedAt,
   replaceSqliteTranscriptEvents,
   replaceSqliteSessionEntry,
+  resolveSqliteSessionKeyBySessionId,
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
@@ -1895,6 +1897,21 @@ export async function appendTranscriptMessage<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendSqliteTranscriptMessage(scope, options);
+}
+
+/** Appends one transcript message synchronously for sync session runtimes. */
+export function appendTranscriptMessageSync<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): TranscriptMessageAppendResult<TMessage> | undefined {
+  return appendSqliteTranscriptMessageSync(scope, options);
+}
+
+/** Resolves the persisted key for a SQLite transcript session id. */
+export function resolveTranscriptSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  return resolveSqliteSessionKeyBySessionId(scope);
 }
 
 /** Emits a transcript update after resolving the current transcript target. */

@@ -48,5 +48,15 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
           ),
       ),
     ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-full-agent-turn" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === report.fullTurnSessionKey && entry.transcriptEvents >= 2,
+          ),
+      ),
+    ).toBe(true);
   }, 180_000);
 });
