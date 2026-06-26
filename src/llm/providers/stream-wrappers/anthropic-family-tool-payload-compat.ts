@@ -237,7 +237,27 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     }
     if (snapshot.type === "custom" && isRecord(snapshot.custom)) {
       const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
-      return name ? { kind: "custom", name, tool: snapshot } : undefined;
+      if (!name) return undefined;
+      // Convert Anthropic custom tool to OpenAI function format (#97020).
+      // type:"custom" is rejected by OpenAI Chat Completions (400).
+      const description = normalizeOptionalString(snapshot.custom.description) ?? undefined;
+      let parameters: unknown = { type: "object", properties: {} };
+      if (isRecord(snapshot.custom.input_schema)) {
+        const projected = projectJsonObjectSchema(snapshot.custom.input_schema, `${name}.input_schema`);
+        if (projected) parameters = projected;
+      }
+      return {
+        kind: "function",
+        name,
+        tool: {
+          type: "function",
+          function: {
+            name,
+            ...(description ? { description } : {}),
+            parameters,
+          },
+        },
+      };
     }
     return { tool: snapshot };
   }
@@ -345,9 +365,12 @@ function normalizeAllowedToolChoice(
     if (!snapshot) {
       return [];
     }
+    const isCustom = snapshot.type === "custom";
     const kind =
-      snapshot.type === "custom" ? "custom" : snapshot.type === "function" ? "function" : undefined;
-    const definition = kind && isRecord(snapshot[kind]) ? snapshot[kind] : undefined;
+      isCustom || snapshot.type === "function" ? "function" : undefined;
+    // Custom tools store their definition under "custom", not "function" (#97020).
+    const definitionKey = isCustom ? "custom" : kind;
+    const definition = definitionKey && isRecord(snapshot[definitionKey]) ? snapshot[definitionKey] : undefined;
     const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
     return kind && name && isProjectedToolAvailable(toolProjection, kind, name) ? [snapshot] : [];
   });
@@ -430,15 +453,16 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
   }
   if (choice.type === "custom" && isRecord(choice.custom)) {
     const name = normalizeOptionalString(choice.custom.name) ?? "";
-    if (name && !isProjectedToolAvailable(toolProjection, "custom", name)) {
+    // Custom tools are projected to function format (#97020).
+    if (name && !isProjectedToolAvailable(toolProjection, "function", name)) {
       throw new Error(
         `OpenAI-compatible Anthropic tool_choice requested unavailable tool "${name}" after payload conversion`,
       );
     }
     if (name) {
       return {
-        type: "custom",
-        custom: { name },
+        type: "function",
+        function: { name },
       };
     }
   }

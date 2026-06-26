@@ -276,19 +276,21 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       },
     });
 
+    // Custom tools are projected to OpenAI function format (#97020).
     expect(payload).toEqual({
       tools: [
         {
-          type: "custom",
-          custom: {
+          type: "function",
+          function: {
             name: "shell",
             description: "Run a shell command.",
+            parameters: { type: "object", properties: {} },
           },
         },
       ],
       tool_choice: {
-        type: "custom",
-        custom: { name: "shell" },
+        type: "function",
+        function: { name: "shell" },
       },
     });
   });
