@@ -9,6 +9,8 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -104,6 +106,26 @@ function parseJsonLines<T>(raw: string): T[] {
   return records;
 }
 
+function readEventMessages(events: unknown[]): Array<{ role?: string; text?: string }> {
+  return events
+    .map((event) =>
+      event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
+    )
+    .filter((message): message is { role?: string; content?: unknown } =>
+      Boolean(message && typeof message === "object"),
+    )
+    .map((message) => {
+      const content = Array.isArray(message.content)
+        ? message.content.find((part): part is { text: string } =>
+            Boolean(part && typeof part === "object" && typeof part.text === "string"),
+          )?.text
+        : typeof message.content === "string"
+          ? message.content
+          : undefined;
+      return { role: message.role, text: content };
+    });
+}
+
 describe("mirrorCodexAppServerTranscript", () => {
   it("mirrors user, assistant, and tool result messages into the embedded-agent transcript", async () => {
     const sessionFile = await createTempSessionFile();
@@ -152,6 +174,53 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:toolResult:${expectedFingerprint(toolResultMessage)}"`,
     );
+  });
+
+  it("mirrors by SQLite session identity when storePath is provided", async () => {
+    const root = await makeRoot("openclaw-codex-mirror-sqlite-");
+    const storePath = path.join(root, "openclaw-agent.sqlite");
+    const sessionId = "session-sqlite-1";
+    const sessionKey = "agent:main:codex-sqlite";
+    const bogusSessionFile = path.join(root, "should-not-be-created.jsonl");
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+      entry: {
+        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+        sessionId,
+        updatedAt: 1,
+      },
+    });
+
+    await mirrorCodexAppServerTranscript({
+      agentId: "main",
+      sessionFile: bogusSessionFile,
+      sessionId,
+      sessionKey,
+      storePath,
+      messages: [
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "sqlite hello" }],
+          timestamp: Date.now(),
+        }),
+      ],
+      idempotencyScope: "codex-app-server:sqlite-thread",
+    });
+
+    await expect(fs.readFile(bogusSessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
+    expect(
+      readEventMessages(
+        await readSessionTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ),
+    ).toContainEqual({ role: "user", text: "sqlite hello" });
+    expect(publishSessionTranscriptFileUpdateMock).not.toHaveBeenCalled();
   });
 
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {

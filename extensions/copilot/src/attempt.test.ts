@@ -2635,17 +2635,28 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
 
-      await runCopilotAttempt(makeParams(), { pool });
+      await runCopilotAttempt(
+        makeParams({
+          sessionTarget: {
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            storePath: "sessions.json",
+          },
+        }),
+        { pool },
+      );
 
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
         sessionFile: string;
         sessionId: string;
+        storePath?: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
       expect(args.sessionFile).toBe("session.json");
       expect(args.sessionId).toBe("session-1");
+      expect(args.storePath).toBe("sessions.json");
       expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
