@@ -67,7 +67,11 @@ function clearIdleRetryControllersForTests(): void {
   idleRetryControllers.clear();
 }
 
-function armWorkTimer(sessionKey: string, fireAt: number): void {
+function armWorkTimer(
+  sessionKey: string,
+  fireAt: number,
+  options: { includeIdleRetry?: boolean } = {},
+): void {
   clearWorkTimer(sessionKey);
   const fireIn = Math.max(0, fireAt - Date.now());
   log.info(
@@ -78,6 +82,7 @@ function armWorkTimer(sessionKey: string, fireAt: number): void {
     log.info(`[continuation:work-hedge-fired] session=${sessionKey}`);
     void dispatchPendingContinuationWork({
       sessionKey,
+      includeIdleRetry: options.includeIdleRetry === true,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
       includeRunningIdleRetry: true,
@@ -86,7 +91,7 @@ function armWorkTimer(sessionKey: string, fireAt: number): void {
       .catch((err: unknown) => {
         const message = formatErrorMessage(err);
         log.error(`[continuation:work-hedge-error] error=${message} session=${sessionKey}`);
-        armWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
+        armNextWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, options);
       });
   }, fireIn);
   handle.unref();
@@ -306,11 +311,16 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
   })().catch((err: unknown) => {
     idleRetryControllers.delete(key);
+    if (controller.signal.aborted) {
+      return;
+    }
     const message = formatErrorMessage(err);
     log.error(
       `[continuation:work-idle-retry-error] trigger=${idleRetryTriggerLabel(trigger)} error=${message} session=${sessionKey}`,
     );
-    armWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
+    armNextWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
+      includeIdleRetry: true,
+    });
   });
 }
 
@@ -452,14 +462,18 @@ function earlierDueAt(left: number | undefined, right: number | undefined): numb
   return right === undefined ? left : Math.min(left, right);
 }
 
-function armNextWorkTimer(sessionKey: string, dueAt: number): void {
+function armNextWorkTimer(
+  sessionKey: string,
+  dueAt: number,
+  options: { includeIdleRetry?: boolean } = {},
+): void {
   const soonestQueued = peekSoonestQueuedWorkDueAt(sessionKey);
   const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
     sessionKey,
     RUNNING_WORK_RECOVERY_STALE_MS,
   );
   const soonest = earlierDueAt(earlierDueAt(dueAt, soonestQueued), runningRecoveryDueAt);
-  armWorkTimer(sessionKey, soonest ?? dueAt);
+  armWorkTimer(sessionKey, soonest ?? dueAt, options);
 }
 
 /**

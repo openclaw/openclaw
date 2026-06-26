@@ -7,6 +7,7 @@ const laneIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
 let mainQueueSize = 0;
 let gatewayDraining = false;
 let replyError: Error | undefined;
+let commandLaneIdleError: Error | undefined;
 let drainAfterReply = false;
 let replyPayloadOverride: unknown;
 const mockSessionStore: Record<string, unknown> = {};
@@ -178,7 +179,12 @@ vi.mock("../../process/command-queue.js", () => ({
     _timeoutMs?: number,
     opts?: { signal?: AbortSignal },
   ) => ({
-    idle: await waitForMockIdle(laneIdleWaiters, lane, () => mainQueueSize <= 0, opts?.signal),
+    idle: await (async () => {
+      if (commandLaneIdleError) {
+        throw commandLaneIdleError;
+      }
+      return await waitForMockIdle(laneIdleWaiters, lane, () => mainQueueSize <= 0, opts?.signal);
+    })(),
   }),
 }));
 
@@ -421,6 +427,7 @@ describe("durable continuation_work dispatch", () => {
     mainQueueSize = 0;
     gatewayDraining = false;
     replyError = undefined;
+    commandLaneIdleError = undefined;
     drainAfterReply = false;
     replyPayloadOverride = undefined;
     for (const key of Object.keys(mockSessionStore)) {
@@ -440,6 +447,7 @@ describe("durable continuation_work dispatch", () => {
     laneIdleWaiters.clear();
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
+    commandLaneIdleError = undefined;
     vi.useRealTimers();
   });
 
@@ -863,6 +871,48 @@ describe("durable continuation_work dispatch", () => {
         context: expect.objectContaining({
           SessionKey: sessionKey,
           Body: expect.stringContaining("queued user turn"),
+        }),
+      }),
+    ]);
+  });
+
+  it("recovers queued idle-retry work promptly when idle waiter registration fails", async () => {
+    const sessionKey = "agent:main:idle-waiter-registration-fails";
+    mockSessionStore[sessionKey] = { sessionKey };
+    mainQueueSize = 1;
+    commandLaneIdleError = new Error("idle waiter unavailable");
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "recover after idle waiter failure",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(turnGrants).toHaveLength(0);
+    expect([...mockFlows.values()][0]).toMatchObject({
+      status: "queued",
+      stateJson: expect.objectContaining({
+        dueAt: Date.now() + 60_000,
+        idleRetry: expect.objectContaining({ trigger: "command-lane-idle" }),
+      }),
+    });
+
+    commandLaneIdleError = undefined;
+    mainQueueSize = 0;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForTurnGrantCount(1);
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("recover after idle waiter failure"),
         }),
       }),
     ]);
