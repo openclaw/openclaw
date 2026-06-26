@@ -2259,10 +2259,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           error?: ReturnType<typeof errorShape>;
         }
       | undefined;
+    const abortSessionKey = canonicalKey ?? key;
     await chatHandlers["chat.abort"]({
       req,
       params: {
-        sessionKey: key,
+        sessionKey: abortSessionKey,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       },
       respond: (ok, _payload, error) => {
