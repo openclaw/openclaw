@@ -262,6 +262,7 @@ describe("registerWorkboardCli", () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed CLI", status: "todo" });
     await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    const program = createProgram(store);
     // CLI without token should fail - scope { ownerId: "cli" } doesn't match claim
     await expect(
       program.parseAsync(["workboard", "move", card.id, "--status", "running"], {
