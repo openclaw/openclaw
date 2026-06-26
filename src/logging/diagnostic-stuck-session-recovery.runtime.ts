@@ -62,7 +62,12 @@ function isActiveRunProgressStale(params: {
 
 function formatRecoveryContext(
   params: StuckSessionRecoveryParams,
-  extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
+  extra?: {
+    activeSessionId?: string;
+    lane?: string;
+    activeCount?: number;
+    queuedCount?: number;
+  },
 ): string {
   const fields = [
     `sessionId=${params.sessionId ?? extra?.activeSessionId ?? "unknown"}`,
@@ -237,18 +242,40 @@ export async function recoverStuckDiagnosticSession(
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
-        const outcome: StuckSessionRecoveryOutcome = {
-          status: "skipped",
-          action: "keep_lane",
-          reason: "active_lane_task",
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          lane: sessionLane,
-          activeCount: laneSnapshot.activeCount,
-          queuedCount: laneSnapshot.queuedCount,
-        };
-        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-        return outcome;
+        // A lane task with no backing embedded-run handle is unbacked bookkeeping:
+        // either a just-started turn that has not registered its handle yet, or an
+        // orphaned slot whose work is dead (e.g. wedged before the run registers).
+        // Keep waiting only while it could still be a fresh turn; once the stall has
+        // aged past the stale-progress threshold and a queued turn is starving behind
+        // it, fall through to resetCommandLane so the lane sweeps the dead slot instead
+        // of blocking the next topic turn until it aborts on its own deadline.
+        const laneStartedFreshTask = getCommandLaneActiveTaskIds(sessionLane).some(
+          (id) => !preAbortActiveTaskIds.has(id),
+        );
+        const hasQueuedWork = laneSnapshot.queuedCount > 0 || (params.queueDepth ?? 0) > 0;
+        const orphanLaneStale = params.ageMs >= staleActiveProgressAbortMs;
+        const sweepOrphanedLane = !laneStartedFreshTask && hasQueuedWork && orphanLaneStale;
+        if (!sweepOrphanedLane) {
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "skipped",
+            action: "keep_lane",
+            reason: "active_lane_task",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            lane: sessionLane,
+            activeCount: laneSnapshot.activeCount,
+            queuedCount: laneSnapshot.queuedCount,
+          };
+          diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+          return outcome;
+        }
+        diag.warn(
+          `stuck session recovery sweeping orphaned lane: ${formatRecoveryContext(params, {
+            lane: sessionLane,
+            activeCount: laneSnapshot.activeCount,
+            queuedCount: laneSnapshot.queuedCount,
+          })}`,
+        );
       }
     }
 
@@ -273,7 +300,10 @@ export async function recoverStuckDiagnosticSession(
     if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
-        resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
+        resolveCronSessionDiagnosticContext({
+          sessionKey: params.sessionKey,
+          activeSessionId,
+        }),
       );
       diag.warn(
         `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
