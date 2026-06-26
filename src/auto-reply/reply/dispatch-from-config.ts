@@ -1179,6 +1179,15 @@ export async function dispatchReplyFromConfig(
       ) {
         return null;
       }
+      const text = normalizeOptionalString(payload.text);
+      const isBackgroundExecProgressText =
+        payload.isError !== true &&
+        text?.startsWith("Command still running (session ") === true &&
+        text.includes("). Use process (list/poll/log/write/kill/clear/remove) for follow-up.");
+      if (isBackgroundExecProgressText && suppressDefaultToolProgressMessages) {
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+        return hasMedia ? { ...payload, text: undefined } : null;
+      }
       if (shouldSendToolSummaries) {
         return payload;
       }
