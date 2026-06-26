@@ -103,6 +103,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -242,7 +243,13 @@ fun OnboardingFlow(
       AlertDialog(
         onDismissRequest = viewModel::declineGatewayTrustPrompt,
         containerColor = ClawTheme.colors.surfaceRaised,
-        title = { Text("Trust this gateway?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+        title = {
+          Text(
+            stringResource(R.string.trust_this_gateway),
+            style = ClawTheme.type.section,
+            color = ClawTheme.colors.text,
+          )
+        },
         text = {
           Text(
             "Verify the certificate fingerprint before continuing.\n\n${prompt.fingerprintSha256}",
@@ -252,12 +259,12 @@ fun OnboardingFlow(
         },
         confirmButton = {
           TextButton(onClick = viewModel::acceptGatewayTrustPrompt) {
-            Text("Trust")
+            Text(stringResource(R.string.trust_and_continue))
           }
         },
         dismissButton = {
           TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-            Text("Cancel")
+            Text(stringResource(R.string.cancel))
           }
         },
       )
@@ -535,20 +542,24 @@ private fun GatewaySetupScreen(
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {
-          OnboardingHeader(title = "Gateway Setup", subtitle = "Connect to your Gateway", onBack = onBack)
+          OnboardingHeader(
+            title = stringResource(R.string.gateway_setup),
+            subtitle = stringResource(R.string.connect_to_gateway),
+            onBack = onBack,
+          )
         }
         item {
           GatewayOption(
             icon = Icons.Default.QrCode2,
-            title = "Scan setup code",
-            subtitle = "Use your Gateway QR or setup code",
+            title = stringResource(R.string.scan_setup_code),
+            subtitle = stringResource(R.string.use_gateway_qr),
             onClick = onScan,
           )
         }
         item {
           GatewayOption(
             icon = Icons.Default.WifiTethering,
-            title = "Nearby gateway",
+            title = stringResource(R.string.nearby_gateway),
             subtitle = nearbyGateway.subtitle,
             status = nearbyGateway.status,
             onClick = onUseNearby.takeIf { nearbyGateway.canConnect },
@@ -557,8 +568,8 @@ private fun GatewaySetupScreen(
         item {
           GatewayOption(
             icon = Icons.Default.Link,
-            title = "Enter gateway URL",
-            subtitle = "Connect using a manual URL",
+            title = stringResource(R.string.enter_gateway_url),
+            subtitle = stringResource(R.string.connect_manual_url),
             onClick = { advancedOpen = true },
           )
         }
@@ -639,7 +650,7 @@ private fun GatewayRecoveryScreen(
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-      OnboardingHeader(title = "Gateway Recovery", onBack = onBack)
+      OnboardingHeader(title = stringResource(R.string.gateway_setup), onBack = onBack)
       Spacer(modifier = Modifier.height(12.dp))
       Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(
@@ -924,7 +935,9 @@ private fun PermissionTopBar(onBack: () -> Unit) {
     AlertDialog(
       onDismissRequest = { showHelp = false },
       containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text("Permissions", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      title = {
+        Text(stringResource(R.string.permissions), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      },
       text = {
         Text(
           "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
@@ -934,7 +947,7 @@ private fun PermissionTopBar(onBack: () -> Unit) {
       },
       confirmButton = {
         TextButton(onClick = { showHelp = false }) {
-          Text("Done")
+          Text(stringResource(R.string.done))
         }
       },
     )
