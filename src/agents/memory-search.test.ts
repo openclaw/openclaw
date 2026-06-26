@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  clearEmbeddingProviders,
+  registerEmbeddingProvider,
+} from "../plugins/embedding-providers.js";
+import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
@@ -73,6 +77,7 @@ describe("memory search config", () => {
 
   afterEach(() => {
     clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -225,6 +230,22 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
 
     expect(resolved?.provider).toBe("local");
+  });
+
+  it("resolves providers from the generic embedding provider registry", () => {
+    clearMemoryEmbeddingProviders();
+    registerEmbeddingProvider({
+      id: "generic-local",
+      defaultModel: "local-gguf-default",
+      transport: "local",
+      create: async () => ({ provider: null }),
+    });
+
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("generic-local"), "main");
+
+    expect(resolved?.provider).toBe("generic-local");
+    expect(resolved?.model).toBe("local-gguf-default");
+    expect(resolved?.remote).toBeUndefined();
   });
 
   it("resolves explicit provider-none", () => {
