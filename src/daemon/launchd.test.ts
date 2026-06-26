@@ -470,6 +470,7 @@ describe("launchctl list detection", () => {
         "- 127 ai.openclaw.update.2026.5.12",
         "- 0 ai.openclaw.manual-update.1717168800",
         "- 0 ai.openclaw.tayoun.update.20260625T201026-0400",
+        "- 0 ai.openclaw.dev.team.update.20260625T201026-0400",
         "8142 0 ai.openclaw.update.2026.5.13-beta.1",
         "- 0 ai.openclaw.manual-updater.1717168800",
         "- 0 com.example.other",
@@ -477,6 +478,10 @@ describe("launchctl list detection", () => {
     );
 
     expect(jobs).toEqual([
+      {
+        label: "ai.openclaw.dev.team.update.20260625T201026-0400",
+        lastExitStatus: 0,
+      },
       {
         label: "ai.openclaw.manual-update.1717168800",
         lastExitStatus: 0,
@@ -503,11 +508,16 @@ describe("launchctl list detection", () => {
       state.listOutput = [
         "- 127 ai.openclaw.update.2026.5.12",
         "- 0 ai.openclaw.tayoun.update.20260625T201026-0400",
+        "- 0 ai.openclaw.dev.team.update.20260625T201026-0400",
       ].join("\n");
 
       const jobs = await findStaleOpenClawUpdateLaunchdJobs();
 
       expect(jobs).toEqual([
+        {
+          label: "ai.openclaw.dev.team.update.20260625T201026-0400",
+          lastExitStatus: 0,
+        },
         {
           label: "ai.openclaw.tayoun.update.20260625T201026-0400",
           lastExitStatus: 0,
@@ -586,14 +596,14 @@ describe("launchctl list detection", () => {
     async () => {
       await expect(
         disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+          LAUNCH_JOB_LABEL: "ai.openclaw.dev.team.update.20260625T201026-0400",
         }),
       ).resolves.toBe(true);
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       expect(state.launchctlCalls).toContainEqual([
         "disable",
-        `${domain}/ai.openclaw.tayoun.update.20260625T201026-0400`,
+        `${domain}/ai.openclaw.dev.team.update.20260625T201026-0400`,
       ]);
       expect(launchctlCommandNames()).not.toContain("remove");
     },
@@ -734,13 +744,13 @@ describe("launchctl list detection", () => {
     "disables explicit profile-scoped updater jobs",
     async () => {
       await expect(
-        disableOpenClawUpdateLaunchdJob("ai.openclaw.tayoun.update.20260625T201026-0400"),
+        disableOpenClawUpdateLaunchdJob("ai.openclaw.dev.team.update.20260625T201026-0400"),
       ).resolves.toBe(true);
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       expect(state.launchctlCalls).toContainEqual([
         "disable",
-        `${domain}/ai.openclaw.tayoun.update.20260625T201026-0400`,
+        `${domain}/ai.openclaw.dev.team.update.20260625T201026-0400`,
       ]);
     },
   );
