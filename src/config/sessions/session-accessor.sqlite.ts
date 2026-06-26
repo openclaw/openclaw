@@ -2003,7 +2003,7 @@ function cleanupSqliteSessionLifecycleArtifactsInTransaction(
     database.db,
     db
       .selectFrom("session_entries")
-      .select(["session_key", "session_id"])
+      .select(["entry_json", "session_key", "session_id"])
       .orderBy("session_key", "asc"),
   ).rows;
 
