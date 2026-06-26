@@ -210,8 +210,8 @@ Required members:
 </ParamField>
 
 `compact` returns a `CompactResult`. When compaction changes the active session
-identity, `result.sessionId` identifies the successor session that the next
-retry or turn must use.
+identity, `result.sessionId` and `result.sessionTarget` identify the successor
+session that the next retry or turn must use.
 
 Optional members:
 

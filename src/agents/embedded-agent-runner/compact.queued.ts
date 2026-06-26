@@ -37,6 +37,7 @@ import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
@@ -470,11 +471,23 @@ export async function compactEmbeddedAgentSession(
             reason: formatErrorMessage(compactErr),
           };
         }
-        const delegatedSessionId = result.result?.sessionId;
+        const delegatedSessionTarget = result.result?.sessionTarget;
+        const delegatedSessionId = delegatedSessionTarget?.sessionId ?? result.result?.sessionId;
         const delegatedRotatedTranscript =
           typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId;
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
         let postCompactionSessionFile = params.sessionFile;
+        if (delegatedSessionTarget) {
+          const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
+            agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
+            config: params.config,
+            sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
+            sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
+            sessionTarget: delegatedSessionTarget,
+          });
+          postCompactionSessionId = resolvedDelegatedTarget.sessionId;
+          postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
+        }
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
           if (

@@ -620,6 +620,43 @@ describe("Engine contract tests", () => {
     });
   });
 
+  it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        tokensAfter: 40,
+        details: undefined,
+        sessionId: "s3-successor",
+        sessionFile: "sqlite:main:s3-successor:/tmp/openclaw-agent.sqlite",
+      },
+    });
+
+    const result = await delegateCompactionToRuntime({
+      sessionId: "s3",
+      sessionKey: "agent:main:s3",
+      tokenBudget: 4096,
+      runtimeContext: {
+        workspaceDir: "/tmp/workspace",
+      },
+    });
+
+    expect(result.result).toMatchObject({
+      sessionId: "s3-successor",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "s3-successor",
+        sessionKey: "agent:main:s3",
+        storePath: "/tmp/openclaw-agent.sqlite",
+      },
+    });
+    expect(result.result).not.toHaveProperty("sessionFile");
+  });
+
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
     installCompactRuntimeSpy();
     const controller = new AbortController();
