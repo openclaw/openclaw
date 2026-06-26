@@ -280,15 +280,26 @@ export async function buildChannelsTable(
       channelId: plugin.id,
     });
 
-    const anyEnabled = accounts.some((a) => a.enabled);
-    const enabledAccounts = accounts.filter((a) => a.enabled);
-    const configuredAccounts = enabledAccounts.filter((a) => a.configured);
-    const unavailableConfiguredAccounts = enabledAccounts.filter(
-      (a) =>
-        hasConfiguredUnavailableCredentialStatus(a.account) &&
+    const enabledAccounts: ChannelAccountRow[] = [];
+    const configuredAccounts: ChannelAccountRow[] = [];
+    const unavailableConfiguredAccounts: ChannelAccountRow[] = [];
+    for (const account of accounts) {
+      if (!account.enabled) {
+        continue;
+      }
+      enabledAccounts.push(account);
+      if (account.configured) {
+        configuredAccounts.push(account);
+      }
+      if (
+        hasConfiguredUnavailableCredentialStatus(account.account) &&
         !credentialResolutionSkipped &&
-        !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
-    );
+        !hasRuntimeCredentialAvailable({ liveAccounts, accountId: account.accountId })
+      ) {
+        unavailableConfiguredAccounts.push(account);
+      }
+    }
+    const anyEnabled = enabledAccounts.length > 0;
     const accountsForTokenSummary = accounts.map((entry) =>
       hasConfiguredUnavailableCredentialStatus(entry.account) &&
       (credentialResolutionSkipped ||
