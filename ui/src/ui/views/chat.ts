@@ -33,13 +33,13 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -290,16 +290,10 @@ function renderNativeTalkSelect(params: {
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
-  selectedLabel?: string;
 }) {
-  const selectedLabel =
-    params.selectedLabel ?? params.options.find((entry) => entry.value === params.value)?.label;
   return html`
     <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
       <span>${params.label}</span>
-      ${selectedLabel
-        ? html`<span class="agent-chat__talk-select-label">${selectedLabel}</span>`
-        : nothing}
       <select
         .value=${params.value}
         @change=${(event: Event) =>
@@ -367,8 +361,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   const sensitivityOptions = isCustomSensitivity
     ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
     : TALK_SENSITIVITY_OPTIONS;
-  const sensitivityLabel =
-    sensitivityOptions.find((entry) => entry.value === sensitivityValue)?.label ?? "Custom";
   const updateSensitivity = (value: string) => {
     if (value !== "__custom") {
       onChange({ vadThreshold: value });
@@ -396,7 +388,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           label: "Sensitivity",
           value: sensitivityValue,
           options: sensitivityOptions,
-          selectedLabel: sensitivityLabel,
           onSelect: updateSensitivity,
         })}
       </div>

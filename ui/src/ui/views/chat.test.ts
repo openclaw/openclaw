@@ -1476,11 +1476,12 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const sensitivityLabel = requireElement(
-      container,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "Talk sensitivity selected label",
+    const sensitivitySelect = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
+    if (sensitivitySelect === null) {
+      throw new Error("expected Talk sensitivity select");
+    }
 
     expect(getTalkSelectOptionValues(container, "voice")).toEqual([
       "",
@@ -1495,7 +1496,7 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(sensitivityLabel.textContent).toBe("Custom");
+    expect(sensitivitySelect.value).toBe("__custom");
     expect(getTalkSelectOptionValues(container, "sensitivity")).toEqual([
       "",
       "0.65",
@@ -1542,12 +1543,13 @@ describe("chat voice controls", () => {
       },
       onRealtimeTalkOptionsChange,
     });
-    const defaultSensitivityLabel = requireElement(
-      defaultContainer,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "default Talk sensitivity selected label",
+    const defaultSensitivitySelect = defaultContainer.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
-    expect(defaultSensitivityLabel.textContent).toBe("Default");
+    if (defaultSensitivitySelect === null) {
+      throw new Error("expected default Talk sensitivity select");
+    }
+    expect(defaultSensitivitySelect.value).toBe("");
     expect(getTalkSelectOptionValues(defaultContainer, "sensitivity")).toEqual([
       "",
       "0.65",
