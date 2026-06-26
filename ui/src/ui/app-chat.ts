@@ -267,6 +267,9 @@ export function hasAbortableSessionRun(host: {
 }
 
 const CHANNEL_AGNOSTIC_ABORT_SCOPES = new Set([
+  "agent",
+  "global",
+  "unknown",
   "main",
   "direct",
   "dm",

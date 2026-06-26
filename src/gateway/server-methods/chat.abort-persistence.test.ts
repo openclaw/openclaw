@@ -503,6 +503,107 @@ describe("chat abort transcript persistence", () => {
     expect(context.chatAbortControllers.has("run-stop-raw-alias")).toBe(false);
   });
 
+  it("plain stop sent to main aborts the only hidden channel run for that agent", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const active = createActiveRun(sessionKey, { controlUiVisible: false });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden-wechat", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey,
+        clientRunId: "run-hidden-wechat",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "agent:main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-hidden-wechat",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-hidden-wechat"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-hidden-wechat")).toBe(false);
+  });
+
+  it("plain stop sent to main does not abort another agent's hidden channel run", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:work:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const active = createActiveRun(sessionKey, { controlUiVisible: false });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden-work-wechat", active]]),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "agent:main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-hidden-work-wechat",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    const actual = expectRecord(payload, "abort payload");
+    expect(actual.aborted).toBe(false);
+    expect(actual.runIds).toEqual([]);
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden-work-wechat")).toBe(true);
+  });
+
+  it("plain stop sent to an explicit channel session does not fallback to another hidden channel run", async () => {
+    const respond = vi.fn();
+    const explicitSessionKey = "agent:main:telegram:direct:8661849123";
+    const hiddenSessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const explicitActive = createActiveRun(explicitSessionKey);
+    const hiddenActive = createActiveRun(hiddenSessionKey, { controlUiVisible: false });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-explicit-telegram", explicitActive],
+        ["run-hidden-wechat", hiddenActive],
+      ]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: explicitSessionKey,
+        clientRunId: "run-explicit-telegram",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: explicitSessionKey,
+        message: "/stop",
+        idempotencyKey: "idem-stop-explicit-channel",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-explicit-telegram"] });
+    expect(explicitActive.controller.signal.aborted).toBe(true);
+    expect(hiddenActive.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-explicit-telegram")).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden-wechat")).toBe(true);
+  });
+
   it("scopes global stop commands to the selected agent", async () => {
     const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-global-agent-");
     sessionEntryState.canonicalKey = "global";

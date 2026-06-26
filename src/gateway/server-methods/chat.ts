@@ -214,6 +214,7 @@ type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
   runId: string;
+  sessionKey: string;
   sessionId: string;
   agentId?: string;
   text: string;
@@ -592,6 +593,9 @@ const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryOmittedEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "agent",
+  "global",
+  "unknown",
   "main",
   "direct",
   "dm",
@@ -617,6 +621,44 @@ function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
     return false;
   }
   return parts.length > 1;
+}
+
+function sessionKeyBelongsToAgent(
+  sessionKey: string,
+  agentId: string | undefined,
+  defaultAgentId: string,
+): boolean {
+  const expectedAgentId = normalizeAgentId(agentId ?? defaultAgentId);
+  const actualAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? defaultAgentId;
+  return normalizeAgentId(actualAgentId) === expectedAgentId;
+}
+
+function resolveUniqueHiddenChannelAbortFallbackSessionKey(params: {
+  context: GatewayRequestContext;
+  agentId: string | undefined;
+  defaultAgentId: string;
+}): string | undefined {
+  const candidates = new Set<string>();
+  for (const active of params.context.chatAbortControllers.values()) {
+    if (
+      active.controlUiVisible === false &&
+      isExplicitChannelScopedSessionKey(active.sessionKey) &&
+      sessionKeyBelongsToAgent(active.sessionKey, params.agentId, params.defaultAgentId)
+    ) {
+      candidates.add(active.sessionKey);
+    }
+  }
+  for (const [key, entry] of params.context.dedupe) {
+    const run = readPreRegisteredAgentRun({ key, entry, includeHidden: true });
+    if (
+      run?.payload.controlUiVisible === false &&
+      isExplicitChannelScopedSessionKey(run.sessionKey) &&
+      sessionKeyBelongsToAgent(run.sessionKey, params.agentId, params.defaultAgentId)
+    ) {
+      candidates.add(run.sessionKey);
+    }
+  }
+  return candidates.size === 1 ? candidates.values().next().value : undefined;
 }
 
 type ChatSendDeliveryEntry = {
@@ -2053,6 +2095,7 @@ function collectSessionAbortPartials(params: {
     }
     out.push({
       runId,
+      sessionKey: active.sessionKey,
       sessionId: active.sessionId,
       agentId: active.agentId,
       text,
@@ -2064,21 +2107,20 @@ function collectSessionAbortPartials(params: {
 
 async function persistAbortedPartials(params: {
   context: Pick<GatewayRequestContext, "logGateway">;
-  sessionKey: string;
+  sessionKey?: string;
   snapshots: AbortedPartialSnapshot[];
 }): Promise<void> {
   if (params.snapshots.length === 0) {
     return;
   }
   for (const snapshot of params.snapshots) {
+    const sessionKey = params.sessionKey ?? snapshot.sessionKey;
     const sessionLoadOptions =
-      params.sessionKey === "global" && snapshot.agentId
-        ? { agentId: snapshot.agentId }
-        : undefined;
-    const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
+      sessionKey === "global" && snapshot.agentId ? { agentId: snapshot.agentId } : undefined;
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
-      sessionKey: params.sessionKey,
+      sessionKey,
       message: snapshot.text,
       sessionId,
       storePath,
@@ -2515,7 +2557,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   if (res.aborted) {
     await persistAbortedPartials({
       context: params.context,
-      sessionKey: params.persistSessionKey ?? params.sessionKey,
+      ...(params.persistSessionKey ? { sessionKey: params.persistSessionKey } : {}),
       snapshots,
     });
   }
@@ -3388,6 +3430,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         snapshots: [
           {
             runId,
+            sessionKey: active.sessionKey,
             sessionId: active.sessionId,
             agentId: active.agentId,
             text: partialText,
@@ -3600,14 +3643,28 @@ export const chatHandlers: GatewayRequestHandlers = {
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const stopAgentId =
         sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+      const canUseHiddenChannelFallback =
+        !isExplicitChannelScopedSessionKey(rawSessionKey) &&
+        !isExplicitChannelScopedSessionKey(sessionKey);
+      const fallbackChannelSessionKey = canUseHiddenChannelFallback
+        ? resolveUniqueHiddenChannelAbortFallbackSessionKey({
+            context,
+            agentId: stopAgentId,
+            defaultAgentId,
+          })
+        : undefined;
+      const sessionKeyAliases = uniqueStrings([
+        ...(sessionKey === rawSessionKey ? [] : [sessionKey]),
+        ...(fallbackChannelSessionKey ? [fallbackChannelSessionKey] : []),
+      ]);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
-        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        sessionKeyAliases: sessionKeyAliases.length > 0 ? sessionKeyAliases : undefined,
         agentId: stopAgentId,
         sessionId: entry?.sessionId,
-        persistSessionKey: sessionKey,
+        ...(fallbackChannelSessionKey ? {} : { persistSessionKey: sessionKey }),
         defaultAgentId,
         abortOrigin: "stop-command",
         stopReason: "stop",
