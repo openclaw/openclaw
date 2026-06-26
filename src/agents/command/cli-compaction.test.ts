@@ -210,6 +210,102 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("records context-engine compaction successor session targets", async () => {
+    const sessionKey = "agent:main:cli-rotates";
+    const sessionId = "session-cli-rotates";
+    const successorSessionId = "session-cli-rotated";
+    const sessionFile = path.join(tmpDir, "session-rotates.jsonl");
+    const storePath = path.join(tmpDir, "sessions-rotates.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn(async () => ({
+      ...sessionEntry,
+      sessionId: successorSessionId,
+      sessionFile: `sqlite:main:${successorSessionId}:${storePath}`,
+      compactionCount: 1,
+    }));
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          return {
+            ok: true,
+            compacted: true,
+            result: {
+              summary: "compacted",
+              tokensBefore: compactParams.currentTokenCount ?? 0,
+              tokensAfter: 100,
+              sessionId: successorSessionId,
+              sessionTarget: {
+                sessionKey,
+                storePath,
+              },
+            },
+          };
+        },
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(maintenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: successorSessionId,
+        sessionFile: `sqlite:main:${successorSessionId}:${storePath}`,
+      }),
+    );
+    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        newSessionFile: `sqlite:main:${successorSessionId}:${storePath}`,
+        newSessionId: successorSessionId,
+        tokensAfter: 100,
+      }),
+    );
+  });
+
   it("treats below-target CLI transcript compaction as a no-op", async () => {
     const sessionKey = "agent:main:cli-under-target";
     const sessionId = "session-cli-under-target";
@@ -698,7 +794,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         provider: "codex",
         sessionKey,
-        tokensAfter: undefined,
+        tokensAfter: 100,
       }),
     );
     expect(result?.compactionCount).toBe(1);
@@ -942,7 +1038,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         provider: "external-harness",
         sessionKey,
-        tokensAfter: undefined,
+        tokensAfter: 100,
       }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
@@ -1031,7 +1127,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         provider: "codex",
         sessionKey,
-        tokensAfter: undefined,
+        tokensAfter: 100,
       }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
@@ -1205,7 +1301,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         provider: "codex",
         sessionKey,
-        tokensAfter: undefined,
+        tokensAfter: 100,
       }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
