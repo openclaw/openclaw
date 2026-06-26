@@ -622,7 +622,9 @@ export function createHookRunner(
         );
         const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
+          await withHookTimeout(promise, timeoutMs, {
+            unref: optionsValue.unrefTimeout ?? true,
+          });
         } else {
           await promise;
         }
@@ -833,7 +835,9 @@ export function createHookRunner(
       "before_model_resolve",
       event,
       ctx,
-      { mergeResults: mergeBeforeModelResolve },
+      {
+        mergeResults: mergeBeforeModelResolve,
+      },
     );
   }
 
@@ -849,7 +853,9 @@ export function createHookRunner(
       "before_prompt_build",
       event,
       ctx,
-      { mergeResults: mergeBeforePromptBuild },
+      {
+        mergeResults: mergeBeforePromptBuild,
+      },
     );
   }
 
@@ -972,7 +978,9 @@ export function createHookRunner(
       "before_agent_finalize",
       withAgentRunId(event, ctx),
       ctx,
-      { mergeResults: mergeBeforeAgentFinalize },
+      {
+        mergeResults: mergeBeforeAgentFinalize,
+      },
     );
   }
 
@@ -1149,7 +1157,11 @@ export function createHookRunner(
           break;
         }
       } catch (err) {
-        handleHookError({ hookName: "reply_payload_sending", pluginId: hook.pluginId, error: err });
+        handleHookError({
+          hookName: "reply_payload_sending",
+          pluginId: hook.pluginId,
+          error: err,
+        });
       }
     }
 
@@ -1468,7 +1480,9 @@ export function createHookRunner(
       "subagent_spawning",
       event,
       ctx,
-      { mergeResults: mergeSubagentSpawningResult },
+      {
+        mergeResults: mergeSubagentSpawningResult,
+      },
     );
   }
 
@@ -1484,7 +1498,9 @@ export function createHookRunner(
       "subagent_delivery_target",
       event,
       ctx,
-      { mergeResults: mergeSubagentDeliveryTargetResult },
+      {
+        mergeResults: mergeSubagentDeliveryTargetResult,
+      },
     );
   }
 
@@ -1543,7 +1559,9 @@ export function createHookRunner(
     return runModifyingHook<
       "heartbeat_prompt_contribution",
       PluginHeartbeatPromptContributionResult
-    >("heartbeat_prompt_contribution", event, ctx, { mergeResults: mergeAgentTurnPrepare });
+    >("heartbeat_prompt_contribution", event, ctx, {
+      mergeResults: mergeAgentTurnPrepare,
+    });
   }
 
   /**

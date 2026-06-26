@@ -2618,7 +2618,7 @@ describe("subagent registry seam flow", () => {
       "updated child session store entry",
     );
 
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(7);
   });
 
   it("throws and removes the entry when the initial durable registry write fails", () => {
@@ -2974,7 +2974,7 @@ describe("subagent registry seam flow", () => {
       const run = mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-killed-recovery");
-      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(2);
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(3);
       expect(run?.outcome?.status).toBe("error");
       expect(run?.endedReason).toBe("subagent-killed");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
@@ -3023,7 +3023,7 @@ describe("subagent registry seam flow", () => {
     });
 
     await waitForFast(() => {
-      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(2);
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(3);
       const run = mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-hook-retry");

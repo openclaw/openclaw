@@ -303,6 +303,29 @@ export type DiscordThreadConfig = {
   inheritParent?: boolean;
 };
 
+export type DiscordSubagentProgressConfig = {
+  /** Enable subagent progress reactions and typing on source Discord messages. Default: false. */
+  enabled?: boolean;
+  /** Reaction behavior for active and failed subagents. */
+  reactions?: {
+    /** Add/remove reactions for subagent progress. Default: true. */
+    enabled?: boolean;
+    /** Count reaction emoji. Counts above the list use the last emoji. Default: 1-10 keycap emoji. */
+    runningOrdinals?: string[];
+    /** Durable generic failure emoji added when any subagent ends non-ok. Default: red circle. */
+    failure?: string;
+  };
+  /** Typing keepalive behavior while tracked subagents remain active. */
+  typing?: {
+    /** Send Discord typing while subagents are active. Default: true. */
+    enabled?: boolean;
+    /** Typing refresh interval in milliseconds. Default: 8500. */
+    intervalMs?: number;
+    /** Safety TTL for one parent-message keepalive in milliseconds. Default: 3600000. */
+    maxDurationMs?: number;
+  };
+};
+
 export type DiscordAutoPresenceConfig = {
   /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
   enabled?: boolean;
@@ -437,6 +460,8 @@ export type DiscordAccountConfig = {
   slashCommand?: DiscordSlashCommandConfig;
   /** Thread binding lifecycle settings (focus/subagent thread sessions). */
   threadBindings?: DiscordThreadBindingsConfig;
+  /** Discord source-message progress feedback for spawned subagents. */
+  subagentProgress?: DiscordSubagentProgressConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */

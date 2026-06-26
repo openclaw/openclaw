@@ -33,6 +33,7 @@ type DiscordSubagentSpawningEvent = {
     channel?: string;
     accountId?: string;
     to?: string;
+    sourceTo?: string;
     threadId?: string | number;
   };
   childSessionKey: string;
@@ -54,6 +55,8 @@ type DiscordSubagentDeliveryTargetEvent = {
   requesterOrigin?: {
     channel?: string;
     accountId?: string;
+    to?: string;
+    sourceTo?: string;
     threadId?: string | number;
   };
 };
@@ -66,6 +69,7 @@ type DiscordSubagentSpawningResult =
         channel: "discord";
         accountId?: string;
         to: string;
+        sourceTo?: string;
         threadId?: string | number;
       };
     }
@@ -78,6 +82,7 @@ type DiscordSubagentDeliveryTargetResult =
         channel: "discord";
         accountId?: string;
         to: string;
+        sourceTo?: string;
         threadId?: string | number;
       };
     }
@@ -152,6 +157,7 @@ export async function handleDiscordSubagentSpawning(
           "Unable to create or bind a Discord thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
+    const sourceTo = event.requester?.sourceTo ?? event.requester?.to;
     return {
       status: "ok" as const,
       threadBindingReady: true,
@@ -159,6 +165,7 @@ export async function handleDiscordSubagentSpawning(
         channel: "discord",
         accountId: account.accountId,
         to: `channel:${binding.threadId}`,
+        ...(sourceTo ? { sourceTo } : {}),
         threadId: binding.threadId,
       },
     };
@@ -222,11 +229,13 @@ export function handleDiscordSubagentDeliveryTarget(
   if (!binding) {
     return undefined;
   }
+  const sourceTo = event.requesterOrigin?.sourceTo ?? event.requesterOrigin?.to;
   return {
     origin: {
       channel: "discord" as const,
       accountId: binding.accountId,
       to: `channel:${binding.threadId}`,
+      ...(sourceTo ? { sourceTo } : {}),
       threadId: binding.threadId,
     },
   };

@@ -13,6 +13,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -259,6 +260,7 @@ export function createSessionsSpawnTool(
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
+    currentMessageId?: string | number;
     sandboxed?: boolean;
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
@@ -405,6 +407,7 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
+            currentMessageId: opts?.currentMessageId,
             agentGroupId: opts?.agentGroupId ?? undefined,
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
@@ -434,6 +437,7 @@ export function createSessionsSpawnTool(
             accountId: opts?.agentAccountId,
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
+            messageId: opts?.currentMessageId,
           });
           const shouldExpectCompletionMessage = result.inlineDelivery
             ? false
@@ -455,6 +459,36 @@ export function createSessionsSpawnTool(
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
+            const hookRunner = getGlobalHookRunner();
+            if (hookRunner?.hasHooks("subagent_spawned")) {
+              try {
+                const requester = {
+                  channel: requesterOrigin?.channel,
+                  accountId: requesterOrigin?.accountId,
+                  to: requesterOrigin?.to,
+                  threadId: requesterOrigin?.threadId,
+                  messageId: requesterOrigin?.messageId,
+                };
+                await hookRunner.runSubagentSpawned(
+                  {
+                    runId: childRunId,
+                    childSessionKey,
+                    agentId: requestedAgentId || opts?.requesterAgentIdOverride || "main",
+                    label: label || undefined,
+                    requester,
+                    threadRequested: thread,
+                    mode: trackedSpawnMode,
+                  },
+                  {
+                    runId: childRunId,
+                    childSessionKey,
+                    requesterSessionKey: ownership.completionRequesterSessionKey,
+                  },
+                );
+              } catch {
+                // ACP spawn already started; progress hooks are best-effort only.
+              }
+            }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
@@ -500,6 +534,7 @@ export function createSessionsSpawnTool(
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
+          currentMessageId: opts?.currentMessageId,
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,

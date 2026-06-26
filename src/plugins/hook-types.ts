@@ -730,17 +730,29 @@ export type PluginHookSubagentContext = {
 
 export type PluginHookSubagentTargetKind = "subagent" | "acp";
 
+/** Source requester metadata shared by subagent lifecycle hooks. */
+export type PluginHookSubagentRequester = {
+  /** Channel plugin id that received the parent request, such as `discord`. */
+  channel?: string;
+  /** Channel account/workspace id for multi-account plugins, when known. */
+  accountId?: string;
+  /** Portable delivery target for the source conversation or channel. */
+  to?: string;
+  /** Native thread id for threaded transports, when known. */
+  threadId?: string | number;
+  /** Native source message id that triggered the parent request, when known. */
+  messageId?: string | number;
+};
+
+export type PluginHookSubagentDeliveryOrigin = PluginHookSubagentRequester;
+
 type PluginHookSubagentSpawnBase = {
   childSessionKey: string;
   agentId: string;
   label?: string;
   mode: "run" | "session";
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  /** Source message/conversation metadata for the parent request. */
+  requester?: PluginHookSubagentRequester;
   threadRequested: boolean;
 };
 
@@ -775,6 +787,7 @@ export type PluginHookSubagentSpawningResult =
         accountId?: string;
         to?: string;
         threadId?: string | number;
+        messageId?: string | number;
       };
     }
   | {
@@ -785,12 +798,7 @@ export type PluginHookSubagentSpawningResult =
 export type PluginHookSubagentDeliveryTargetEvent = {
   childSessionKey: string;
   requesterSessionKey: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requesterOrigin?: PluginHookSubagentDeliveryOrigin;
   childRunId?: string;
   spawnMode?: "run" | "session";
   expectsCompletionMessage: boolean;
@@ -807,6 +815,7 @@ export type PluginHookSubagentDeliveryTargetResult = {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    messageId?: string | number;
   };
 };
 
@@ -826,6 +835,8 @@ export type PluginHookSubagentEndedEvent = {
   accountId?: string;
   runId?: string;
   endedAt?: number;
+  /** Source message/conversation metadata used by progress cleanup hooks. */
+  requester?: PluginHookSubagentRequester;
   outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
   error?: string;
 };

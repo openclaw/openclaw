@@ -280,6 +280,13 @@ to the current requester; a child can only see its own controlled children.
 Use `subagents` for on-demand status and debugging. Use `sessions_yield` to
 wait for completion events.
 
+On Discord, source-message subagent progress is default off. Set
+`channels.discord.subagentProgress.enabled=true` to opt in. When enabled,
+active runs use one count reaction (`1️⃣`, `2️⃣`, and so on) for the current
+active subagent count, zero active runs remove that count reaction, and non-ok
+runs leave a durable `🔴` failure reaction while typing stays active until all
+tracked subagents finish. Tune this with `channels.discord.subagentProgress`.
+
 ## Thread-bound sessions
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound
