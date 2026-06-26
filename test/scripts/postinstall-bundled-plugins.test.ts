@@ -573,9 +573,15 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
     const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
     const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
+    const contentInventoryFile = path.join(
+      packageRoot,
+      "dist",
+      "postinstall-content-inventory.json",
+    );
     await fs.mkdir(path.dirname(currentFile), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
     await writePackageDistInventory(packageRoot);
+    await fs.writeFile(contentInventoryFile, "[]\n");
     await fs.writeFile(staleFile, "export {};\n");
 
     expect(
@@ -586,6 +592,7 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/channel-CJUAgRQR.js"]);
 
     await expectPathExists(currentFile);
+    await expectPathExists(contentInventoryFile);
     await expectPathMissing(staleFile);
   });
 

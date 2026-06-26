@@ -35,6 +35,7 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+  reapplyLocalOverrides?: boolean;
 };
 
 export type UpdateStatusOptions = {

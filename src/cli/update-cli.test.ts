@@ -3589,6 +3589,9 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
+    await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
@@ -3616,6 +3619,30 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv[2] === "-g" &&
+        argv.includes("--omit=optional")
+      ) {
+        await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.6.6" }),
+          "utf-8",
+        );
+        await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
+        await writePackageDistInventory(pkgRoot);
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
       return {
         stdout: "",
         stderr: "",
@@ -3626,7 +3653,16 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true, restart: false });
+    await withEnvAsync(
+      {
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
 
     const installArgvs = commandCalls()
       .map(([argv]) => argv)

@@ -92,6 +92,11 @@ export function registerUpdateCli(program: Command) {
     )
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .option(
+      "--reapply-local-overrides",
+      "Reapply preserved local package dist changes after update; use only for trusted local edits",
+      false,
+    )
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -103,6 +108,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update --reapply-local-overrides", "Reapply trusted local package dist edits"],
         ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
@@ -124,6 +130,7 @@ ${theme.heading("Switch channels:")}
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
+  - Use --reapply-local-overrides only when you trust local edits under packaged dist
   - Use --dry-run to preview actions without writing config/installing/restarting
 
 ${theme.heading("Examples:")}
@@ -147,6 +154,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           tag: opts.tag as string | undefined,
           timeout: opts.timeout as string | undefined,
           yes: Boolean(opts.yes),
+          reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),
         });
       } catch (err) {
         defaultRuntime.error(String(err));
