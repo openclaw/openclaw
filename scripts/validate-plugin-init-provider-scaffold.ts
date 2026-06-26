@@ -56,8 +56,9 @@ function assertCleanInspectorReport(report: InspectorReport): void {
 fs.rmSync(projectDir, { force: true, recursive: true });
 fs.mkdirSync(artifactRoot, { recursive: true });
 
-await runPluginsInitCommand("Plugin Init Test", {
+await runPluginsInitCommand("plugin-init-test", {
   directory: projectDir,
+  name: "Plugin Init Test",
   type: "provider",
 });
 

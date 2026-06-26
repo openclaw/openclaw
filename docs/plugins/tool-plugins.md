@@ -44,7 +44,7 @@ The generated plugin imports `typebox` at runtime, so keep `typebox` in
 Create a new plugin package:
 
 ```bash
-openclaw plugins init "Stock Quotes"
+openclaw plugins init stock-quotes --name "Stock Quotes"
 cd stock-quotes
 npm install
 npm run plugin:build

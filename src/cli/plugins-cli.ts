@@ -234,13 +234,14 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("init")
     .description("Create a plugin project")
-    .argument("<display-name>", "Plugin display name")
+    .argument("<id>", "Plugin id")
     .option("--directory <path>", "Output directory")
+    .option("--name <name>", "Display name")
     .option("--type <type>", "Scaffold type (tool or provider)", "tool")
     .option("--force", "Overwrite an existing output directory", false)
-    .action(async (displayName: string, opts: PluginAuthoringInitOptions) => {
+    .action(async (id: string, opts: PluginAuthoringInitOptions) => {
       const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
-      await runPluginsInitCommand(displayName, opts);
+      await runPluginsInitCommand(id, opts);
     });
 
   const marketplace = plugins

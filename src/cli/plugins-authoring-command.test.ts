@@ -318,12 +318,13 @@ describe("plugin authoring commands", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-init-"));
     const projectDir = path.join(tmpDir, "stock-quotes");
 
-    await runPluginsInitCommand("Stock Quotes", {
+    await runPluginsInitCommand("stock-quotes", {
       directory: projectDir,
+      name: 'Stock "Quotes"',
     });
 
     expect(fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8")).toContain(
-      'name: "Stock Quotes"',
+      'name: "Stock \\"Quotes\\""',
     );
     expect(
       JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8")),
@@ -352,7 +353,7 @@ describe("plugin authoring commands", () => {
       JSON.parse(fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8")),
     ).toMatchObject({
       id: "stock-quotes",
-      name: "Stock Quotes",
+      name: 'Stock "Quotes"',
       configSchema: {
         type: "object",
         additionalProperties: false,
@@ -372,8 +373,9 @@ describe("plugin authoring commands", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-init-"));
     const projectDir = path.join(tmpDir, "plugin-init-test");
 
-    await runPluginsInitCommand("Plugin Init Test", {
+    await runPluginsInitCommand("plugin-init-test", {
       directory: projectDir,
+      name: "Plugin Init Test",
       type: "provider",
     });
 

@@ -35,6 +35,7 @@ export type PluginsValidateOptions = {
 export type PluginsInitOptions = {
   directory?: string;
   force?: boolean;
+  name?: string;
   type?: string;
 };
 
@@ -365,17 +366,20 @@ function normalizeDisplayName(input: string): string {
   return name;
 }
 
-function pluginIdFromDisplayName(displayName: string): string {
-  const id = displayName
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "");
+function normalizePluginId(input: string): string {
+  const id = input.trim();
   if (!id) {
-    throw new Error(`Could not derive a plugin id from display name: ${displayName}`);
+    throw new Error("Plugin id is required.");
   }
   return id;
+}
+
+function titleFromId(id: string): string {
+  return id
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function upperSnakeFromId(id: string): string {
@@ -785,11 +789,11 @@ jobs:
 }
 
 export async function runPluginsInitCommand(
-  displayNameInput: string,
+  idInput: string,
   opts: PluginsInitOptions,
 ): Promise<void> {
-  const name = normalizeDisplayName(displayNameInput);
-  const id = pluginIdFromDisplayName(name);
+  const id = normalizePluginId(idInput);
+  const name = opts.name ? normalizeDisplayName(opts.name) : titleFromId(id);
   const type = resolveScaffoldType(opts.type);
   const rootDir = path.resolve(opts.directory ?? id);
   const force = opts.force === true;
