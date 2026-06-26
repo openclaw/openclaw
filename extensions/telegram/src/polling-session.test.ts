@@ -2180,10 +2180,11 @@ describe("TelegramPollingSession", () => {
       if (!claimed) {
         throw new Error("Expected claimed update");
       }
+      const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
       await adoptClaimOwner({
         spoolDir: tempDir,
         updateId: 42,
-        ownerId: `${process.pid}:other-process`,
+        ownerId: `${liveOwnerPid}:other-process`,
         claimedAt: Date.now(),
       });
 
@@ -2203,10 +2204,9 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("fails timed-out current-process claims before draining later same-lane updates", async () => {
+  it("releases pid-reused claims before draining later same-lane updates", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
-      const log = vi.fn();
       const events: string[] = [];
       await writeSpooledTestUpdates(tempDir, [
         topicUpdate(42, 10, "wedged topic 10 turn"),
@@ -2232,7 +2232,6 @@ describe("TelegramPollingSession", () => {
       const { runPromise, stopWorker } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,
-        log,
         spooledUpdateHandlerTimeoutMs: 100,
         handleUpdate: async (update) => {
           events.push(`handled:${update.update_id}`);
@@ -2240,17 +2239,11 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      await vi.waitFor(() => expect(events).toEqual(["handled:43"]));
+      await vi.waitFor(() => expect(events).toEqual(["handled:42"]));
       await runPromise;
-      expect(await failedUpdateReasons(tempDir)).toEqual([
-        { id: 42, reason: "lane-released-on-stuck" },
-      ]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateReasons(tempDir)).toEqual([]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      expectLogIncludes(
-        log,
-        "spooled update 42 Telegram spooled update claim owned by this process",
-      );
       stopWorker();
     });
   });
