@@ -1303,6 +1303,80 @@
   background: var(--bg-content);
 }
 
+.content--sessions {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(255, 0, 128, 0.6), transparent 24%),
+    radial-gradient(circle at 90% 10%, rgba(0, 180, 255, 0.58), transparent 25%),
+    radial-gradient(circle at 82% 88%, rgba(132, 255, 0, 0.48), transparent 26%),
+    linear-gradient(
+      135deg,
+      #ff004c 0%,
+      #ff8a00 15%,
+      #ffe600 30%,
+      #00d084 45%,
+      #00a3ff 60%,
+      #6d4cff 75%,
+      #ff4fd8 90%,
+      #ff004c 100%
+    );
+  background-attachment: local;
+}
+
+.content--sessions::before {
+  content: "";
+  position: fixed;
+  inset: var(--shell-topbar-height) 0 0 var(--shell-nav-width);
+  z-index: -2;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.24) 0 18px, transparent 18px 36px),
+    conic-gradient(
+      from 0.1turn at 52% 48%,
+      rgba(255, 0, 76, 0.42),
+      rgba(255, 138, 0, 0.38),
+      rgba(255, 230, 0, 0.36),
+      rgba(0, 208, 132, 0.38),
+      rgba(0, 163, 255, 0.42),
+      rgba(109, 76, 255, 0.42),
+      rgba(255, 79, 216, 0.44),
+      rgba(255, 0, 76, 0.42)
+    );
+  filter: saturate(1.45);
+  mix-blend-mode: screen;
+}
+
+.shell--nav-collapsed .content--sessions::before {
+  left: var(--shell-nav-rail-width);
+}
+
+.content--sessions::after {
+  content: "";
+  position: fixed;
+  inset: var(--shell-topbar-height) 0 0 var(--shell-nav-width);
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(8, 8, 16, 0.34), rgba(8, 8, 16, 0.66)),
+    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.36), transparent 22%);
+}
+
+.shell--nav-collapsed .content--sessions::after {
+  left: var(--shell-nav-rail-width);
+}
+
+.content--sessions .content-header,
+.content--sessions .panel,
+.content--sessions .card,
+.content--sessions .settings-workspace {
+  backdrop-filter: blur(14px) saturate(1.35);
+  -webkit-backdrop-filter: blur(14px) saturate(1.35);
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.26),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
 .content--chat {
   display: flex;
   flex-direction: column;

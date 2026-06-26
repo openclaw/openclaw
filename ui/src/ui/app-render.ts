@@ -2651,8 +2651,9 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
-          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
-        "skillWorkshop"
+          : ""} ${state.tab === "sessions" ? "content--sessions" : ""} ${state.tab === "workboard"
+          ? "content--workboard"
+          : ""} ${state.tab === "skillWorkshop"
           ? `content--skill-workshop ${
               state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""
             }`
