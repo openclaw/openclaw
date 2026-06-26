@@ -534,22 +534,23 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
-  it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
+  it("commits reply session initialization despite a runtime-only resolvedSkills cache", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
       { sessionKey, storePath },
       {
         sessionId: "first-session",
+        updatedAt: 10,
         skillsSnapshot: {
           prompt: `<available_skills>${"x".repeat(600)}</available_skills>`,
           skills: [{ name: "skill-0" }],
           version: 1,
         },
-        updatedAt: 10,
       },
     );
 
     const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
     const cachedStore = loadSessionStore(storePath, { clone: false });
     const cachedEntry = cachedStore[sessionKey];
     if (!cachedEntry?.skillsSnapshot) {
@@ -559,10 +560,10 @@ describe("session accessor file-backed seam", () => {
       ...cachedEntry.skillsSnapshot,
       resolvedSkills: [
         createCanonicalFixtureSkill({
-          baseDir: "/skills/skill-0",
+          name: "skill-0",
           description: "skill-0 description",
           filePath: "/skills/skill-0/SKILL.md",
-          name: "skill-0",
+          baseDir: "/skills/skill-0",
           source: `# skill-0\n\n${"x".repeat(3000)}`,
         }),
       ],

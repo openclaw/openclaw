@@ -92,6 +92,7 @@ export {
   readSessionEntries,
   readSessionEntry,
   readSessionStoreSnapshot,
+  stripPersistedSkillsCache,
 } from "./store-load.js";
 export type {
   SessionStoreSnapshot,

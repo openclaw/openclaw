@@ -1161,9 +1161,11 @@ function createReplySessionInitializationRevision(params: {
   storePath: string;
 }): string {
   const { entry, storePath } = params;
-  // Snapshot reads may see promptRef-only disk entries while commit reads can
-  // see hydrated prompt text and runtime-only resolvedSkills cache entries.
-  // Compare the canonical persisted shape so cache hydration is not a conflict.
+  // The guarded snapshot is read from disk (which never carries the runtime-only
+  // skillsSnapshot.resolvedSkills in-turn cache and may carry a promptRef instead
+  // of a hydrated prompt) while the commit re-reads the live writer object cache.
+  // Hash the canonical persisted shape on both sides so transient runtime caches
+  // cannot spuriously fail the revision guard.
   return JSON.stringify(
     entry ? projectSessionEntryForPersistenceRevision({ storePath, entry }) : null,
   );
