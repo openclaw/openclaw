@@ -126,8 +126,10 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
  * narrow: namespaced GLM ids that route through other providers (e.g.
  * `ollama/glm-*`, `opencode-go/glm-*`) are NOT included because their hosts
  * have their own overflow accounting and may not exhibit the z.ai silent-
- * overflow shape. Other providers documented as silently truncating are not
- * added without a reproducible repro.
+ * overflow shape. The official `zhipu` provider is also excluded — it uses
+ * the standard first-party Zhipu REST API that returns proper overflow
+ * errors, unlike the legacy z.ai gateway. Other providers documented as
+ * silently truncating are not added without a reproducible repro.
  */
 export function isSilentOverflowProneModel(model: {
   provider?: string | null;
@@ -137,6 +139,12 @@ export function isSilentOverflowProneModel(model: {
   const provider = normalizeProviderId(typeof model.provider === "string" ? model.provider : "");
   if (provider === "zai") {
     return true;
+  }
+  // The official Zhipu REST API returns proper overflow errors — the
+  // silent-overflow shape is specific to the z.ai gateway and does not
+  // apply to the first-party zhipu provider.
+  if (provider === "zhipu") {
+    return false;
   }
   if (typeof model.baseUrl === "string" && model.baseUrl.length > 0) {
     if (resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native") {
