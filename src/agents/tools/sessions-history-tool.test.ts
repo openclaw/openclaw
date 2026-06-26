@@ -8,6 +8,11 @@ import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
+type HistoryMessage = {
+  role: string;
+  content: string;
+  __openclaw: { seq: number };
+};
 
 let createSessionsHistoryTool: typeof import("./sessions-history-tool.js").createSessionsHistoryTool;
 let previousConfigPath: string | undefined;
@@ -39,6 +44,22 @@ function createHistoryToolWithMessage(content: string) {
       return {} as T;
     },
   });
+}
+
+function readHistoryDetails(result: { details: unknown }) {
+  return result.details as Record<string, unknown>;
+}
+
+function readMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const seq = (meta as Record<string, unknown>).seq;
+  return typeof seq === "number" ? seq : undefined;
 }
 
 describe("sessions_history redaction", () => {
@@ -155,6 +176,77 @@ describe("sessions_history redaction", () => {
       nextOffset: 2,
       hasMore: true,
       totalMessages: 4,
+    });
+  });
+
+  it("recomputes pagination after the tool byte cap drops older returned messages", async () => {
+    const messages: HistoryMessage[] = Array.from({ length: 30 }, (_, index) => ({
+      role: "assistant",
+      content: `message-${index + 1} ${"x".repeat(10_000)}`,
+      __openclaw: { seq: index + 1 },
+    }));
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages,
+          offset: 0,
+          nextOffset: 30,
+          hasMore: false,
+          totalMessages: 30,
+        }) as T,
+    });
+
+    const result = await tool.execute("call-1", { sessionKey: "main", offset: 0 });
+    const details = readHistoryDetails(result);
+    const returnedMessages = details.messages as unknown[];
+    const oldestReturnedSeq = readMessageSeq(returnedMessages[0]);
+
+    expect(returnedMessages.length).toBeGreaterThan(0);
+    expect(returnedMessages.length).toBeLessThan(messages.length);
+    expect(typeof oldestReturnedSeq).toBe("number");
+    const expectedNextOffset = 30 - oldestReturnedSeq! + 1;
+    expect(oldestReturnedSeq).toBeGreaterThan(1);
+    expect(details).toMatchObject({
+      offset: 0,
+      nextOffset: expectedNextOffset,
+      hasMore: true,
+      totalMessages: 30,
+      truncated: true,
+      droppedMessages: true,
+    });
+    expect(details.nextOffset).not.toBe(30);
+  });
+
+  it("uses the oldest visible message for pagination after tool messages are filtered", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [
+            { role: "tool", content: "hidden", __openclaw: { seq: 6 } },
+            { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
+            { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
+          ],
+          offset: 0,
+          nextOffset: 5,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
+    });
+
+    const result = await tool.execute("call-1", { sessionKey: "main", offset: 0 });
+    const details = readHistoryDetails(result);
+
+    expect(details.messages).toEqual([
+      { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
+      { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
+    ]);
+    expect(details).toMatchObject({
+      offset: 0,
+      nextOffset: 4,
+      hasMore: true,
+      totalMessages: 10,
     });
   });
 });
