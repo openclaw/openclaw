@@ -54,6 +54,7 @@ type SessionHookEvent = {
   context?: Record<string, unknown>;
 };
 type PostCompactionSyncParams = {
+  archiveFiles?: string[];
   reason: string;
   sessionFiles?: string[];
   sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
@@ -1342,8 +1343,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       settled = true;
     });
     await expect(syncStarted.promise).resolves.toEqual({
+      archiveFiles: [TEST_SESSION_FILE],
       reason: "post-compaction",
-      sessionFiles: [TEST_SESSION_FILE],
     });
     expect(settled).toBe(false);
     syncRelease.resolve(undefined);
@@ -1396,8 +1397,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(sync).not.toHaveBeenCalled();
     managerGate.resolve({ manager: { sync } });
     await expect(syncStarted.promise).resolves.toEqual({
+      archiveFiles: [TEST_SESSION_FILE],
       reason: "post-compaction",
-      sessionFiles: [TEST_SESSION_FILE],
     });
   });
 

@@ -36,14 +36,33 @@ describe("session store lifecycle mutations", () => {
     await replaceSessionEntry(
       { sessionKey: "agent:main:room", storePath },
       {
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-1",
+            createdAt: now,
+            postCompaction: { sessionId: "post-compaction-session" },
+            preCompaction: { sessionId: "pre-compaction-session" },
+            reason: "manual",
+            sessionId: "checkpoint-session",
+            sessionKey: "agent:main:room",
+          },
+        ],
         sessionId: "old-session",
         updatedAt: now,
+        usageFamilySessionIds: ["old-session", "usage-family-session"],
       },
     );
-    await replaceSqliteTranscriptEvents(
-      { sessionKey: "agent:main:room", sessionId: "old-session", storePath },
-      [createTranscriptEvent("old-session", "before reset")],
-    );
+    for (const sessionId of [
+      "old-session",
+      "usage-family-session",
+      "checkpoint-session",
+      "pre-compaction-session",
+      "post-compaction-session",
+    ]) {
+      await replaceSqliteTranscriptEvents({ sessionKey: "agent:main:room", sessionId, storePath }, [
+        createTranscriptEvent(sessionId, `before reset ${sessionId}`),
+      ]);
+    }
     const transcriptUpdates = recordTranscriptUpdateFiles();
     let callbackTranscriptEvents: TestTranscriptEvent[] = [];
 
@@ -53,8 +72,7 @@ describe("session store lifecycle mutations", () => {
         canonicalKey: "agent:main:room",
         storeKeys: ["agent:main:room", "Agent:Main:Room"],
       },
-      buildNextEntry: ({ currentEntry }): SessionEntry => ({
-        ...currentEntry,
+      buildNextEntry: (): SessionEntry => ({
         sessionId: "next-session",
         updatedAt: now + 1,
         systemSent: false,
@@ -73,17 +91,51 @@ describe("session store lifecycle mutations", () => {
     const stored = loadSessionEntry({ sessionKey: "agent:main:room", storePath });
     expect(stored?.sessionId).toBe("next-session");
     expect(result.previousSessionId).toBe("old-session");
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(result.archivedTranscripts[0]?.archivedPath).toContain("old-session.jsonl.reset.");
+    expect(result.archivedTranscripts).toHaveLength(5);
+    expect(result.archivedTranscripts.map((transcript) => transcript.archivedPath)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("old-session.jsonl.reset."),
+        expect.stringContaining("usage-family-session.jsonl.reset."),
+        expect.stringContaining("checkpoint-session.jsonl.reset."),
+        expect.stringContaining("pre-compaction-session.jsonl.reset."),
+        expect.stringContaining("post-compaction-session.jsonl.reset."),
+      ]),
+    );
     expect(transcriptUpdates.files).toContain(result.archivedTranscripts[0]?.archivedPath);
     expect(callbackTranscriptEvents).toEqual([
-      createTranscriptEvent("old-session", "before reset"),
+      createTranscriptEvent("old-session", "before reset old-session"),
     ]);
-    expect(readArchiveLines(result.archivedTranscripts[0]?.archivedPath)).toEqual([
-      createTranscriptEventLine("old-session", "before reset"),
+    expect(readArchiveLinesForSession(result, "old-session")).toEqual([
+      createTranscriptEventLine("old-session", "before reset old-session"),
+    ]);
+    expect(readArchiveLinesForSession(result, "usage-family-session")).toEqual([
+      createTranscriptEventLine("usage-family-session", "before reset usage-family-session"),
+    ]);
+    expect(readArchiveLinesForSession(result, "checkpoint-session")).toEqual([
+      createTranscriptEventLine("checkpoint-session", "before reset checkpoint-session"),
+    ]);
+    expect(readArchiveLinesForSession(result, "pre-compaction-session")).toEqual([
+      createTranscriptEventLine("pre-compaction-session", "before reset pre-compaction-session"),
+    ]);
+    expect(readArchiveLinesForSession(result, "post-compaction-session")).toEqual([
+      createTranscriptEventLine("post-compaction-session", "before reset post-compaction-session"),
     ]);
     await expect(
       loadTranscriptEvents({ sessionKey: "agent:main:room", sessionId: "old-session", storePath }),
+    ).resolves.toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:room",
+        sessionId: "usage-family-session",
+        storePath,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:room",
+        sessionId: "pre-compaction-session",
+        storePath,
+      }),
     ).resolves.toEqual([]);
   });
 
@@ -101,12 +153,15 @@ describe("session store lifecycle mutations", () => {
       {
         sessionId: "delete-session",
         updatedAt: now - 1,
+        usageFamilySessionIds: ["delete-session", "delete-ancestor-session"],
       },
     );
-    await replaceSqliteTranscriptEvents(
-      { sessionKey: "agent:main:delete", sessionId: "delete-session", storePath },
-      [createTranscriptEvent("delete-session", "before delete")],
-    );
+    for (const sessionId of ["delete-session", "delete-ancestor-session"]) {
+      await replaceSqliteTranscriptEvents(
+        { sessionKey: "agent:main:delete", sessionId, storePath },
+        [createTranscriptEvent(sessionId, `before delete ${sessionId}`)],
+      );
+    }
     const transcriptUpdates = recordTranscriptUpdateFiles();
 
     const result = await deleteSessionEntryLifecycle({
@@ -121,11 +176,19 @@ describe("session store lifecycle mutations", () => {
 
     expect(result.deleted).toBe(true);
     expect(result.deletedSessionId).toBe("delete-session");
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(result.archivedTranscripts[0]?.archivedPath).toContain("delete-session.jsonl.deleted.");
+    expect(result.archivedTranscripts).toHaveLength(2);
+    expect(result.archivedTranscripts.map((transcript) => transcript.archivedPath)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("delete-session.jsonl.deleted."),
+        expect.stringContaining("delete-ancestor-session.jsonl.deleted."),
+      ]),
+    );
     expect(transcriptUpdates.files).toContain(result.archivedTranscripts[0]?.archivedPath);
-    expect(readArchiveLines(result.archivedTranscripts[0]?.archivedPath)).toEqual([
-      createTranscriptEventLine("delete-session", "before delete"),
+    expect(readArchiveLinesForSession(result, "delete-session")).toEqual([
+      createTranscriptEventLine("delete-session", "before delete delete-session"),
+    ]);
+    expect(readArchiveLinesForSession(result, "delete-ancestor-session")).toEqual([
+      createTranscriptEventLine("delete-ancestor-session", "before delete delete-ancestor-session"),
     ]);
     await expect(
       loadTranscriptEvents({
@@ -224,12 +287,25 @@ function readArchiveLines(archivePath: string | undefined): string[] {
     .split("\n");
 }
 
+function readArchiveLinesForSession(
+  result: { archivedTranscripts: Array<{ archivedPath: string }> },
+  sessionId: string,
+): string[] {
+  return readArchiveLines(
+    result.archivedTranscripts.find((transcript) =>
+      transcript.archivedPath.includes(`${sessionId}.jsonl.`),
+    )?.archivedPath,
+  );
+}
+
 function recordTranscriptUpdateFiles(): { files: string[]; unsubscribe: () => void } {
   const files: string[] = [];
   return {
     files,
     unsubscribe: onSessionTranscriptUpdate((update) => {
-      files.push(update.sessionFile);
+      if (update.sessionFile) {
+        files.push(update.sessionFile);
+      }
     }),
   };
 }
