@@ -1,7 +1,7 @@
 // OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import { createSdkBoundedFetch } from "../../agents/sdk-bounded-fetch.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
   CacheRetention,
@@ -173,7 +173,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
-    fetch: createSdkBoundedFetch(),
+    fetch: buildGuardedModelFetch(model),
   });
 }
 
