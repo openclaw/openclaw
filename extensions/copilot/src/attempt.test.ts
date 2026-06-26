@@ -271,6 +271,12 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionTarget: {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: "openclaw-agent.sqlite",
+    },
     timeoutMs: 5000,
     workspaceDir: "C:\\workspace",
     ...overrides,
@@ -1268,7 +1274,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: undefined,
+        sessionKey: "agent:main:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -2626,7 +2632,7 @@ describe("runCopilotAttempt", () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockResolvedValue(undefined);
     });
 
-    it("invokes dual-write mirror with sessionFile and scoped idempotencyScope when sessionFile is set", async () => {
+    it("invokes dual-write mirror with runtime identity and scoped idempotencyScope", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2648,14 +2654,14 @@ describe("runCopilotAttempt", () => {
 
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        sessionFile: string;
         sessionId: string;
+        sessionKey: string;
         storePath?: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
-      expect(args.sessionFile).toBe("session.json");
       expect(args.sessionId).toBe("session-1");
+      expect(args.sessionKey).toBe("agent:main:session-1");
       expect(args.storePath).toBe("sessions.json");
       expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
@@ -2664,7 +2670,7 @@ describe("runCopilotAttempt", () => {
       expect(roles).toContain("assistant");
     });
 
-    it("does not invoke dual-write mirror when sessionFile is absent", async () => {
+    it("does not invoke dual-write mirror when runtime identity is absent", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2673,7 +2679,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const params = makeParams() as unknown as Record<string, unknown>;
-      delete params.sessionFile;
+      delete params.sessionTarget;
 
       await runCopilotAttempt(params as never, { pool });
 

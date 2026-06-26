@@ -34,9 +34,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  withSessionTranscriptFileWriteLock,
   withSessionTranscriptWriteLock,
-  type SessionTranscriptFileTargetParams,
   type SessionTranscriptTargetParams,
   type SessionTranscriptWriteLockContext,
   type SessionTranscriptWriteLockParams,
@@ -96,7 +94,6 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export interface MirrorCopilotTranscriptParams {
-  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -180,49 +177,30 @@ export async function mirrorCopilotTranscript(
   );
 }
 
-type CopilotMirrorTranscriptTarget =
-  | ({ targetKind: "runtime-session" } & SessionTranscriptTargetParams)
-  | ({ targetKind: "transcript-file" } & SessionTranscriptFileTargetParams);
-
 function resolveCopilotMirrorTranscriptTarget(params: {
   agentId?: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): CopilotMirrorTranscriptTarget {
-  if (params.sessionKey && params.storePath) {
-    return {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      targetKind: "runtime-session",
-    };
-  }
-  const sessionFile = params.sessionFile.trim();
-  if (!sessionFile) {
-    throw new Error("Copilot transcript mirror requires a sessionFile target");
+}): SessionTranscriptTargetParams {
+  const sessionKey = params.sessionKey?.trim();
+  const storePath = params.storePath?.trim();
+  if (!sessionKey || !storePath) {
+    throw new Error("Copilot transcript mirror requires a runtime session identity");
   }
   return {
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionFile,
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? "",
-    targetKind: "transcript-file",
+    sessionKey,
+    storePath,
   };
 }
 
 function withCopilotMirrorTranscriptWriteLock<T>(
-  params: CopilotMirrorTranscriptTarget & { config?: SessionTranscriptWriteLockParams["config"] },
+  params: SessionTranscriptTargetParams & { config?: SessionTranscriptWriteLockParams["config"] },
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  if (params.targetKind === "runtime-session") {
-    const { targetKind: _targetKind, ...target } = params;
-    return withSessionTranscriptWriteLock(target, run);
-  }
-  const { targetKind: _targetKind, ...target } = params;
-  return withSessionTranscriptFileWriteLock(target, run);
+  return withSessionTranscriptWriteLock(params, run);
 }
 
 function readTranscriptIdempotencyKeys(events: unknown[]): Set<string> {

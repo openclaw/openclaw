@@ -39,26 +39,10 @@ afterEach(async () => {
   }
 });
 
-async function createTempSessionFile() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-mirror-"));
-  tempDirs.push(dir);
-  return path.join(dir, "session.jsonl");
-}
-
 async function makeRoot(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(root);
   return root;
-}
-
-function parseJsonLines<T>(raw: string): T[] {
-  const records: T[] = [];
-  for (const line of raw.trim().split("\n")) {
-    if (line.length > 0) {
-      records.push(JSON.parse(line) as T);
-    }
-  }
-  return records;
 }
 
 function readEventMessages(events: unknown[]): Array<{ role?: string; text?: string }> {
@@ -81,9 +65,62 @@ function readEventMessages(events: unknown[]): Array<{ role?: string; text?: str
     });
 }
 
+async function createSqliteMirrorTarget(prefix: string, options: { sessionId?: string } = {}) {
+  const root = await makeRoot(prefix);
+  const agentId = "main";
+  const sessionId = options.sessionId ?? "session-1";
+  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const storePath = path.join(root, "openclaw-agent.sqlite");
+  await upsertSessionEntry({
+    agentId,
+    sessionId,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
+      sessionId,
+      updatedAt: 1,
+    },
+  });
+  return {
+    agentId,
+    sessionId,
+    sessionKey,
+    storePath,
+    bogusSessionFile: path.join(root, "should-not-be-created.jsonl"),
+  };
+}
+
+async function readMirrorEvents(target: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  return await readSessionTranscriptEvents(target);
+}
+
+async function readMirrorRaw(target: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<string> {
+  return (await readMirrorEvents(target)).map((event) => JSON.stringify(event)).join("\n");
+}
+
+async function readMirrorMessages(target: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<Array<{ role?: string; text?: string }>> {
+  return readEventMessages(await readMirrorEvents(target));
+}
+
 describe("mirrorCopilotTranscript", () => {
-  it("mirrors user, assistant, and tool result messages into the OpenClaw transcript", async () => {
-    const sessionFile = await createTempSessionFile();
+  it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-basic-");
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
@@ -96,25 +133,17 @@ describe("mirrorCopilotTranscript", () => {
       role: "toolResult",
       toolCallId: "call-1",
       toolName: "read",
-      content: [
-        {
-          type: "toolResult",
-          toolCallId: "call-1",
-          content: "read output",
-        },
-      ],
+      content: [{ type: "toolResult", toolCallId: "call-1", content: "read output" }],
       timestamp: Date.now() + 2,
     }) as MirroredAgentMessage;
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "copilot:session-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain('"role":"user"');
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"role":"toolResult"');
@@ -128,78 +157,28 @@ describe("mirrorCopilotTranscript", () => {
     expect(raw).toContain(
       `"idempotencyKey":"copilot:session-1:toolResult:${expectedFingerprint(toolResultMessage)}"`,
     );
+    await expect(fs.readFile(target.bogusSessionFile, "utf8")).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   });
 
-  it("mirrors by SQLite session identity when storePath is provided", async () => {
-    const root = await makeRoot("openclaw-copilot-mirror-sqlite-");
-    const storePath = path.join(root, "openclaw-agent.sqlite");
-    const sessionId = "session-sqlite-1";
-    const sessionKey = "agent:main:copilot-sqlite";
-    const bogusSessionFile = path.join(root, "should-not-be-created.jsonl");
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-      entry: {
-        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
-        sessionId,
-        updatedAt: 1,
-      },
-    });
-
-    await mirrorCopilotTranscript({
-      agentId: "main",
-      sessionFile: bogusSessionFile,
-      sessionId,
-      sessionKey,
-      storePath,
-      messages: [
-        makeAgentUserMessage({
-          content: [{ type: "text", text: "sqlite hello" }],
-          timestamp: Date.now(),
-        }),
-      ],
-      idempotencyScope: "copilot:sqlite-session",
-    });
-
-    await expect(fs.readFile(bogusSessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
-    expect(
-      readEventMessages(
-        await readSessionTranscriptEvents({
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-        }),
-      ),
-    ).toContainEqual({ role: "user", text: "sqlite hello" });
-  });
-
-  it("creates the transcript directory on first mirror", async () => {
-    const root = await makeRoot("openclaw-copilot-mirror-missing-dir-");
-    const sessionFile = path.join(root, "nested", "sessions", "session.jsonl");
-
-    await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
-      messages: [
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "first mirror" }],
-          timestamp: Date.now(),
-        }),
-      ],
-      idempotencyScope: "copilot:session-1",
-    });
-
-    const raw = await fs.readFile(sessionFile, "utf8");
-    expect(raw).toContain('"role":"assistant"');
-    expect(raw).toContain('"content":[{"type":"text","text":"first mirror"}]');
+  it("rejects mirror writes without a runtime session identity", async () => {
+    await expect(
+      mirrorCopilotTranscript({
+        sessionId: "session-1",
+        messages: [
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "no identity" }],
+            timestamp: Date.now(),
+          }),
+        ],
+      }),
+    ).rejects.toThrow("runtime session identity");
   });
 
   it("deduplicates re-emits by idempotency scope", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-dedupe-");
     const messages = [
       makeAgentUserMessage({
         content: [{ type: "text", text: "hello" }],
@@ -212,27 +191,17 @@ describe("mirrorCopilotTranscript", () => {
     ] as const;
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
     });
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
     });
 
-    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
-      await fs.readFile(sessionFile, "utf8"),
-    );
-    // First "header" record may or may not appear depending on migration.
-    // What matters is that the second mirror call adds zero new messages.
-    const messageRecords = records.filter((r) => r.message?.role !== undefined);
-    expect(messageRecords).toHaveLength(2);
+    expect((await readMirrorMessages(target)).filter((message) => message.role)).toHaveLength(2);
   });
 
   it("runs before_message_write before appending mirrored messages", async () => {
@@ -249,21 +218,19 @@ describe("mirrorCopilotTranscript", () => {
         },
       ]),
     );
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-hook-");
     const sourceMessage = makeAgentAssistantMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
     });
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [sourceMessage],
       idempotencyScope: "copilot:session-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain('"content":[{"type":"text","text":"hello [hooked]"}]');
     expect(raw).toContain(
       `"idempotencyKey":"copilot:session-1:assistant:${expectedFingerprint(sourceMessage)}"`,
@@ -273,18 +240,13 @@ describe("mirrorCopilotTranscript", () => {
   it("respects before_message_write blocking decisions", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: () => ({ block: true }),
-        },
+        { hookName: "before_message_write", handler: () => ({ block: true }) },
       ]),
     );
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-block-");
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "should not persist" }],
@@ -294,43 +256,40 @@ describe("mirrorCopilotTranscript", () => {
       idempotencyScope: "copilot:session-1",
     });
 
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
+    expect(await readMirrorMessages(target)).toEqual([]);
   });
 
   it("is a no-op when no mirrorable messages are present", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-empty-");
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
-      sessionKey: "session-1",
+      ...target,
       messages: [],
       idempotencyScope: "copilot:session-1",
     });
 
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
+    expect(await readMirrorMessages(target)).toEqual([]);
   });
 
   it("uses content fingerprint when no explicit mirror identity is attached", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-fingerprint-");
     const message = makeAgentAssistantMessage({
       content: [{ type: "text", text: "fp" }],
       timestamp: Date.now(),
     });
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
+      ...target,
       messages: [message],
       idempotencyScope: "scope-fp",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain(`"idempotencyKey":"scope-fp:assistant:${expectedFingerprint(message)}"`);
   });
 
   it("uses attached identity instead of content fingerprint when provided", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-identity-");
     const baseMessage = makeAgentAssistantMessage({
       content: [{ type: "text", text: "explicit" }],
       timestamp: Date.now(),
@@ -338,13 +297,12 @@ describe("mirrorCopilotTranscript", () => {
     const tagged = attachCopilotMirrorIdentity(baseMessage, "sdk-session-1:assistant:0");
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
+      ...target,
       messages: [tagged],
       idempotencyScope: "copilot:openclaw-session-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain(
       '"idempotencyKey":"copilot:openclaw-session-1:sdk-session-1:assistant:0"',
     );
@@ -352,11 +310,10 @@ describe("mirrorCopilotTranscript", () => {
   });
 
   it("omits idempotencyKey when no idempotencyScope is provided", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-no-scope-");
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
+      ...target,
       messages: [
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "no scope" }],
@@ -365,13 +322,13 @@ describe("mirrorCopilotTranscript", () => {
       ],
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain('"content":[{"type":"text","text":"no scope"}]');
     expect(raw).not.toContain("idempotencyKey");
   });
 
   it("filters out non-mirrorable roles", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-filter-");
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "u" }],
       timestamp: Date.now(),
@@ -383,19 +340,18 @@ describe("mirrorCopilotTranscript", () => {
     });
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
+      ...target,
       messages: [userMessage, systemLike],
       idempotencyScope: "scope",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain('"role":"user"');
     expect(raw).not.toContain("system note");
   });
 
   it("preserves explicit identity across attachCopilotMirrorIdentity overrides", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-override-");
     const base = makeAgentAssistantMessage({
       content: [{ type: "text", text: "x" }],
       timestamp: Date.now(),
@@ -404,13 +360,12 @@ describe("mirrorCopilotTranscript", () => {
     const second = attachCopilotMirrorIdentity(first, "id-2");
 
     await mirrorCopilotTranscript({
-      sessionFile,
-      sessionId: "session-1",
+      ...target,
       messages: [second],
       idempotencyScope: "scope",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = await readMirrorRaw(target);
     expect(raw).toContain('"idempotencyKey":"scope:id-2"');
     expect(raw).not.toContain('"idempotencyKey":"scope:id-1"');
   });
@@ -418,11 +373,10 @@ describe("mirrorCopilotTranscript", () => {
 
 describe("dualWriteCopilotTranscriptBestEffort", () => {
   it("returns normally when mirror succeeds", async () => {
-    const sessionFile = await createTempSessionFile();
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-best-effort-");
     await expect(
       dualWriteCopilotTranscriptBestEffort({
-        sessionFile,
-        sessionId: "session-1",
+        ...target,
         messages: [
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "ok" }],
@@ -432,39 +386,25 @@ describe("dualWriteCopilotTranscriptBestEffort", () => {
         idempotencyScope: "scope",
       }),
     ).resolves.toBeUndefined();
-    const raw = await fs.readFile(sessionFile, "utf8");
-    expect(raw).toContain('"role":"assistant"');
+    expect(await readMirrorMessages(target)).toContainEqual({ role: "assistant", text: "ok" });
   });
 
-  it("swallows infrastructure failures and never rejects", async () => {
+  it("swallows missing runtime identity and does not write JSONL", async () => {
     const root = await makeRoot("openclaw-copilot-mirror-invalid-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
-    try {
-      await expect(
-        dualWriteCopilotTranscriptBestEffort({
-          agentId: "main",
-          sessionFile: "",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          messages: [
-            makeAgentAssistantMessage({
-              content: [{ type: "text", text: "should-not-throw" }],
-              timestamp: Date.now(),
-            }),
-          ],
-          idempotencyScope: "scope",
-        }),
-      ).resolves.toBeUndefined();
-      await expect(
-        fs.access(path.join(root, "agents", "main", "sessions", "session-1.jsonl")),
-      ).rejects.toHaveProperty("code", "ENOENT");
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    const sessionFile = path.join(root, "agents", "main", "sessions", "session-1.jsonl");
+    await expect(
+      dualWriteCopilotTranscriptBestEffort({
+        agentId: "main",
+        sessionId: "session-1",
+        messages: [
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "should-not-throw" }],
+            timestamp: Date.now(),
+          }),
+        ],
+        idempotencyScope: "scope",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(fs.access(sessionFile)).rejects.toHaveProperty("code", "ENOENT");
   });
 });
