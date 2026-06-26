@@ -1424,6 +1424,7 @@
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "agents:eval": "node scripts/agent-role-eval.mjs",
     "agents:eval:contracts": "node scripts/agent-role-eval.mjs --contracts-only",
+    "agents:eval:live": "node scripts/agent-role-eval.mjs --live",
     "agents:eval:live:self-contained": "node scripts/agent-role-eval.mjs --live --self-contained",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
@@ -1855,9 +1856,17 @@
     "verify": "node scripts/verify.mjs",
     "ui:smoke:projects": "node --import tsx scripts/dev/control-ui-projects-smoke.ts",
     "ui:smoke:self-improvement": "node --import tsx scripts/dev/control-ui-self-improvement-smoke.ts",
-    "ui:smoke:snes-studio": "node --import tsx scripts/dev/control-ui-snes-studio-smoke.ts",
+    "ui:smoke:snes-studio": "node scripts/ensure-playwright-chromium.mjs && node --import tsx scripts/dev/control-ui-snes-studio-smoke.ts",
     "ui:smoke:dashboard": "node --import tsx scripts/dev/control-ui-dashboard-smoke-suite.ts",
-    "ui:smoke:control-director-no-response": "node --import tsx scripts/dev/control-ui-control-director-no-response-smoke.ts"
+    "ui:smoke:control-director-no-response": "node --import tsx scripts/dev/control-ui-control-director-no-response-smoke.ts",
+    "snes:benchmark:models": "node scripts/snes-local-model-benchmark.mjs",
+    "glm52:runtime": "node scripts/glm52-local-runtime.mjs",
+    "stanski:produce": "node scripts/stanski-production-loop.mjs",
+    "snes:toolchain": "node scripts/snes-toolchain.mjs",
+    "snes:mastery": "node .artifacts/snes-game-builder-reference/scripts/snes-mastery-harness.mjs",
+    "snes:mastery:receipts": "node .artifacts/snes-game-builder-reference/scripts/validate-generic-receipts.mjs",
+    "ui:smoke:snes-studio:dom": "node --import tsx scripts/dev/control-ui-snes-studio-dom-smoke.ts",
+    "snes:emulator:headless-proof": "node --import tsx scripts/dev/snes-emulator-headless-proof.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.22.1",

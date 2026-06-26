@@ -49,6 +49,37 @@ describe("listGatewayMethods", () => {
     );
   });
 
+  it("advertises the Trading Lab dashboard RPC", () => {
+    expect(listGatewayMethods()).toEqual(expect.arrayContaining(["tradingLab.dashboard.snapshot"]));
+  });
+
+  it("advertises the SNES Studio benchmark and production-loop RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "snes.benchmark.latest",
+        "snes.glm52.status",
+        "snes.mastery.status",
+        "snes.proof.run",
+        "snes.project.createBlank",
+        "snes.toolchain.status",
+        "snes.visual.reject",
+        "snes.visual.artBible",
+        "snes.visual.artSourcePack",
+        "snes.visual.compileArt",
+        "snes.visual.captureProof",
+        "snes.visual.qualityAudit",
+        "snes.visual.runtimeAssetTruth",
+        "snes.visual.approve",
+        "snes.production.status",
+        "snes.production.continue",
+        "snes.production.retryBlocked",
+        "snes.stanski.production.status",
+        "snes.stanski.production.continue",
+        "snes.stanski.production.retryBlocked",
+      ]),
+    );
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     expect(listGatewayMethods()).toEqual(
       expect.arrayContaining([

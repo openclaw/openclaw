@@ -47,8 +47,13 @@ import {
   createSnesAgentTeamPlan,
   createSnesAgentTeamPreflight,
   createSnesAgentTeamReadinessPlan,
+  createSnesAgentCapabilityMatrixReport,
+  createSnesAgentOperatingManual,
+  createSnesAgentWorkflowReport,
   createSnesAiAuthoringPrompts,
   createSnesAssetPipelineReport,
+  createSnesArtDirectorVisualGate,
+  createSnesProductionVisualReport,
   createSnesCodexTaskPacket,
   createSnesCutsceneTimeline,
   createSnesCollisionParityReport,
@@ -72,11 +77,41 @@ import {
   createSnesAgentPatchProposalForSurface,
   createSnesCodexBlueprint,
   createSnesLocalAgentPatchResponse,
+  createSnesLocalModelBenchmarkCandidates,
+  createSnesLocalModelBenchmarkCorpus,
+  createSnesLocalModelBenchmarkReport,
+  createSnesAiPlaytestReport,
+  createSnesGameQualityReport,
+  normalizeSnesStudioProject,
   reviewSnesOpenClawProduction,
   createSnesOnePromptGameReport,
+  createSnesAssetAdapterReceipt,
+  createSnesAssetAdapterPlan,
   createSnesCollisionPhysicsPlan,
+  createSnesEmulatorProofPlanFromToolchain,
+  createSnesGameBuilderManifest,
+  createSnesGenericProductionPacket,
+  createSnesGenericProductionState,
   createSnesLevelTransitionPlan,
+  createSnesMvpSampleProjectPackage,
+  createSnesProductionAssetRecord,
+  createSnesProductionReadinessReport,
+  createSnesProjectPackage,
+  createSnesRomBuildScaffoldDryRun,
   createSnesSceneRuntimeTable,
+  createSnesFxpakDryRunPlan,
+  createSnesEmulatorProofReceiptFromToolchain,
+  createSnesFxpakPackageDryRunReceipt,
+  createSnesRomBuildReceiptFromToolchain,
+  createStanskiLevelOneProductionState,
+  createStanskiWorldOneVerticalSliceLevels,
+  createStanskiWorldProductionBacklog,
+  createStanskiWorldProductionProjectPackage,
+  createStanskiCanaryProjectPackage,
+  createSnesToolchainDoctorReport,
+  createSnesVisualApprovalContract,
+  createSnesRepairLoopPlan,
+  decideSnesGpt55Usage,
   compileSnesRuntimeEventBytecode,
   executeSnesRuntimeEventBytecode,
   executeSnesRomLevelLoaderTable,
@@ -89,6 +124,8 @@ import {
   paintSnesSceneCell,
   paintSnesSceneRect,
   parseSnesProjectDocument,
+  parseSnesGameBuilderManifest,
+  parseSnesProjectPackage,
   parseSnesIndexedTilePixels,
   parseSnesAgentDispatchQueue,
   parseSnesAgentResultQueue,
@@ -120,8 +157,10 @@ import {
   validateSnesPreviewRomArtifact,
   validateSnesSramImage,
   validateSnesStudioProject,
+  validateSnesGenericProductionPatch,
   writeSnesSaveSlot,
   diffSnesProjectVersions,
+  applySnesGenericProductionPatch,
 } from "./index.ts";
 
 function containsSubsequence(bytes: Uint8Array, sequence: number[]): boolean {
@@ -142,6 +181,993 @@ describe("SNES Studio core", () => {
       "player-idle",
       "enemy-patrol",
     ]);
+  });
+
+  it("keeps production-grade SNES readiness blocked until every proof surface passes", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const report = createSnesProductionReadinessReport(project, {
+      visualApproval: { currentHumanScore: 25, machineScore: 76, targetScore: 100 },
+    });
+
+    expect(report.status).toBe("production-blocked");
+    expect(report.visualApproval.status).toBe("blocked");
+    expect(report.visualApproval.blocker).toContain("25/100");
+    expect(report.assetRegistry.status).toBe("blocked");
+    expect(report.assetRegistry.records.some((record) => record.status === "spec-only")).toBe(true);
+    expect(report.gates.map((gate) => gate.id)).toEqual([
+      "browser-preview",
+      "asset-pipeline",
+      "visual-approval",
+      "engine-runtime-proof",
+      "rom-build",
+      "emulator-proof",
+      "fxpak-package",
+      "hardware-proof",
+    ]);
+    expect(report.gates.find((gate) => gate.id === "rom-build")?.status).toBe("not-run");
+    expect(report.gates.find((gate) => gate.id === "engine-runtime-proof")?.status).toBe("not-run");
+    expect(report.gates.find((gate) => gate.id === "emulator-proof")?.status).toBe("not-run");
+    expect(report.gates.find((gate) => gate.id === "hardware-proof")?.status).toBe(
+      "manual-required",
+    );
+    expect(report.blockers.join("\n")).toContain("Missing production real asset");
+    expect(report.blockers.join("\n")).toContain("Playable SNES engine proof has not run");
+    expect(report.blockers.join("\n")).toContain("Production ROM build has not run");
+  });
+
+  it("passes production readiness only with real assets, visual approval, ROM, emulator, FXPAK, and hardware proof", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    project.scenes[0].entities.push({
+      id: "goal-door",
+      kind: "npc",
+      name: "Goal Door",
+      x: 960,
+      y: 176,
+      metaspriteTiles: 8,
+    });
+    const realAsset = (
+      id: string,
+      type: Parameters<typeof createSnesProductionAssetRecord>[0]["type"],
+    ) =>
+      createSnesProductionAssetRecord({
+        id,
+        type,
+        status: "real-asset",
+        sourcePath: `assets/${id}.png`,
+        sourceHash: `${id}-sha256`,
+        license: "original",
+        provenance: "openclaw-generated",
+        visualMaturity: "production-approved",
+        palette: { colorCount: 12, colors: ["#000000", "#ffffff"] },
+        frames: Array.from({ length: type === "character-sprite" ? 40 : 4 }, (_, index) => ({
+          id: `${id}-frame-${index + 1}`,
+          width: 16,
+          height: 16,
+          durationTicks: 8,
+        })),
+        visualProof: [
+          {
+            kind: type === "tileset" ? "tileset-atlas" : "sprite-contact-sheet",
+            path: `proof/${id}.png`,
+          },
+        ],
+        tileMetadata: {
+          tileSize: "16x16",
+          tileCount: type === "tileset" ? 96 : 4,
+          collisionClasses: ["solid"],
+        },
+        usage: ["production test asset"],
+      });
+    const toolchain = createSnesToolchainDoctorReport({
+      tools: {
+        pvsneslib: { available: true, path: "/opt/pvsneslib" },
+        superfamiconv: { available: true, path: "/usr/local/bin/superfamiconv" },
+        pixelorama: { available: true, path: "/Applications/Pixelorama.app" },
+        ldtk: { available: true, path: "/Applications/LDtk.app" },
+        mesen: { available: true, path: "/Applications/Mesen.app" },
+        superfamicheck: { available: true, path: "/usr/local/bin/superfamicheck" },
+        brrtools: { available: true, path: "/usr/local/bin/brr_encoder" },
+      },
+      fxpakVolume: { mounted: true, path: "/Volumes/FXPAK", fileSystem: "fat32" },
+    });
+    const report = createSnesProductionReadinessReport(project, {
+      assetRecords: [
+        realAsset("hero", "character-sprite"),
+        realAsset("enemy", "enemy-sprite"),
+        realAsset("burger", "item-sprite"),
+        realAsset("grassland", "tileset"),
+        realAsset("skyline-far", "background-layer"),
+        realAsset("skyline-mid", "background-layer"),
+        realAsset("skyline-near", "background-layer"),
+      ],
+      visualApproval: { currentHumanScore: 100, machineScore: 96, targetScore: 100 },
+      toolchain,
+      romBuild: {
+        status: "pass",
+        romFileName: "test-game.sfc",
+        projectHash: "project-hash",
+        assetManifestHash: "asset-hash",
+        toolVersions: { pvsneslib: "test" },
+        checksumStatus: "pass",
+        blockers: [],
+        proofKind: "engine-runtime",
+      },
+      engineRuntimeProof: {
+        status: "pass",
+        engineVersion: "platformer-v1",
+        romFileName: "test-game.sfc",
+        sourceDataHash: "engine-data-hash",
+        features: [
+          "player-movement",
+          "jump",
+          "gravity",
+          "camera-scroll",
+          "collision",
+          "enemy",
+          "collectible",
+          "goal",
+          "converted-assets-visible",
+        ],
+        blockers: [],
+      },
+      emulatorProof: {
+        status: "pass",
+        emulator: "mesen",
+        romHash: "rom-hash",
+        launchCommand: ["mesen", "test-game.sfc"],
+        screenshotPath: "proof/boot.png",
+        blockers: [],
+      },
+      fxpakPackage: {
+        status: "pass",
+        destinationPath: "/Volumes/FXPAK/GAMES/test-game.sfc",
+        fileSystemRequired: "fat32",
+        savePolicy: "preserve-existing-sram",
+        dryRun: true,
+        blockers: [],
+      },
+      hardwareProof: {
+        status: "pass",
+        checklist: [
+          { label: "Boot on original SNES through FXPAK Pro", status: "pass" },
+          {
+            label: "Verify controls, audio, video, save, and power-cycle behavior",
+            status: "pass",
+          },
+        ],
+        blockers: [],
+      },
+    });
+
+    expect(report.status).toBe("production-ready");
+    expect(report.gates.every((gate) => gate.status === "pass" || gate.status === "warning")).toBe(
+      true,
+    );
+    expect(report.assetRegistry.missingRequiredTypes).toEqual([]);
+    expect(report.blockers).toEqual([]);
+  });
+
+  it("creates and parses a generic SNES Game Builder manifest without Stanski-specific fields", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    project.name = "Comet Fox";
+    project.id = "comet-fox";
+    const manifest = createSnesGameBuilderManifest(project, {
+      createdAt: "2026-06-23T01:00:00.000Z",
+      visualApproval: { currentHumanScore: null, targetScore: 100 },
+    });
+    const serialized = JSON.stringify(manifest);
+    const parsed = parseSnesGameBuilderManifest(serialized);
+
+    expect(manifest.format).toBe("openclaw-snes-game-builder-project");
+    expect(manifest.project.name).toBe("Comet Fox");
+    expect(serialized).not.toMatch(/Stanski/i);
+    expect(parsed.project.id).toBe("comet-fox");
+    expect(parsed.productionReadiness.status).toBe("production-blocked");
+  });
+
+  it("persists, reloads, and rejects invalid generic SNES project packages", () => {
+    const project = generateSnesProjectFromPrompt(
+      "Make Comet Fox, an original one-level SNES platformer.",
+      createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z"),
+    ).project;
+    const adapterReceipt = createSnesAssetAdapterReceipt({
+      adapter: "pixelorama",
+      inputHash: "hero-source-hash",
+      inputPath: "assets/hero.png",
+      outputHash: "hero-output-hash",
+      outputPath: "assets/hero-indexed.png",
+      producedAssetId: "hero",
+    });
+    const projectPackage = createSnesProjectPackage(project, {
+      adapterReceipts: [adapterReceipt],
+      createdAt: "2026-06-23T02:00:00.000Z",
+      qaReceipts: [{ id: "browser-preview", status: "pass", summary: "Preview replay passed." }],
+    });
+    const serialized = JSON.stringify(projectPackage);
+    const parsed = parseSnesProjectPackage(serialized);
+
+    expect(projectPackage.format).toBe("openclaw-snes-project-package");
+    expect(projectPackage.sampleSpecific).toBe(false);
+    expect(projectPackage.packageHash).toMatch(/^[0-9a-f]+$/u);
+    expect(parsed.projectId).toBe(projectPackage.projectId);
+    expect(parsed.receipts.assetAdapters[0]).toMatchObject({
+      adapter: "pixelorama",
+      status: "ready",
+    });
+    expect(() => parseSnesProjectPackage('{"format":"wrong"}')).toThrow(
+      "SNES project package is invalid",
+    );
+    expect(serialized).not.toMatch(/Stanski/i);
+  });
+
+  it("requires production-approved visual proof and keeps visual approval separate from ROM proof", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const assetWithoutScreenshot = createSnesProductionAssetRecord({
+      id: "hero",
+      type: "character-sprite",
+      status: "real-asset",
+      sourcePath: "assets/hero.png",
+      sourceHash: "hero-hash",
+      license: "original",
+      provenance: "openclaw-generated",
+      usage: ["hero sprite"],
+    });
+    const report = createSnesProductionReadinessReport(project, {
+      assetRecords: [assetWithoutScreenshot],
+      visualApproval: { currentHumanScore: 100, machineScore: 95, targetScore: 100 },
+    });
+
+    expect(assetWithoutScreenshot.blockers).toContain(
+      "Asset visual maturity is draft-generated; production visuals require production-approved.",
+    );
+    expect(assetWithoutScreenshot.blockers).toContain(
+      "Review proof artifact is required for production visual assets; source PNGs do not count.",
+    );
+    expect(report.status).toBe("production-blocked");
+    expect(report.visualApproval.status).toBe("approved");
+    expect(report.gates.find((gate) => gate.id === "visual-approval")?.status).toBe("blocked");
+    expect(report.gates.find((gate) => gate.id === "rom-build")?.status).toBe("not-run");
+    expect(report.blockers.join("\n")).toContain("source PNGs do not count");
+  });
+
+  it("runs a generic one-milestone production packet without Stanski-specific state or GPT 5.5 cost", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const state = createSnesGenericProductionState(project);
+    const packet = createSnesGenericProductionPacket(state);
+    const validPatch = {
+      localGlmOnly: true,
+      hostedGlmUsed: false,
+      milestoneId: "GEN01",
+      patchType: "manifestPatch",
+      summary: "Validated the generic SNES project package.",
+      manifestPatch: { projectId: project.id },
+    };
+    const invalidPatch = {
+      localGlmOnly: true,
+      hostedGlmUsed: false,
+      milestoneId: "GEN01",
+      patchType: "manifestPatch",
+      summary: "Bad patch",
+      rawHtml: "<script>alert(1)</script>",
+    };
+    const result = applySnesGenericProductionPatch(state, validPatch);
+
+    expect(packet.task).toBe("Complete milestone GEN01 only.");
+    expect(packet.gpt55Used).toBe(false);
+    expect(packet.localGlmOnly).toBe(true);
+    expect(validateSnesGenericProductionPatch(validPatch, state).status).toBe("pass");
+    expect(validateSnesGenericProductionPatch(invalidPatch, state).status).toBe("blocked");
+    expect(result.status).toBe("pass");
+    expect(result.state.completedMilestones).toContain("GEN01");
+    expect(result.state.currentMilestoneId).toBe("GEN02");
+    expect(JSON.stringify(result.state)).not.toMatch(/stanski/i);
+  });
+
+  it("defines the SNES agent operating manual and smart GPT 5.5 token governor", () => {
+    const manual = createSnesAgentOperatingManual();
+    const routine = decideSnesGpt55Usage("routine-local-patch");
+    const blueprint = decideSnesGpt55Usage("initial-blueprint");
+    const repair = decideSnesGpt55Usage("obvious-repair-brief");
+    const repeated = decideSnesGpt55Usage("repeated-blocker-diagnosis", {
+      repeatedFailureCount: 2,
+    });
+
+    expect(manual.roles.map((role) => role.role)).toEqual([
+      "producer-orchestrator",
+      "codex-architect",
+      "openclaw-game-director",
+      "openclaw-level-designer",
+      "openclaw-gameplay-designer",
+      "openclaw-art-audio",
+      "openclaw-hardware-qa",
+      "codex-qa-gate",
+      "art-director-visual-qa",
+    ]);
+    expect(manual.completionRule).toContain("No milestone is complete");
+    expect(routine).toMatchObject({
+      gpt55Used: false,
+      localWorkerDefault: true,
+      reasoningLevel: "none",
+    });
+    expect(routine.costAvoidedByLocalAgents).toContain("Local agents");
+    expect(blueprint).toMatchObject({ gpt55Used: true, reasoningLevel: "high" });
+    expect(repair).toMatchObject({ gpt55Used: true, reasoningLevel: "low" });
+    expect(repeated).toMatchObject({ gpt55Used: true, reasoningLevel: "high" });
+  });
+
+  it("defines role-specific SNES agent tools, model params, and runtime readiness gates", () => {
+    const readyToolchain = createSnesToolchainDoctorReport({
+      tools: {
+        brrtools: { available: true },
+        ldtk: { available: true },
+        mesen: { available: true },
+        pixelorama: { available: true },
+        pvsneslib: { available: true },
+        superfamiconv: { available: true },
+        superfamicheck: { available: true },
+        tiled: { available: true },
+      },
+    });
+    const report = createSnesAgentCapabilityMatrixReport({
+      availableModelRefs: [
+        "ollama/openclaw-control-qwen25-32b:latest",
+        "ollama/openclaw-control-qwen36-27b:latest",
+      ],
+      createdAt: "2026-06-24T00:00:00.000Z",
+      glm52RuntimeReady: true,
+      ollamaRuntimeReady: true,
+      toolchain: readyToolchain,
+    });
+    const artAudio = report.entries.find((entry) => entry.role === "openclaw-art-audio");
+    const hardwareQa = report.entries.find((entry) => entry.role === "openclaw-hardware-qa");
+    const routineRoles = report.entries.filter((entry) => entry.owner === "local-openclaw-glm");
+
+    expect(report).toMatchObject({
+      format: "openclaw-snes-agent-capability-matrix",
+      gpt55AutomatedVisualJudgeUsed: false,
+      hostedGlmUsed: false,
+      localOnly: true,
+      status: "ready",
+    });
+    expect(routineRoles.every((entry) => entry.model.schemaMode)).toBe(true);
+    expect(artAudio?.tools.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(["superfamiconv", "pixelorama", "brrtools"]),
+    );
+    expect(hardwareQa?.model.provider).toBe("local-glm52");
+    expect(hardwareQa?.model.quant).toBe("UD-IQ1_S");
+    expect(hardwareQa?.runtime.status).toBe("ready");
+    expect(hardwareQa?.tools.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(["pvsneslib", "superfamicheck", "mesen"]),
+    );
+  });
+
+  it("blocks SNES model readiness when local runtimes or candidate models are missing", () => {
+    const report = createSnesAgentCapabilityMatrixReport({
+      availableModelRefs: [],
+      createdAt: "2026-06-24T00:00:00.000Z",
+      glm52RuntimeReady: false,
+      ollamaRuntimeReady: false,
+    });
+    const gameDirector = report.entries.find((entry) => entry.role === "openclaw-game-director");
+    const hardwareQa = report.entries.find((entry) => entry.role === "openclaw-hardware-qa");
+
+    expect(report.status).toBe("blocked");
+    expect(gameDirector?.runtime.status).toBe("offline");
+    expect(hardwareQa?.runtime.status).toBe("offline");
+    expect(report.blockers.join("\n")).toContain("Local Ollama runtime is not reachable");
+    expect(report.blockers.join("\n")).toContain("Local GLM-5.2");
+    expect(report.entries.every((entry) => entry.model.promotionRule.includes("fresh"))).toBe(true);
+  });
+
+  it("keeps the project manifest as agent memory and emits handoff receipts for every role", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    project.id = "agent-memory-smoke";
+    const report = createSnesAgentWorkflowReport(project, {
+      humanVisualScore: 25,
+      targetVisualScore: 100,
+    });
+
+    expect(report.format).toBe("openclaw-snes-agent-workflow-report");
+    expect(report.manifestMemory.sourceOfTruth).toBe("snes-project-manifest");
+    expect(report.manifestMemory.fullTranscriptRequired).toBe(false);
+    expect(report.manifestMemory.latestPacket.gpt55Used).toBe(false);
+    expect(report.manifestMemory.latestPacket.gpt55Policy.reasoningLevel).toBe("none");
+    expect(report.handoffReceipts).toHaveLength(9);
+    for (const receipt of report.handoffReceipts) {
+      expect(receipt.surfaceChanged).toBeTruthy();
+      expect(receipt.assumptions.length).toBeGreaterThan(0);
+      expect(receipt.qaEvidenceRequired.length).toBeGreaterThan(0);
+      expect(receipt.testHypothesis).toContain("QA");
+    }
+    expect(report.nextRecommendedAction).toContain("Review Art");
+    expect(report.blockers.join("\n")).toContain("Human visual grade 25/100");
+  });
+
+  it("blocks placeholder-quality art through the Art Director visual QA gate", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const blocked = createSnesArtDirectorVisualGate(project, {
+      humanScore: 25,
+      targetScore: 70,
+    });
+    const realRecord = (
+      id: string,
+      type: Parameters<typeof createSnesProductionAssetRecord>[0]["type"],
+      tileCount = 4,
+    ) =>
+      createSnesProductionAssetRecord({
+        frames: [
+          { id: `${id}-a`, width: 16, height: 16, durationTicks: 8 },
+          { id: `${id}-b`, width: 16, height: 16, durationTicks: 8 },
+        ],
+        id,
+        license: "original",
+        palette: { colorCount: 8, colors: ["#000000", "#ffffff", "#228844", "#88ddff"] },
+        provenance: "openclaw-generated",
+        visualMaturity: "production-approved",
+        visualProof: [
+          {
+            kind: type === "tileset" ? "tileset-atlas" : "sprite-contact-sheet",
+            path: `proof/${id}.png`,
+          },
+        ],
+        sourceHash: `${id}-hash`,
+        sourcePath: `assets/${id}.png`,
+        status: "real-asset",
+        tileMetadata: { collisionClasses: ["solid"], tileCount, tileSize: "16x16" },
+        type,
+        usage: ["visual gate proof"],
+      });
+    const passed = createSnesArtDirectorVisualGate(project, {
+      assetRecords: [
+        realRecord("hero", "character-sprite"),
+        realRecord("enemy", "enemy-sprite"),
+        realRecord("item", "item-sprite"),
+        realRecord("tiles", "tileset", 24),
+        realRecord("bg-far", "background-layer"),
+        realRecord("bg-mid", "background-layer"),
+        realRecord("bg-near", "background-layer"),
+      ],
+      humanScore: 100,
+      targetScore: 70,
+    });
+
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.blockers.join("\n")).toContain("Placeholder");
+    expect(blocked.blockers.join("\n")).toContain("25/100");
+    expect(passed.status).toBe("pass");
+    expect(passed.metrics.realSpriteSheets).toBe(3);
+    expect(passed.metrics.realTilesetVariants).toBe(24);
+    expect(passed.metrics.realBackgroundLayers).toBe(3);
+  });
+
+  it("separates production visual evidence from spec-only placeholder art", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const realRecord = (
+      id: string,
+      type: Parameters<typeof createSnesProductionAssetRecord>[0]["type"],
+      provenance: Parameters<typeof createSnesProductionAssetRecord>[0]["provenance"],
+      tileCount = 4,
+    ) =>
+      createSnesProductionAssetRecord({
+        frames: [
+          { id: `${id}-a`, width: 16, height: 16, durationTicks: 8 },
+          { id: `${id}-b`, width: 16, height: 16, durationTicks: 8 },
+        ],
+        id,
+        license: provenance === "external-licensed" ? "licensed" : "original",
+        palette: { colorCount: 8, colors: ["#000000", "#ffffff", "#228844", "#88ddff"] },
+        provenance,
+        visualMaturity: "production-approved",
+        visualProof: [
+          {
+            kind: type === "tileset" ? "tileset-atlas" : "sprite-contact-sheet",
+            path: `proof/${id}.png`,
+          },
+        ],
+        sourceHash: `${id}-hash`,
+        sourcePath: `assets/${id}.png`,
+        status: "real-asset",
+        tileMetadata: { collisionClasses: ["solid"], tileCount, tileSize: "16x16" },
+        type,
+        usage: ["production visual report proof"],
+      });
+
+    const blocked = createSnesProductionVisualReport(project, {
+      humanScore: 28,
+      targetScore: 70,
+    });
+    const passed = createSnesProductionVisualReport(project, {
+      assetRecords: [
+        realRecord("hero", "character-sprite", "openclaw-generated"),
+        realRecord("enemy", "enemy-sprite", "openclaw-generated"),
+        realRecord("item", "item-sprite", "openclaw-generated"),
+        realRecord("tiles", "tileset", "user-imported", 24),
+        realRecord("bg-far", "background-layer", "external-licensed"),
+        realRecord("bg-mid", "background-layer", "openclaw-generated"),
+        realRecord("bg-near", "background-layer", "openclaw-generated"),
+      ],
+      humanScore: 100,
+      targetScore: 70,
+    });
+
+    expect(blocked.format).toBe("openclaw-snes-production-visual-report");
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.specOnlyPlaceholderArt.length).toBeGreaterThan(0);
+    expect(blocked.blockers.join("\n")).toContain("spec-only placeholder");
+    expect(passed.status).toBe("pass");
+    expect(passed.importedConvertedSourceArt.map((asset) => asset.id)).toEqual(["tiles", "bg-far"]);
+    expect(passed.deterministicGeneratedArt.length).toBe(5);
+    expect(passed.productionApprovedArt).toHaveLength(7);
+    expect(passed.visualProof).toHaveLength(7);
+    expect(passed.screenshotProof).toHaveLength(7);
+  });
+
+  it("does not count source PNG paths as production visual proof", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const sourceOnlyRecord = createSnesProductionAssetRecord({
+      frames: [
+        { id: "hero-a", width: 16, height: 24, durationTicks: 8 },
+        { id: "hero-b", width: 16, height: 24, durationTicks: 8 },
+      ],
+      id: "hero",
+      license: "original",
+      palette: { colorCount: 8, colors: ["#000000", "#ffffff", "#228844", "#88ddff"] },
+      provenance: "openclaw-generated",
+      screenshotProof: ["source-assets/hero.png"],
+      sourceHash: "hero-hash",
+      sourcePath: "source-assets/hero.png",
+      status: "real-asset",
+      type: "character-sprite",
+      usage: ["source-only proof regression"],
+      visualMaturity: "production-approved",
+      visualProof: [{ kind: "source-image", path: "source-assets/hero.png" }],
+    });
+    const report = createSnesArtDirectorVisualGate(project, {
+      assetRecords: [sourceOnlyRecord],
+      humanScore: 100,
+      targetScore: 70,
+    });
+
+    expect(report.status).toBe("blocked");
+    expect(report.metrics.visualProofArtifacts).toBe(0);
+    expect(report.blockers.join("\n")).toContain("source PNGs do not count");
+  });
+
+  it("blocks converted procedural placeholders even when conversion review artifacts exist", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const placeholderRecord = createSnesProductionAssetRecord({
+      frames: [
+        { id: "hero-a", width: 16, height: 24, durationTicks: 8 },
+        { id: "hero-b", width: 16, height: 24, durationTicks: 8 },
+      ],
+      id: "hero-placeholder",
+      license: "original",
+      palette: { colorCount: 8, colors: ["#000000", "#ffffff", "#228844", "#88ddff"] },
+      provenance: "openclaw-generated",
+      sourceHash: "hero-placeholder-hash",
+      sourcePath: "source-assets/hero-placeholder.png",
+      status: "real-asset",
+      type: "character-sprite",
+      usage: ["converted placeholder regression"],
+      visualMaturity: "procedural-placeholder",
+      visualProof: [{ kind: "sprite-contact-sheet", path: "visual-review/hero-placeholder.png" }],
+    });
+    const report = createSnesProductionVisualReport(project, {
+      assetRecords: [placeholderRecord],
+      humanScore: 100,
+      targetScore: 70,
+    });
+
+    expect(report.status).toBe("blocked");
+    expect(report.specOnlyPlaceholderArt.map((asset) => asset.id)).toContain("hero-placeholder");
+    expect(report.blockers.join("\n")).toContain("converted placeholders do not count");
+  });
+
+  it("blocks compiled draft art with in-game proof until visual maturity is production-approved", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const draftHero = createSnesProductionAssetRecord({
+      frames: Array.from({ length: 40 }, (_, index) => ({
+        id: `hero-${index}`,
+        width: 16,
+        height: 32,
+        durationTicks: 6,
+      })),
+      id: "compiled-hero-draft",
+      license: "original",
+      palette: { colorCount: 12, colors: ["#000000", "#ffffff", "#228844", "#88ddff"] },
+      provenance: "openclaw-generated",
+      sourceHash: "compiled-hero-hash",
+      sourcePath: "compiled-assets/hero.png",
+      status: "real-asset",
+      type: "character-sprite",
+      usage: ["compiled draft hero"],
+      visualMaturity: "draft-generated",
+      visualProof: [
+        { kind: "sprite-contact-sheet", path: "visual-review/hero.png" },
+        { kind: "in-game-screenshot", path: "visual-proof/start.png" },
+      ],
+    });
+    const report = createSnesProductionVisualReport(project, {
+      assetRecords: [draftHero],
+      humanScore: 100,
+      targetScore: 100,
+    });
+
+    expect(draftHero.blockers).toContain(
+      "Asset visual maturity is draft-generated; production visuals require production-approved.",
+    );
+    expect(report.status).toBe("blocked");
+    expect(report.deterministicGeneratedArt.map((asset) => asset.id)).toContain(
+      "compiled-hero-draft",
+    );
+    expect(report.blockers.join("\n")).toContain("Production visuals need production-approved");
+  });
+
+  it("creates a GPT-governed repair loop that sends fixes to the relevant local worker", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    project.scenes[0].widthMetatiles = 16;
+    project.scenes[0].entities = project.scenes[0].entities.filter(
+      (entity) => entity.kind !== "npc" && entity.kind !== "item",
+    );
+    const quality = createSnesGameQualityReport(project);
+    const firstRepair = createSnesRepairLoopPlan(project, {
+      previousFailureCount: 0,
+      qualityReport: quality,
+    });
+    const repeatedRepair = createSnesRepairLoopPlan(project, {
+      previousFailureCount: 2,
+      qualityReport: quality,
+    });
+
+    expect(quality.status).toBe("fail");
+    expect(firstRepair.status).toBe("ready");
+    expect(firstRepair.localWorkerPatchRequired).toBe(true);
+    expect(firstRepair.gpt55Decision.reasoningLevel).toBe("low");
+    expect(firstRepair.targetRole).toBeTruthy();
+    expect(repeatedRepair.gpt55Decision.reasoningLevel).toBe("high");
+    expect(repeatedRepair.gpt55Decision.gpt55Used).toBe(true);
+  });
+
+  it("creates blocked ROM, emulator, and dry-run FXPAK contracts without executing external tools", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T00:00:00.000Z");
+    const missingToolchain = createSnesToolchainDoctorReport();
+    const readyToolchain = createSnesToolchainDoctorReport({
+      tools: {
+        pvsneslib: { available: true, version: "mock-pvsneslib" },
+        superfamicheck: { available: true, version: "mock-superfamicheck" },
+        mesen: { available: true, version: "mock-mesen" },
+      },
+    });
+    const blockedRom = createSnesRomBuildReceiptFromToolchain(project, missingToolchain);
+    const readyRomContract = createSnesRomBuildReceiptFromToolchain(project, readyToolchain);
+    const emulator = createSnesEmulatorProofReceiptFromToolchain(project, readyToolchain);
+    const fxpak = createSnesFxpakPackageDryRunReceipt(project);
+
+    expect(blockedRom.status).toBe("blocked");
+    expect(blockedRom.blockers.join("\n")).toContain("PVSnesLib");
+    expect(readyRomContract.status).toBe("not-run");
+    expect(readyRomContract.blockers[0]).toContain("has not executed");
+    expect(emulator.status).toBe("not-run");
+    expect(emulator.launchCommand?.join(" ")).toContain("mesen");
+    expect(fxpak.status).toBe("pass");
+    expect(fxpak.dryRun).toBe(true);
+    expect(fxpak.blockers[0]).toContain("approval-gated");
+  });
+
+  it("loads Stanski as a canary package and creates a separate non-Stanski MVP sample", () => {
+    const stanski = createStanskiCanaryProjectPackage("2026-06-23T03:00:00.000Z");
+    const sample = createSnesMvpSampleProjectPackage("2026-06-23T03:05:00.000Z");
+
+    expect(stanski.source).toBe("sample-stanski");
+    expect(stanski.sampleSpecific).toBe(false);
+    expect(stanski.manifest.project.name).toContain("Stanski");
+    expect(sample.source).toBe("sample-mvp");
+    expect(sample.manifest.project.name).toBe("Comet Fox MVP");
+    expect(sample.manifest.productionReadiness.status).toBe("production-blocked");
+    expect(JSON.stringify(sample)).not.toMatch(/Stanski/i);
+  });
+
+  it("creates Stanski's World as a generic production project package with Batch 1 canon", () => {
+    const stanski = createStanskiWorldProductionProjectPackage("2026-06-24T12:00:00.000Z", [
+      {
+        id: "todd-stanski-reference",
+        dimensions: { width: 1024, height: 768 },
+        path: ".artifacts/snes-image-assets/todd-stanski-reference/source/source.jpg",
+        sha256: "todd-hash",
+        sourceType: "image-reference",
+        status: "preserved",
+      },
+      {
+        id: "man-boy-snes-photo-reference",
+        dimensions: { width: 1536, height: 2048 },
+        path: ".artifacts/snes-image-assets/man-boy-snes-photo-reference/source/source.jpg",
+        sha256: "photo-hash",
+        sourceType: "image-reference",
+        status: "preserved",
+      },
+    ]);
+    const parsed = parseSnesProjectPackage(JSON.stringify(stanski));
+    const canon = parsed.manifest.project.stanskiCanon;
+    const levelOne = parsed.manifest.project.stanskiLevelOneProduction;
+    const backlog = createStanskiWorldProductionBacklog();
+    const worldOne = createStanskiWorldOneVerticalSliceLevels();
+
+    expect(parsed.projectId).toBe("stanskis-world");
+    expect(parsed.projectName).toBe("Stanski's World");
+    expect(parsed.source).toBe("stanski-production");
+    expect(parsed.sampleSpecific).toBe(false);
+    expect(parsed.manifest.project.profile.target).toBe("fxpak-pro");
+    expect(parsed.manifest.project.profile.enhancementChip).toBe("none");
+    expect(parsed.manifest.project.export.romBaseName).toBe("stanskis-world");
+    expect(parsed.manifest.project.levelPlan?.id).toBe("level-1-cleveland-skyline-scramble");
+    expect(parsed.manifest.project.scenes.map((scene) => scene.id)).toEqual([
+      "w1-1-cleveland-skyline-scramble",
+    ]);
+    expect(levelOne?.activeLevelId).toBe("w1-1-cleveland-skyline-scramble");
+    expect(levelOne?.fullGamePlanStatus).toBe("preserved-for-later");
+    expect(levelOne?.openingOverlay).toEqual({ level: "1", world: "Cleveland" });
+    expect(levelOne?.mechanics.startingLives).toBe(5);
+    expect(levelOne?.mechanics.runMultiplier).toBe(1.5);
+    expect(levelOne?.mechanics.gasBoostMultiplier).toBe(1.5);
+    expect(levelOne?.mechanics.fallingGasBoostAllowed).toBe(true);
+    expect(levelOne?.objects.map((object) => object.id)).toEqual(
+      expect.arrayContaining([
+        "l1-cheeseburger-trail",
+        "l1-receipt-goblin",
+        "l1-burrito-block",
+        "l1-bridge-checkpoint",
+        "l1-upper-awning-secret",
+        "l1-pizza-slice",
+        "l1-turnstile-snatcher",
+        "l1-toilet-ending",
+        "l1-fireworks-vfx",
+      ]),
+    );
+    expect(levelOne?.replayScript.at(-1)?.id).toBe("toilet-ending");
+    expect(levelOne?.blockers.join("\n")).toContain("Family Memory Card photo cameo");
+    expect(canon?.targetPlatform).toBe("original-snes-via-fxpak-pro");
+    expect(canon?.visualTarget).toEqual({ approval: "human-required", score: 100 });
+    expect(canon?.fxpakWrites).toBe("blocked-until-exact-mounted-volume");
+    expect(canon?.secretSystems.join("\n")).toContain("Secret World 9");
+    expect(canon?.secretSystems.join("\n")).toContain("Receipt Reality");
+    expect(canon?.secretSystems.join("\n")).toContain("Back of the Map");
+    expect(canon?.finalBoss.join("\n")).toContain("Auditor");
+    expect(canon?.gameBible.join("\n")).toContain("man-and-boy photo");
+    const manBoyReference = canon?.references.find(
+      (reference) => reference.id === "man-boy-snes-photo-reference",
+    );
+    expect(manBoyReference?.status).toBe("preserved");
+    expect(manBoyReference?.usage).toContain("Family Memory Card secret room");
+    expect(manBoyReference?.dimensions).toEqual({ width: 1536, height: 2048 });
+    const manBoyAsset = parsed.manifest.assetRegistry.records.find(
+      (record) => record.id === "man-boy-snes-photo-reference",
+    );
+    expect(manBoyAsset?.conversionStatus).toBe("blocked");
+    expect(manBoyAsset?.blockers.join("\n")).toContain("SNES-safe conversion");
+    expect(manBoyAsset?.visualMaturity).toBe("artist-imported");
+    expect(worldOne.map((level) => level.title)).toEqual([
+      "Cleveland: Skyline Scramble",
+      "Detroit: Motor City Mayhem",
+      "Lakewood: Warren Road Roof Run",
+      "Edgewater Ticket Cache",
+      "Turnpike Toll Trouble",
+      "Fare Snatcher Boss",
+    ]);
+    expect(worldOne.find((level) => level.id === "w1-boss-fare-snatcher")?.firstReward).toBe(
+      "Golden Transfer Pass #1 after boss defeat.",
+    );
+    expect(JSON.stringify(worldOne)).toContain("Warren Road");
+    expect(backlog.some((milestone) => milestone.group === "worlds-2-through-8")).toBe(true);
+    expect(backlog.some((milestone) => milestone.id === "SW-L1-M2")).toBe(true);
+    expect(backlog.some((milestone) => milestone.status === "planned")).toBe(true);
+    expect(backlog.some((milestone) => milestone.status === "active")).toBe(true);
+    expect(parsed.manifest.productionReadiness.status).toBe("production-blocked");
+    expect(parsed.receipts.qa.map((receipt) => receipt.id)).toEqual(
+      expect.arrayContaining([
+        "level-1-production-target",
+        "batch-1-foundation",
+        "fxpak-write-status",
+        "visual-approval-status",
+      ]),
+    );
+  });
+
+  it("rejects corrupted Stanski production canon instead of silently loading broken progression", () => {
+    const createPackage = () =>
+      createStanskiWorldProductionProjectPackage("2026-06-24T12:00:00.000Z", [
+        {
+          id: "todd-stanski-reference",
+          dimensions: { width: 1024, height: 768 },
+          path: ".artifacts/snes-image-assets/todd-stanski-reference/source/source.jpg",
+          sha256: "todd-hash",
+          sourceType: "image-reference",
+          status: "preserved",
+        },
+        {
+          id: "man-boy-snes-photo-reference",
+          dimensions: { width: 1536, height: 2048 },
+          path: ".artifacts/snes-image-assets/man-boy-snes-photo-reference/source/source.jpg",
+          sha256: "photo-hash",
+          sourceType: "image-reference",
+          status: "preserved",
+        },
+      ]);
+    const clonePackage = (): ReturnType<typeof createPackage> =>
+      JSON.parse(JSON.stringify(createPackage())) as ReturnType<typeof createPackage>;
+
+    const missingToilet = clonePackage();
+    missingToilet.manifest.project.stanskiCanon!.worldOneVerticalSlice[0].toiletEnding = "";
+    expect(() => parseSnesProjectPackage(JSON.stringify(missingToilet))).toThrow(
+      /toilet completion/u,
+    );
+
+    const missingBossReward = clonePackage();
+    const boss = missingBossReward.manifest.project.stanskiCanon!.worldOneVerticalSlice.find(
+      (level) => level.title === "Fare Snatcher Boss",
+    )!;
+    boss.firstReward = "A generic pass.";
+    boss.purpose = "Close World 1.";
+    boss.qaExpectations = ["Boss has readable attacks."];
+    expect(() => parseSnesProjectPackage(JSON.stringify(missingBossReward))).toThrow(
+      /Golden Transfer Pass #1/u,
+    );
+
+    const missingFinalBossStateMachine = clonePackage();
+    missingFinalBossStateMachine.manifest.project.stanskiCanon!.finalBoss = [
+      "The Auditor is the final boss.",
+    ];
+    expect(() => parseSnesProjectPackage(JSON.stringify(missingFinalBossStateMachine))).toThrow(
+      /Final boss.*state-machine phases/u,
+    );
+
+    const missingAssetHash = clonePackage();
+    const realAsset = missingAssetHash.manifest.assetRegistry.records.find(
+      (record) => record.id === "todd-stanski-reference",
+    )!;
+    realAsset.sourceHash = undefined;
+    expect(() => parseSnesProjectPackage(JSON.stringify(missingAssetHash))).toThrow(
+      /provenance hash/u,
+    );
+
+    const preservedPhotoWithoutDimensions = clonePackage();
+    const photo = preservedPhotoWithoutDimensions.manifest.project.stanskiCanon!.references.find(
+      (reference) => reference.id === "man-boy-snes-photo-reference",
+    )!;
+    photo.dimensions = undefined;
+    expect(() => parseSnesProjectPackage(JSON.stringify(preservedPhotoWithoutDimensions))).toThrow(
+      /preserved without image dimensions/u,
+    );
+
+    const productionApprovedPhotoWithoutProof = clonePackage();
+    const photoAsset = productionApprovedPhotoWithoutProof.manifest.assetRegistry.records.find(
+      (record) => record.id === "man-boy-snes-photo-reference",
+    )!;
+    photoAsset.visualMaturity = "production-approved";
+    photoAsset.visualProof = [{ kind: "source-image", path: photoAsset.sourcePath ?? "" }];
+    expect(() =>
+      parseSnesProjectPackage(JSON.stringify(productionApprovedPhotoWithoutProof)),
+    ).toThrow(/cannot be production-approved/u);
+
+    const brokenLevelOneScope = clonePackage();
+    brokenLevelOneScope.manifest.project.stanskiLevelOneProduction!.fullGamePlanStatus =
+      "preserved-for-later" as const;
+    brokenLevelOneScope.manifest.project.stanskiLevelOneProduction!.activeLevelId =
+      "w1-1-cleveland-skyline-scramble";
+    brokenLevelOneScope.manifest.project.stanskiLevelOneProduction!.objects =
+      brokenLevelOneScope.manifest.project.stanskiLevelOneProduction!.objects.filter(
+        (object) => object.id !== "l1-toilet-ending",
+      );
+    expect(() => parseSnesProjectPackage(JSON.stringify(brokenLevelOneScope))).toThrow(
+      /l1-toilet-ending/u,
+    );
+  });
+
+  it("creates a Level 1-only Stanski production state with finishable Cleveland pacing", () => {
+    const state = createStanskiLevelOneProductionState({
+      acceleration: 0.14,
+      conveyorSupport: "planned",
+      coyoteTimeFrames: 6,
+      damageKnockback: { invulnerabilityFrames: 90, xVelocity: 1.6, yVelocity: -3.2 },
+      jumpBufferFrames: 6,
+      jumpVelocity: -5.6,
+      runMultiplier: 1.5,
+      slopeSupport: "planned",
+      variableJump: true,
+      walkSpeed: 1.45,
+    });
+
+    expect(state.productionScope).toBe("level-1-only");
+    expect(state.activeLevelTitle).toBe("Cleveland: Skyline Scramble");
+    expect(state.sections.map((section) => section.id)).toEqual([
+      "skyline-tutorial",
+      "sidewalk-potholes",
+      "bridge-gas-route",
+      "food-power-up",
+      "restroom-finale",
+    ]);
+    expect(state.objects.find((object) => object.id === "l1-pizza-slice")?.x).toBeLessThan(
+      state.objects.find((object) => object.id === "l1-turnstile-snatcher")?.x ?? 0,
+    );
+    expect(state.replayScript.map((step) => step.id)).toContain("projectile-required-enemy");
+    expect(state.snesBudget.enhancementChip).toBe("none");
+    expect(state.deferredMilestoneGroups).toContain("Worlds 2-8");
+  });
+
+  it("reports missing SNES production tools and records adapter conversion blockers", () => {
+    const missing = createSnesToolchainDoctorReport();
+    const ready = createSnesToolchainDoctorReport({
+      tools: {
+        pvsneslib: { available: true },
+        superfamiconv: { available: true },
+        pixelorama: { available: true },
+        ldtk: { available: true },
+        mesen: { available: true },
+        superfamicheck: { available: true },
+        brrtools: { available: true },
+      },
+    });
+    const blockedReceipt = createSnesAssetAdapterReceipt({
+      adapter: "superfamiconv",
+      inputPath: "assets/hero.png",
+      blockedReason: "SuperFamiconv is not installed.",
+    });
+    const visual = createSnesVisualApprovalContract({
+      currentHumanScore: null,
+      machineScore: 82,
+      targetScore: 100,
+    });
+
+    expect(missing.status).toBe("blocked");
+    expect(missing.blockers).toEqual(
+      expect.arrayContaining(["PVSnesLib is required for production SNES builds."]),
+    );
+    expect(ready.status).toBe("ready");
+    expect(blockedReceipt.status).toBe("blocked");
+    expect(blockedReceipt.blockers).toContain("SuperFamiconv is not installed.");
+    expect(visual.status).toBe("manual-required");
+    expect(visual.blocker).toContain("Human visual grade is required");
+  });
+
+  it("creates fixture-backed adapter, ROM scaffold, emulator, and FXPAK dry-run plans", () => {
+    const project = createDefaultSnesStudioProject("2026-06-23T04:00:00.000Z");
+    const missingToolchain = createSnesToolchainDoctorReport();
+    const readyToolchain = createSnesToolchainDoctorReport({
+      fxpakVolume: { fileSystem: "fat32", mounted: true, path: "/Volumes/FXPAK" },
+      tools: {
+        brrtools: { available: true, path: "/usr/local/bin/brr_encoder" },
+        ldtk: { available: true, path: "/Applications/LDtk.app" },
+        mesen: { available: true, path: "/Applications/Mesen.app" },
+        pixelorama: { available: true, path: "/Applications/Pixelorama.app" },
+        pvsneslib: { available: true, path: "/opt/pvsneslib" },
+        superfamicheck: { available: true, path: "/usr/local/bin/superfamicheck" },
+        superfamiconv: { available: true, path: "/usr/local/bin/superfamiconv" },
+        tiled: { available: true, path: "/Applications/Tiled.app" },
+      },
+    });
+    const blockedAdapters = createSnesAssetAdapterPlan(project, missingToolchain);
+    const readyAdapters = createSnesAssetAdapterPlan(project, readyToolchain);
+    const scaffold = createSnesRomBuildScaffoldDryRun(project, readyToolchain);
+    const emulator = createSnesEmulatorProofPlanFromToolchain(project, readyToolchain);
+    const fxpak = createSnesFxpakDryRunPlan(project, { volumePath: "/Volumes/FXPAK" });
+
+    expect(blockedAdapters.status).toBe("blocked");
+    expect(
+      blockedAdapters.receipts.find((receipt) => receipt.adapter === "superfamiconv"),
+    ).toMatchObject({ status: "blocked" });
+    expect(readyAdapters.status).toBe("ready");
+    expect(readyAdapters.receipts.map((receipt) => receipt.adapter)).toEqual(
+      expect.arrayContaining(["pixelorama", "superfamiconv", "ldtk", "tiled", "brrtools"]),
+    );
+    expect(readyAdapters.receipts.every((receipt) => receipt.inputHash.length > 0)).toBe(true);
+    expect(scaffold.status).toBe("ready");
+    expect(scaffold.plannedFiles.map((file) => file.path).join("\n")).toContain("src/main.c");
+    expect(scaffold.receipt.status).toBe("not-run");
+    expect(emulator.status).toBe("ready");
+    expect(emulator.selectedEmulator).toBe("mesen");
+    expect(emulator.receipt.status).toBe("not-run");
+    expect(fxpak.status).toBe("ready");
+    expect(fxpak.copyPlan[0]?.destination).toContain("/Volumes/FXPAK");
+    expect(fxpak.warnings.join("\n")).toContain("SRAM");
   });
 
   it("maps classic platformer graphics prompts to original SNES-safe art", () => {
@@ -170,6 +1196,23 @@ describe("SNES Studio core", () => {
     expect(stylePack.spriteRecipes).toEqual(
       expect.arrayContaining(["16x24 cheerful hero with bold outline"]),
     );
+    expect(stylePack.tileSpecs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "tile-grass-top", size: "16x16", collisionClass: "solid" }),
+      ]),
+    );
+    expect(stylePack.spriteSpecs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "sprite-hero", frameSize: "16x24", paletteIndex: 8 }),
+      ]),
+    );
+    expect(stylePack.musicPatternSpecs[0]).toMatchObject({
+      tempo: 144,
+      patternRows: 32,
+    });
+    expect(stylePack.sfxEventMap).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "pickup" })]),
+    );
     expect(stylePack.backgroundLayers).toEqual(
       expect.arrayContaining(["soft clouds", "rounded hills"]),
     );
@@ -187,7 +1230,7 @@ describe("SNES Studio core", () => {
     expect(validateSnesPreviewRomArtifact(rom).valid).toBe(true);
   });
 
-  it("runs Codex-supervised OpenClaw production with OpenClaw filling game sections", () => {
+  it("runs GPT 5.5-directed OpenClaw production with validation and approval gates", () => {
     const production = createSnesAiProductionRun(
       'Make "Summit Gem Quest", a robot platformer with three levels, gems, a rival drone, a hidden key, music, saves, and Super Mario World graphics.',
       createDefaultSnesStudioProject("2026-05-25T00:00:00.000Z"),
@@ -195,10 +1238,12 @@ describe("SNES Studio core", () => {
     );
 
     expect(production.run.blueprint.createdBy).toBe("codex-architect");
+    expect(production.run.directorPlan).toBe(production.run.blueprint);
     expect(production.run.blueprint.qualityRubric).toContain(
       "Playable from one prompt without extra setup.",
     );
     expect(production.run.taskList).toHaveLength(11);
+    expect(production.run.builderTasks).toHaveLength(11);
     expect(production.run.taskList.every((task) => task.id.startsWith("openclaw-"))).toBe(true);
     expect(production.run.agentResults.map((result) => result.role)).toEqual(
       expect.arrayContaining([
@@ -213,6 +1258,19 @@ describe("SNES Studio core", () => {
       status: "pass",
       approvalStatus: "approved-for-snes-game-file",
     });
+    expect(production.run.validationReport.status).toBe("pass");
+    expect(production.run.playtestReport.status).toBe("pass");
+    expect(production.run.qualityReport.status).toBe("pass");
+    expect(production.run.qualityReport.modelRouting).toMatchObject({
+      workers: "local-openclaw",
+      codexCostUsed: false,
+    });
+    expect(production.run.qualityReport.gates.map((gate) => gate.code)).toEqual(
+      expect.arrayContaining(["level-finishable", "first-screen-fairness", "first-30-seconds"]),
+    );
+    expect(production.run.gpt55Review?.approvalStatus).toBe("approved-for-snes-game-file");
+    expect(production.run.approvalStatus).toBe("approved-for-snes-game-file");
+    expect(production.run.auditTrail.join(" ")).toContain("GPT 5.5");
     expect(production.run.status).toBe("approved-for-snes-game-file");
     expect(production.project.aiProductionRun?.id).toBe(production.run.id);
     expect(production.project.aiCommandResult).toMatchObject({
@@ -224,7 +1282,33 @@ describe("SNES Studio core", () => {
     expect(buildSnesReadiness(production.project).status).toBe("ready");
   });
 
-  it("lets Codex fail weak OpenClaw output before approval", () => {
+  it("defines a SNES-specific local model benchmark ladder without promoting unverified models", () => {
+    const corpus = createSnesLocalModelBenchmarkCorpus();
+    const candidates = createSnesLocalModelBenchmarkCandidates();
+
+    expect(corpus.map((task) => task.role)).toEqual(
+      expect.arrayContaining([
+        "snes-game-director",
+        "snes-level-designer",
+        "snes-gameplay-designer",
+        "snes-art-audio",
+        "snes-hardware-qa",
+      ]),
+    );
+    expect(corpus.every((task) => task.requiredSignals.length >= 5)).toBe(true);
+    expect(candidates.map((candidate) => candidate.modelRef)).toEqual(
+      expect.arrayContaining([
+        "ollama/openclaw-control-qwen25-32b:latest",
+        "ollama/qwen3.6:27b-q8_0",
+        "local-glm-5.2-2bit",
+      ]),
+    );
+    expect(
+      candidates.find((candidate) => candidate.modelRef === "local-glm-5.2-2bit")?.reason,
+    ).toContain("Approval-gated");
+  });
+
+  it("lets GPT 5.5 disapprove weak OpenClaw output before approval", () => {
     const blueprint = createSnesCodexBlueprint(
       "Make a tiny robot platformer.",
       createDefaultSnesStudioProject("2026-05-25T00:00:00.000Z"),
@@ -239,7 +1323,7 @@ describe("SNES Studio core", () => {
     );
 
     expect(review.status).toBe("fail");
-    expect(review.approvalStatus).toBe("needs-fixes");
+    expect(review.approvalStatus).toBe("rejected-needs-repair");
     expect(review.requiredCorrections).toEqual(
       expect.arrayContaining([
         "Make the first level playable with a hero, reward, challenge, ground, and goal.",
@@ -1614,7 +2698,7 @@ describe("SNES Studio core", () => {
         timeout: 180,
       }),
     );
-    expect(handoff.wait).toEqual({ method: "agent.wait", timeoutMs: 120000 });
+    expect(handoff.wait).toEqual({ method: "agent.wait", timeoutMs: 180000 });
     expect(handoff.history).toEqual({ method: "chat.history", limit: 12, maxChars: 60000 });
     expect(handoff.request.message).toContain("SNES Studio OpenClaw/Codex generation task.");
     expect(handoff.request.message).toContain('"requestedAgent": "openclaw"');
@@ -1624,7 +2708,7 @@ describe("SNES Studio core", () => {
     expect(handoff.instructions.join("\n")).toContain("approval");
   });
 
-  it("creates a Codex-supervised OpenClaw Gateway production route", () => {
+  it("creates a GPT 5.5-directed OpenClaw Gateway production route", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
     const plan = createSnesAiProductionGatewayPlan(
       project,
@@ -1636,8 +2720,10 @@ describe("SNES Studio core", () => {
     );
 
     expect(plan.sessionKey).toBe("agent:main:dashboard:snes-studio-test");
+    expect(plan.proofMode).toBe("full-production");
     expect(plan.stages.map((stage) => stage.role)).toEqual([
       "codex-architect",
+      "openclaw-game-team",
       "openclaw-game-director",
       "openclaw-level-designer",
       "openclaw-gameplay-designer",
@@ -1652,29 +2738,67 @@ describe("SNES Studio core", () => {
       "openclaw",
       "openclaw",
       "openclaw",
+      "openclaw",
       "codex",
     ]);
     expect(plan.stages.every((stage) => stage.handoff.method === "agent")).toBe(true);
     expect(plan.stages.every((stage) => !stage.handoff.request.deliver)).toBe(true);
     expect(plan.stages[0]?.handoff.request.model).toBe("openai/gpt-5.5");
     expect(
-      plan.stages.slice(1, 6).every((stage) => stage.handoff.request.model === undefined),
+      plan.stages.slice(1, 7).every((stage) => stage.handoff.request.model === undefined),
     ).toBe(true);
-    expect(plan.stages[6]?.handoff.request.model).toBe("openai/gpt-5.5");
+    expect(plan.stages[7]?.handoff.request.model).toBe("openai/gpt-5.5");
+    expect(plan.stages[1]?.sessionKey).toBe(
+      "agent:snes-game-director:dashboard:snes-studio:game-team",
+    );
+    expect(plan.stages[1]?.agentId).toBe("snes-game-director");
+    expect(plan.stages[1]?.handoff.request.agentId).toBe("snes-game-director");
+    expect(plan.stages[2]?.sessionKey).toBe(
+      "agent:snes-game-director:dashboard:snes-studio:game-director",
+    );
+    expect(plan.stages[3]?.sessionKey).toBe(
+      "agent:snes-level-designer:dashboard:snes-studio:level-designer",
+    );
+    expect(plan.stages[6]?.sessionKey).toBe(
+      "agent:snes-hardware-qa:dashboard:snes-studio:hardware-qa",
+    );
+    expect(plan.stages[7]?.sessionKey).toBe("agent:main:dashboard:snes-studio-test:codex-qa");
     expect(plan.stages.every((stage) => stage.handoff.wait.method === "agent.wait")).toBe(true);
     expect(plan.stages.every((stage) => stage.handoff.history.method === "chat.history")).toBe(
       true,
     );
-    expect(plan.stages[0]?.handoff.request.message).toContain("Codex Architect stage.");
+    expect(plan.stages[0]?.handoff.request.message).toContain(
+      "GPT 5.5 Game Director planning stage.",
+    );
     expect(plan.stages[1]?.handoff.request.message).toContain(
-      "OpenClaw Game Director production stage.",
+      "OpenClaw Game Team production stage.",
     );
     expect(plan.stages[2]?.handoff.request.message).toContain(
+      "OpenClaw Game Director production stage.",
+    );
+    expect(plan.stages[3]?.handoff.request.message).toContain(
       "OpenClaw Level Designer production stage.",
     );
-    expect(plan.stages[6]?.handoff.request.message).toContain("Codex QA Gate stage.");
+    expect(plan.stages[7]?.handoff.request.message).toContain("GPT 5.5 Quality Gate stage.");
     expect(plan.acceptanceCriteria.join(" ")).toContain("approval-gated JSON");
     expect(plan.blockers.join(" ")).toContain("FAT32 flash-cart");
+
+    const dashboardProof = createSnesAiProductionGatewayPlan(
+      project,
+      "Make a mountain robot platformer with three levels.",
+      {
+        createdAt: "2026-05-19T02:10:00.000Z",
+        proofMode: "dashboard-e2e",
+        sessionKey: "agent:main:dashboard:snes-studio-test",
+      },
+    );
+    expect(dashboardProof.proofMode).toBe("dashboard-e2e");
+    expect(dashboardProof.stages.map((stage) => stage.role)).toEqual([
+      "codex-architect",
+      "openclaw-game-team",
+      "codex-qa-gate",
+    ]);
+    expect(dashboardProof.stages[1]?.agentId).toBe("snes-game-director");
   });
 
   it("creates stable SNES Studio AI team roles for Codex review and OpenClaw worker lanes", () => {
@@ -2973,6 +4097,63 @@ describe("SNES Studio core", () => {
     expect(unsigned.blockers).toContain("Developer ID signing identity was not provided.");
     expect(signed.status).toBe("signed");
     expect(signed.signingIdentity).toBe("Developer ID Application: Example");
+  });
+
+  it("hard-gates production quality with replay-backed playtest evidence", () => {
+    const production = createSnesAiProductionRun(
+      "Make a bright beginner platformer with a visible reward, fair enemy, and goal.",
+      createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z"),
+      "2026-05-19T08:00:00.000Z",
+    );
+
+    expect(production.run.playtestReport.replayEvidence.framesSimulated).toBeGreaterThan(0);
+    expect(production.run.playtestReport.replayEvidence.reachedGoal).toBe(true);
+    expect(production.run.qualityReport.status).toBe("pass");
+    expect(production.run.status).toBe("approved-for-snes-game-file");
+  });
+
+  it("fails closed when the first level has no reachable goal", () => {
+    const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
+    project.scenes[0].entities = project.scenes[0].entities.filter(
+      (entity) =>
+        !entity.name.toLowerCase().includes("goal") && !entity.name.toLowerCase().includes("door"),
+    );
+
+    const playtest = createSnesAiPlaytestReport(project);
+    const quality = createSnesGameQualityReport(project, { playtestReport: playtest });
+
+    expect(playtest.status).toBe("fail");
+    expect(playtest.replayEvidence.reachedGoal).toBe(false);
+    expect(quality.status).toBe("fail");
+    expect(quality.requiredRepairs.join(" ")).toContain("goal");
+  });
+
+  it("normalizes concrete generated assets for old projects", () => {
+    const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
+    delete project.generatedAssets;
+
+    const normalized = normalizeSnesStudioProject(project);
+
+    expect(normalized.generatedAssets?.tileSpecs.length).toBeGreaterThan(0);
+    expect(normalized.generatedAssets?.spriteSpecs[0].frames.length).toBeGreaterThan(0);
+    expect(normalized.generatedAssets?.paletteSpecs.length).toBeGreaterThan(0);
+    expect(normalized.generatedAssets?.musicPatternSpecs.length).toBeGreaterThan(0);
+    expect(normalized.generatedAssets?.sfxEventMap.length).toBeGreaterThan(0);
+  });
+
+  it("keeps local model benchmarks evidence-backed without downloading unavailable models", () => {
+    const report = createSnesLocalModelBenchmarkReport([
+      "ollama/openclaw-control-qwen25-32b:latest",
+    ]);
+
+    expect(report.status).toBe("ready");
+    expect(report.winnersByRole["snes-level-designer"]).toBe(
+      "ollama/openclaw-control-qwen25-32b:latest",
+    );
+    expect(report.blockers).toEqual(
+      expect.arrayContaining([expect.stringContaining("local-glm-5.2-2bit is not installed")]),
+    );
+    expect(report.scores.some((score) => score.available && score.evidence.length > 0)).toBe(true);
   });
 
   it("creates project bundles and diffs version history", () => {

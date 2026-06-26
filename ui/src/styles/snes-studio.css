@@ -8367,3 +8367,121 @@
     order: 4;
   }
 }
+
+/* 10/10 beginner SNES Builder shell: one prompt, one canvas, one action loop. */
+.snes-local-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  background: color-mix(in srgb, var(--accent-color, #4f7cff) 12%, transparent);
+  color: var(--text-primary, #111827);
+  font-size: 0.9rem;
+}
+
+.snes-beginner-next-actions,
+.snes-beginner-action-strip {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.snes-beginner-next-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1rem 0;
+}
+
+.snes-beginner-next-actions article,
+.snes-beginner-action-strip button {
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, Canvas 92%, var(--accent-color, #4f7cff) 8%);
+  padding: 0.9rem;
+}
+
+.snes-beginner-next-actions strong,
+.snes-beginner-next-actions small {
+  display: block;
+}
+
+.snes-beginner-action-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  position: sticky;
+  top: 0.5rem;
+  z-index: 3;
+  padding: 0.75rem;
+  border-radius: 24px;
+  background: color-mix(in srgb, Canvas 88%, transparent);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 50px color-mix(in srgb, black 12%, transparent);
+}
+
+.snes-beginner-canvas-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.snes-beginner-canvas-workspace__main,
+.snes-beginner-canvas-workspace__side,
+.snes-beginner-headline {
+  min-width: 0;
+}
+
+.snes-beginner-canvas-workspace__side {
+  display: grid;
+  gap: 1rem;
+}
+
+.snes-beginner-headline h2 {
+  margin: 0.1rem 0;
+  font-size: clamp(1.7rem, 3vw, 3rem);
+}
+
+.snes-arcade-builder--simple .snes-guided-health-strip {
+  margin: 0.75rem 0;
+}
+
+.snes-arcade-builder--start > .snes-production-builder-cockpit,
+.snes-arcade-builder--simple > .snes-production-builder-cockpit {
+  display: none;
+}
+
+.snes-production-visual-report {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 24px;
+  background: color-mix(in srgb, Canvas 94%, var(--accent-color, #4f7cff) 6%);
+}
+
+.snes-production-visual-report .snes-production-builder-cockpit__gates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.snes-production-visual-report .snes-production-gate {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .snes-beginner-next-actions,
+  .snes-beginner-action-strip,
+  .snes-beginner-canvas-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.snes-mastery-status-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.snes-mastery-status-card__actions button {
+  flex: 0 1 auto;
+}

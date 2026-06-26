@@ -23,13 +23,16 @@ import {
   createSnesAgentPatchProposalForSurface,
   createSnesAgentDispatchRecord,
   createSnesAgentPatchProposalFromResult,
+  createSnesAgentCapabilityMatrixReport,
   createSnesAgentTeamPlan,
   createSnesAgentTeamReadinessPlan,
+  createSnesAgentWorkflowReport,
   createSnesAiBuildPlan,
   createSnesAiAuthoringPrompts,
   createSnesAgentTaskBlueprints,
   createSnesAiProductionGatewayPlan,
   createSnesAiProductionRun,
+  createSnesAssetAdapterPlan,
   createSnesAssetPipelineReport,
   createSnesAudioManifest,
   createSnesBuildPipeline,
@@ -37,22 +40,33 @@ import {
   createSnesCutsceneTimeline,
   createSnesEmulatorBootProof,
   createSnesEmulatorBootPlan,
+  createSnesEmulatorProofPlanFromToolchain,
   createSnesFxpakExportPackage,
   createSnesFxpakCopyDryRun,
   createSnesFxpakCopyProof,
+  createSnesFxpakDryRunPlan,
   createSnesFxpakMountedExportValidation,
   createSnesGatewayAgentHandoff,
   createSnesGeneratedObjectSummary,
+  createSnesGenericProductionPacket,
+  createSnesGenericProductionState,
+  createSnesGameQualityReport,
   createSnesGuidedBuildChecklist,
   createSnesHardwareQaBundle,
   createSnesLevelTransitionPlan,
   createSnesLocalAgentPatchResponse,
+  createSnesLocalModelBenchmarkReport,
   createSnesOnePromptGameReport,
   createSnesPromptSpriteAsset,
   createSnesProjectBundle,
   createSnesProjectFromTemplate,
+  createSnesProjectPackage,
   createSnesProjectTemplates,
   createSnesProjectVersion,
+  createSnesProductionReadinessReport,
+  createSnesProductionVisualReport,
+  createSnesRomBuildScaffoldDryRun,
+  createSnesMvpSampleProjectPackage,
   createSnesRuntimeEventPlan,
   compileSnesRuntimeProject,
   createSnesSaveManifest,
@@ -64,6 +78,8 @@ import {
   createSnesSramSerializationReport,
   createSnesSramImage,
   createSnesSramPowerCycleProof,
+  createStanskiWorldProductionProjectPackage,
+  createStanskiCanaryProjectPackage,
   createSnesAiGapReport,
   fillSnesAiGaps,
   importSnesIndexedTileAsset,
@@ -136,6 +152,7 @@ import {
   type SnesSramSlotValues,
   type SnesStudioProject,
   type SnesTileBrush,
+  type SnesToolchainDoctorReport,
 } from "../../../../packages/snes-studio-core/src/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
@@ -185,6 +202,375 @@ type HostUpdate = {
   connected?: boolean | null;
   lastError?: string | null;
   lastErrorCode?: string | null;
+};
+
+type SnesBenchmarkModelSummary = {
+  role?: string;
+  modelRef?: string;
+  meanScore?: number;
+  worstScore?: number;
+  bestScore?: number;
+  meanLatencyMs?: number | null;
+  rounds?: number;
+  statusCounts?: Record<string, number>;
+  blockers?: string[];
+};
+
+type SnesBenchmarkLatestSnapshot = {
+  available?: boolean;
+  blocker?: string | null;
+  generatedAt?: string | null;
+  status?: string;
+  reportPath?: string;
+  summaryPath?: string;
+  rounds?: number | null;
+  hostedProvidersUsed?: boolean;
+  hostedGlmUsed?: boolean;
+  downloadsAttempted?: boolean;
+  promotionApplied?: boolean;
+  currentDefaultsByRole?: Record<string, string>;
+  recommendedWinnersByRole?: Record<string, string>;
+  winnersByRole?: Record<string, string>;
+  modelSummaries?: SnesBenchmarkModelSummary[];
+};
+
+type SnesBenchmarkLatestState = {
+  loading: boolean;
+  error: string | null;
+  snapshot: SnesBenchmarkLatestSnapshot | null;
+};
+
+type SnesGlm52StatusSnapshot = {
+  available?: boolean;
+  blocker?: string | null;
+  providerId?: string;
+  modelRef?: string;
+  runtimeReady?: boolean;
+  runtimeStatus?: string;
+  providerConfigured?: boolean;
+  hardwareQaPromoted?: boolean;
+  hardwareQaModel?: unknown;
+  benchmarkRecommendsHardwareQa?: boolean;
+  agentProofReady?: boolean;
+  agentProofScore?: number | null;
+  runtimeReportPath?: string;
+  agentProofReportPath?: string;
+  generatedAt?: string | null;
+};
+
+type SnesGlm52StatusState = {
+  loading: boolean;
+  error: string | null;
+  snapshot: SnesGlm52StatusSnapshot | null;
+};
+
+type SnesToolchainStatusSnapshot = SnesToolchainDoctorReport & {
+  generatedAt?: string;
+  liveProbe?: boolean;
+  manifestPath?: string;
+  receiptSummary?: Record<string, unknown>;
+  toolchainHome?: string;
+};
+
+type SnesToolchainStatusState = {
+  loading: boolean;
+  error: string | null;
+  snapshot: SnesToolchainStatusSnapshot | null;
+};
+
+type SnesMasteryStatusSnapshot = {
+  available?: boolean;
+  blocker?: string | null;
+  generatedAt?: string | null;
+  status?: string;
+  kataSummary?: {
+    total?: number;
+    passed?: number;
+    pendingOrBlocked?: number;
+    percentComplete?: number;
+  };
+  milestoneSummary?: {
+    total?: number;
+    pass?: number;
+    blocked?: number;
+    completionPercentByMilestoneCount?: number;
+  };
+  nextIncomplete?: {
+    id?: string;
+    title?: string;
+    status?: string;
+    percentComplete?: number;
+    blockers?: string[];
+  } | null;
+  nextKata?: {
+    id?: string;
+    title?: string;
+    status?: string;
+    percentComplete?: number;
+    blockers?: string[];
+  } | null;
+  blockers?: Array<{ id?: string; title?: string; percentComplete?: number; blockers?: string[] }>;
+  legalCorpus?: { ok?: boolean | null; status?: string; path?: string };
+  genericScope?: { status?: string; path?: string };
+  gpt55Used?: boolean;
+  hostedGlmUsed?: boolean;
+  projectSpecific?: boolean;
+};
+
+type SnesMasteryStatusState = {
+  loading: boolean;
+  error: string | null;
+  snapshot: SnesMasteryStatusSnapshot | null;
+};
+
+type SnesProofActionId =
+  | "browser-smoke"
+  | "budget-enforcement"
+  | "emulator-headless"
+  | "fxpak-package-dry-run"
+  | "generic-project-gate"
+  | "mastery-refresh"
+  | "runtime-asset-truth";
+
+type SnesProofActionReceipt = {
+  actionId?: SnesProofActionId;
+  blocker?: string | null;
+  blockers?: string[];
+  command?: string;
+  generatedAt?: string;
+  hostedGlmUsed?: boolean;
+  localOnly?: boolean;
+  projectSpecific?: boolean;
+  removableMediaWritePerformed?: boolean;
+  status?: string;
+};
+
+type SnesProofActionState = {
+  error: string | null;
+  lastReceipt: SnesProofActionReceipt | null;
+  running: SnesProofActionId | null;
+};
+
+type SnesBlankProjectReceipt = {
+  packageHash?: string;
+  packagePath?: string;
+  projectId?: string;
+  projectName?: string;
+  proofClaim?: string;
+  status?: string;
+};
+
+type SnesBlankProjectState = {
+  error: string | null;
+  lastReceipt: SnesBlankProjectReceipt | null;
+  running: boolean;
+};
+
+type SnesGenericProductionMilestoneSummary = {
+  id?: string;
+  name?: string;
+  goal?: string;
+  surface?: string;
+  patchSchema?: string;
+};
+
+type SnesGenericProductionStatusSnapshot = {
+  status?: string;
+  projectId?: string;
+  projectName?: string;
+  completedCount?: number;
+  totalCount?: number;
+  currentMilestone?: SnesGenericProductionMilestoneSummary | null;
+  nextMilestone?: SnesGenericProductionMilestoneSummary | null;
+  blocker?: string | null;
+  paths?: Record<string, string>;
+  state?: {
+    currentMilestoneId?: string | null;
+    completedMilestones?: string[];
+    blockedMilestone?: string | null;
+    receipts?: Array<{ id?: string; status?: string; summary?: string }>;
+    policy?: {
+      localGlmOnly?: boolean;
+      hostedGlmAllowed?: boolean;
+      routineGpt55Allowed?: boolean;
+      defaultGpt55Reasoning?: string;
+    };
+  };
+  projectPackage?: {
+    manifest?: {
+      assetRegistry?: { records?: unknown[] };
+      productionReadiness?: { visualApproval?: { currentHumanScore?: number | null } };
+    };
+    projectId?: string;
+    projectName?: string;
+    source?: string;
+  };
+  packet?: { task?: string; allowedPatchSchema?: string | null; gpt55Used?: boolean };
+  toolchain?: SnesToolchainStatusSnapshot;
+  adapterPlan?: {
+    status?: string;
+    blockers?: string[];
+    receipts?: Array<{ adapter?: string; status?: string }>;
+  };
+  romScaffold?: { status?: string; scaffoldRoot?: string; blockers?: string[] };
+  emulatorPlan?: { status?: string; selectedEmulator?: string | null; blockers?: string[] };
+  fxpakPlan?: {
+    status?: string;
+    destinationPath?: string | null;
+    warnings?: string[];
+    blockers?: string[];
+  };
+  projectProof?: {
+    statuses?: {
+      artCompile?: string;
+      artManifest?: string;
+      assetConversion?: string;
+      audioCompile?: string;
+      engineRom?: string;
+      engineEmulator?: string;
+      rom?: string;
+      emulator?: string;
+      fxpak?: string;
+      fxpakTransferPackage?: string;
+      visualApproval?: string;
+      visualProof?: string;
+    };
+    productionReadiness?: {
+      status?: string;
+      score?: number;
+      blockers?: string[];
+    };
+    assetConversion?: { receiptPath?: string; assetManifestHash?: string };
+    audioCompile?: {
+      audioRuntimeIntegrated?: boolean;
+      blockers?: string[];
+      manifestPath?: string;
+      status?: string;
+    };
+    artCompile?: { receiptPath?: string; assetManifestHash?: string };
+    artManifest?: { receiptPath?: string; manifestHash?: string };
+    visualApproval?: { receiptPath?: string; humanScore?: number; status?: string };
+    visualProof?: { receiptPath?: string; screenshots?: Array<{ scene?: string; path?: string }> };
+    rom?: { receiptPath?: string; rom?: { fileName?: string; sha256?: string; path?: string } };
+    engineRom?: {
+      blockers?: string[];
+      audioRuntimeIntegrated?: boolean;
+      cameraScroll?: boolean;
+      collisionMap?: boolean;
+      levelWidthPx?: number;
+      objectCount?: number;
+      productionReady?: boolean;
+      receiptPath?: string;
+      rom?: { fileName?: string; sha256?: string; path?: string };
+      runtimeMaturity?: string;
+      scaffoldClassification?: {
+        blockers?: string[];
+        isScaffold?: boolean;
+        runtimeMaturity?: string;
+        status?: string;
+      };
+      status?: string;
+      engineRuntimeProof?: {
+        audioRuntimeIntegrated?: boolean;
+        cameraScroll?: boolean;
+        collisionMap?: boolean;
+        levelWidthPx?: number;
+        objectCount?: number;
+        runtimeMaturity?: string;
+      };
+    };
+    emulator?: { receiptPath?: string; emulator?: { id?: string }; screenshot?: { path?: string } };
+    fxpak?: { receiptPath?: string; destinationPath?: string; blockers?: string[] };
+    fxpakTransferPackage?: {
+      receiptPath?: string;
+      rom?: { fileName?: string; packagePath?: string; packageSha256?: string };
+      status?: string;
+    };
+  };
+  control?: { paused?: boolean; cancelRequested?: boolean; updatedAt?: string };
+  latestReceipt?: { id?: string; status?: string; summary?: string } | null;
+  gpt55Used?: boolean;
+  localGlmOnly?: boolean;
+  workerMode?: string;
+};
+
+type SnesGenericProductionState = {
+  loading: boolean;
+  running: boolean;
+  error: string | null;
+  snapshot: SnesGenericProductionStatusSnapshot | null;
+};
+
+type SnesVisualActionState = {
+  running: boolean;
+  error: string | null;
+  lastAction: string | null;
+  lastReceipt: { status?: string; receiptPath?: string; blockers?: string[] } | null;
+};
+
+type StanskiProductionMilestoneSummary = {
+  id?: string;
+  name?: string;
+  goal?: string;
+  patchType?: string;
+};
+
+type StanskiProductionStatusSnapshot = {
+  status?: string;
+  ok?: boolean;
+  ready?: boolean;
+  blocker?: string | null;
+  completedCount?: number;
+  totalCount?: number;
+  currentMilestone?: StanskiProductionMilestoneSummary | null;
+  nextMilestone?: StanskiProductionMilestoneSummary | null;
+  rendererImpact?: {
+    status?: string;
+    failures?: string[];
+    appliedCount?: number;
+    assetPackCount?: number;
+    completedCount?: number;
+    totalCount?: number;
+    productionComplete?: boolean;
+    paths?: Record<string, string>;
+  };
+  state?: {
+    blockedMilestone?: unknown;
+    currentHumanVisualGrade?: number;
+    targetHumanVisualGrade?: number;
+    lastGoodBuild?: string;
+    lastGlmPatchPath?: string;
+    lastReceipt?: string;
+    gpt55UsagePolicy?: {
+      defaultReasoning?: string;
+      useGpt55ForRoutineMilestone?: boolean;
+    };
+  };
+  paths?: Record<string, string>;
+  control?: {
+    paused?: boolean;
+    cancelRequested?: boolean;
+    updatedAt?: string;
+  };
+  lock?: {
+    pid?: number;
+    heartbeatAt?: string;
+    mode?: string;
+  } | null;
+  policySummary?: {
+    localGlmOnly?: boolean;
+    hostedGlmAllowed?: boolean;
+    routineGpt55Allowed?: boolean;
+    targetHumanVisualGrade?: number;
+  };
+  results?: Array<{ milestoneId?: string; status?: string; blocker?: string }>;
+};
+
+type StanskiProductionState = {
+  loading: boolean;
+  running: boolean;
+  error: string | null;
+  snapshot: StanskiProductionStatusSnapshot | null;
 };
 
 type SnesLiveAiReadinessStatus = "ready" | "no-client" | "disconnected" | "unauthorized";
@@ -258,7 +644,7 @@ function probeSnesLiveAiReadiness(host: HostUpdate): SnesLiveAiReadiness {
     status: "ready",
     title: "Dashboard Gateway ready",
     detail:
-      "Dashboard Gateway is connected and authenticated. SNES Studio checks the live Codex/OpenClaw team automatically and reports any unavailable role. Automated smoke E2E remains opt-in to avoid accidental model spend.",
+      "Dashboard Gateway is connected and authenticated. SNES Studio checks the live GPT 5.5/OpenClaw team automatically and reports any unavailable role. Automated smoke E2E remains opt-in to avoid accidental model spend.",
     gatewayConnected: true,
     authenticated: true,
     agentRpcAvailable: true,
@@ -268,6 +654,60 @@ function probeSnesLiveAiReadiness(host: HostUpdate): SnesLiveAiReadiness {
     blockers: [],
     nextActions: ["Wait for automatic live team status, or use Check Again."],
   };
+}
+
+function currentDashboardOriginLabel() {
+  if (typeof window === "undefined") {
+    return "unknown browser origin";
+  }
+  try {
+    return window.location.origin || "unknown browser origin";
+  } catch {
+    return "unknown browser origin";
+  }
+}
+
+function renderSnesConnectionDoctor(host: HostUpdate) {
+  const readiness = probeSnesLiveAiReadiness(host);
+  const origin = currentDashboardOriginLabel();
+  const command = "openclaw dashboard --no-open --path /snes-studio";
+  const status =
+    readiness.status === "ready"
+      ? "Gateway connected and authenticated"
+      : readiness.status === "unauthorized"
+        ? "Dashboard auth missing or expired"
+        : readiness.status === "no-client"
+          ? "Page loaded without a Gateway client"
+          : "Gateway disconnected";
+  return html`
+    <article class=${`snes-connection-doctor snes-connection-doctor--${readiness.status}`}>
+      <div>
+        <span>Connection Doctor</span>
+        <strong>${status}</strong>
+        <small>Current origin: ${origin}</small>
+      </div>
+      <p>${readiness.detail}</p>
+      <ul>
+        <li>Page loaded: yes</li>
+        <li>Gateway connected: ${readiness.gatewayConnected ? "yes" : "no"}</li>
+        <li>Authenticated: ${readiness.authenticated ? "yes" : "no"}</li>
+        <li>
+          Live agents:
+          ${readiness.status === "ready" ? "check available" : "blocked until auth works"}
+        </li>
+      </ul>
+      ${readiness.status === "ready"
+        ? html`<small
+            >Use Check Again or Run Live Production Check when you want model-backed proof.</small
+          >`
+        : html`
+            <small
+              >Open an authenticated SNES Studio URL with <code>${command}</code>, then paste or
+              open the copied URL.</small
+            >
+          `}
+    </article>
+  `;
 }
 
 type SnesStudioPanel =
@@ -674,7 +1114,8 @@ function createDefaultLiveAgentProofState(): SnesLiveAgentProofState {
   return {
     status: "idle",
     title: "Checking automatically",
-    detail: "SNES Studio checks live Codex/OpenClaw availability when Dashboard Gateway is ready.",
+    detail:
+      "SNES Studio checks GPT 5.5-directed OpenClaw availability when Dashboard Gateway is ready.",
   };
 }
 
@@ -683,12 +1124,63 @@ function createDefaultLiveAiProductionProofState(): SnesLiveAgentProofState {
     status: "idle",
     title: "Gateway production route not verified",
     detail:
-      "Build With OpenClaw creates a local editable draft now. Run live production check to verify Codex Architect, OpenClaw workers, and Codex QA through Gateway.",
+      "Make My Game creates a local editable draft unless live GPT 5.5 approval is verified. Run live production check to verify GPT 5.5 planning, OpenClaw builders, deterministic validation, and GPT 5.5 approval through Gateway.",
   };
 }
 
 let liveAgentProofState = createDefaultLiveAgentProofState();
 let liveAiProductionProofState = createDefaultLiveAiProductionProofState();
+let snesBenchmarkLatestState: SnesBenchmarkLatestState = {
+  error: null,
+  loading: false,
+  snapshot: null,
+};
+let snesGlm52StatusState: SnesGlm52StatusState = {
+  error: null,
+  loading: false,
+  snapshot: null,
+};
+let snesToolchainStatusState: SnesToolchainStatusState = {
+  error: null,
+  loading: false,
+  snapshot: null,
+};
+let snesMasteryStatusState: SnesMasteryStatusState = {
+  error: null,
+  loading: false,
+  snapshot: null,
+};
+
+let snesProofActionState: SnesProofActionState = {
+  error: null,
+  lastReceipt: null,
+  running: null,
+};
+
+let snesBlankProjectState: SnesBlankProjectState = {
+  error: null,
+  lastReceipt: null,
+  running: false,
+};
+let snesGenericProductionState: SnesGenericProductionState = {
+  error: null,
+  loading: false,
+  running: false,
+  snapshot: null,
+};
+let snesVisualActionState: SnesVisualActionState = {
+  error: null,
+  lastAction: null,
+  lastReceipt: null,
+  running: false,
+};
+
+let stanskiProductionState: StanskiProductionState = {
+  error: null,
+  loading: false,
+  running: false,
+  snapshot: null,
+};
 
 const beginnerPromptChips: Array<{ label: string; prompt: string }> = [
   {
@@ -935,6 +1427,34 @@ export function resetSnesStudioStateForTests() {
   lastAiActionFeedback = null;
   lastAppliedFullGamePrompt = "";
   const promptCatalog = createSnesAiAuthoringPrompts(project);
+  stanskiProductionState = {
+    error: null,
+    loading: false,
+    running: false,
+    snapshot: null,
+  };
+  snesGenericProductionState = {
+    error: null,
+    loading: false,
+    running: false,
+    snapshot: null,
+  };
+  snesVisualActionState = {
+    error: null,
+    lastAction: null,
+    lastReceipt: null,
+    running: false,
+  };
+  snesToolchainStatusState = {
+    error: null,
+    loading: false,
+    snapshot: null,
+  };
+  snesMasteryStatusState = {
+    error: null,
+    loading: false,
+    snapshot: null,
+  };
   aiPromptDrafts = Object.fromEntries(
     promptCatalog.map((entry) => [entry.surface, entry.placeholder]),
   ) as Record<SnesAiAuthoringSurface, string>;
@@ -996,6 +1516,7 @@ export function resetSnesStudioStateForTests() {
   audioPreviewSummary = "";
   liveAgentProofState = createDefaultLiveAgentProofState();
   liveAiProductionProofState = createDefaultLiveAiProductionProofState();
+  snesBenchmarkLatestState = { error: null, loading: false, snapshot: null };
 }
 
 function selectPanel(host: HostUpdate, panel: SnesStudioPanel) {
@@ -1670,9 +2191,9 @@ function aiGameStageResolvedProvider(surface: SnesAiAuthoringSurface = aiGameSta
 
 function aiGameStageProviderLabel(provider: SnesAiGameStageProvider = aiGameStageProvider) {
   if (provider === "auto-team") {
-    return "Cost-aware Auto Team";
+    return "GPT 5.5-Directed Team";
   }
-  return provider === "openclaw" ? "OpenClaw Workers" : "Codex Review Gate";
+  return provider === "openclaw" ? "OpenClaw Workers" : "GPT 5.5 Quality Gate";
 }
 
 function setAiGameStageProvider(host: HostUpdate, provider: SnesAiGameStageProvider) {
@@ -2177,11 +2698,13 @@ async function createGuidedPlatformerDraft(host: HostUpdate) {
     host,
     "openclaw",
     "full-game",
-    liveOpenClawReady ? "Live OpenClaw-ready game built" : "Local OpenClaw fallback game built",
+    liveOpenClawReady
+      ? "GPT 5.5-approved OpenClaw game built"
+      : "Local Draft Only — Not GPT 5.5 Approved",
     [
-      "a Codex blueprint",
+      "a GPT 5.5 director plan",
       "OpenClaw-filled text boxes",
-      "Codex quality review",
+      "GPT 5.5 quality gate",
       "a story map",
       "level chapters",
       "a hero",
@@ -2190,8 +2713,8 @@ async function createGuidedPlatformerDraft(host: HostUpdate) {
       "a playable first level",
     ],
     liveOpenClawReady
-      ? "Live OpenClaw workers are ready; SNES Studio is also requesting the staged Codex/OpenClaw production review."
-      : "Used local OpenClaw fallback because live proof has not passed yet. You can still play, edit, and export.",
+      ? "Live OpenClaw workers are ready; SNES Studio is requesting the staged GPT 5.5-directed production review."
+      : "Used local draft mode because GPT 5.5 live approval has not passed yet. You can play and edit, but this is not a GPT 5.5-approved build.",
   );
   if (liveOpenClawReady) {
     await runLiveAiProductionProof(host);
@@ -3510,6 +4033,23 @@ function startBlankProject(host: HostUpdate) {
   arcadeAreaDragStart = null;
   arcadeAreaPromptDraft = "Add a coin trail here.";
   const promptCatalog = createSnesAiAuthoringPrompts(project);
+  stanskiProductionState = {
+    error: null,
+    loading: false,
+    running: false,
+    snapshot: null,
+  };
+  snesGenericProductionState = {
+    error: null,
+    loading: false,
+    running: false,
+    snapshot: null,
+  };
+  snesToolchainStatusState = {
+    error: null,
+    loading: false,
+    snapshot: null,
+  };
   aiPromptDrafts = Object.fromEntries(
     promptCatalog.map((entry) => [entry.surface, entry.placeholder]),
   ) as Record<SnesAiAuthoringSurface, string>;
@@ -3572,6 +4112,69 @@ function fillGuidedMissingPieces(host: HostUpdate) {
       title: "AI could not fill gaps",
       detail: error instanceof Error ? error.message : "Gap filling failed.",
       next: "Try building from the main game prompt again.",
+    };
+    pushConsole(host, guidedReceipt.detail);
+  } finally {
+    host.requestUpdate?.();
+  }
+}
+
+function improveGuidedGameQuality(host: HostUpdate) {
+  try {
+    persistSnapshot();
+    rememberUndo();
+    const previous = project.aiProductionRun?.qualityReport;
+    const before = previous ?? createSnesGameQualityReport(project);
+    const result = fillSnesAiGaps(project);
+    project = normalizeSnesStudioProject(result.project);
+    const after = createSnesGameQualityReport(project, {
+      liveGpt55Used: previous?.modelRouting.planner === "gpt-5.5-live",
+      localOpenClawUsed: true,
+    });
+    if (project.aiProductionRun) {
+      project.aiProductionRun = {
+        ...project.aiProductionRun,
+        validationReport: after.validationReport,
+        playtestReport: after.playtestReport,
+        qualityReport: after,
+        status: after.status === "pass" ? project.aiProductionRun.status : "rejected-needs-repair",
+        approvalStatus:
+          after.status === "pass"
+            ? project.aiProductionRun.approvalStatus
+            : "rejected-needs-repair",
+        auditTrail: [
+          ...project.aiProductionRun.auditTrail,
+          `OpenClaw quality repair changed score ${before.score}/100 -> ${after.score}/100.`,
+        ],
+      };
+    }
+    selectedSceneIndex = 0;
+    pendingAgentProposal = null;
+    saveProject();
+    previewSimulationState = initializeRuntimeState();
+    guidedReceipt = {
+      title: after.status === "pass" ? "Game quality improved" : "Game quality still needs work",
+      detail: `Quality score ${before.score}/100 -> ${after.score}/100. ${
+        after.requiredRepairs.slice(0, 2).join(" ") || "All deterministic quality gates pass."
+      }`,
+      next:
+        after.status === "pass"
+          ? "Playtest now, then export the SNES game file."
+          : "Review the remaining blockers, then run Improve Game Quality again.",
+    };
+    setAiActionFeedback(host, {
+      status: after.status === "pass" ? "ready" : "working",
+      title: guidedReceipt.title,
+      detail: guidedReceipt.detail,
+      provider: "openclaw",
+      target: "Whole Game",
+    });
+    pushConsole(host, guidedReceipt.detail);
+  } catch (error) {
+    guidedReceipt = {
+      title: "Quality repair failed",
+      detail: error instanceof Error ? error.message : "Quality repair failed.",
+      next: "Use Fill Gaps or rebuild from the main game prompt.",
     };
     pushConsole(host, guidedReceipt.detail);
   } finally {
@@ -3685,6 +4288,32 @@ function applyClassicPlatformerStyle(host: HostUpdate, reason = "graphics style 
       draft.assets.spritePalettes,
       stylePack.budgetEstimate.spritePalettes,
     );
+    draft.generatedAssets = {
+      tileSpecs: stylePack.tileSpecs.map((spec) => ({ ...spec })),
+      spriteSpecs: stylePack.spriteSpecs.map((spec) => ({
+        ...spec,
+        frames: spec.frames.map((frame) => ({ ...frame })),
+      })),
+      paletteSpecs: [
+        {
+          id: "palette-grass-sky",
+          name: "Grass and sky",
+          paletteIndex: 2,
+          colors: ["#2f7d32", "#6fbd45", "#c8f070", "#78c8f8"],
+        },
+        {
+          id: "palette-reward-gold",
+          name: "Reward gold",
+          paletteIndex: 3,
+          colors: ["#5a3600", "#b86f00", "#ffd34d", "#fff4a3"],
+        },
+      ],
+      musicPatternSpecs: stylePack.musicPatternSpecs.map((spec) => ({
+        ...spec,
+        channelPlan: [...spec.channelPlan],
+      })),
+      sfxEventMap: stylePack.sfxEventMap.map((spec) => ({ ...spec })),
+    };
     if (draft.gameplayBlueprint) {
       draft.gameplayBlueprint.artMood = `${stylePack.name} original art`;
     }
@@ -3700,6 +4329,68 @@ function applyClassicPlatformerStyle(host: HostUpdate, reason = "graphics style 
     target: "Graphics Style",
   });
   pushConsole(host, `Applied ${stylePack.name}: ${reason}.`);
+}
+
+function renameFirstGeneratedTile(host: HostUpdate) {
+  updateProject(host, (draft) => {
+    const assets = draft.generatedAssets;
+    if (!assets || assets.tileSpecs.length === 0) {
+      return;
+    }
+    assets.tileSpecs[0] = {
+      ...assets.tileSpecs[0],
+      name: `${assets.tileSpecs[0].name} edited`,
+    };
+  });
+  setAiActionFeedback(host, {
+    status: "ready",
+    title: "Generated asset edited",
+    detail: "Updated the first generated tile spec without replacing the asset data with prose.",
+    provider: aiGameStageResolvedProvider("full-game"),
+    target: "Generated Assets",
+  });
+}
+
+function renderGeneratedAssetSpecs(host: HostUpdate) {
+  const assets = project.generatedAssets;
+  if (!assets) {
+    return null;
+  }
+  return html`
+    <section class="snes-generated-assets" aria-label="Generated Assets">
+      <strong>Generated Assets</strong>
+      <div class="snes-generated-assets__grid">
+        <article>
+          <span>Editable tile table</span>
+          <small
+            >${assets.tileSpecs
+              .slice(0, 3)
+              .map((spec) => `${spec.tileId}:${spec.name}:${spec.collisionClass}`)
+              .join(" · ")}</small
+          >
+        </article>
+        <article>
+          <span>Editable sprite frames</span>
+          <small
+            >${assets.spriteSpecs
+              .slice(0, 3)
+              .map((spec) => `${spec.name} ${spec.frames.length} frames`)
+              .join(" · ")}</small
+          >
+        </article>
+        <article>
+          <span>Palette, music, and SFX specs</span>
+          <small
+            >${assets.paletteSpecs.length} palettes · ${assets.musicPatternSpecs.length} music
+            patterns · ${assets.sfxEventMap.length} SFX events</small
+          >
+        </article>
+      </div>
+      <button type="button" @click=${() => renameFirstGeneratedTile(host)}>
+        Edit first tile spec
+      </button>
+    </section>
+  `;
 }
 
 function renderGraphicsStyleCard(host: HostUpdate) {
@@ -3725,6 +4416,9 @@ function renderGraphicsStyleCard(host: HostUpdate) {
         <span>${stylePack.budgetEstimate.backgroundTiles} level tiles</span>
         <span>${stylePack.budgetEstimate.spriteTiles} sprite tiles</span>
         <span>${stylePack.budgetEstimate.cgramColors} colors</span>
+        <span>${stylePack.tileSpecs.length} tile specs</span>
+        <span>${stylePack.spriteSpecs.length} sprite specs</span>
+        <span>${stylePack.sfxEventMap.length} SFX events</span>
         <span>${project.assetProvenance === "user-imported" ? "user art" : "original art"}</span>
       </div>
       <button
@@ -3734,6 +4428,1077 @@ function renderGraphicsStyleCard(host: HostUpdate) {
       >
         Use This Look
       </button>
+      ${renderGeneratedAssetSpecs(host)}
+    </section>
+  `;
+}
+
+function describeGenericProductionMilestone(
+  milestone?: SnesGenericProductionMilestoneSummary | null,
+) {
+  if (!milestone) {
+    return "none";
+  }
+  return `${milestone.id ?? "unknown"} ${milestone.name ?? "unnamed milestone"}`;
+}
+
+async function loadSnesToolchainStatus(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesToolchainStatusState.loading) {
+    return;
+  }
+  snesToolchainStatusState = {
+    error: null,
+    loading: true,
+    snapshot: snesToolchainStatusState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<SnesToolchainStatusSnapshot>(
+      "snes.toolchain.status",
+      {},
+      { timeoutMs: 30_000 },
+    );
+    snesToolchainStatusState = { error: null, loading: false, snapshot };
+  } catch (error) {
+    snesToolchainStatusState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      snapshot: snesToolchainStatusState.snapshot,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function loadSnesMasteryStatus(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesMasteryStatusState.loading) {
+    return;
+  }
+  snesMasteryStatusState = {
+    error: null,
+    loading: true,
+    snapshot: snesMasteryStatusState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<SnesMasteryStatusSnapshot>(
+      "snes.mastery.status",
+      {},
+      { timeoutMs: 15_000 },
+    );
+    snesMasteryStatusState = { error: null, loading: false, snapshot };
+  } catch (error) {
+    snesMasteryStatusState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      snapshot: snesMasteryStatusState.snapshot,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function createBlankSnesProject(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesBlankProjectState.running) {
+    return;
+  }
+  snesBlankProjectState = {
+    error: null,
+    lastReceipt: snesBlankProjectState.lastReceipt,
+    running: true,
+  };
+  host.requestUpdate?.();
+  try {
+    const receipt = await host.client.request<SnesBlankProjectReceipt>(
+      "snes.project.createBlank",
+      { projectId: "blank-snes-platformer", projectName: "Blank SNES Platformer" },
+      { timeoutMs: 30_000 },
+    );
+    snesBlankProjectState = { error: null, lastReceipt: receipt, running: false };
+    pushConsole(
+      host,
+      `Created blank SNES project: ${receipt.projectId ?? "unknown"} · ${receipt.packagePath ?? "package path pending"}.`,
+    );
+  } catch (error) {
+    snesBlankProjectState = {
+      error: error instanceof Error ? error.message : String(error),
+      lastReceipt: snesBlankProjectState.lastReceipt,
+      running: false,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function runSnesGenericProofAction(host: HostUpdate, actionId: SnesProofActionId) {
+  if (!isGatewayLiveReady(host) || snesProofActionState.running) {
+    return;
+  }
+  snesProofActionState = {
+    error: null,
+    lastReceipt: snesProofActionState.lastReceipt,
+    running: actionId,
+  };
+  host.requestUpdate?.();
+  try {
+    const receipt = await host.client.request<SnesProofActionReceipt>(
+      "snes.proof.run",
+      { actionId },
+      { timeoutMs: actionId === "browser-smoke" ? 240_000 : 180_000 },
+    );
+    snesProofActionState = { error: null, lastReceipt: receipt, running: null };
+    pushConsole(
+      host,
+      `SNES proof ${actionId}: ${receipt.status ?? "unknown"}${receipt.blocker ? ` · ${receipt.blocker}` : ""}.`,
+    );
+    await loadSnesMasteryStatus(host);
+  } catch (error) {
+    snesProofActionState = {
+      error: error instanceof Error ? error.message : String(error),
+      lastReceipt: snesProofActionState.lastReceipt,
+      running: null,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function loadSnesGenericProductionStatus(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesGenericProductionState.loading) {
+    return;
+  }
+  snesGenericProductionState = {
+    error: null,
+    loading: true,
+    running: false,
+    snapshot: snesGenericProductionState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<SnesGenericProductionStatusSnapshot>(
+      "snes.production.status",
+      { projectId: project.id || "comet-fox-mvp", projectName: project.name },
+      { timeoutMs: 30_000 },
+    );
+    snesGenericProductionState = { error: null, loading: false, running: false, snapshot };
+  } catch (error) {
+    snesGenericProductionState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      running: false,
+      snapshot: snesGenericProductionState.snapshot,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function runSnesGenericProductionAction(
+  host: HostUpdate,
+  method:
+    | "snes.production.auto"
+    | "snes.production.cancel"
+    | "snes.production.continue"
+    | "snes.production.pause"
+    | "snes.production.resume"
+    | "snes.production.retryBlocked"
+    | "snes.production.splitNext",
+) {
+  if (!isGatewayLiveReady(host) || snesGenericProductionState.running) {
+    return;
+  }
+  snesGenericProductionState = {
+    error: null,
+    loading: false,
+    running: true,
+    snapshot: snesGenericProductionState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const params = {
+      maxMilestones: method === "snes.production.auto" ? 40 : 1,
+      projectId: project.id || "comet-fox-mvp",
+      projectName: project.name,
+    };
+    const snapshot = await host.client.request<SnesGenericProductionStatusSnapshot>(
+      method,
+      params,
+      { timeoutMs: method === "snes.production.auto" ? 1_860_000 : 120_000 },
+    );
+    snesGenericProductionState = { error: null, loading: false, running: false, snapshot };
+    pushConsole(
+      host,
+      `Generic SNES production ${method.replace("snes.production.", "")}: ${snapshot.status ?? "unknown"} · ${snapshot.completedCount ?? 0}/${snapshot.totalCount ?? 0}.`,
+    );
+  } catch (error) {
+    snesGenericProductionState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      running: false,
+      snapshot: snesGenericProductionState.snapshot,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function runSnesVisualAction(
+  host: HostUpdate,
+  method:
+    | "snes.visual.approve"
+    | "snes.visual.artBible"
+    | "snes.visual.artManifest"
+    | "snes.visual.artSourcePack"
+    | "snes.visual.captureProof"
+    | "snes.visual.qualityAudit"
+    | "snes.visual.runtimeAssetTruth"
+    | "snes.visual.compileArt"
+    | "snes.visual.reject",
+) {
+  if (!isGatewayLiveReady(host) || snesVisualActionState.running) {
+    return;
+  }
+  if (method === "snes.visual.approve") {
+    const confirmed =
+      typeof window === "undefined" ||
+      typeof window.confirm !== "function" ||
+      window.confirm(
+        "Approve visuals as 100/100 only if you personally reviewed the contact sheets, atlas sheets, background composites, and in-game screenshots and believe these pixels are production grade.",
+      );
+    if (!confirmed) {
+      return;
+    }
+  }
+  snesVisualActionState = {
+    error: null,
+    lastAction: method,
+    lastReceipt: snesVisualActionState.lastReceipt,
+    running: true,
+  };
+  host.requestUpdate?.();
+  try {
+    const receipt = await host.client.request<{
+      artifacts?: { receiptPath?: string };
+      blockers?: string[];
+      receiptPath?: string;
+      status?: string;
+    }>(
+      method,
+      {
+        approver: "dashboard-human-operator",
+        assetId: method === "snes.visual.artManifest" ? "hero" : undefined,
+        confirmHumanReviewedVisuals: method === "snes.visual.approve" ? true : undefined,
+        humanScore:
+          method === "snes.visual.approve" ? 100 : method === "snes.visual.reject" ? 3 : undefined,
+        levelId: "w1-1-cleveland-skyline-scramble",
+        projectId: "stanskis-world",
+        reviewNote:
+          method === "snes.visual.approve"
+            ? "Dashboard human confirmed review of contact sheets, atlases, background composites, and in-game screenshots."
+            : undefined,
+      },
+      { timeoutMs: method === "snes.visual.artManifest" ? 120_000 : 180_000 },
+    );
+    snesVisualActionState = {
+      error: null,
+      lastAction: method,
+      lastReceipt: {
+        blockers: receipt.blockers,
+        receiptPath: receipt.artifacts?.receiptPath ?? receipt.receiptPath,
+        status: receipt.status,
+      },
+      running: false,
+    };
+    pushConsole(
+      host,
+      `SNES visual action ${method.replace("snes.visual.", "")}: ${receipt.status ?? "unknown"}${receipt.artifacts?.receiptPath ? ` · ${receipt.artifacts.receiptPath}` : ""}.`,
+    );
+    await loadSnesGenericProductionStatus(host);
+  } catch (error) {
+    snesVisualActionState = {
+      error: error instanceof Error ? error.message : String(error),
+      lastAction: method,
+      lastReceipt: snesVisualActionState.lastReceipt,
+      running: false,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+function renderProductionGameBuilderCockpit(host: HostUpdate) {
+  const readiness = createSnesProductionReadinessReport(project);
+  const projectPackage = createSnesProjectPackage(project);
+  const productionState = createSnesGenericProductionState(project);
+  const milestonePacket = createSnesGenericProductionPacket(productionState);
+  const stanskiProduction = createStanskiWorldProductionProjectPackage("2026-06-24T12:00:00.000Z");
+  const stanskiCanary = createStanskiCanaryProjectPackage("2026-06-23T00:00:00.000Z");
+  const mvpSample = createSnesMvpSampleProjectPackage("2026-06-23T00:05:00.000Z");
+  const stanskiCanon = stanskiProduction.manifest.project.stanskiCanon;
+  const stanskiLevelOne = stanskiProduction.manifest.project.stanskiLevelOneProduction;
+  const stanskiPhotoReference = stanskiCanon?.references.find(
+    (reference) => reference.id === "man-boy-snes-photo-reference",
+  );
+  const staticStanskiPhotoAsset = stanskiProduction.manifest.assetRegistry.records.find(
+    (record) => record.id === "man-boy-snes-photo-reference",
+  );
+  const staticToolchain = projectPackage.manifest.toolchain;
+  const adapterPlan = createSnesAssetAdapterPlan(project, staticToolchain);
+  const romScaffold = createSnesRomBuildScaffoldDryRun(project, staticToolchain);
+  const emulatorPlan = createSnesEmulatorProofPlanFromToolchain(project, staticToolchain);
+  const fxpakPlan = createSnesFxpakDryRunPlan(project, {
+    volumePath: staticToolchain.fxpakVolume.path,
+  });
+  const liveToolchain = snesToolchainStatusState.snapshot;
+  const liveProduction = snesGenericProductionState.snapshot;
+  const liveStanskiPhotoAsset =
+    liveProduction?.projectId === "stanskis-world" &&
+    Array.isArray(liveProduction.projectPackage?.manifest?.assetRegistry?.records)
+      ? liveProduction.projectPackage.manifest.assetRegistry.records.find(
+          (record) =>
+            typeof record === "object" &&
+            record !== null &&
+            (record as { id?: string }).id === "man-boy-snes-photo-reference",
+        )
+      : undefined;
+  const stanskiPhotoAsset =
+    (liveStanskiPhotoAsset as
+      | {
+          blockers?: string[];
+          conversionStatus?: string;
+          sourcePath?: string;
+          visualMaturity?: string;
+          visualProof?: unknown[];
+        }
+      | undefined) ?? staticStanskiPhotoAsset;
+  const levelOneEngineRom = liveProduction?.projectProof?.engineRom;
+  const levelOneRuntimeProof = levelOneEngineRom?.engineRuntimeProof;
+  const levelOneRuntimeMaturity =
+    levelOneEngineRom?.runtimeMaturity ??
+    levelOneRuntimeProof?.runtimeMaturity ??
+    levelOneEngineRom?.scaffoldClassification?.runtimeMaturity ??
+    "not-run";
+  const levelOneRuntimeIsCandidate =
+    levelOneRuntimeMaturity === "production-candidate-level" ||
+    levelOneRuntimeMaturity === "production-approved-level";
+  const levelOneRuntimeWidth =
+    levelOneEngineRom?.levelWidthPx ?? levelOneRuntimeProof?.levelWidthPx;
+  const levelOneRuntimeObjects =
+    levelOneEngineRom?.objectCount ?? levelOneRuntimeProof?.objectCount;
+  const levelOneAudioRuntimeIntegrated =
+    levelOneEngineRom?.audioRuntimeIntegrated ??
+    levelOneRuntimeProof?.audioRuntimeIntegrated ??
+    liveProduction?.projectProof?.audioCompile?.audioRuntimeIntegrated ??
+    false;
+  const fxpakTransferPackage = liveProduction?.projectProof?.fxpakTransferPackage;
+  const liveProductionStatus = snesGenericProductionState.loading
+    ? "Loading generic production state…"
+    : snesGenericProductionState.running
+      ? "Running generic persisted milestone…"
+      : snesGenericProductionState.error
+        ? `Generic runner unavailable: ${snesGenericProductionState.error}`
+        : liveProduction
+          ? `${liveProduction.completedCount ?? 0}/${liveProduction.totalCount ?? 0} generic milestones complete · ${liveProduction.status ?? "ready"}`
+          : "Load generic persisted runner state.";
+  const gateStatus = (id: string) =>
+    readiness.gates.find((gate) => gate.id === id)?.status ?? "blocked";
+  const modeCards: Array<{
+    label: string;
+    detail: string;
+    step: SnesGuidedGameStep;
+    status: string;
+  }> = [
+    {
+      label: "Create",
+      detail: "Prompt the MVP and generate the editable game manifest.",
+      step: "idea",
+      status: "ready",
+    },
+    {
+      label: "Edit",
+      detail: "Select objects, levels, mechanics, or areas and prompt changes.",
+      step: "build-level",
+      status: "ready",
+    },
+    {
+      label: "Art Lab",
+      detail: "Approve real sprite sheets, tilesets, palettes, backgrounds, music, and SFX.",
+      step: "make-things",
+      status: gateStatus("asset-pipeline"),
+    },
+    {
+      label: "Playtest",
+      detail: "Run browser replay, quality gates, and visual approval.",
+      step: "playtest",
+      status: gateStatus("visual-approval"),
+    },
+    {
+      label: "Ship",
+      detail: "Build .sfc, prove emulator boot, prepare FXPAK Pro package, then hardware-test.",
+      step: "export",
+      status: gateStatus("rom-build"),
+    },
+  ];
+  const requiredTools = readiness.toolchain.tools.filter((tool) => tool.requiredForProduction);
+  return html`
+    <section class="snes-production-builder-cockpit" aria-label="Production SNES Studio">
+      <div class="snes-section-header">
+        <div>
+          <span class="snes-eyebrow">Production SNES Studio</span>
+          <h3>Prompt-first builder, real SNES proof</h3>
+          <p>
+            Browser preview is only the fast draft. Production requires real assets, visual
+            approval, .sfc ROM build, emulator proof, FXPAK Pro package, and original-SNES hardware
+            proof.
+          </p>
+        </div>
+        <strong
+          >${readiness.status === "production-ready"
+            ? "Production ready"
+            : "Production blocked"}</strong
+        >
+      </div>
+      <div class="snes-production-builder-cockpit__modes" aria-label="Builder modes">
+        ${modeCards.map(
+          (mode) => html`
+            <button type="button" @click=${() => setGuidedStep(host, mode.step)}>
+              <span>${mode.label}</span>
+              <strong>${mode.status}</strong>
+              <small>${mode.detail}</small>
+            </button>
+          `,
+        )}
+      </div>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Production gates">
+        ${readiness.gates.map(
+          (gate) => html`
+            <article class=${`snes-production-gate snes-production-gate--${gate.status}`}>
+              <span>${gate.label}</span>
+              <strong>${gate.status}</strong>
+              <small>${gate.summary}</small>
+            </article>
+          `,
+        )}
+      </div>
+      ${renderProductionVisualReportPanel(host, "expert")}
+      <div class="snes-production-builder-cockpit__gates" aria-label="Generic project package">
+        <article class="snes-production-gate snes-production-gate--pass">
+          <span>Generic project package</span>
+          <strong>v${projectPackage.packageVersion}</strong>
+          <small
+            >${projectPackage.projectName} · package hash ${projectPackage.packageHash} · no
+            Stanski-specific schema</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--pass">
+          <span>Generic production runner</span>
+          <strong
+            >${liveProduction?.state?.currentMilestoneId ??
+            productionState.currentMilestoneId ??
+            "complete"}</strong
+          >
+          <small
+            >${liveProductionStatus} · next packet:
+            ${liveProduction?.packet?.task ?? milestonePacket.milestone?.name ?? "none"} · routine
+            GPT 5.5 off</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Selectable projects</span>
+          <strong>Stanski + MVP</strong>
+          <small
+            >${stanskiProduction.projectName} (${stanskiProduction.projectId}) ·
+            ${stanskiCanary.manifest.project.name} canary · ${mvpSample.manifest.project.name} MVP
+            all load through the generic package path.</small
+          >
+        </article>
+      </div>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Stanski World project state">
+        <article class="snes-production-gate snes-production-gate--warning">
+          <span>Stanski's World active target</span>
+          <strong>Level 1 only</strong>
+          <small
+            >${stanskiLevelOne?.activeLevelTitle ?? "Cleveland: Skyline Scramble"} is the active
+            production target. Full game plan, Secret World 9, The Auditor, and true ending are
+            preserved for later.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--pass">
+          <span>Level 1 definition of done</span>
+          <strong>${stanskiLevelOne?.definitionOfDone.length ?? 0} checks</strong>
+          <small
+            >Opening overlay: World: ${stanskiLevelOne?.openingOverlay.world ?? "Cleveland"} ·
+            Level: ${stanskiLevelOne?.openingOverlay.level ?? "1"} · five lives · 1.5x run · 1.5x
+            falling gas boost · checkpoint · secret path · toilet ending with newspaper, two poops,
+            and fireworks.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--pass">
+          <span>Level 1 playable data</span>
+          <strong>${stanskiLevelOne?.objects.length ?? 0} objects</strong>
+          <small
+            >${stanskiLevelOne?.sections.map((section) => section.name).join(" → ") ??
+            "Skyline tutorial → restroom finale"}
+            · replay ends at ${stanskiLevelOne?.replayScript.at(-1)?.id ?? "toilet-ending"}.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--warning">
+          <span>Production state reconciled</span>
+          <strong>receipt-backed</strong>
+          <small
+            >SNES Studio now reconciles Stanski Level 1 state from art compile, conversion, visual
+            proof, browser playtest, ROM, emulator, FXPAK, and hardware receipts instead of leaving
+            completedMilestones empty.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--warning">
+          <span>Level 1 browser playtest</span>
+          <strong>mechanics assertions</strong>
+          <small
+            >Checks overlay, five lives, 1.5x run, 1.5x falling gas boost, crouch/projectile origin,
+            first reward, fair enemy, checkpoint, secret route, pizza gate, toilet ending,
+            newspaper, two poop drops, and fireworks.</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${liveProduction?.projectProof?.audioCompile?.status === "pass" && levelOneAudioRuntimeIntegrated ? "pass" : "blocked"}`}
+        >
+          <span>Level 1 audio</span>
+          <strong>${liveProduction?.projectProof?.audioCompile?.status ?? "not-run"}</strong>
+          <small
+            >${levelOneAudioRuntimeIntegrated
+              ? "Audio manifest is compiled and integrated into the SNES runtime."
+              : "Audio manifest may exist, but runtime sound is not complete until the ROM proves SNES audio integration."}
+            ${liveProduction?.projectProof?.audioCompile?.blockers?.[0] ??
+            "Sound cannot be marked complete from a manifest alone."}</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${levelOneEngineRom?.status === "pass" && levelOneEngineRom.productionReady === true && levelOneRuntimeIsCandidate ? "pass" : "blocked"}`}
+        >
+          <span>Level 1 ROM runtime</span>
+          <strong>${levelOneRuntimeMaturity}</strong>
+          <small
+            >${levelOneEngineRom?.scaffoldClassification?.isScaffold
+              ? "Current ROM receipt is rejected: text-mode scaffold, not playable Stanski gameplay."
+              : "Requires production-candidate-level runtime maturity: 2048 px scrolling Level 1, real BG tilemaps, metasprites/OAM, collision, gameplay objects, ending state machine, and audio runtime proof."}
+            Runtime proof:
+            ${levelOneRuntimeWidth ? `${levelOneRuntimeWidth} px` : "width not proven"} ·
+            ${levelOneRuntimeObjects ?? "unknown"} objects · audio integrated:
+            ${levelOneAudioRuntimeIntegrated ? "yes" : "no"}.
+            ${levelOneEngineRom?.blockers?.[0] ??
+            "FXPAK export stays blocked until production-candidate-level proof is real."}</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${fxpakTransferPackage?.status === "pass" ? "warning" : "blocked"}`}
+        >
+          <span>MacBook FXPAK handoff</span>
+          <strong>${fxpakTransferPackage?.status ?? "manual transfer package pending"}</strong>
+          <small
+            >Copy the verified .sfc from the transfer package to FXPAK/Games on the MacBook SD card.
+            Preserve SRAM, do not overwrite files, verify SHA-256 after copy, and eject safely. This
+            does not count as original SNES hardware proof.
+            ${fxpakTransferPackage?.rom?.fileName ??
+            "Run fxpak-transfer-package to create the manual package."}</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Level 1 visual review pack</span>
+          <strong>human approval required</strong>
+          <small
+            >Contact sheets, tile atlases, background composites, and start/mid/goal screenshots are
+            review artifacts only. They do not mark assets production-approved until the human
+            100/100 receipt exists.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Canon/reference status</span>
+          <strong>${stanskiCanon?.references.length ?? 0} references</strong>
+          <small
+            >Todd drawing and man-and-boy photo are source/reference assets first. They are not
+            production-approved in-game art until visual QA proves them.</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${stanskiPhotoReference?.status === "preserved" ? "warning" : "blocked"}`}
+        >
+          <span>man-boy-snes-photo-reference</span>
+          <strong>${stanskiPhotoReference?.status ?? "not loaded"}</strong>
+          <small
+            >Planned use: Family Memory Card secret room cameo; optional ending/credits memory card
+            after visual QA.
+            ${stanskiPhotoReference?.status === "preserved"
+              ? "Reference is preserved only; production in-game art still requires conversion and executable visual proof."
+              : (stanskiPhotoReference?.blocker ?? "source image unavailable")}</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${stanskiPhotoAsset?.conversionStatus === "converted" ? "warning" : "blocked"}`}
+        >
+          <span>Family Memory Card converted cameo</span>
+          <strong>${stanskiPhotoAsset?.conversionStatus ?? "blocked"}</strong>
+          <small
+            >Maturity: ${stanskiPhotoAsset?.visualMaturity ?? "unknown"} · source:
+            ${stanskiPhotoAsset?.sourcePath ?? "missing"} · review artifacts:
+            ${stanskiPhotoAsset?.visualProof?.length ?? 0} · not production-approved until in-game
+            visual proof and human approval pass.
+            ${stanskiPhotoAsset?.blockers?.[0] ?? "SNES-safe photo conversion not complete."}</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Full-game plan preserved</span>
+          <strong>${stanskiCanon?.worldOneVerticalSlice.length ?? 0} World 1 records</strong>
+          <small
+            >Deferred after Level 1:
+            ${stanskiLevelOne?.deferredMilestoneGroups.join(" · ") ??
+            "remaining worlds and release candidate proof"}.</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Stanski blockers</span>
+          <strong>production blocked</strong>
+          <small
+            >100/100 human visual approval, full game implementation, exact FXPAK media path, and
+            original SNES hardware proof remain incomplete.</small
+          >
+        </article>
+      </div>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Generic production actions">
+        <article
+          class=${`snes-production-gate snes-production-gate--${liveProduction?.blocker ? "blocked" : "pass"}`}
+        >
+          <span>Generic persisted runner</span>
+          <strong>${liveProduction?.status ?? "not loaded"}</strong>
+          <small
+            >Current: ${describeGenericProductionMilestone(liveProduction?.currentMilestone)} ·
+            project ${liveProduction?.projectId ?? project.id} · worker
+            ${liveProduction?.workerMode ?? "deterministic-contract-proof"}</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Adapter receipts</span>
+          <strong>${liveProduction?.adapterPlan?.status ?? adapterPlan.status}</strong>
+          <small
+            >${(liveProduction?.adapterPlan?.receipts ?? adapterPlan.receipts)
+              .map((receipt) => `${receipt.adapter}:${receipt.status}`)
+              .join(" · ")}</small
+          >
+        </article>
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>ROM / emulator / FXPAK plans</span>
+          <strong
+            >${liveProduction?.romScaffold?.status ?? romScaffold.status} /
+            ${liveProduction?.emulatorPlan?.status ?? emulatorPlan.status} /
+            ${liveProduction?.fxpakPlan?.status ?? fxpakPlan.status}</strong
+          >
+          <small
+            >ROM scaffold ${liveProduction?.romScaffold?.scaffoldRoot ?? romScaffold.scaffoldRoot} ·
+            emulator
+            ${liveProduction?.emulatorPlan?.selectedEmulator ??
+            emulatorPlan.selectedEmulator ??
+            "blocked"}
+            · FXPAK
+            ${liveProduction?.fxpakPlan?.destinationPath ??
+            fxpakPlan.destinationPath ??
+            "dry-run pending"}</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${liveProduction?.projectProof?.productionReadiness?.status === "production-ready" ? "pass" : "blocked"}`}
+        >
+          <span>Real project proof receipts</span>
+          <strong
+            >asset ${liveProduction?.projectProof?.statuses?.assetConversion ?? "not-run"} · engine
+            ${liveProduction?.projectProof?.statuses?.engineRom ?? "not-run"} · ROM
+            ${liveProduction?.projectProof?.statuses?.rom ?? "not-run"} · emulator
+            ${liveProduction?.projectProof?.statuses?.emulator ?? "not-run"} · FXPAK
+            ${liveProduction?.projectProof?.statuses?.fxpak ?? "not-run"} · handoff
+            ${liveProduction?.projectProof?.statuses?.fxpakTransferPackage ?? "not-run"}</strong
+          >
+          <small
+            >ROM ${liveProduction?.projectProof?.rom?.rom?.fileName ?? "not built"} · readiness
+            ${liveProduction?.projectProof?.productionReadiness?.status ?? "not loaded"} ·
+            ${liveProduction?.projectProof?.productionReadiness?.blockers?.[0] ??
+            "receipts loaded"}</small
+          >
+        </article>
+      </div>
+      <div class="snes-production-builder-cockpit__actions">
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.loading}
+          @click=${() => void loadSnesGenericProductionStatus(host)}
+        >
+          ${snesGenericProductionState.loading
+            ? "Loading Generic Production Status"
+            : "Load Generic Production Status"}
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.continue")}
+        >
+          Run Generic Milestone
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.auto")}
+        >
+          Start Generic Auto
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.splitNext")}
+        >
+          Split Generic Next
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.retryBlocked")}
+        >
+          Retry Generic Blocker
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.pause")}
+        >
+          Hold Generic Runner
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.resume")}
+        >
+          Continue Generic Runner
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesGenericProductionState.running}
+          @click=${() => void runSnesGenericProductionAction(host, "snes.production.cancel")}
+        >
+          Abort Generic Runner
+        </button>
+      </div>
+      <details class="snes-toolchain-doctor">
+        <summary>
+          <span>Toolchain Doctor</span>
+          <strong>${liveToolchain?.status ?? readiness.toolchain.status}</strong>
+        </summary>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesToolchainStatusState.loading}
+          @click=${() => void loadSnesToolchainStatus(host)}
+        >
+          ${snesToolchainStatusState.loading
+            ? "Checking Toolchain Doctor"
+            : "Check Toolchain Doctor"}
+        </button>
+        ${snesToolchainStatusState.error
+          ? html`<p>Live Toolchain Doctor unavailable: ${snesToolchainStatusState.error}</p>`
+          : nothing}
+        ${liveToolchain
+          ? html`<p>
+                Live read-only probe ${liveToolchain.generatedAt ?? "complete"} ·
+                ${liveToolchain.blockers[0] ?? "required tools detected"}
+              </p>
+              <p>
+                Local SNES toolchain home: ${liveToolchain.toolchainHome ?? "not registered"} ·
+                manifest: ${liveToolchain.manifestPath ?? "not registered"}
+              </p>
+              <p>
+                Real toolchain receipts:
+                ${Object.entries(liveToolchain.receiptSummary ?? {})
+                  .map(
+                    ([key, value]) =>
+                      `${key}:${typeof value === "object" && value && "status" in value ? String((value as { status?: unknown }).status ?? "unknown") : "recorded"}`,
+                  )
+                  .join(" · ") || "none yet"}
+              </p>`
+          : nothing}
+        <div class="snes-toolchain-doctor__grid">
+          ${(liveToolchain?.tools ?? requiredTools).map(
+            (tool) => html`
+              <article>
+                <span>${tool.label}</span>
+                <strong>${tool.status}</strong>
+                <small>${tool.installHint}</small>
+              </article>
+            `,
+          )}
+        </div>
+        <p>${(liveToolchain ?? readiness.toolchain).fxpakVolume.detail}</p>
+      </details>
+      <p class="snes-production-builder-cockpit__blocker">
+        ${readiness.blockers[0] ??
+        "All required production SNES proof surfaces passed for the current game."}
+      </p>
+    </section>
+  `;
+}
+
+function renderProductionVisualReportPanel(
+  host: HostUpdate,
+  context: "expert" | "guided" = "expert",
+) {
+  const liveProduction = snesGenericProductionState.snapshot;
+  const liveAssetRecords = Array.isArray(
+    liveProduction?.projectPackage?.manifest?.assetRegistry?.records,
+  )
+    ? (liveProduction.projectPackage.manifest.assetRegistry.records as never[])
+    : [];
+  const liveHumanScore =
+    typeof liveProduction?.projectPackage?.manifest?.productionReadiness?.visualApproval
+      ?.currentHumanScore === "number"
+      ? liveProduction.projectPackage.manifest.productionReadiness.visualApproval.currentHumanScore
+      : null;
+  const report = createSnesProductionVisualReport(project, {
+    assetRecords: liveAssetRecords,
+    humanScore: liveHumanScore,
+    targetScore: 100,
+  });
+  const buckets = [
+    {
+      label: "Production-approved art",
+      assets: report.productionApprovedArt,
+      detail: "Human-approved or explicitly approved visual-review assets.",
+    },
+    {
+      label: "Imported/converted source art",
+      assets: report.importedConvertedSourceArt,
+      detail: "Real files from import/conversion receipts; not automatically production art.",
+    },
+    {
+      label: "Deterministic generated art",
+      assets: report.deterministicGeneratedArt,
+      detail: "OpenClaw-generated local source art with hashes; draft until approved.",
+    },
+    {
+      label: "Spec-only placeholder art",
+      assets: report.specOnlyPlaceholderArt,
+      detail: "Descriptions, recipes, or procedural placeholders that cannot count as production.",
+    },
+  ];
+  const assetCards = buckets.flatMap((bucket) =>
+    bucket.assets.slice(0, context === "guided" ? 2 : 4).map((asset) => ({ asset, bucket })),
+  );
+  return html`
+    <section class="snes-production-visual-report" aria-label="Production visual report">
+      <div class="snes-section-header">
+        <div>
+          <span class="snes-eyebrow">Art Lab</span>
+          <h3>100/100 Visual Board</h3>
+          <p>
+            Prompt-to-asset workflow: choose one sprite, enemy, item, tileset, background, UI,
+            music, or SFX card; local OpenClaw/GLM creates a bounded JSON patch for that asset only;
+            deterministic code generates, converts, applies, captures in-game proof, and creates
+            review receipts. Source PNGs do not count as production art until visual maturity is
+            approved; converted files prove compatibility, not quality.
+          </p>
+        </div>
+        <strong>${report.status}</strong>
+      </div>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Visual evidence buckets">
+        ${buckets.map(
+          (bucket) => html`
+            <article
+              class=${`snes-production-gate snes-production-gate--${bucket.assets.length > 0 ? "pass" : "blocked"}`}
+            >
+              <span>${bucket.label}</span>
+              <strong>${bucket.assets.length}</strong>
+              <small>${bucket.detail}</small>
+            </article>
+          `,
+        )}
+        <article
+          class=${`snes-production-gate snes-production-gate--${report.visualProof.length > 0 ? "pass" : "blocked"}`}
+        >
+          <span>Review proof artifacts</span>
+          <strong>${report.visualProof.length}</strong>
+          <small
+            >Contact sheets, atlases, composites, plus start/mid/goal in-game screenshots. Source
+            PNGs do not count.</small
+          >
+        </article>
+        <article
+          class=${`snes-production-gate snes-production-gate--${report.humanGrade === null ? "manual-required" : report.humanGrade >= report.targetScore ? "pass" : "blocked"}`}
+        >
+          <span>Human grade</span>
+          <strong
+            >${report.humanGrade === null ? "manual required" : `${report.humanGrade}/100`}</strong
+          >
+          <small
+            >Human grade overrides synthetic visual scoring. Target
+            ${report.targetScore}/100.</small
+          >
+        </article>
+      </div>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Asset cards">
+        ${assetCards.length > 0
+          ? assetCards.map(
+              ({ asset, bucket }) => html`
+                <article
+                  class="snes-production-gate snes-production-gate--${asset.status ===
+                    "real-asset" && asset.blockers.length === 0
+                    ? "pass"
+                    : "blocked"}"
+                >
+                  <span>${asset.type}: ${asset.id}</span>
+                  <strong>${asset.status}</strong>
+                  <small>
+                    ${bucket.label} · source path ${asset.sourcePath ?? "missing"} · source hash
+                    ${asset.sourceHash ?? "missing"} · provenance ${asset.provenance} · license
+                    ${asset.license} · maturity ${asset.visualMaturity ?? "unknown"} · palette
+                    ${asset.palette?.colorCount ?? 0} colors · frames ${asset.frames?.length ?? 0} ·
+                    tiles ${asset.tileMetadata?.tileCount ?? 0} · in-game usage
+                    ${asset.usage.join(", ") || "missing"} · review proof
+                    ${asset.visualProof?.length ?? 0} · visual blocker
+                    ${asset.blockers[0] ?? "none"}
+                  </small>
+                  <button type="button">Improve Asset</button>
+                </article>
+              `,
+            )
+          : html`
+              <article class="snes-production-gate snes-production-gate--blocked">
+                <span>Asset cards</span>
+                <strong>missing</strong>
+                <small>
+                  Production art needs hero sprites, enemy sprites, items, tilesets, backgrounds,
+                  UI, music, and SFX records with source hashes and screenshot proof.
+                </small>
+              </article>
+            `}
+      </div>
+      <p class="snes-production-builder-cockpit__blocker">
+        ${report.blockers[0] ?? report.summary}
+      </p>
+      <p class="snes-production-builder-cockpit__blocker">
+        ROM boots, converted assets, and browser preview do not approve visuals. 100/100 requires
+        explicit human review of contact sheets, atlas sheets, background composites, and in-game
+        screenshots unless GPT 5.5 visual review is separately enabled.
+      </p>
+      <div class="snes-production-builder-cockpit__gates" aria-label="Max SNES graphics gap">
+        <article class="snes-production-gate snes-production-gate--manual-required">
+          <span>Max SNES graphics gap</span>
+          <strong>${report.status === "pass" ? "approved" : "not production"}</strong>
+          <small>
+            Current generated pixels are draft evidence until a human approves them. Best-in-class
+            SNES visuals require hand-reviewable sprite silhouette, sub-pixel animation readability,
+            palette ramps, material-specific tiles, parallax composition, and start/mid/goal
+            screenshots.
+          </small>
+        </article>
+        <article
+          class="snes-production-gate snes-production-gate--${report.visualGate.metrics
+            .placeholderArtDetected
+            ? "blocked"
+            : "pass"}"
+        >
+          <span>Placeholder detection</span>
+          <strong
+            >${report.visualGate.metrics.placeholderArtDetected ? "detected" : "clear"}</strong
+          >
+          <small>
+            Draft-generated or procedural art cannot be promoted by conversion alone; it needs
+            explicit production approval after visual review.
+          </small>
+        </article>
+      </div>
+      <div
+        class="snes-production-builder-cockpit__gates"
+        aria-label="Stanski visual recovery status"
+      >
+        <article class="snes-production-gate snes-production-gate--blocked">
+          <span>Stanski Level 1 visuals</span>
+          <strong>rejected: 3/100</strong>
+          <small>
+            User review is authoritative: in-game screenshots are 3/100, sprite sheets are 72/100,
+            tiles are 20/100, and the background is 8/100 because it does not read as a recognizable
+            Cleveland skyline. Production and FXPAK export remain blocked until a 100/100 human
+            approval receipt exists.
+          </small>
+        </article>
+        <article class="snes-production-gate snes-production-gate--warning">
+          <span>Recovery pipeline</span>
+          <strong>Pixelorama + Tiled + SuperFamiconv</strong>
+          <small>
+            Real production visuals now require editable source receipts, SNES-safe conversion, and
+            runtime screenshots. Super Mario World is reference quality only; Nintendo code, ROMs,
+            sprites, tiles, maps, palettes, and audio are blocked from the clean-room pipeline.
+          </small>
+        </article>
+      </div>
+      ${snesVisualActionState.lastReceipt || snesVisualActionState.error
+        ? html`<p class="snes-production-builder-cockpit__blocker">
+            Visual action
+            ${snesVisualActionState.lastAction?.replace("snes.visual.", "") ?? "latest"}:
+            ${snesVisualActionState.error ??
+            `${snesVisualActionState.lastReceipt?.status ?? "unknown"} · ${snesVisualActionState.lastReceipt?.receiptPath ?? "receipt pending"}${snesVisualActionState.lastReceipt?.blockers?.[0] ? ` · ${snesVisualActionState.lastReceipt.blockers[0]}` : ""}`}
+          </p>`
+        : nothing}
+      <div class="snes-production-builder-cockpit__actions">
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.reject")}
+        >
+          Reject 3/100 Visuals
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.artBible")}
+        >
+          Build Art Bible
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.artSourcePack")}
+        >
+          Create Source Pack
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.artManifest")}
+        >
+          Create Art Manifest
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.compileArt")}
+        >
+          Compile Art
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.captureProof")}
+        >
+          Capture Visual Proof
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.runtimeAssetTruth")}
+        >
+          Prove Runtime Assets
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.qualityAudit")}
+        >
+          Audit Visual Quality
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesVisualActionState.running}
+          @click=${() => void runSnesVisualAction(host, "snes.visual.approve")}
+        >
+          Approve Visuals
+        </button>
+      </div>
     </section>
   `;
 }
@@ -3800,7 +5565,7 @@ function createPlayableDraftFromPrompt(host: HostUpdate, reason: "create" | "fin
       host,
       record,
       "streaming",
-      "Codex Architect is planning; OpenClaw Game Team is filling story, levels, cast, rules, audio, and export basics.",
+      "GPT 5.5 Director is planning; OpenClaw Game Team is filling story, levels, cast, rules, audio, and export basics.",
     );
     const production = createSnesAiProductionRun(surfacePromptDraft("full-game"), project);
     project = normalizeSnesStudioProject(production.project);
@@ -3817,7 +5582,7 @@ function createPlayableDraftFromPrompt(host: HostUpdate, reason: "create" | "fin
       host,
       record,
       "complete",
-      "Codex-supervised OpenClaw production created an editable full-game draft.",
+      "GPT 5.5-directed OpenClaw production created an editable full-game draft.",
       JSON.stringify({
         summary: project.aiCommandResult?.summary,
         blueprint: production.run.blueprint.gameConcept,
@@ -3842,15 +5607,15 @@ function createPlayableDraftFromPrompt(host: HostUpdate, reason: "create" | "fin
       status: "ready",
       title:
         reason === "play"
-          ? "OpenClaw filled the game and Codex approved Test"
-          : "Codex-supervised OpenClaw made a playable game",
-      detail: `Codex wrote the blueprint, OpenClaw filled every editable game section, and Codex reviewed ${project.name} at ${production.run.finalApproval?.score ?? 0}/100. You can test it now, change it with OpenClaw, or export later.`,
+          ? "OpenClaw filled the game and GPT 5.5 approved Test"
+          : "GPT 5.5-directed OpenClaw made a playable game",
+      detail: `GPT 5.5 wrote the director plan, OpenClaw filled every editable game section, deterministic validation ran, and GPT 5.5 reviewed ${project.name} at ${production.run.finalApproval?.score ?? 0}/100. You can test it now, change it with OpenClaw, or export later.`,
       provider,
       target: "Whole Game",
     });
     pushConsole(
       host,
-      `${action} with Codex-supervised OpenClaw task ${record.id}: ${readiness.status} ${readiness.score}/100, production ${production.run.status}. Test Game is ready.`,
+      `${action} with GPT 5.5-directed OpenClaw task ${record.id}: ${readiness.status} ${readiness.score}/100, production ${production.run.status}. Test Game is ready.`,
     );
     return true;
   } catch (error) {
@@ -5532,7 +7297,7 @@ function unwrapJsonCodeFence(text: string): string {
 }
 
 function collectGatewayResponseText(value: unknown, depth = 0): string[] {
-  if (depth > 5 || value === null || value === undefined) {
+  if (depth > 12 || value === null || value === undefined) {
     return [];
   }
   if (typeof value === "string") {
@@ -5550,6 +7315,7 @@ function collectGatewayResponseText(value: unknown, depth = 0): string[] {
     "proposal",
     "json",
     "reply",
+    "finalText",
     "response",
     "message",
     "content",
@@ -5560,6 +7326,14 @@ function collectGatewayResponseText(value: unknown, depth = 0): string[] {
     "data",
     "messages",
     "choices",
+    "items",
+    "entries",
+    "entry",
+    "record",
+    "value",
+    "parts",
+    "payload",
+    "body",
   ];
   return preferredKeys.flatMap((key) => collectGatewayResponseText(record[key], depth + 1));
 }
@@ -5568,6 +7342,21 @@ type GatewayAgentPatchResult = {
   proposal: SnesAgentPatchProposal;
   responseText: string;
 };
+
+type GatewayHistoryRequestPayload = {
+  sessionKey: string;
+  targetRunId?: string;
+  auditTs?: number;
+  limit: number;
+  maxChars: number;
+};
+
+const SNES_GATEWAY_HISTORY_IMPORT_POLL_MS = 750;
+const SNES_GATEWAY_HISTORY_IMPORT_TIMEOUT_MS = 10_000;
+
+function delaySnesGatewayHistoryImport(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
 
 function parseGatewayAgentPatchResult(
   response: unknown,
@@ -5662,36 +7451,121 @@ async function requestGatewayAgentPatch(
   if (!runId) {
     return null;
   }
-  const wait = await host.client.request(
-    handoff.wait.method,
-    { runId, timeoutMs: handoff.wait.timeoutMs },
-    { timeoutMs: handoff.wait.timeoutMs + 5000 },
-  );
+  let wait: unknown;
+  try {
+    const waitFinal = await host.client.request(
+      "agent.waitFinal",
+      {
+        runId,
+        sessionKey: handoff.sessionKey,
+        timeoutMs: handoff.wait.timeoutMs,
+        historyLimit: handoff.history.limit,
+        maxChars: Math.max(handoff.history.maxChars, 120000),
+        minStartedAt: Date.now() - 60_000,
+      },
+      { timeoutMs: handoff.wait.timeoutMs + 15000 },
+    );
+    const waitFinalPatch = parseGatewayAgentPatchResult(
+      waitFinal,
+      currentProject,
+      requestedAgent,
+      surface,
+    );
+    if (waitFinalPatch) {
+      return waitFinalPatch;
+    }
+    const waitFinalRecord = responseRecord(waitFinal);
+    const waitFinalStatus =
+      typeof waitFinalRecord?.status === "string" ? waitFinalRecord.status : "";
+    if (waitFinalStatus === "error") {
+      const blocker =
+        typeof waitFinalRecord?.blocker === "string"
+          ? waitFinalRecord.blocker
+          : typeof waitFinalRecord?.error === "string"
+            ? waitFinalRecord.error
+            : "agent.waitFinal failed without final assistant JSON.";
+      throw new Error(blocker);
+    }
+    wait = waitFinal;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const methodUnavailable =
+      /agent\.waitFinal|unknown method|unsupported method|method not found|missing scope/iu.test(
+        message,
+      );
+    if (!methodUnavailable) {
+      throw error;
+    }
+    wait = await host.client.request(
+      handoff.wait.method,
+      { runId, timeoutMs: handoff.wait.timeoutMs },
+      { timeoutMs: handoff.wait.timeoutMs + 5000 },
+    );
+  }
   const waitPatch = parseGatewayAgentPatchResult(wait, currentProject, requestedAgent, surface);
   if (waitPatch) {
     return waitPatch;
   }
   const waitRecord = responseRecord(wait);
   const waitStatus = typeof waitRecord?.status === "string" ? waitRecord.status : "";
+  const shouldPollHistoryImport = waitStatus !== "timeout" && waitStatus !== "pending";
+  const startedHistoryImportAt = Date.now();
+  do {
+    const historyPayloads: GatewayHistoryRequestPayload[] = [
+      {
+        sessionKey: handoff.sessionKey,
+        targetRunId: runId,
+        limit: handoff.history.limit,
+        maxChars: handoff.history.maxChars,
+      },
+      {
+        sessionKey: handoff.sessionKey,
+        targetRunId: runId,
+        auditTs: Date.now(),
+        limit: handoff.history.limit,
+        maxChars: Math.max(handoff.history.maxChars, 120000),
+      },
+      {
+        sessionKey: handoff.sessionKey,
+        limit: handoff.history.limit,
+        maxChars: Math.max(handoff.history.maxChars, 120000),
+      },
+    ];
+    for (const payload of historyPayloads) {
+      const history = await host.client.request(handoff.history.method, payload, {
+        timeoutMs: 15000,
+      });
+      const historyPatch = parseGatewayAgentPatchResult(
+        history,
+        currentProject,
+        requestedAgent,
+        surface,
+      );
+      if (historyPatch) {
+        return historyPatch;
+      }
+    }
+    if (
+      !shouldPollHistoryImport ||
+      Date.now() - startedHistoryImportAt >= SNES_GATEWAY_HISTORY_IMPORT_TIMEOUT_MS
+    ) {
+      break;
+    }
+    await delaySnesGatewayHistoryImport(SNES_GATEWAY_HISTORY_IMPORT_POLL_MS);
+  } while (true);
+  if (waitStatus === "error") {
+    const detail =
+      typeof waitRecord?.message === "string"
+        ? waitRecord.message
+        : typeof waitRecord?.error === "string"
+          ? waitRecord.error
+          : "agent.wait failed";
+    throw new Error(detail);
+  }
   if (waitStatus === "timeout" || waitStatus === "pending") {
     return null;
   }
-  if (waitStatus === "error") {
-    const detail =
-      typeof waitRecord?.message === "string" ? waitRecord.message : "agent.wait failed";
-    throw new Error(detail);
-  }
-  const history = await host.client.request(
-    handoff.history.method,
-    {
-      sessionKey: handoff.sessionKey,
-      targetRunId: runId,
-      limit: handoff.history.limit,
-      maxChars: handoff.history.maxChars,
-    },
-    { timeoutMs: 15000 },
-  );
-  return parseGatewayAgentPatchResult(history, currentProject, requestedAgent, surface);
+  return null;
 }
 
 function setAgentTeamMemberReadiness(
@@ -5987,7 +7861,7 @@ async function connectSnesAgentTeam(host: HostUpdate, options: { automatic?: boo
       detail: readiness.detail,
       checkedAt,
     });
-    pushConsole(host, `Live AI team unavailable: ${readiness.detail}`);
+    pushConsole(host, `GPT 5.5-directed build unavailable: ${readiness.detail}`);
     return;
   }
 
@@ -6121,9 +7995,11 @@ async function runLiveAiProductionProof(host: HostUpdate) {
     return;
   }
 
+  const liveProofSessionKey = `${agentGatewaySessionKey}:run-${checkedAt.replace(/[^0-9]/gu, "")}`;
   const plan = createSnesAiProductionGatewayPlan(project, prompt, {
     createdAt: checkedAt,
-    sessionKey: agentGatewaySessionKey,
+    proofMode: "dashboard-e2e",
+    sessionKey: liveProofSessionKey,
   });
   const preparingState = {
     status: "running" as const,
@@ -6138,6 +8014,23 @@ async function runLiveAiProductionProof(host: HostUpdate) {
     createdAt: checkedAt,
     sessionKey: agentGatewaySessionKey,
   });
+  agentTeamRun = {
+    ...teamPlan,
+    status: "checking",
+    readiness: teamPlan.readiness.map((entry) => ({
+      ...entry,
+      status: "not-checked",
+      detail: "Waiting for the live production proof to reach this role.",
+      checkedAt,
+      blocker: undefined,
+    })),
+  };
+  agentTeamReadinessReport = {
+    ...createSnesAgentTeamReadinessPlan(project, agentGatewaySessionKey, { checkedAt }),
+    status: "checking",
+    title: "Checking live OpenClaw",
+    detail: "Running the live GPT 5.5/OpenClaw production proof one stage at a time.",
+  };
   const workerSetup = await ensureSnesOpenClawWorkerAgents(liveHost, teamPlan, checkedAt);
   if (!workerSetup.ok) {
     setLiveAgentProofState(host, {
@@ -6155,7 +8048,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
     setAiActionFeedback(host, {
       status: "error",
       title: "Live OpenClaw workers need setup",
-      detail: `${workerSetup.detail} Build With OpenClaw can still create a local editable draft now.`,
+      detail: `${workerSetup.detail} Local Draft Only can still create an editable draft now.`,
       provider: "openclaw",
       target: "Whole Game",
     });
@@ -6180,7 +8073,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
     setAiActionFeedback(host, {
       status: "error",
       title: "Live OpenClaw runtime unavailable",
-      detail: `${runtime.detail} Build With OpenClaw can still create a local editable draft now.`,
+      detail: `${runtime.detail} Local Draft Only can still create an editable draft now.`,
       provider: "openclaw",
       target: "Whole Game",
     });
@@ -6203,9 +8096,9 @@ async function runLiveAiProductionProof(host: HostUpdate) {
   });
   setAiActionFeedback(host, {
     status: "working",
-    title: "Checking Codex-supervised OpenClaw route",
+    title: "Checking GPT 5.5-directed OpenClaw route",
     detail:
-      "Codex Architect, OpenClaw Game Team, and Codex QA are being asked for approval-gated JSON through Gateway.",
+      "GPT 5.5 Director, OpenClaw Game Team, and GPT 5.5 QA are being asked for approval-gated JSON through Gateway.",
     provider: "openclaw",
     target: "Whole Game",
   });
@@ -6228,7 +8121,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
       updateAgentTeamReadinessReportFromRun(
         checkedAt,
         "Live proof running",
-        "Running one Codex/OpenClaw stage at a time.",
+        "Running one GPT 5.5/OpenClaw stage at a time after fast setup checks.",
       );
     }
     agentDispatchQueue = appendSnesAgentDispatchRecord(agentDispatchQueue, record);
@@ -6276,7 +8169,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
           returned.responseText,
         );
       } else {
-        const message = `${stage.title} timed out during live proof or did not return approval-gated JSON.`;
+        const message = `${stage.title} (${stage.role}) timed out during live proof or did not return approval-gated JSON. Session: ${stage.handoff.sessionKey}.`;
         failedStages.push(message);
         if (teamMember) {
           setAgentTeamMemberReadiness(teamMember, "blocked", message, checkedAt, message);
@@ -6286,11 +8179,12 @@ async function runLiveAiProductionProof(host: HostUpdate) {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : `${stage.title} failed.`;
-      failedStages.push(`${stage.title}: ${message}`);
+      const detail = `${stage.title} (${stage.role}) failed. Session: ${stage.handoff.sessionKey}. ${message}`;
+      failedStages.push(detail);
       if (teamMember) {
-        setAgentTeamMemberReadiness(teamMember, "blocked", message, checkedAt, message);
+        setAgentTeamMemberReadiness(teamMember, "blocked", detail, checkedAt, detail);
       }
-      markAgentRunStream(host, record, "error", message);
+      markAgentRunStream(host, record, "error", detail);
       break;
     }
     updateAgentTeamReadinessReportFromRun(
@@ -6309,28 +8203,47 @@ async function runLiveAiProductionProof(host: HostUpdate) {
   saveAgentDispatchQueue();
 
   if (failedStages.length > 0) {
+    const failedDetail = failedStages.join(" ");
+    agentTeamRun = agentTeamRun
+      ? {
+          ...agentTeamRun,
+          status: "blocked",
+          readiness: agentTeamRun.readiness.map((entry) =>
+            entry.status === "checking"
+              ? {
+                  ...entry,
+                  status: "blocked",
+                  detail: failedDetail,
+                  blocker: failedDetail,
+                  checkedAt,
+                }
+              : entry.status === "not-checked"
+                ? {
+                    ...entry,
+                    detail: "Not checked because an earlier live production stage failed.",
+                    checkedAt,
+                  }
+                : entry,
+          ),
+        }
+      : agentTeamRun;
     setLiveAgentProofState(host, {
       status: "failed",
       title: "Live production route failed",
-      detail: failedStages.join(" "),
+      detail: failedDetail,
       checkedAt,
     });
     setLiveAiProductionProofState(host, {
       status: "failed",
       title: "Live production route failed",
-      detail: failedStages.join(" "),
+      detail: failedDetail,
       checkedAt,
     });
-    agentTeamRun = agentTeamRun ? { ...agentTeamRun, status: "blocked" } : agentTeamRun;
-    updateAgentTeamReadinessReportFromRun(
-      checkedAt,
-      "Live OpenClaw unavailable",
-      failedStages.join(" "),
-    );
+    updateAgentTeamReadinessReportFromRun(checkedAt, "Live OpenClaw unavailable", failedDetail);
     setAiActionFeedback(host, {
       status: "error",
       title: "Live AI production needs setup",
-      detail: failedStages.join(" "),
+      detail: failedDetail,
       provider: "openclaw",
       target: "Whole Game",
     });
@@ -6342,7 +8255,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
       status: "passed",
       title: "Live production route verified",
       detail:
-        "Codex Architect, OpenClaw Game Team, and Codex QA each returned approval-gated JSON through Gateway. Review the latest patch before applying it.",
+        "GPT 5.5 Director, OpenClaw Game Team, and GPT 5.5 QA each returned approval-gated JSON through Gateway. Review the latest patch before applying it.",
       checkedAt,
       recordId: plan.stages[plan.stages.length - 1]?.record.id,
     });
@@ -6350,7 +8263,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
       status: "passed",
       title: "Live production route verified",
       detail:
-        "Codex Architect, OpenClaw Game Team, and Codex QA each returned approval-gated JSON through Gateway. Review the latest patch before applying it.",
+        "GPT 5.5 Director, OpenClaw Game Team, and GPT 5.5 QA each returned approval-gated JSON through Gateway. Review the latest patch before applying it.",
       checkedAt,
       recordId: plan.stages[plan.stages.length - 1]?.record.id,
     });
@@ -6358,11 +8271,11 @@ async function runLiveAiProductionProof(host: HostUpdate) {
     updateAgentTeamReadinessReportFromRun(
       checkedAt,
       "Live OpenClaw ready",
-      "Live proof passed. Codex/OpenClaw stages returned approval-gated JSON through Gateway.",
+      "Live proof passed. GPT 5.5 planning, OpenClaw building, and GPT 5.5 approval stages returned approval-gated JSON through Gateway.",
     );
     setAiActionFeedback(host, {
       status: "review",
-      title: "Codex-supervised OpenClaw route verified",
+      title: "GPT 5.5-directed OpenClaw route verified",
       detail:
         "The live route returned editable JSON. Review the pending change, apply it, test it, or ask OpenClaw for another pass.",
       provider: "openclaw",
@@ -6378,7 +8291,7 @@ async function runLiveAiProductionProof(host: HostUpdate) {
   setLiveAiProductionProofState(host, {
     status: "needs-setup",
     title: "Gateway accepted, result return not complete",
-    detail: `Gateway accepted ${acceptedStages}/${plan.stages.length} staged jobs, but only ${returnedPatchStages}/${plan.stages.length} returned approval-gated JSON. Configure the live Codex/OpenClaw result return path or import returned patch JSON manually.`,
+    detail: `Gateway accepted ${acceptedStages}/${plan.stages.length} staged jobs, but only ${returnedPatchStages}/${plan.stages.length} returned approval-gated JSON. Configure the live GPT 5.5/OpenClaw result return path or import returned patch JSON manually.`,
     checkedAt,
   });
   setAiActionFeedback(host, {
@@ -14690,6 +16603,7 @@ function renderAgentConnectionSummary(host: HostUpdate) {
   const gatewayStatus = readiness.status === "ready" ? "Gateway live ready" : readiness.title;
   return html`
     <div class="snes-agent-connection" aria-label="OpenClaw and Codex connection status">
+      ${renderSnesConnectionDoctor(host)}
       <article>
         <span>OpenClaw</span>
         <strong>${gatewayStatus}</strong>
@@ -15726,7 +17640,8 @@ function renderExpertStudio(host: HostUpdate) {
         ? html`
             ${renderLearningDrawer()} ${renderModeRail(host)}
             ${renderUniversalCreateBar(host, selectedMode !== "make")} ${renderRecoveryPanel(host)}
-            ${renderCurrentStudioMode(host)}
+            ${renderCurrentStudioMode(host)} ${renderProductionGameBuilderCockpit(host)}
+            ${renderAiProductionRunCard(host)} ${renderStoryGapFiller(host)}
             <details class="snes-pro-drawer">
               <summary>Advanced AI stage</summary>
               ${renderAiStagePrompt(host)} ${renderAiReviewDrawer(host)}
@@ -15750,7 +17665,7 @@ function renderGuidedProviderButtons(host: HostUpdate) {
         class=${aiGameStageProvider === "auto-team" ? "active" : ""}
         @click=${() => setAiGameStageProvider(host, "auto-team")}
       >
-        Cost-aware Auto Team
+        GPT 5.5-Directed Team
       </button>
       <button
         type="button"
@@ -15764,11 +17679,11 @@ function renderGuidedProviderButtons(host: HostUpdate) {
         class=${aiGameStageProvider === "codex" ? "active" : ""}
         @click=${() => setAiGameStageProvider(host, "codex")}
       >
-        Codex Review Gate
+        GPT 5.5 Quality Gate
       </button>
       <small>
-        OpenClaw fills editable text boxes and game parts by default. Codex is reserved for
-        blueprint, review, export, and build-fix gates.
+        OpenClaw fills editable text boxes and game parts from GPT 5.5 briefs. GPT 5.5 owns
+        planning, problem solving, repair instructions, and approval gates.
         ${run
           ? ` Current status: ${run.status.replace(/-/g, " ")}${finalReview ? `, ${finalReview.score}/100` : ""}.`
           : ""}
@@ -15808,9 +17723,9 @@ function renderAgentTeamConnector(host: HostUpdate) {
         : team.status === "ready"
           ? "Required agents and runtime are configured. Run Live Production Check when you want model-backed proof."
           : team.status === "blocked"
-            ? "Some live agent lanes are unavailable. Build Local Draft still works, and Check Again reruns this automatic status check."
+            ? "Some live agent lanes are unavailable. Local Draft Only still works, and Check Again reruns this automatic status check."
             : team.status === "checking"
-              ? "SNES Studio is checking live Codex/OpenClaw lanes now. You can keep building locally."
+              ? "SNES Studio is checking live GPT 5.5/OpenClaw lanes now. You can keep building locally."
               : "SNES Studio checks this automatically when Dashboard Gateway is ready."));
   const actionLabel =
     liveAgentProofState.status === "running" ? "Checking Live Team" : "Check Again";
@@ -15873,11 +17788,11 @@ function renderAgentTeamConnector(host: HostUpdate) {
   return html`
     <section class="snes-agent-team-connector" aria-label="SNES Studio AI team connector">
       <div class="snes-section-header">
-        <span class="snes-eyebrow">Live AI Team Status</span>
+        <span class="snes-eyebrow">GPT 5.5-Directed Team Status</span>
         <h3>${statusLabel}</h3>
         <p>
-          Codex plans and approves. OpenClaw role agents fill story, levels, gameplay, art, audio,
-          and hardware checks. ${statusDetail}
+          GPT 5.5 plans, diagnoses, approves, or disapproves. OpenClaw role agents build story,
+          levels, gameplay, art, audio, and hardware checks from its briefs. ${statusDetail}
         </p>
       </div>
       <div class="snes-ai-production-route__checks">
@@ -15930,22 +17845,24 @@ function renderLiveAiProductionRoute(host: HostUpdate) {
   return html`
     <div class=${`snes-ai-production-route snes-ai-production-route--${state.status}`}>
       <div>
-        <span>Live AI team</span>
+        <span>GPT 5.5-directed build</span>
         <strong>${routeLabel}</strong>
         <p>
           ${connected
-            ? "Live team status checks automatically. Run the production check only when you want a full Codex/OpenClaw staged build."
-            : "You can build and play now with the local fallback. Live Codex/OpenClaw proof needs the connected Dashboard Gateway, not FXPAK hardware."}
+            ? "Live team status checks automatically. Run the production check when you want GPT 5.5 to direct and approve a full OpenClaw staged build."
+            : "You can build and play now with the local fallback. Live GPT 5.5-directed OpenClaw proof needs the connected Dashboard Gateway, not FXPAK hardware."}
         </p>
       </div>
       <div class="snes-ai-production-route__checks">
         <article>
-          <strong>Codex Architect</strong><small>blueprint and quality rubric</small>
+          <strong>GPT 5.5 Director</strong><small>blueprint, rubric, and builder briefs</small>
         </article>
         <article>
           <strong>OpenClaw workers</strong><small>fill every editable game part</small>
         </article>
-        <article><strong>Codex QA</strong><small>review, corrections, approval</small></article>
+        <article>
+          <strong>GPT 5.5 Quality Gate</strong><small>review, repair instructions, approval</small>
+        </article>
       </div>
       <div class="snes-ai-production-route__checks">
         <article>
@@ -15960,7 +17877,7 @@ function renderLiveAiProductionRoute(host: HostUpdate) {
       </div>
       <small class="snes-ai-production-route__state">${readiness.title}. ${readiness.detail}</small>
       <small class="snes-ai-production-route__state">${state.title}. ${state.detail}</small>
-      ${renderAgentTeamConnector(host)}
+      ${renderSnesConnectionDoctor(host)} ${renderAgentTeamConnector(host)}
       ${pendingAgentProposal
         ? html`
             <div class="snes-ai-production-route__review">
@@ -15985,10 +17902,677 @@ function renderLiveAiProductionRoute(host: HostUpdate) {
           ${state.status === "running" ? "Checking Live Team" : "Run Live Production Check"}
         </button>
         <button type="button" @click=${() => void createGuidedPlatformerDraft(host)}>
-          Build Local Draft
+          Local Draft Only
         </button>
       </div>
     </div>
+  `;
+}
+
+async function loadLatestSnesBenchmarkReport(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesBenchmarkLatestState.loading) {
+    return;
+  }
+  snesBenchmarkLatestState = {
+    error: null,
+    loading: true,
+    snapshot: snesBenchmarkLatestState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<SnesBenchmarkLatestSnapshot>(
+      "snes.benchmark.latest",
+      {},
+      { timeoutMs: 15_000 },
+    );
+    snesBenchmarkLatestState = { error: null, loading: false, snapshot };
+  } catch (error) {
+    snesBenchmarkLatestState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      snapshot: null,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+function renderLatestBenchmarkSnapshot() {
+  const { error, loading, snapshot } = snesBenchmarkLatestState;
+  if (loading) {
+    return html`<small>Loading latest real benchmark report from Gateway…</small>`;
+  }
+  if (error) {
+    return html`<small>Latest benchmark report unavailable: ${error}</small>`;
+  }
+  if (!snapshot) {
+    return html`<small>Click Load Latest Benchmark to read the latest real output report.</small>`;
+  }
+  if (snapshot.available === false) {
+    return html`<small>${snapshot.blocker ?? "No real output benchmark report found."}</small>`;
+  }
+  const hardwareWinner =
+    snapshot.recommendedWinnersByRole?.["snes-hardware-qa"] ??
+    snapshot.winnersByRole?.["snes-hardware-qa"] ??
+    "not measured";
+  const summaries = snapshot.modelSummaries ?? [];
+  const visibleSummaries = summaries.slice(0, 4);
+  return html`
+    <small
+      >${snapshot.status ?? "unknown"} · ${snapshot.rounds ?? 1} round(s) · hardware QA winner
+      ${hardwareWinner} · hosted ${snapshot.hostedProvidersUsed ? "yes" : "no"} · hosted GLM
+      ${snapshot.hostedGlmUsed ? "yes" : "no"} · downloads
+      ${snapshot.downloadsAttempted ? "yes" : "no"}</small
+    >
+    ${visibleSummaries.length > 0
+      ? html`<ul>
+          ${visibleSummaries.map(
+            (summary) => html`<li>
+              ${summary.role}: ${summary.modelRef} · mean ${summary.meanScore ?? "n/a"} ·
+              ${summary.rounds ?? 0} run(s)
+            </li>`,
+          )}
+        </ul>`
+      : nothing}
+  `;
+}
+
+async function loadLatestGlm52Status(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || snesGlm52StatusState.loading) {
+    return;
+  }
+  snesGlm52StatusState = {
+    error: null,
+    loading: true,
+    snapshot: snesGlm52StatusState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<SnesGlm52StatusSnapshot>(
+      "snes.glm52.status",
+      {},
+      { timeoutMs: 15_000 },
+    );
+    snesGlm52StatusState = { error: null, loading: false, snapshot };
+  } catch (error) {
+    snesGlm52StatusState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      snapshot: null,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+function renderGlm52LocalStatus(host: HostUpdate) {
+  const { error, loading, snapshot } = snesGlm52StatusState;
+  const stateText = loading
+    ? "Loading local GLM-5.2 status…"
+    : error
+      ? `Local GLM-5.2 status unavailable: ${error}`
+      : snapshot
+        ? snapshot.available
+          ? "GLM-5.2 local lane is fully connected for hardware QA."
+          : (snapshot.blocker ?? "GLM-5.2 local lane is not fully connected yet.")
+        : "Click Check GLM-5.2 to verify runtime, provider registration, benchmark winner, promotion, and agent proof.";
+  return html`
+    <article>
+      <strong>Local GLM-5.2 lane</strong>
+      <small>${stateText}</small>
+      ${snapshot
+        ? html`<small
+              >runtime ${snapshot.runtimeReady ? "ready" : (snapshot.runtimeStatus ?? "missing")} ·
+              provider ${snapshot.providerConfigured ? "registered" : "missing"} · hardware QA
+              ${snapshot.hardwareQaPromoted ? "primary" : "not primary"} · agent proof
+              ${snapshot.agentProofReady
+                ? `passed ${snapshot.agentProofScore ?? ""}`
+                : "missing"}</small
+            >
+            <small>model ${snapshot.modelRef ?? "not detected"}</small>`
+        : nothing}
+      <button
+        type="button"
+        ?disabled=${!isGatewayLiveReady(host) || loading}
+        @click=${() => void loadLatestGlm52Status(host)}
+      >
+        ${loading ? "Checking GLM-5.2" : "Check GLM-5.2"}
+      </button>
+      <small
+        >Repair path: pnpm glm52:runtime -- repair --json; then register-provider, promote-winners,
+        agent-proof, and restart Gateway. Hosted GLM is never used.</small
+      >
+    </article>
+  `;
+}
+
+function describeStanskiProductionMilestone(milestone?: StanskiProductionMilestoneSummary | null) {
+  if (!milestone) {
+    return "none";
+  }
+  const id = milestone.id ?? "unknown";
+  const name = milestone.name ?? "unnamed milestone";
+  return `${id} ${name}`;
+}
+
+async function loadStanskiProductionStatus(host: HostUpdate) {
+  if (!isGatewayLiveReady(host) || stanskiProductionState.loading) {
+    return;
+  }
+  stanskiProductionState = {
+    error: null,
+    loading: true,
+    running: false,
+    snapshot: stanskiProductionState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const snapshot = await host.client.request<StanskiProductionStatusSnapshot>(
+      "snes.stanski.production.status",
+      {},
+      { timeoutMs: 15_000 },
+    );
+    stanskiProductionState = { error: null, loading: false, running: false, snapshot };
+  } catch (error) {
+    stanskiProductionState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      running: false,
+      snapshot: null,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+async function runStanskiProductionAction(
+  host: HostUpdate,
+  method:
+    | "snes.stanski.production.auto"
+    | "snes.stanski.production.cancel"
+    | "snes.stanski.production.continue"
+    | "snes.stanski.production.pause"
+    | "snes.stanski.production.resume"
+    | "snes.stanski.production.retryBlocked"
+    | "snes.stanski.production.splitNext",
+) {
+  if (!isGatewayLiveReady(host) || stanskiProductionState.running) {
+    return;
+  }
+  stanskiProductionState = {
+    error: null,
+    loading: false,
+    running: true,
+    snapshot: stanskiProductionState.snapshot,
+  };
+  host.requestUpdate?.();
+  try {
+    const params =
+      method === "snes.stanski.production.auto"
+        ? { maxMilestones: 40, maxRuntimeMinutes: 30, until: "blocked" }
+        : method === "snes.stanski.production.continue" ||
+            method === "snes.stanski.production.retryBlocked"
+          ? { maxMilestones: 1 }
+          : {};
+    const timeoutMs = method === "snes.stanski.production.auto" ? 1_860_000 : 900_000;
+    const snapshot = await host.client.request<StanskiProductionStatusSnapshot>(method, params, {
+      timeoutMs,
+    });
+    stanskiProductionState = { error: null, loading: false, running: false, snapshot };
+  } catch (error) {
+    stanskiProductionState = {
+      error: error instanceof Error ? error.message : String(error),
+      loading: false,
+      running: false,
+      snapshot: stanskiProductionState.snapshot,
+    };
+  }
+  host.requestUpdate?.();
+}
+
+function renderStanskiProductionPanel(host: HostUpdate) {
+  const { error, loading, running, snapshot } = stanskiProductionState;
+  const completedCount = snapshot?.completedCount ?? 0;
+  const totalCount = snapshot?.totalCount ?? 40;
+  const activeMilestone = snapshot?.currentMilestone ?? snapshot?.nextMilestone ?? null;
+  const blockedMilestone = snapshot?.state?.blockedMilestone;
+  const blocker =
+    snapshot?.blocker ?? (typeof blockedMilestone === "string" ? blockedMilestone : null);
+  const humanGrade = snapshot?.state?.currentHumanVisualGrade ?? 24;
+  const targetGrade = snapshot?.state?.targetHumanVisualGrade ?? 100;
+  const policy = snapshot?.state?.gpt55UsagePolicy;
+  const policySummary = snapshot?.policySummary;
+  const lock = snapshot?.lock;
+  const control = snapshot?.control;
+  const rendererImpact = snapshot?.rendererImpact;
+  const rendererFailures = Array.isArray(rendererImpact?.failures) ? rendererImpact.failures : [];
+  const statusText = loading
+    ? "Loading durable production state…"
+    : running
+      ? "Running one GLM milestone with executable QA…"
+      : error
+        ? `Production loop unavailable: ${error}`
+        : snapshot
+          ? blocker
+            ? `Blocked: ${blocker}`
+            : `${completedCount}/${totalCount} milestones complete · ${snapshot.status ?? "ready"}`
+          : "Load status or continue one milestone. OpenClaw stores progress; GLM receives one tiny packet.";
+  const latestResult = snapshot?.results?.at(-1);
+  return html`
+    <article>
+      <strong>Stanski production loop</strong>
+      <small>${statusText}</small>
+      <small
+        >Current milestone: ${describeStanskiProductionMilestone(activeMilestone)} · visual grade
+        ${humanGrade}/${targetGrade}</small
+      >
+      <small
+        >Local GLM-only creative work · routine GPT 5.5
+        ${policy?.useGpt55ForRoutineMilestone === false ? "off" : "governed"} · default GPT
+        reasoning ${policy?.defaultReasoning ?? "low"}</small
+      >
+      <small
+        >Policy: local GLM ${policySummary?.localGlmOnly === false ? "off" : "required"} · hosted
+        GLM ${policySummary?.hostedGlmAllowed ? "allowed" : "blocked"} · target
+        ${policySummary?.targetHumanVisualGrade ?? targetGrade}/100</small
+      >
+      <small
+        >Worker: ${lock?.pid ? `locked by pid ${lock.pid}` : "no active lock"} · heartbeat
+        ${lock?.heartbeatAt ?? "none"} · paused ${control?.paused ? "yes" : "no"} · cancel
+        ${control?.cancelRequested ? "requested" : "no"}</small
+      >
+      <small
+        >Renderer impact:
+        ${rendererImpact
+          ? `${rendererImpact.status ?? "unknown"} · applied ${rendererImpact.appliedCount ?? 0} patches · assets ${rendererImpact.assetPackCount ?? 0}`
+          : "not checked"}
+        ${rendererFailures.length ? ` · ${rendererFailures.join("; ")}` : ""}</small
+      >
+      ${latestResult
+        ? html`<small
+            >Last milestone ${latestResult.milestoneId ?? "unknown"}:
+            ${latestResult.status ?? "unknown"}${latestResult.blocker
+              ? ` · ${latestResult.blocker}`
+              : ""}</small
+          >`
+        : nothing}
+      <div>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void loadStanskiProductionStatus(host)}
+        >
+          ${loading ? "Loading Production Status" : "Load Production Status"}
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.auto")}
+        >
+          Start Bounded Auto
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.continue")}
+        >
+          ${running ? "Running One Milestone" : "Run One Milestone"}
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.splitNext")}
+        >
+          Split Next
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() =>
+            void runStanskiProductionAction(host, "snes.stanski.production.retryBlocked")}
+        >
+          Retry Blocked Milestone
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.pause")}
+        >
+          Pause
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.resume")}
+        >
+          Resume
+        </button>
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading || running}
+          @click=${() => void runStanskiProductionAction(host, "snes.stanski.production.cancel")}
+        >
+          Cancel
+        </button>
+      </div>
+      <small
+        >Runner files: .artifacts/stanskis-world/production/state.json, backlog.json,
+        memory-cards.json, decision-log.json, latest-summary.md, latest-worker-receipt.md.</small
+      >
+      <small
+        >View Last GLM Patch:
+        ${snapshot?.state?.lastGlmPatchPath ??
+        `${snapshot?.paths?.artifactDir ?? ".artifacts/stanskis-world/production"}/milestone-current/glm-response.json`}
+        · View Last QA:
+        ${snapshot?.state?.lastReceipt ??
+        ".artifacts/stanskis-world/production-smoke-latest.json"}</small
+      >
+    </article>
+  `;
+}
+
+const snesProofActions: Array<{ actionId: SnesProofActionId; label: string }> = [
+  { actionId: "mastery-refresh", label: "Refresh Mastery" },
+  { actionId: "browser-smoke", label: "Run Browser Proof" },
+  { actionId: "emulator-headless", label: "Run Emulator Proof" },
+  { actionId: "budget-enforcement", label: "Run Budget Proof" },
+  { actionId: "runtime-asset-truth", label: "Run Runtime Asset Truth" },
+  { actionId: "fxpak-package-dry-run", label: "Run FXPAK Dry-Run" },
+  { actionId: "generic-project-gate", label: "Run Project Generator Gate" },
+];
+
+function renderSnesMasteryStatusCard(host: HostUpdate) {
+  const { error, loading, snapshot } = snesMasteryStatusState;
+  const kata = snapshot?.kataSummary;
+  const milestone = snapshot?.milestoneSummary;
+  const next = snapshot?.nextIncomplete ?? snapshot?.nextKata ?? null;
+  const blocker = snapshot?.blockers?.[0];
+  const statusText = loading
+    ? "Loading generic SNES Mastery status…"
+    : error
+      ? `SNES Mastery unavailable: ${error}`
+      : snapshot
+        ? `${snapshot.status ?? "unknown"} · katas ${kata?.passed ?? 0}/${kata?.total ?? 0} · milestones ${milestone?.pass ?? 0}/${milestone?.total ?? 0}`
+        : "Click Load SNES Mastery to read the generic mastery ledger.";
+  const nextText = next
+    ? `${next.id ?? "unknown"} ${next.title ?? "incomplete milestone"} · ${next.status ?? "blocked"}`
+    : "none";
+  const blockerText =
+    blocker?.blockers?.[0] ?? blocker?.title ?? snapshot?.blocker ?? "No generic blocker reported.";
+  return html`
+    <article class="snes-mastery-status-card" aria-label="SNES Mastery status">
+      <strong>SNES Mastery</strong>
+      <small>${statusText}</small>
+      ${snapshot
+        ? html`
+            <small
+              >legal corpus ${snapshot.legalCorpus?.status ?? "unknown"} · generic scope
+              ${snapshot.genericScope?.status ?? "unknown"} · GPT 5.5
+              ${snapshot.gpt55Used ? "used" : "off"} · hosted GLM
+              ${snapshot.hostedGlmUsed ? "used" : "off"}</small
+            >
+            <small>Next incomplete: ${nextText}</small>
+            <small>Blocker: ${blockerText}</small>
+          `
+        : nothing}
+      <div class="snes-mastery-status-card__actions" aria-label="Generic SNES proof actions">
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || loading}
+          @click=${() => void loadSnesMasteryStatus(host)}
+        >
+          ${loading ? "Loading SNES Mastery" : "Load SNES Mastery"}
+        </button>
+        ${snesProofActions.map(
+          (action) => html`<button
+            type="button"
+            ?disabled=${!isGatewayLiveReady(host) || Boolean(snesProofActionState.running)}
+            @click=${() => void runSnesGenericProofAction(host, action.actionId)}
+          >
+            ${snesProofActionState.running === action.actionId ? "Running…" : action.label}
+          </button>`,
+        )}
+        <button
+          type="button"
+          ?disabled=${!isGatewayLiveReady(host) || snesBlankProjectState.running}
+          @click=${() => void createBlankSnesProject(host)}
+        >
+          ${snesBlankProjectState.running ? "Creating…" : "Create Blank SNES Project"}
+        </button>
+      </div>
+      ${snesBlankProjectState.lastReceipt || snesBlankProjectState.error
+        ? html`<small
+            >Blank project:
+            ${snesBlankProjectState.error ??
+            `${snesBlankProjectState.lastReceipt?.projectId ?? "unknown"} · ${snesBlankProjectState.lastReceipt?.status ?? "unknown"} · ${snesBlankProjectState.lastReceipt?.proofClaim ?? "package created only"}`}</small
+          >`
+        : nothing}
+      ${snesProofActionState.lastReceipt || snesProofActionState.error
+        ? html`<small
+            >Latest proof action:
+            ${snesProofActionState.error ??
+            `${snesProofActionState.lastReceipt?.actionId ?? "unknown"} · ${snesProofActionState.lastReceipt?.status ?? "unknown"}${snesProofActionState.lastReceipt?.blocker ? ` · ${snesProofActionState.lastReceipt.blocker}` : ""}`}</small
+          >`
+        : nothing}
+      <small
+        >Dashboard actions are local-only and keep browser, emulator, runtime, budget, FXPAK
+        dry-run, and project-generation proof separate.</small
+      >
+    </article>
+  `;
+}
+
+function renderSnesLocalProofChecklist(
+  host: HostUpdate,
+  qualityReport = createSnesGameQualityReport(project),
+) {
+  const benchmarkReport = createSnesLocalModelBenchmarkReport([
+    "ollama/openclaw-control-qwen25-32b:latest",
+  ]);
+  const readiness = probeSnesLiveAiReadiness(host);
+  const exportReady = buildSnesReadiness(project);
+  return html`
+    <section class="snes-local-proof-checklist" aria-label="SNES Studio local proof checklist">
+      <strong>Local Proof Checklist</strong>
+      <div class="snes-ai-production-route__checks">
+        <article>
+          <strong>Local proof</strong
+          ><small
+            >${qualityReport.status === "pass" ? "passed" : "needs repair"} · replay
+            ${qualityReport.playtestReport.replayEvidence.framesSimulated} frames</small
+          >
+        </article>
+        <article>
+          <strong>Authenticated Gateway</strong
+          ><small>${readiness.authenticated ? "connected" : "needs dashboard token/session"}</small>
+        </article>
+        <article>
+          <strong>Live GPT 5.5 route</strong
+          ><small
+            >${liveAiProductionProofState.status === "passed"
+              ? "verified"
+              : "manual gate pending"}</small
+          >
+        </article>
+        <article>
+          <strong>Cost used</strong
+          ><small
+            >${qualityReport.modelRouting.codexCostUsed
+              ? "GPT/Codex cost used"
+              : "no GPT/Codex cost used"}</small
+          >
+        </article>
+        <article>
+          <strong>Export proof bundle</strong
+          ><small
+            >${exportReady.status === "ready"
+              ? ".sfc and emulator proof available after export"
+              : (exportReady.issues[0]?.message ?? "export blockers present")}</small
+          >
+        </article>
+      </div>
+      <div class="snes-ai-production-route__checks">
+        <article>
+          <strong>Local model benchmark report</strong
+          ><small
+            >${benchmarkReport.status} · synthetic winner
+            ${benchmarkReport.winnersByRole["snes-game-director"]} · run real output benchmark for
+            promotion proof</small
+          >
+        </article>
+        <article>
+          <strong>Real output benchmark</strong>${renderLatestBenchmarkSnapshot()}
+          <button
+            type="button"
+            ?disabled=${!isGatewayLiveReady(host) || snesBenchmarkLatestState.loading}
+            @click=${() => void loadLatestSnesBenchmarkReport(host)}
+          >
+            ${snesBenchmarkLatestState.loading ? "Loading Benchmark" : "Load Latest Benchmark"}
+          </button>
+          <small
+            >Run pnpm snes:benchmark:models -- --mode output --models
+            ollama/openclaw-control-qwen25-32b:latest,local-glm-5.2-2bit --rounds 3 --judge none
+            --no-download --timeout 240 --max-output-tokens 900 --json. Add --judge gpt-5.5 only
+            after explicit hosted-judge approval.</small
+          >
+        </article>
+        ${renderGlm52LocalStatus(host)} ${renderSnesMasteryStatusCard(host)}
+        ${renderStanskiProductionPanel(host)}
+        <article>
+          <strong>Manual live proof steps</strong
+          ><small
+            >Open authenticated dashboard, Check Again, Run Live Production Check, build, improve,
+            export proof.</small
+          >
+        </article>
+      </div>
+      ${readiness.authenticated
+        ? nothing
+        : html`<small class="snes-ai-production-route__state"
+            >Live proof blocked until the Dashboard Gateway token/session is connected.</small
+          >`}
+    </section>
+  `;
+}
+
+function renderSnesAgentWorkflowPanel(host: HostUpdate) {
+  const workflow = createSnesAgentWorkflowReport(project, {
+    humanVisualScore: null,
+    targetVisualScore: 100,
+  });
+  const benchmarkSnapshot = snesBenchmarkLatestState.snapshot;
+  const availableModels = [
+    ...new Set([
+      ...Object.values(benchmarkSnapshot?.currentDefaultsByRole ?? {}),
+      ...Object.values(benchmarkSnapshot?.recommendedWinnersByRole ?? {}),
+      ...Object.values(benchmarkSnapshot?.winnersByRole ?? {}),
+    ]),
+  ].filter(Boolean);
+  const capabilityMatrix = createSnesAgentCapabilityMatrixReport({
+    availableModelRefs: availableModels,
+    glm52RuntimeReady: snesGlm52StatusState.snapshot?.runtimeReady === true,
+    ollamaRuntimeReady:
+      availableModels.some((model) => String(model).startsWith("ollama/")) ||
+      benchmarkSnapshot?.status === "ready",
+    toolchain: snesToolchainStatusState.snapshot ?? undefined,
+  });
+  const routine = workflow.tokenGovernor.routinePatch;
+  const blueprint = workflow.tokenGovernor.blueprint;
+  const repair = workflow.repairLoop;
+  const currentBlocker = workflow.blockers[0] ?? "none";
+  const currentOwner =
+    workflow.visualGate.status !== "pass"
+      ? "Art Director / Visual QA"
+      : (repair.targetRole ?? "Producer Orchestrator");
+  return html`
+    <section class="snes-agent-workflow-panel" aria-label="How the SNES team is working">
+      <span class="snes-eyebrow">How The Team Is Working</span>
+      <h3>Producer controls the pipeline. GPT 5.5 is used only where it improves quality.</h3>
+      <div class="snes-ai-production-route__checks">
+        <article>
+          <strong>Producer Orchestrator</strong>
+          <small
+            >Owns manifest memory, milestone order, token policy, and pass/fail receipts.</small
+          >
+        </article>
+        <article>
+          <strong>GPT 5.5 smart use</strong>
+          <small
+            >Blueprint ${blueprint.reasoningLevel} · routine patches
+            ${routine.gpt55Used ? "GPT 5.5" : "local OpenClaw/GLM"} · repair
+            ${repair.gpt55Decision.reasoningLevel}</small
+          >
+        </article>
+        <article>
+          <strong>Local OpenClaw/GLM workers</strong>
+          <small>Do routine scoped JSON patches. ${routine.costAvoidedByLocalAgents}</small>
+        </article>
+        <article>
+          <strong>Current blocker owner</strong>
+          <small>${currentOwner} · ${currentBlocker}</small>
+        </article>
+      </div>
+      <div class="snes-ai-production-route__checks">
+        <article>
+          <strong>Manifest memory</strong>
+          <small
+            >${workflow.manifestMemory.latestPacket.task} · full transcript required:
+            ${workflow.manifestMemory.fullTranscriptRequired ? "yes" : "no"}</small
+          >
+        </article>
+        <article>
+          <strong>Art Director gate</strong>
+          <small
+            >${workflow.visualGate.status} · machine ${workflow.visualGate.machineScore}/100 ·
+            target ${workflow.visualGate.targetScore}/100</small
+          >
+        </article>
+        <article>
+          <strong>Handoff receipts</strong>
+          <small
+            >${workflow.handoffReceipts.length} role receipts require patch, risk, QA, and next-role
+            evidence.</small
+          >
+        </article>
+        <article>
+          <strong>Next action</strong>
+          <small>${workflow.nextRecommendedAction}</small>
+        </article>
+      </div>
+      <div class="snes-ai-production-route__checks" aria-label="Agent tools and models">
+        <article>
+          <strong>Agent readiness</strong>
+          <small
+            >${capabilityMatrix.status} · ${capabilityMatrix.entries.length} roles · hosted GLM
+            ${capabilityMatrix.hostedGlmUsed ? "yes" : "no"} · GPT visual judge
+            ${capabilityMatrix.gpt55AutomatedVisualJudgeUsed ? "yes" : "no"}</small
+          >
+        </article>
+        ${capabilityMatrix.entries
+          .filter((entry) => entry.role !== "producer-orchestrator")
+          .slice(0, 6)
+          .map(
+            (entry) => html`
+              <article>
+                <strong>${entry.title}</strong>
+                <small
+                  >${entry.model.modelRef} · ${entry.model.quant} · temp ${entry.model.temperature}
+                  · ctx ${entry.model.contextTokens} · runtime ${entry.runtime.status}</small
+                >
+                <small
+                  >tools
+                  ${entry.tools.filter((tool) => tool.status === "ready").length}/${entry.tools
+                    .length}
+                  ready${entry.runtime.blocker ? ` · ${entry.runtime.blocker}` : ""}</small
+                >
+              </article>
+            `,
+          )}
+      </div>
+      <div class="snes-ai-production-route__actions">
+        <button type="button" @click=${() => setGuidedStep(host, "playtest")}>Continue</button>
+        <button type="button" @click=${() => improveGuidedGameQuality(host)}>Repair</button>
+        <button type="button" @click=${() => setGuidedStep(host, "make-things")}>Review Art</button>
+        <button type="button" @click=${() => setGuidedStep(host, "export")}>Ship Proof</button>
+      </div>
+    </section>
   `;
 }
 
@@ -15996,32 +18580,34 @@ function renderAiProductionRunCard(host: HostUpdate) {
   const run = project.aiProductionRun;
   if (!run) {
     return html`
-      <section class="snes-ai-production-card" aria-label="Codex-supervised OpenClaw game team">
+      <section class="snes-ai-production-card" aria-label="GPT 5.5-directed OpenClaw game team">
         <span class="snes-eyebrow">AI Production Team</span>
-        <h3>Codex plans and reviews. OpenClaw fills the game.</h3>
+        <h3>GPT 5.5 plans, solves problems, and approves. OpenClaw builds the game.</h3>
         <div class="snes-ai-production-card__steps">
           <article>
-            <strong>1 Codex Architect</strong><small>Blueprint, rubric, risks.</small>
+            <strong>1 GPT 5.5 Director</strong><small>Blueprint, rubric, risks, metrics.</small>
           </article>
           <article>
             <strong>2 OpenClaw Game Team</strong><small>Story, levels, cast, rules.</small>
           </article>
           <article>
-            <strong>3 Codex QA Gate</strong><small>Scores and approves before export.</small>
+            <strong>3 GPT 5.5 Gate</strong
+            ><small>Approves, rejects, or orders repairs before export.</small>
           </article>
         </div>
-        ${renderLiveAiProductionRoute(host)}
+        ${renderSnesAgentWorkflowPanel(host)} ${renderLiveAiProductionRoute(host)}
       </section>
     `;
   }
+  const qualityReport = run.qualityReport ?? createSnesGameQualityReport(project);
   return html`
-    <section class="snes-ai-production-card" aria-label="Codex-supervised OpenClaw production run">
+    <section class="snes-ai-production-card" aria-label="GPT 5.5-directed OpenClaw production run">
       <span class="snes-eyebrow">AI Production Team</span>
       <h3>${run.status.replace(/-/g, " ")}</h3>
       <p>${run.blueprint.gameConcept}</p>
       <div class="snes-ai-production-card__steps">
         <article>
-          <strong>Codex blueprint ready</strong>
+          <strong>GPT 5.5 director plan ready</strong>
           <small
             >${run.blueprint.qualityRubric.length} quality checks · ${run.taskList.length} OpenClaw
             tasks</small
@@ -16036,7 +18622,21 @@ function renderAiProductionRunCard(host: HostUpdate) {
           >
         </article>
         <article>
-          <strong>Codex approved for playtest</strong>
+          <strong>Automated validation</strong>
+          <small
+            >validation ${run.validationReport?.score ?? 0}/100 · playtest
+            ${run.playtestReport?.score ?? 0}/100</small
+          >
+        </article>
+        <article>
+          <strong>Game quality gauntlet</strong>
+          <small
+            >${qualityReport.score}/100 · ${qualityReport.status} ·
+            ${qualityReport.modelRouting.codexCostUsed ? "GPT cost used" : "no GPT cost"}</small
+          >
+        </article>
+        <article>
+          <strong>GPT 5.5 decision</strong>
           <small
             >${run.finalApproval
               ? `${run.finalApproval.score}/100 · ${run.finalApproval.approvalStatus.replace(/-/g, " ")}`
@@ -16055,6 +18655,23 @@ function renderAiProductionRunCard(host: HostUpdate) {
         : html`<small
             >All editable game sections have an audit trail and can be changed with OpenClaw.</small
           >`}
+      ${renderSnesAgentWorkflowPanel(host)} ${renderSnesLocalProofChecklist(host, qualityReport)}
+      <div class="snes-ai-production-route__actions">
+        <small
+          >Replay evidence: ${qualityReport.playtestReport.replayEvidence.framesSimulated} frames ·
+          ${qualityReport.playtestReport.replayEvidence.terminalStatus} ·
+          ${qualityReport.playtestReport.replayEvidence.collectedRewardCount} rewards · damage
+          ${qualityReport.playtestReport.replayEvidence.damageTaken}</small
+        >
+        <button type="button" class="primary" @click=${() => improveGuidedGameQuality(host)}>
+          Improve Game Quality
+        </button>
+        <small
+          >Planner ${qualityReport.modelRouting.planner.replace(/-/g, " ")} · workers
+          ${qualityReport.modelRouting.workers.replace(/-/g, " ")} · QA
+          ${qualityReport.modelRouting.qa.replace(/-/g, " ")}</small
+        >
+      </div>
       ${renderLiveAiProductionRoute(host)}
     </section>
   `;
@@ -16062,22 +18679,23 @@ function renderAiProductionRunCard(host: HostUpdate) {
 
 function renderGuidedHeader(host: HostUpdate) {
   return html`
-    <header class="snes-guided-hero snes-arcade-header" aria-label="AI Arcade Builder">
+    <header class="snes-guided-hero snes-arcade-header" aria-label="SNES Studio">
       <div>
-        <span class="snes-eyebrow">AI Arcade Builder</span>
+        <span class="snes-eyebrow">SNES Studio</span>
         <h2>Play it, point at it, ask OpenClaw to change it.</h2>
         <p>
-          Start with one side-scrolling platformer. Codex plans and reviews; OpenClaw fills the
-          game, then the emulator-like canvas becomes the editor.
+          Start with one side-scrolling platformer. GPT 5.5 plans, solves, and approves; OpenClaw
+          builds the game, then the emulator-like canvas becomes the editor.
         </p>
       </div>
       <div class="snes-guided-hero__actions">
         <button
           type="button"
-          class="primary"
+          class="primary snes-make-my-game"
+          aria-label="Make My Game with OpenClaw"
           @click=${() => void createGuidedPlatformerDraft(host)}
         >
-          Build With OpenClaw
+          Make My Game
         </button>
         <button type="button" @click=${() => fillGuidedMissingPieces(host)}>Fill Gaps</button>
         <button type="button" @click=${() => setGuidedStep(host, "playtest")}>Play & Change</button>
@@ -16166,7 +18784,7 @@ function renderGuidedReceipt(host: HostUpdate) {
       <section class="snes-guided-receipt" aria-label="Latest AI result">
         <span>Ready</span>
         <strong>OpenClaw is waiting for your first game idea.</strong>
-        <p>Type one story prompt and press Build With OpenClaw.</p>
+        <p>Type one story prompt and press Make My Game.</p>
       </section>
     `;
   }
@@ -16239,8 +18857,8 @@ function renderGuidedIdeaStep(host: HostUpdate) {
         <span class="snes-eyebrow">Idea</span>
         <h3>What game do you want to make?</h3>
         <p>
-          Change the original idea at any time. Codex writes the blueprint, OpenClaw fills the
-          playable draft, and Codex reviews quality before export.
+          Change the original idea at any time. GPT 5.5 writes the live blueprint, OpenClaw fills
+          the playable draft, and GPT 5.5 reviews quality before export when the live route runs.
         </p>
       </div>
       <label>
@@ -16256,10 +18874,11 @@ function renderGuidedIdeaStep(host: HostUpdate) {
       <div class="snes-guided-actions">
         <button
           type="button"
-          class="primary"
+          class="primary snes-make-my-game"
+          aria-label="Make My Game with OpenClaw"
           @click=${() => void createGuidedPlatformerDraft(host)}
         >
-          Build With OpenClaw
+          Make My Game
         </button>
         <button type="button" @click=${() => void askAiGameStageLiveAgent(host)}>
           Ask Live OpenClaw
@@ -16429,7 +19048,7 @@ function renderGuidedThingsShelf(host: HostUpdate) {
 
 function renderGuidedThingsShelfDrawer(host: HostUpdate) {
   return html`
-    <details class="snes-play-drawer snes-guided-things-drawer">
+    <details class="snes-play-drawer snes-guided-things-drawer" open>
       <summary>Add game things</summary>
       ${renderGuidedThingsShelf(host)}
     </details>
@@ -16616,7 +19235,7 @@ function renderGuidedMakeThingsStep(host: HostUpdate) {
           `,
         )}
       </div>
-      ${renderGuidedThingsShelf(host)}
+      ${renderGuidedThingsShelf(host)} ${renderProductionVisualReportPanel(host, "guided")}
     </section>
   `;
 }
@@ -16853,38 +19472,47 @@ function renderGuidedWorkspace(host: HostUpdate) {
 
 function renderArcadeStart(host: HostUpdate) {
   return html`
-    <section class="snes-arcade-start" aria-label="AI Arcade Builder start">
+    <section class="snes-arcade-start" aria-label="SNES Studio start">
       <div class="snes-arcade-start__copy">
-        <span class="snes-eyebrow">AI Arcade Builder</span>
-        <h2>What game do you want to make?</h2>
+        <span class="snes-eyebrow">SNES Studio</span>
+        <h2>What game should we make?</h2>
         <p>
-          Type one idea. Codex creates the blueprint, OpenClaw fills the game, Codex checks it, and
-          you get a playable side-scrolling game you can change by clicking the emulator.
+          Type one idea. OpenClaw makes a playable game. Then click, drag, or ask AI to change
+          anything.
         </p>
       </div>
       <label class="snes-arcade-start__prompt">
-        <span>Game idea</span>
+        <span>Describe your game</span>
         <textarea
-          rows="6"
+          rows="5"
           .value=${surfacePromptDraft("full-game")}
-          placeholder="Example: Make a robot mountain adventure with three levels, gems, a rival drone, a hidden key, and a big door at the end."
+          placeholder="Example: Make a robot mountain adventure with gems, a rival drone, a hidden key, and a big door at the end."
           @input=${(event: Event) => updateAiPrompt("full-game", inputValue(event))}
         ></textarea>
       </label>
       <div class="snes-arcade-start__bottom">
         <div>
-          <span class="snes-arcade-start__label">Who helps?</span>
-          ${renderGuidedProviderButtons(host)}
+          <span class="snes-arcade-start__label">AI helper</span>
+          <strong class="snes-local-ai-badge">Local OpenClaw by default</strong>
         </div>
         <button
           type="button"
-          class="primary"
+          class="primary snes-make-my-game"
+          aria-label="Make My Game with OpenClaw"
           @click=${() => void createGuidedPlatformerDraft(host)}
         >
-          Build With OpenClaw
+          Make My Game
         </button>
       </div>
-      ${renderAiProductionRunCard(host)} ${renderGraphicsStyleCard(host)}
+      <div class="snes-beginner-next-actions" aria-label="What happens after Make My Game">
+        <article><strong>1. Play</strong><small>Try the game immediately.</small></article>
+        <article>
+          <strong>2. Click or drag</strong><small>Point at anything you want changed.</small>
+        </article>
+        <article>
+          <strong>3. Ask AI</strong><small>Type the change and preview it first.</small>
+        </article>
+      </div>
       <div class="snes-arcade-start__chips" aria-label="Starter game ideas">
         ${[
           {
@@ -16913,21 +19541,68 @@ function renderArcadeStart(host: HostUpdate) {
       </div>
       <div class="snes-arcade-start__promise" aria-label="What happens next">
         <article>
-          <span>1</span>
-          <strong>AI makes the game plan</strong>
-          <small>Story, levels, cast, rules, music idea, save plan.</small>
+          <span>Play</span>
+          <strong>Try it first</strong>
+          <small>The game canvas is the editor.</small>
         </article>
         <article>
-          <span>2</span>
-          <strong>You play it</strong>
-          <small>The emulator-like canvas moves immediately.</small>
+          <span>Change</span>
+          <strong>Click anything</strong>
+          <small>AI changes only the thing or area you picked.</small>
         </article>
         <article>
-          <span>3</span>
-          <strong>You point and prompt</strong>
-          <small>Drag-select the screen and ask AI to add, remove, or change things.</small>
+          <span>Ship</span>
+          <strong>Make a game file</strong>
+          <small>Expert proof stays hidden until you ask for details.</small>
         </article>
       </div>
+    </section>
+  `;
+}
+
+function renderBeginnerActionStrip(host: HostUpdate) {
+  return html`
+    <nav class="snes-beginner-action-strip" aria-label="Main SNES Studio actions">
+      <button type="button" class="primary" @click=${() => startPreviewPlaytest(host, true, true)}>
+        Play
+      </button>
+      <button
+        type="button"
+        @click=${() => {
+          selectedGuidedStep = "playtest";
+          host.requestUpdate?.();
+        }}
+      >
+        Change
+      </button>
+      <button type="button" @click=${() => downloadPreviewRom(host)}>Ship</button>
+      <button
+        type="button"
+        ?disabled=${undoStack.length === 0}
+        @click=${() => undoProjectChange(host)}
+      >
+        Undo
+      </button>
+    </nav>
+  `;
+}
+
+function renderBeginnerCanvasWorkspace(host: HostUpdate) {
+  return html`
+    <section class="snes-beginner-canvas-workspace" aria-label="Play, click, drag, and prompt">
+      <div class="snes-beginner-canvas-workspace__main">
+        <div class="snes-beginner-headline">
+          <span class="snes-eyebrow">Play & Change</span>
+          <h2>${project.name}</h2>
+          <p>Click or drag anything on the game screen. Then type what you want changed.</p>
+        </div>
+        ${renderGameTestPanel(host)}
+      </div>
+      <aside class="snes-beginner-canvas-workspace__side" aria-label="Ask AI and ship">
+        ${renderArcadeAskBar(host)} ${renderAiActionFeedback(host, true)}
+        ${renderSnesAgentWorkflowPanel(host)} ${renderSelectedThingPanel(host)}
+        ${renderGuidedThingsShelfDrawer(host)} ${renderAiExportCard(host)}
+      </aside>
     </section>
   `;
 }
@@ -16935,15 +19610,18 @@ function renderArcadeStart(host: HostUpdate) {
 function renderGuidedGameBuilder(host: HostUpdate) {
   if (!hasArcadeGameDraft()) {
     return html`
-      <main class="snes-arcade-builder snes-arcade-builder--start" aria-label="AI Arcade Builder">
+      <main class="snes-arcade-builder snes-arcade-builder--start" aria-label="SNES Studio">
         ${renderArcadeStart(host)} ${renderExpertStudio(host)}
       </main>
     `;
   }
   return html`
-    <main class="snes-guided-game-builder snes-arcade-builder" aria-label="AI Arcade Builder">
-      ${renderGuidedHeader(host)} ${renderGuidedStepRail(host)} ${renderGuidedControlBar()}
-      ${renderGuidedHealthStrip()} ${renderGuidedWorkspace(host)} ${renderExpertStudio(host)}
+    <main
+      class="snes-guided-game-builder snes-arcade-builder snes-arcade-builder--simple"
+      aria-label="SNES Studio"
+    >
+      ${renderGuidedHeader(host)} ${renderBeginnerActionStrip(host)} ${renderGuidedHealthStrip()}
+      ${renderBeginnerCanvasWorkspace(host)} ${renderExpertStudio(host)}
     </main>
   `;
 }
