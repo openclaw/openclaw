@@ -59,15 +59,19 @@ function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
   return host;
 }
 
-function resolveRedirectUri(host: string = CALLBACK_HOST): string {
+function resolveRedirectUri(host: string): string {
   const hostForUrl = host === "::1" ? "[::1]" : host;
   const url = new URL(`http://${hostForUrl}:${CALLBACK_PORT}`);
   url.pathname = CALLBACK_PATH;
   return url.toString();
 }
 
-const CALLBACK_HOST = resolveCallbackHost();
-const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
+function resolveCallbackConfig(): { callbackHost: string; redirectUri: string } {
+  const callbackHost = resolveCallbackHost();
+  const redirectUri = resolveRedirectUri(callbackHost);
+  return { callbackHost, redirectUri };
+}
+
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 async function getNodeApis(): Promise<NodeApis> {
@@ -217,14 +221,16 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
       }
     });
 
+    const { callbackHost, redirectUri } = resolveCallbackConfig();
+
     server.on("error", (err) => {
       reject(err);
     });
 
-    server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+    server.listen(CALLBACK_PORT, callbackHost, () => {
       resolve({
         server,
-        redirectUri: REDIRECT_URI,
+        redirectUri,
         cancelWait: () => {
           settleWait?.(null);
         },
@@ -316,7 +322,7 @@ export async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
-  let redirectUriForExchange = REDIRECT_URI;
+  let redirectUriForExchange = server.redirectUri;
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -324,7 +330,7 @@ export async function loginAnthropic(options: {
       code: "true",
       client_id: CLIENT_ID,
       response_type: "code",
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: server.redirectUri,
       scope: SCOPES,
       code_challenge: challenge,
       code_challenge_method: "S256",
@@ -365,7 +371,7 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
+        redirectUriForExchange = server.redirectUri;
       } else if (manualInput) {
         const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
@@ -398,7 +404,7 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
+        redirectUriForExchange = server.redirectUri;
       }
     }
 
@@ -406,7 +412,7 @@ export async function loginAnthropic(options: {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
-          placeholder: REDIRECT_URI,
+          placeholder: server.redirectUri,
         }),
         options.signal,
         server.cancelWait,
@@ -483,7 +489,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
 };
 
 export const testing = {
-  callbackHost: CALLBACK_HOST,
+  resolveCallbackConfig,
   resolveCallbackHost,
   resolveRedirectUri,
 };
