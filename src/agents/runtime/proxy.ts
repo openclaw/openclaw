@@ -124,6 +124,11 @@ function sanitizeProxyModel(model: Model): Model {
   return safeModel as Model;
 }
 
+/** Max bytes for the internal SSE line-buffer. A response that cannot find a
+ *  `\n` boundary within this many characters is almost certainly hostile or
+ *  broken — cap the buffer rather than letting it grow unbounded. */
+const PROXY_SSE_BUFFER_MAX_BYTES = 64 * 1024;
+
 export function streamProxy(
   model: Model,
   context: Context,
@@ -224,6 +229,11 @@ export function streamProxy(
         }
 
         buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > PROXY_SSE_BUFFER_MAX_BYTES) {
+          throw new Error(
+            `Proxy SSE response exceeded max buffer size (${PROXY_SSE_BUFFER_MAX_BYTES} bytes) without line boundary`,
+          );
+        }
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 

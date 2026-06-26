@@ -189,4 +189,31 @@ describe("streamProxy", () => {
       errorMessage: "Proxy stream ended before terminal event",
     });
   });
+
+  it("rejects oversized SSE response without line boundary in proxy reader", async () => {
+    const oversized = "x".repeat(65 * 1024);
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(oversized));
+            controller.close();
+          },
+        }),
+      })),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("exceeded max buffer size");
+  });
 });
