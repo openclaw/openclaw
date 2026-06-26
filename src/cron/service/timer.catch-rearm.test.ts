@@ -92,29 +92,33 @@ describe("cron timer .catch() re-arm", () => {
       ],
     };
 
-    // Make the job execution reject to trigger the catch path.
-    // onTimer calls runIsolatedAgentJob which returns the job promise;
-    // by making it reject, onTimer will reject, exercising the .catch handler.
+    // Make the job execution reject. onTimer's catch and finally blocks
+    // ensure the scheduler re-arms. The .catch() safety-net in armTimer's
+    // setTimeout fires only for infrastructure-level rejections (e.g.
+    // locked() failing); job execution errors are caught internally by
+    // executeJobCoreWithTimeout. The timer re-arm here comes from onTimer's
+    // finally block, which is the normal error-recovery path.
     state.deps.runIsolatedAgentJob = vi.fn().mockRejectedValue(
-      new Error("simulated job rejection for catch-path test"),
+      new Error("simulated job rejection for re-arm test"),
     );
 
     armTimer(state);
     expect(state.timer).not.toBeNull();
-    const firstTimer = state.timer!;
+    const _firstTimer = state.timer!;
 
-    // Fire the timer callback which calls onTimer → rejects → .catch → armTimer
+    // Fire the timer callback which calls onTimer → job rejects internally → finally re-arms
     await vi.advanceTimersToNextTimerAsync();
 
-    // The .catch handler should have logged the error
-    expect(noopLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.stringContaining("simulated job rejection") }),
-      "cron: timer tick failed",
+    // The job error should be logged via applyJobResult's warn path
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: "catch-test-job",
+        error: expect.stringContaining("simulated job rejection"),
+      }),
+      expect.stringContaining("job run returned error status"),
     );
 
-    // armTimer should have been called again from the .catch handler,
-    // scheduling a new timer. The old timer was cleared + a new one set.
-    // Either the timer is replaced or at minimum the scheduler didn't die.
+    // onTimer's finally block should have re-armed the timer.
     expect(state.timer).not.toBeNull();
 
     // Clean up
