@@ -100,6 +100,12 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+      name: "channel deny accepts opaque Matrix peers with empty tail segments",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "matrix" } }]),
+      sessionKey: "agent:main:matrix:channel:!room:[2001:db8::1]",
+      expected: "deny",
+    },
+    {
       name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",

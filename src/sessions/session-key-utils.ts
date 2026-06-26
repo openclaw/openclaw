@@ -252,7 +252,7 @@ export function parseAgentSessionKey(
     return null;
   }
   const parts = raw.split(":");
-  if (parts.length < 3 || parts.some((part) => !part)) {
+  if (parts.length < 3 || !parts[1] || !parts[2]) {
     return null;
   }
   if (parts[0] !== "agent") {

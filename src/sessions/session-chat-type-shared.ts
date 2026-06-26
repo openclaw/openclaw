@@ -40,9 +40,9 @@ export function parseCanonicalSessionPeerShape(
     peerKind = parts[2];
     peerIdStart = 3;
   }
-  // Peer ids may contain colons, but every tail segment must be present. This
-  // rejects incomplete or empty structural keys before policy classification.
-  if (!peerKind || !parts[peerIdStart] || parts.slice(peerIdStart).some((part) => !part)) {
+  // Peer ids are opaque tails and may contain empty colon-delimited segments.
+  // Only the structural prefix and first peer-id segment must be present.
+  if (!peerKind || !parts[peerIdStart]) {
     return undefined;
   }
   const chatType = peerKind === "direct" || peerKind === "dm" ? "direct" : peerKind;

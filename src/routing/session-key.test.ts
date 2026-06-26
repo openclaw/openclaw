@@ -1,5 +1,6 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
+import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
@@ -138,6 +139,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
     { key: "agent:main:matrix:channel:!Room:example.org", expected: "channel" },
+    { key: "agent:main:matrix:channel:!room:[2001:db8::1]", expected: "channel" },
     { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
     { key: "agent:main:direct", expected: "unknown" },
     { key: "agent:main:demo:acct:channel", expected: "unknown" },
@@ -202,6 +204,16 @@ describe("session key canonicalization", () => {
           agentId: "main",
           rest: "hook:webhook:42",
         }),
+    },
+    {
+      name: "preserves empty segments inside opaque agent-scoped tails",
+      run: () => {
+        expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
+          agentId: "voice",
+          rest: "room::part",
+        });
+        expect(resolveSessionStoreAgentId({}, "agent:voice:room::part")).toBe("voice");
+      },
     },
     {
       name: "does not double-prefix already-qualified agent keys",
