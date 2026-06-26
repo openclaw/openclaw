@@ -22,6 +22,7 @@ type OfficialExternalPackageLookup = (packageName: string) =>
   | {
       pluginId: string;
       npmSpec?: string;
+      clawhubSpec?: string;
       expectedIntegrity?: string;
     }
   | undefined;
@@ -134,6 +135,7 @@ export function resolveOfficialExternalNpmPackageTrust(params: {
   findOfficialExternalPackage: OfficialExternalPackageLookup;
 }): {
   pluginId: string;
+  clawhubSpec?: string;
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall: true;
 } | null {
@@ -152,6 +154,7 @@ export function resolveOfficialExternalNpmPackageTrust(params: {
   }
   return {
     pluginId: entry.pluginId,
+    ...(entry.clawhubSpec ? { clawhubSpec: entry.clawhubSpec } : {}),
     ...(entry.expectedIntegrity && catalogSpec === params.npmSpec.trim()
       ? { expectedIntegrity: entry.expectedIntegrity }
       : {}),

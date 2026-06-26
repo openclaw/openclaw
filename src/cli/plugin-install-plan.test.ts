@@ -155,6 +155,43 @@ describe("plugin install plan helpers", () => {
     });
   });
 
+  it("includes clawhubSpec in npm package trust when present", () => {
+    const findOfficialExternalPackage = vi.fn().mockReturnValue({
+      pluginId: "searxng",
+      npmSpec: "@openclaw/searxng-plugin",
+      clawhubSpec: "clawhub:@openclaw/searxng-plugin",
+    });
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "@openclaw/searxng-plugin",
+      findOfficialExternalPackage,
+    });
+
+    expect(result).toEqual({
+      pluginId: "searxng",
+      clawhubSpec: "clawhub:@openclaw/searxng-plugin",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+  });
+
+  it("omits clawhubSpec from npm package trust when not in catalog entry", () => {
+    const findOfficialExternalPackage = vi.fn().mockReturnValue({
+      pluginId: "discord",
+      npmSpec: "@openclaw/discord",
+    });
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "@openclaw/discord",
+      findOfficialExternalPackage,
+    });
+
+    expect(result).toEqual({
+      pluginId: "discord",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+    expect(result).not.toHaveProperty("clawhubSpec");
+  });
+
   it("does not trust npm package names outside the official external catalog", () => {
     const findOfficialExternalPackage = vi.fn();
 

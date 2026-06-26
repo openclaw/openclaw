@@ -119,6 +119,7 @@ function findTrustedCatalogPackageInstall(packageName: string):
   | {
       pluginId: string;
       npmSpec?: string;
+      clawhubSpec?: string;
       expectedIntegrity?: string;
     }
   | undefined {
@@ -137,6 +138,7 @@ function findTrustedCatalogPackageInstall(packageName: string):
   return {
     pluginId,
     ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
+    ...(install?.clawhubSpec ? { clawhubSpec: install.clawhubSpec } : {}),
     ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
   };
 }
@@ -1303,6 +1305,7 @@ export async function runPluginInstallCommand(params: {
           mode: installMode,
           spec: officialExternalPlan.clawhubSpec,
           extensionsDir,
+          expectedPluginId: officialExternalPlan.pluginId,
           logger: createPluginInstallLogger(runtime),
         });
         if (clawhubResult.ok) {
@@ -1378,6 +1381,34 @@ export async function runPluginInstallCommand(params: {
     runtime,
   });
   if (!npmResult.ok) {
+    if (officialNpmTrust?.clawhubSpec) {
+      runtime.log(
+        `npm install failed for ${raw}; trying ClawHub fallback…`,
+      );
+      const clawhubResult = await installPluginFromClawHub({
+        ...safetyOverrides,
+        mode: installMode,
+        spec: officialNpmTrust.clawhubSpec,
+        extensionsDir,
+        expectedPluginId: officialNpmTrust.pluginId,
+        logger: createPluginInstallLogger(runtime),
+      });
+      if (clawhubResult.ok) {
+        await persistPluginInstall({
+          snapshot,
+          pluginId: clawhubResult.pluginId,
+          install: {
+            ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
+            spec: officialNpmTrust.clawhubSpec,
+            installPath: clawhubResult.targetDir,
+          },
+          invalidateRuntimeCache,
+          runtime,
+        });
+        return;
+      }
+      runtime.error(clawhubResult.error);
+    }
     return runtime.exit(1);
   }
 }
