@@ -320,18 +320,18 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
     return;
   }
   // Tie the refresh to the picker request-generation counter so that a newer
-  // search arriving while the rename-triggered sessions.list is in flight
-  // is not overwritten by the stale refresh response.  When the signature
-  // matches the active request (begin returns null) there is no concurrent
-  // search to race against, so proceed without the cancel guard.
-  const guardId = beginChatSessionPickerSearchRequest(
-    state,
-    createChatSessionPickerRequestSignature({
-      query: normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "",
-    }),
-  );
+  // search arriving while the rename-triggered sessions.list is in flight is
+  // not overwritten by the stale refresh response. When the signature matches
+  // the active request (begin returns null) we still need our own guard: a
+  // newer search can start during the await below, so invalidate the duplicate
+  // and take a fresh generation, keeping the post-await assignment guarded.
+  const signature = createChatSessionPickerRequestSignature({
+    query: normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "",
+  });
+  let guardId = beginChatSessionPickerSearchRequest(state, signature);
   if (guardId === null) {
     invalidateChatSessionPickerSearchRequests(state);
+    guardId = beginChatSessionPickerSearchRequest(state, signature);
   }
   const query = normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "";
   const limit =
@@ -349,13 +349,13 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
       limit,
     }),
   );
-  if (guardId !== null && !isCurrentChatSessionPickerSearchRequest(state, guardId)) {
+  // guardId is always a live generation here, so a newer search started during
+  // the await wins and this stale refresh bails instead of clobbering it.
+  if (!isCurrentChatSessionPickerSearchRequest(state, guardId)) {
     return;
   }
   state.chatSessionPickerResult = projectChatSessionPickerResult(state, listResult);
-  if (guardId !== null) {
-    finishChatSessionPickerSearchRequest(state, guardId);
-  }
+  finishChatSessionPickerSearchRequest(state, guardId);
 }
 
 async function saveChatSessionPickerRename(
