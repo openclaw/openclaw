@@ -46,10 +46,28 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CALLBACK_HOST = process.env.OPENCLAW_OAUTH_CALLBACK_HOST || "127.0.0.1";
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
+const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
-const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
+
+function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
+  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
+    throw new Error("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
+  }
+  return host;
+}
+
+function resolveRedirectUri(host: string = CALLBACK_HOST): string {
+  const hostForUrl = host === "::1" ? "[::1]" : host;
+  const url = new URL(`http://${hostForUrl}:${CALLBACK_PORT}`);
+  url.pathname = CALLBACK_PATH;
+  return url.toString();
+}
+
+const CALLBACK_HOST = resolveCallbackHost();
+const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 async function getNodeApis(): Promise<NodeApis> {
@@ -462,4 +480,10 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;
   },
+};
+
+export const testing = {
+  callbackHost: CALLBACK_HOST,
+  resolveCallbackHost,
+  resolveRedirectUri,
 };

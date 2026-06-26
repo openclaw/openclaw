@@ -1,6 +1,6 @@
 // Anthropic OAuth tests cover token exchange and refresh behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { anthropicOAuthProvider, refreshAnthropicToken } from "./anthropic.js";
+import { anthropicOAuthProvider, refreshAnthropicToken, testing } from "./anthropic.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -78,5 +78,25 @@ describe("Anthropic OAuth token responses", () => {
     await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
       "Anthropic token refresh returned invalid token fields.",
     );
+  });
+});
+
+describe("Anthropic OAuth callback host", () => {
+  it("builds callback redirect URIs from the configured loopback host", () => {
+    expect(testing.resolveRedirectUri("127.0.0.1")).toBe("http://127.0.0.1:53692/callback");
+  });
+
+  it("wraps IPv6 loopback in brackets for redirect URIs", () => {
+    expect(testing.resolveRedirectUri("::1")).toBe("http://[::1]:53692/callback");
+  });
+
+  it("rejects non-loopback callback bind hosts", () => {
+    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
+      "Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1",
+    );
+  });
+
+  it("defaults callback host to 127.0.0.1 when env var is unset", () => {
+    expect(testing.resolveCallbackHost({})).toBe("127.0.0.1");
   });
 });
