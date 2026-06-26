@@ -4348,7 +4348,8 @@ async function migrateLegacySessions(
     [...Object.keys(targetStore), ...Object.keys(legacyStore)].filter(
       (key) =>
         isAmbiguousSharedStoreKey(key, detected.targetMainKey, detected.targetScope) ||
-        isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
+        (detected.sessions.preserveForeignMainAliases &&
+          isLegacyDefaultMainAliasKey(key, detected.targetMainKey)),
     ),
   );
   // Atomic replacement separates filesystem aliases. Defer the whole merge so
@@ -4973,6 +4974,7 @@ export async function runLegacyStateMigrations(params: {
     cfg: params.config ?? ({} as OpenClawConfig),
     env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
     now,
+    preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
@@ -5169,8 +5171,7 @@ export async function migrateOrphanedSessionKeys(params: {
     const preservedAmbiguousKeyCount = Object.keys(working).filter(
       (key) =>
         (preserveAmbiguousKeys && isAmbiguousSharedStoreKey(key, mainKey, scope)) ||
-        ((hasDistinctAliases || pluginForeignMainAliasRisk) &&
-          isLegacyDefaultMainAliasKey(key, mainKey)),
+        (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
     if (hasDistinctAliases && preservedAmbiguousKeyCount > 0) {
       warnings.push(
@@ -5230,6 +5231,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  preserveForeignMainAliases?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -5280,7 +5282,8 @@ async function migrateLegacyAcpSessionMetadata(params: {
     }
     const ambiguousKeyCount = Object.keys(parsed.store).filter(
       (key) =>
-        isAmbiguousSharedStoreKey(key, mainKey, scope) || isLegacyDefaultMainAliasKey(key, mainKey),
+        isAmbiguousSharedStoreKey(key, mainKey, scope) ||
+        (params.preserveForeignMainAliases && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
     const hasLegacyAcpMetadata = Object.values(parsed.store).some(
       (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
@@ -5310,7 +5313,8 @@ async function migrateLegacyAcpSessionMetadata(params: {
           fixedCustomStorePath !== undefined &&
           sessionStorePathsMatch(storePath, fixedCustomStorePath) &&
           (isAmbiguousSharedStoreKey(sessionKey, mainKey, scope) ||
-            isLegacyDefaultMainAliasKey(sessionKey, mainKey));
+            (params.preserveForeignMainAliases &&
+              isLegacyDefaultMainAliasKey(sessionKey, mainKey)));
         if (ambiguousFixedStoreKey) {
           preserved++;
           normalized[sessionKey] = normalizedEntry;
@@ -5499,6 +5503,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     now: params.now,
+    preserveForeignMainAliases: sessionStoreOwnership.preserveForeignMainAliases,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
@@ -5729,6 +5734,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     now,
+    preserveForeignMainAliases: sessionStoreOwnership.preserveForeignMainAliases,
   });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(

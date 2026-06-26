@@ -112,6 +112,18 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+      name: "bare direct and channel-shaped tokens fail closed",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "direct" } }]),
+      sessionKey: "agent:main:direct:group:room",
+      expected: "deny",
+    },
+    {
+      name: "bare dm and account-shaped tokens fail closed",
+      cfg: cfgWithRules([{ action: "deny", match: { chatType: "group" } }]),
+      sessionKey: "agent:main:dm:account:group:room",
+      expected: "deny",
+    },
+    {
       name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",

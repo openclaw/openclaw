@@ -22,11 +22,14 @@ export function hasAmbiguousCanonicalSessionPeerShape(scopedSessionKey: string):
   if (parts[0] === "agent") {
     return false;
   }
+  const hasBareDirectPeerShape = Boolean((parts[0] === "direct" || parts[0] === "dm") && parts[1]);
   const hasChannelPeerShape = Boolean(parts[0] && isCanonicalPeerKind(parts[1]) && parts[2]);
   const hasAccountPeerShape = Boolean(
     parts[0] && parts[1] && isCanonicalPeerKind(parts[2]) && parts[3],
   );
-  return hasChannelPeerShape && hasAccountPeerShape;
+  return (
+    [hasBareDirectPeerShape, hasChannelPeerShape, hasAccountPeerShape].filter(Boolean).length > 1
+  );
 }
 
 export function parseCanonicalSessionPeerShape(

@@ -361,6 +361,30 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("canonicalizes global main aliases in aliased stores without foreign owners", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const standardStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      writeStore(standardStorePath, {
+        "agent:main:main": { sessionId: "legacy-global", updatedAt: 1000 },
+      });
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      fs.linkSync(standardStorePath, configuredStorePath);
+      const cfg = {
+        session: { scope: "global", store: configuredStorePath },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      expect(requireStoreEntry(readStore(configuredStorePath), "global").sessionId).toBe(
+        "legacy-global",
+      );
+      expect(readStore(configuredStorePath)["agent:main:main"]).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);

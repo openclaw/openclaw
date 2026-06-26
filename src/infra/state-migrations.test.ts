@@ -638,6 +638,52 @@ describe("state migrations", () => {
     );
   });
 
+  it("migrates global main aliases through aliased store rewrites", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
+    await fs.writeFile(
+      targetStorePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "legacy-global",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "global-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const configuredStorePath = path.join(root, "configured-sessions.json");
+    await fs.link(targetStorePath, configuredStorePath);
+    const cfg = {
+      session: { scope: "global", store: configuredStorePath },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    for (const storePath of [configuredStorePath, targetStorePath]) {
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        { sessionId: string; acp?: unknown }
+      >;
+      expect(store.global?.sessionId).toBe("legacy-global");
+      expect(store.global?.acp).toBeUndefined();
+      expect(store["agent:main:main"]).toBeUndefined();
+    }
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+  });
+
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
