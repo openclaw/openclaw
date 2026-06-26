@@ -58,6 +58,24 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
           ),
       ),
     ).toBe(true);
+    expect(report.pluginSdkConsumer).toMatchObject({
+      activeJsonlForSessionExists: false,
+      latestAssistantTextBeforeAppend: report.fullTurnAssistantText,
+      latestAssistantTextAfterAppend: "sqlite sdk consumer appended by identity",
+      sessionKey: report.pluginSdkSessionKey,
+    });
+    expect(report.pluginSdkConsumer?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
+    expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-plugin-sdk-consumer" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === report.pluginSdkSessionKey && entry.transcriptEvents >= 3,
+          ),
+      ),
+    ).toBe(true);
     const concurrentCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-concurrent-multi-client",
     );
