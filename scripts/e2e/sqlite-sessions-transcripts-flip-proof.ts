@@ -59,6 +59,7 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   checkpoints: ProofCheckpoint[];
   deleteSessionKey: string;
   failures: string[];
+  gatewayEntrypoint: string[];
   legacySessionId: string;
   resetSessionKey: string;
   sharedSessionKeys: string[];
@@ -81,6 +82,7 @@ type ProofContext = {
 
 type RunOptions = {
   print?: boolean;
+  requireBuiltCli?: boolean;
 };
 
 const AGENT_ID = "main";
@@ -104,6 +106,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   const context = buildProofContext(inst.stateDir);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
+  let gatewayEntrypoint: string[] = [];
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -119,6 +122,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   };
 
   try {
+    gatewayEntrypoint = await inst.entrypoint();
+    if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
+      throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
+    }
+
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
@@ -214,6 +222,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     checkpoints,
     deleteSessionKey: context.deleteSessionKey,
     failures,
+    gatewayEntrypoint,
     legacySessionId: context.legacySessionId,
     resetSessionKey: context.resetSessionKey,
     sharedSessionKeys: [...context.sharedSessionKeys],
@@ -223,6 +232,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   }
   return report;
+}
+
+function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
+  const [first, ...rest] = entrypoint;
+  return rest.length === 0 && (first === "dist/index.js" || first === "dist/index.mjs");
 }
 
 function buildProofContext(stateDir: string): ProofContext {
