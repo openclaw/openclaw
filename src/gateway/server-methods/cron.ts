@@ -46,18 +46,14 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronCallerScope = {
   kind: "agentTool";
   agentId: string;
 };
 
-type CronCallerScopeParams = {
-  callerScope?: CronCallerScope;
-};
-
-type CronJobIdParams = { id?: string; jobId?: string } & CronCallerScopeParams;
+type CronJobIdParams = { id?: string; jobId?: string };
 
 type CronRunsRequestParams = CronJobIdParams & {
   scope?: "job" | "all";
@@ -90,16 +86,14 @@ function compactCronListJob(job: CronJob) {
   };
 }
 
-function readCronCallerScope(params: unknown): CronCallerScope | undefined {
-  const callerScope = (params as { callerScope?: unknown } | null)?.callerScope;
-  if (!callerScope || typeof callerScope !== "object") {
+function readCronCallerScope(
+  client: GatewayClient | null | undefined,
+): CronCallerScope | undefined {
+  const identity = client?.internal?.agentRuntimeIdentity;
+  if (!identity?.agentId) {
     return undefined;
   }
-  const raw = callerScope as { kind?: unknown; agentId?: unknown };
-  if (raw.kind !== "agentTool" || typeof raw.agentId !== "string") {
-    return undefined;
-  }
-  return { kind: "agentTool", agentId: normalizeAgentId(raw.agentId) };
+  return { kind: "agentTool", agentId: normalizeAgentId(identity.agentId) };
 }
 
 function resolveCronJobEffectiveAgentId(job: CronJob, defaultAgentId?: string): string {
@@ -169,6 +163,19 @@ function cronCreateMatchesCallerScope(params: {
   return (
     !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === params.callerScope.agentId
   );
+}
+
+function applyCronCreateCallerScopeDefault(
+  job: CronJobCreate,
+  callerScope: CronCallerScope | undefined,
+): CronJobCreate {
+  if (!callerScope || "agentId" in job) {
+    return job;
+  }
+  return {
+    ...job,
+    agentId: callerScope.agentId,
+  };
 }
 
 function cronPatchSessionRefsMatchCaller(
@@ -528,7 +535,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(true, result, undefined);
   },
-  "cron.list": async ({ params, respond, context }) => {
+  "cron.list": async ({ params, respond, context, client }) => {
     if (!validateCronListParams(params)) {
       respond(
         false,
@@ -552,8 +559,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir?: "asc" | "desc";
       agentId?: string;
       compact?: boolean;
-    } & CronCallerScopeParams;
-    const callerScope = readCronCallerScope(p);
+    };
+    const callerScope = readCronCallerScope(client);
     const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
     if (callerScope && requestedAgentId && requestedAgentId !== callerScope.agentId) {
       respondInvalidCronParams(respond, "cron.list", "agentId outside caller scope");
@@ -604,7 +611,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const status = await context.cron.status();
     respond(true, status, undefined);
   },
-  "cron.get": async ({ params, respond, context }) => {
+  "cron.get": async ({ params, respond, context, client }) => {
     if (!validateCronGetParams(params)) {
       respondInvalidCronParams(
         respond,
@@ -618,7 +625,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondMissingCronJobId(respond, "cron.get");
       return;
     }
-    const callerScope = readCronCallerScope(params);
+    const callerScope = readCronCallerScope(client);
     const job = await context.cron.readJob(jobId);
     if (
       !job ||
@@ -637,7 +644,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     respond(true, job, undefined);
   },
-  "cron.add": async ({ params, respond, context }) => {
+  "cron.add": async ({ params, respond, context, client }) => {
     const sessionKey =
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
@@ -660,10 +667,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const candidate =
-      normalized && typeof params === "object" && params !== null && "callerScope" in params
-        ? { ...normalized, callerScope: (params as { callerScope?: unknown }).callerScope }
-        : normalized;
+    const candidate = normalized;
     if (!validateCronAddParams(candidate)) {
       respond(
         false,
@@ -675,9 +679,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const callerScope = readCronCallerScope(candidate);
-    const { callerScope: _callerScope, ...jobCreate } = candidate as CronJobCreate &
-      CronCallerScopeParams;
+    const callerScope = readCronCallerScope(client);
+    const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     if (
       !cronCreateMatchesCallerScope({
@@ -735,7 +738,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
-  "cron.update": async ({ params, respond, context }) => {
+  "cron.update": async ({ params, respond, context, client }) => {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
     try {
       const rawPatch = (params as { patch?: unknown } | null)?.patch;
@@ -775,8 +778,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       id?: string;
       jobId?: string;
       patch: Record<string, unknown>;
-    } & CronCallerScopeParams;
-    const callerScope = readCronCallerScope(p);
+    };
+    const callerScope = readCronCallerScope(client);
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -861,7 +864,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },
-  "cron.remove": async ({ params, respond, context }) => {
+  "cron.remove": async ({ params, respond, context, client }) => {
     if (!validateCronRemoveParams(params)) {
       respondInvalidCronParams(
         respond,
@@ -875,7 +878,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondMissingCronJobId(respond, "cron.remove");
       return;
     }
-    const callerScope = readCronCallerScope(params);
+    const callerScope = readCronCallerScope(client);
     const job = await context.cron.readJob(jobId);
     if (
       !job ||
@@ -904,7 +907,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     context.logGateway.info("cron: job removed", { jobId });
     respond(true, result, undefined);
   },
-  "cron.run": async ({ params, respond, context }) => {
+  "cron.run": async ({ params, respond, context, client }) => {
     if (!validateCronRunParams(params)) {
       respondInvalidCronParams(
         respond,
@@ -914,7 +917,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as CronJobIdParams & { mode?: "due" | "force" };
-    const callerScope = readCronCallerScope(p);
+    const callerScope = readCronCallerScope(client);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
       respondMissingCronJobId(respond, "cron.run");
@@ -948,7 +951,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "cron.runs": async ({ params, respond, context }) => {
+  "cron.runs": async ({ params, respond, context, client }) => {
     if (!validateCronRunsParams(params)) {
       respondInvalidCronParams(
         respond,
@@ -958,7 +961,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as CronRunsRequestParams;
-    const callerScope = readCronCallerScope(p);
+    const callerScope = readCronCallerScope(client);
     const explicitScope = p.scope;
     const jobId = resolveCronJobId(p);
     const scope: "job" | "all" = explicitScope ?? (jobId ? "job" : "all");

@@ -9,6 +9,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { GatewayClient } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
@@ -126,7 +127,11 @@ type CronMethod = keyof typeof cronHandlers;
 async function invokeCron(
   method: CronMethod,
   params: Record<string, unknown>,
-  options: { currentJob?: CronJob; context?: ReturnType<typeof createCronContext> } = {},
+  options: {
+    currentJob?: CronJob;
+    context?: ReturnType<typeof createCronContext>;
+    client?: GatewayClient;
+  } = {},
 ) {
   const context = options.context ?? createCronContext(options.currentJob);
   const respond = vi.fn();
@@ -135,22 +140,33 @@ async function invokeCron(
     params: params as never,
     respond: respond as never,
     context: context as never,
-    client: null,
+    client: options.client ?? null,
     isWebchatConnect: () => false,
   });
   return { context, respond };
 }
 
-async function invokeCronAdd(params: Record<string, unknown>) {
-  return await invokeCron("cron.add", params);
+async function invokeCronAdd(
+  params: Record<string, unknown>,
+  options?: { client?: GatewayClient },
+) {
+  return await invokeCron("cron.add", params, options);
 }
 
-async function invokeCronGet(params: Record<string, unknown>, currentJob?: CronJob) {
-  return await invokeCron("cron.get", params, { currentJob });
+async function invokeCronGet(
+  params: Record<string, unknown>,
+  currentJob?: CronJob,
+  options?: { client?: GatewayClient },
+) {
+  return await invokeCron("cron.get", params, { currentJob, ...options });
 }
 
-async function invokeCronUpdate(params: Record<string, unknown>, currentJob?: CronJob) {
-  return await invokeCron("cron.update", params, { currentJob });
+async function invokeCronUpdate(
+  params: Record<string, unknown>,
+  currentJob?: CronJob,
+  options?: { client?: GatewayClient },
+) {
+  return await invokeCron("cron.update", params, { currentJob, ...options });
 }
 
 async function invokeCronUpdateDelivery(
@@ -168,13 +184,13 @@ async function invokeCronUpdateDelivery(
 
 async function invokeCronRemove(
   params: Record<string, unknown>,
-  options?: { removeResult?: { ok: boolean; removed: boolean } },
+  options?: { removeResult?: { ok: boolean; removed: boolean }; client?: GatewayClient },
 ) {
   const context = createCronContext();
   if (options?.removeResult) {
     context.cron.remove.mockResolvedValueOnce(options.removeResult);
   }
-  return await invokeCron("cron.remove", params, { context });
+  return await invokeCron("cron.remove", params, { context, client: options?.client });
 }
 
 async function invokeWake(params: Record<string, unknown>) {
@@ -198,8 +214,17 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function callerScope(agentId: string) {
-  return { kind: "agentTool", agentId };
+function callerClient(agentId: string): GatewayClient {
+  return {
+    connect: {} as GatewayClient["connect"],
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId,
+        sessionKey: `agent:${agentId}:main`,
+      },
+    },
+  };
 }
 
 function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
@@ -423,8 +448,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.remove",
-      { id: "cron-1", callerScope: callerScope("ops") },
-      { context },
+      { id: "cron-1" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.remove).toHaveBeenCalledWith("cron-1");
@@ -436,8 +461,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.remove",
-      { jobId: "cron-1", callerScope: callerScope("ops") },
-      { context },
+      { jobId: "cron-1" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.remove).not.toHaveBeenCalled();
@@ -459,10 +484,9 @@ describe("cron method validation", () => {
   it("allows caller-scoped cron.get for the same agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
-    const { respond } = await invokeCronGet(
-      { id: "cron-42", callerScope: callerScope("ops") },
-      job,
-    );
+    const { respond } = await invokeCronGet({ id: "cron-42" }, job, {
+      client: callerClient("ops"),
+    });
 
     expect(respond).toHaveBeenCalledWith(true, job, undefined);
   });
@@ -470,10 +494,9 @@ describe("cron method validation", () => {
   it("hides caller-scoped cron.get for a foreign agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
-    const { respond } = await invokeCronGet(
-      { jobId: "cron-42", callerScope: callerScope("worker") },
-      job,
-    );
+    const { respond } = await invokeCronGet({ jobId: "cron-42" }, job, {
+      client: callerClient("worker"),
+    });
 
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
@@ -488,10 +511,9 @@ describe("cron method validation", () => {
       sessionTarget: "session:agent:worker:telegram:direct:alice",
     });
 
-    const { respond } = await invokeCronGet(
-      { id: "cron-42", callerScope: callerScope("ops") },
-      job,
-    );
+    const { respond } = await invokeCronGet({ id: "cron-42" }, job, {
+      client: callerClient("ops"),
+    });
 
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
@@ -513,8 +535,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.list",
-      { includeDisabled: true, compact: true, callerScope: callerScope("ops") },
-      { context },
+      { includeDisabled: true, compact: true },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.listPage).toHaveBeenCalledWith(
@@ -532,8 +554,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.list",
-      { agentId: "worker", callerScope: callerScope("ops") },
-      { context },
+      { agentId: "worker" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.listPage).not.toHaveBeenCalled();
@@ -577,8 +599,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.list",
-      { compact: true, limit: 1, callerScope: callerScope("ops") },
-      { context },
+      { compact: true, limit: 1 },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.listPage).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
@@ -596,13 +618,24 @@ describe("cron method validation", () => {
     );
   });
 
-  it("allows caller-scoped cron.add for the same agent without persisting callerScope", async () => {
+  it("allows internally scoped cron.add for the same agent without persisting caller identity", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
         agentId: "ops",
-        callerScope: callerScope("ops"),
       }),
+      { client: callerClient("ops") },
     );
+
+    const payload = requireCronAddPayload(context);
+    expect(payload.agentId).toBe("ops");
+    expect(payload).not.toHaveProperty("callerScope");
+    expectCronSuccess(respond);
+  });
+
+  it("defaults scoped cron.add ownership to the trusted caller when agentId is omitted", async () => {
+    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
+      client: callerClient("ops"),
+    });
 
     const payload = requireCronAddPayload(context);
     expect(payload.agentId).toBe("ops");
@@ -614,8 +647,8 @@ describe("cron method validation", () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
         agentId: "worker",
-        callerScope: callerScope("ops"),
       }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.add).not.toHaveBeenCalled();
@@ -630,8 +663,8 @@ describe("cron method validation", () => {
       agentTurnCronParams({
         agentId: "ops",
         sessionTarget: "session:agent:worker:telegram:direct:alice",
-        callerScope: callerScope("ops"),
       }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.add).not.toHaveBeenCalled();
@@ -676,9 +709,9 @@ describe("cron method validation", () => {
       {
         id: "cron-1",
         patch: { enabled: false },
-        callerScope: callerScope("ops"),
       },
       createCronJob({ agentId: "ops" }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
@@ -690,9 +723,9 @@ describe("cron method validation", () => {
       {
         id: "cron-1",
         patch: { enabled: false },
-        callerScope: callerScope("ops"),
       },
       createCronJob({ agentId: "worker" }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
@@ -707,9 +740,9 @@ describe("cron method validation", () => {
       {
         id: "cron-1",
         patch: { agentId: "worker" },
-        callerScope: callerScope("ops"),
       },
       createCronJob({ agentId: "ops" }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
@@ -724,9 +757,9 @@ describe("cron method validation", () => {
       {
         id: "cron-1",
         patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
-        callerScope: callerScope("ops"),
       },
       createCronJob({ agentId: "ops" }),
+      { client: callerClient("ops") },
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
@@ -1392,8 +1425,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.run",
-      { id: "cron-1", mode: "due", callerScope: callerScope("ops") },
-      { context },
+      { id: "cron-1", mode: "due" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due");
@@ -1409,8 +1442,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.run",
-      { jobId: "cron-1", callerScope: callerScope("ops") },
-      { context },
+      { jobId: "cron-1" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
@@ -1425,8 +1458,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.runs",
-      { scope: "all", callerScope: callerScope("ops") },
-      { context },
+      { scope: "all" },
+      { context, client: callerClient("ops") },
     );
 
     expect(context.cron.list).not.toHaveBeenCalled();
@@ -1441,8 +1474,8 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.runs",
-      { id: "cron-1", callerScope: callerScope("ops") },
-      { context },
+      { id: "cron-1" },
+      { context, client: callerClient("ops") },
     );
 
     expectResponseError(respond, {

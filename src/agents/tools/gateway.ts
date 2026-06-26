@@ -13,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -208,6 +210,16 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
   "plugin.approval.waitDecision",
 ]);
 
+const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "cron.list",
+  "cron.get",
+  "cron.add",
+  "cron.update",
+  "cron.remove",
+  "cron.run",
+  "cron.runs",
+]);
+
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
@@ -263,6 +275,26 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   }
 }
 
+function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
+  method: string;
+  opts: GatewayCallOptions;
+  target: GatewayOverrideTarget;
+}): string | undefined {
+  if (!AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
+    return undefined;
+  }
+  const identity = getGatewayToolCallerIdentity();
+  if (!identity) {
+    return undefined;
+  }
+  const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
+  const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
+  if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
+    throw new Error("agent cron gateway calls require the trusted local gateway context");
+  }
+  return mintAgentRuntimeIdentityToken(identity);
+}
+
 /**
  * Calls a gateway method as the agent-tool backend client with least-privilege scopes.
  */
@@ -277,6 +309,11 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     ? extra.scopes
     : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+    method,
+    opts,
+    target: gateway.target,
+  });
+  const agentRuntimeIdentityToken = resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,
@@ -297,6 +334,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
+    ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
     ...(deviceIdentity ? { deviceIdentity } : {}),
     scopes,
   });

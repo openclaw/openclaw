@@ -85,6 +85,7 @@ type CallGatewayBaseOptions = {
   platform?: string;
   mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   useStoredDeviceAuth?: boolean;
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
@@ -989,6 +990,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
+      ...(opts.agentRuntimeIdentityToken
+        ? { agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken }
+        : {}),
       role: "operator",
       ...(Array.isArray(scopes) ? { scopes } : {}),
       deviceIdentity,

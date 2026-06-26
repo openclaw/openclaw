@@ -60,10 +60,6 @@ describe("cron tool", () => {
     return callGatewayMock.mock.calls[index]?.[1] as Record<string, unknown> | undefined;
   }
 
-  function cronCallerScope(agentId: string) {
-    return { kind: "agentTool", agentId };
-  }
-
   function readCronPayloadText(index = 0): string {
     const params = readGatewayCall(index).params as { payload?: { text?: string } } | undefined;
     return params?.payload?.text ?? "";
@@ -197,7 +193,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.remove");
-    expect(params).toEqual({ id: "job-current", callerScope: cronCallerScope("main") });
+    expect(params).toEqual({ id: "job-current" });
   });
 
   it("denies scoped isolated cron runs from removing another job", async () => {
@@ -236,7 +232,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.runs");
-    expect(params).toEqual({ id: "job-current", callerScope: cronCallerScope("main") });
+    expect(params).toEqual({ id: "job-current" });
     expect(result.details).toEqual({
       entries: [{ jobId: "job-current", status: "ok" }],
       total: 1,
@@ -308,7 +304,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.get");
-    expect(params).toStrictEqual({ id: "job-current", callerScope: cronCallerScope("main") });
+    expect(params).toStrictEqual({ id: "job-current" });
     expect(result.details).toEqual({ id: "job-current", name: "current" });
   });
 
@@ -356,7 +352,6 @@ describe("cron tool", () => {
       includeDisabled: true,
       compact: true,
       agentId: "agent-123",
-      callerScope: cronCallerScope("agent-123"),
       limit: 200,
       offset: 0,
     });
@@ -415,7 +410,6 @@ describe("cron tool", () => {
         includeDisabled: true,
         compact: true,
         agentId: "agent-123",
-        callerScope: cronCallerScope("agent-123"),
         limit: 200,
         offset: 0,
       },
@@ -426,7 +420,6 @@ describe("cron tool", () => {
         includeDisabled: true,
         compact: true,
         agentId: "agent-123",
-        callerScope: cronCallerScope("agent-123"),
         limit: 200,
         offset: 200,
       },
@@ -473,7 +466,6 @@ describe("cron tool", () => {
       includeDisabled: false,
       compact: true,
       agentId: "agent-123",
-      callerScope: cronCallerScope("agent-123"),
     });
   });
 
@@ -531,7 +523,6 @@ describe("cron tool", () => {
         includeDisabled: false,
         compact: true,
         agentId: "agent-123",
-        callerScope: cronCallerScope("agent-123"),
       },
     });
     expect(readGatewayCall(1)).toEqual({
@@ -539,7 +530,6 @@ describe("cron tool", () => {
       params: {
         includeDisabled: false,
         agentId: "agent-123",
-        callerScope: cronCallerScope("agent-123"),
       },
     });
   });
@@ -964,7 +954,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("ignores model-supplied callerScope and uses the derived caller scope", async () => {
+  it("does not forward model-supplied callerScope", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:agent-123:telegram:direct:channing",
     });
@@ -972,12 +962,11 @@ describe("cron tool", () => {
     await tool.execute("call-spoofed-caller-scope", {
       action: "remove",
       jobId: "job-1",
-      callerScope: cronCallerScope("worker"),
+      callerScope: { kind: "agentTool", agentId: "worker" },
     });
 
     expect(readGatewayCall().params).toEqual({
       id: "job-1",
-      callerScope: cronCallerScope("agent-123"),
     });
   });
 
@@ -1946,7 +1935,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.update") as
-      | { id?: string; patch?: { agentId?: string }; callerScope?: unknown }
+      | { id?: string; patch?: { agentId?: string } }
       | undefined;
     expect(params).toEqual({
       id: "job-1",
@@ -2394,7 +2383,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(readGatewayCall(0)).toEqual({
       method: "cron.get",
-      params: { id: "job-9", callerScope: cronCallerScope("main") },
+      params: { id: "job-9" },
     });
     expect(readGatewayCall(1)).toEqual({
       method: "cron.update",
@@ -2408,7 +2397,6 @@ describe("cron tool", () => {
             toolsAllowIsDefault: true,
           },
         },
-        callerScope: cronCallerScope("main"),
       },
     });
   });
@@ -2443,7 +2431,6 @@ describe("cron tool", () => {
             toolsAllow: ["read"],
           },
         },
-        callerScope: cronCallerScope("main"),
       },
     });
   });
@@ -2480,7 +2467,6 @@ describe("cron tool", () => {
             toolsAllow: ["read"],
           },
         },
-        callerScope: cronCallerScope("main"),
       },
     });
   });
@@ -2526,7 +2512,6 @@ describe("cron tool", () => {
             toolsAllowIsDefault: true,
           },
         },
-        callerScope: cronCallerScope("main"),
       },
     });
   });
@@ -2566,7 +2551,6 @@ describe("cron tool", () => {
             toolsAllowIsDefault: true,
           },
         },
-        callerScope: cronCallerScope("main"),
       },
     });
   });

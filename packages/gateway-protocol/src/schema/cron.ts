@@ -171,17 +171,6 @@ const CronCommonOptionalFields = {
   deleteAfterRun: Type.Optional(Type.Boolean()),
 };
 
-const CronCallerScopeSchema = Type.Object(
-  {
-    kind: Type.Literal("agentTool"),
-    agentId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-const CronCallerScopeField = {
-  callerScope: Type.Optional(CronCallerScopeSchema),
-};
-
 function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
   return Type.Union([
     Type.Object(
@@ -481,7 +470,6 @@ export const CronListParamsSchema = Type.Object(
     sortDir: Type.Optional(CronSortDirSchema),
     agentId: Type.Optional(NonEmptyString),
     compact: Type.Optional(Type.Boolean()),
-    ...CronCallerScopeField,
   },
   { additionalProperties: false },
 );
@@ -490,7 +478,7 @@ export const CronListParamsSchema = Type.Object(
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
 /** Looks up a job by stable id or legacy jobId alias. */
-export const CronGetParamsSchema = cronIdOrJobIdParams(CronCallerScopeField);
+export const CronGetParamsSchema = cronIdOrJobIdParams({});
 
 /** Creates a scheduled job with schedule, target, payload, and delivery policy. */
 export const CronAddParamsSchema = Type.Object(
@@ -503,7 +491,6 @@ export const CronAddParamsSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
-    ...CronCallerScopeField,
   },
   { additionalProperties: false },
 );
@@ -527,16 +514,14 @@ export const CronJobPatchSchema = Type.Object(
 /** Updates a cron job by id or legacy jobId alias. */
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
-  ...CronCallerScopeField,
 });
 
 /** Removes a cron job by id or legacy jobId alias. */
-export const CronRemoveParamsSchema = cronIdOrJobIdParams(CronCallerScopeField);
+export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
 
 /** Runs a cron job immediately or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
-  ...CronCallerScopeField,
 });
 
 /** Query params for cron run history. */
@@ -556,7 +541,6 @@ export const CronRunsParamsSchema = Type.Object(
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     query: Type.Optional(Type.String()),
     sortDir: Type.Optional(CronSortDirSchema),
-    ...CronCallerScopeField,
   },
   { additionalProperties: false },
 );

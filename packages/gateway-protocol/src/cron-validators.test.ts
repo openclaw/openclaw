@@ -36,11 +36,11 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
-  it("accepts agent tool caller scope on cron admin params", () => {
-    expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(true);
-    expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
+  it("rejects public caller scope on cron admin params", () => {
+    expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(false);
+    expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
     expect(validateCronAddParams({ ...minimalAddParams, callerScope: agentToolCallerScope })).toBe(
-      true,
+      false,
     );
     expect(
       validateCronUpdateParams({
@@ -48,22 +48,12 @@ describe("cron protocol validators", () => {
         patch: { enabled: false },
         callerScope: agentToolCallerScope,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(validateCronRemoveParams({ jobId: "job-1", callerScope: agentToolCallerScope })).toBe(
-      true,
+      false,
     );
-    expect(validateCronRunParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
-    expect(validateCronRunsParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(true);
-  });
-
-  it("rejects malformed agent tool caller scope", () => {
-    expect(validateCronGetParams({ id: "job-1", callerScope: { kind: "agentTool" } })).toBe(false);
-    expect(
-      validateCronGetParams({ id: "job-1", callerScope: { kind: "operator", agentId: "ops" } }),
-    ).toBe(false);
-    expect(
-      validateCronGetParams({ id: "job-1", callerScope: { kind: "agentTool", agentId: "" } }),
-    ).toBe(false);
+    expect(validateCronRunParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
+    expect(validateCronRunsParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
   });
 
   it("accepts current and custom session targets", () => {

@@ -6161,7 +6161,6 @@ public struct CronListParams: Codable, Sendable {
     public let sortdir: AnyCodable?
     public let agentid: String?
     public let compact: Bool?
-    public let callerscope: [String: AnyCodable]?
 
     public init(
         includedisabled: Bool?,
@@ -6174,8 +6173,7 @@ public struct CronListParams: Codable, Sendable {
         sortby: AnyCodable?,
         sortdir: AnyCodable?,
         agentid: String? = nil,
-        compact: Bool? = nil,
-        callerscope: [String: AnyCodable]? = nil)
+        compact: Bool? = nil)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -6188,7 +6186,6 @@ public struct CronListParams: Codable, Sendable {
         self.sortdir = sortdir
         self.agentid = agentid
         self.compact = compact
-        self.callerscope = callerscope
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6203,7 +6200,6 @@ public struct CronListParams: Codable, Sendable {
         case sortdir = "sortDir"
         case agentid = "agentId"
         case compact
-        case callerscope = "callerScope"
     }
 }
 
@@ -6222,7 +6218,6 @@ public struct CronAddParams: Codable, Sendable {
     public let payload: AnyCodable
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
-    public let callerscope: [String: AnyCodable]?
 
     public init(
         name: String,
@@ -6236,8 +6231,7 @@ public struct CronAddParams: Codable, Sendable {
         wakemode: AnyCodable,
         payload: AnyCodable,
         delivery: AnyCodable?,
-        failurealert: AnyCodable?,
-        callerscope: [String: AnyCodable]? = nil)
+        failurealert: AnyCodable?)
     {
         self.name = name
         self.agentid = agentid
@@ -6251,7 +6245,6 @@ public struct CronAddParams: Codable, Sendable {
         self.payload = payload
         self.delivery = delivery
         self.failurealert = failurealert
-        self.callerscope = callerscope
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6267,7 +6260,6 @@ public struct CronAddParams: Codable, Sendable {
         case payload
         case delivery
         case failurealert = "failureAlert"
-        case callerscope = "callerScope"
     }
 }
 
@@ -6284,7 +6276,6 @@ public struct CronRunsParams: Codable, Sendable {
     public let deliverystatus: AnyCodable?
     public let query: String?
     public let sortdir: AnyCodable?
-    public let callerscope: [String: AnyCodable]?
 
     public init(
         scope: AnyCodable?,
@@ -6298,8 +6289,7 @@ public struct CronRunsParams: Codable, Sendable {
         deliverystatuses: [AnyCodable]?,
         deliverystatus: AnyCodable?,
         query: String?,
-        sortdir: AnyCodable?,
-        callerscope: [String: AnyCodable]? = nil)
+        sortdir: AnyCodable?)
     {
         self.scope = scope
         self.id = id
@@ -6313,7 +6303,6 @@ public struct CronRunsParams: Codable, Sendable {
         self.deliverystatus = deliverystatus
         self.query = query
         self.sortdir = sortdir
-        self.callerscope = callerscope
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6329,7 +6318,6 @@ public struct CronRunsParams: Codable, Sendable {
         case deliverystatus = "deliveryStatus"
         case query
         case sortdir = "sortDir"
-        case callerscope = "callerScope"
     }
 }
 
