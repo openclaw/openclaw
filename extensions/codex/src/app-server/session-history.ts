@@ -10,6 +10,7 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
+import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   readSessionTranscriptEvents,
   resolveSessionTranscriptFileTarget,
@@ -72,10 +73,14 @@ async function readCodexMirroredSessionEntries(
     ) {
       return [];
     }
+    const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
+    if (!sessionKey) {
+      return [];
+    }
     return (await readSessionTranscriptEvents({
       agentId: sqliteMarker.agentId,
       sessionId: sqliteMarker.sessionId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+      sessionKey,
       storePath: sqliteMarker.storePath,
     })) as SessionEntry[];
   }
@@ -92,6 +97,23 @@ function resolveCodexHistoryTranscriptTarget(
     sessionId: target.sessionId,
     sessionKey: target.sessionKey ?? "",
   };
+}
+
+function resolveSqliteMarkerSessionKey(
+  target: CodexMirroredSessionHistoryTarget,
+  marker: SqliteSessionFileMarker,
+): string | undefined {
+  const explicitSessionKey = target.sessionKey?.trim();
+  if (explicitSessionKey) {
+    return explicitSessionKey;
+  }
+  const matchingEntry = listSessionEntries({
+    agentId: marker.agentId,
+    storePath: marker.storePath,
+  }).find(({ entry }) => {
+    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
+  });
+  return matchingEntry?.sessionKey;
 }
 
 function parseSqliteSessionFileMarker(
