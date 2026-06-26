@@ -47,8 +47,10 @@ function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
 }
 
 function parseCurrentPublicCounts(stdout: string): PublicSurfaceCounts {
-  const totalsMatch = /public package SDK entrypoints:[\s\S]*?\n\s{2}exports: (\d+)\n\s{2}callable exports: (\d+)/u
-    .exec(stdout);
+  const totalsMatch =
+    /public package SDK entrypoints:[\s\S]*?\n\s{2}exports: (\d+)\n\s{2}callable exports: (\d+)/u.exec(
+      stdout,
+    );
   const wildcardsMatch = /public wildcard reexports: (\d+)/u.exec(stdout);
   if (
     totalsMatch === null ||
