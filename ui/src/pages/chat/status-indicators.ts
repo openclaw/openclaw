@@ -1,6 +1,7 @@
 // Control UI chat module implements status indicators behavior.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "./run-lifecycle.ts";
 
@@ -42,7 +43,6 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
       role="status"
       aria-live="polite"
       aria-label=${`Run status: ${label}`}
-      title=${`Run status: ${label}`}
     >
       ${icon}<span class="agent-chat__run-status-label">${label}</span>
     </span>
@@ -109,8 +109,10 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
       : "compaction-indicator compaction-indicator--fallback";
   const icon = phase === "cleared" ? icons.check : icons.brain;
   return html`
-    <div class=${className} role="status" aria-live="polite" title=${details}>
-      ${icon} ${message}
-    </div>
+    <openclaw-tooltip .content=${details}>
+      <div class=${className} role="status" aria-live="polite" aria-label=${details}>
+        ${icon} ${message}
+      </div>
+    </openclaw-tooltip>
   `;
 }

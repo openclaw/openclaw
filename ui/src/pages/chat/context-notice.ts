@@ -128,7 +128,6 @@ export function renderContextNotice(
       role="status"
       aria-label=${summary}
       style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
-      title=${summary}
     >
       <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
         <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />

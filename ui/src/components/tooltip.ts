@@ -29,11 +29,12 @@ export class TooltipProvider extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener("pointerdown", this.handlePointerDown, true);
+    this.activeTooltip?.closeFromProvider();
+    this.activeTooltip = null;
     if (this.skipDelayTimer !== null) {
       window.clearTimeout(this.skipDelayTimer);
       this.skipDelayTimer = null;
     }
-    this.activeTooltip = null;
     this.suppressFocus = false;
     super.disconnectedCallback();
   }
@@ -308,8 +309,11 @@ export class Tooltip extends LitElement {
     );
     window.addEventListener("resize", this.handleViewportChange);
     window.addEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
+    const viewport = window.visualViewport;
+    if (typeof viewport?.addEventListener === "function") {
+      viewport.addEventListener("resize", this.handleViewportChange);
+      viewport.addEventListener("scroll", this.handleViewportChange);
+    }
     this.positionTooltip();
   }
 
@@ -327,8 +331,11 @@ export class Tooltip extends LitElement {
     this.portal = null;
     window.removeEventListener("resize", this.handleViewportChange);
     window.removeEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
+    const viewport = window.visualViewport;
+    if (typeof viewport?.removeEventListener === "function") {
+      viewport.removeEventListener("resize", this.handleViewportChange);
+      viewport.removeEventListener("scroll", this.handleViewportChange);
+    }
   }
 
   closeFromProvider() {

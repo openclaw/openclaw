@@ -890,7 +890,6 @@ describe("grouped chat rendering", () => {
     const display = formatChatTimestampForDisplay(timestamp);
     expect(time?.dateTime).toBe(display.dateTime);
     expect(time?.textContent?.trim()).toBe(display.label);
-    expect(time?.getAttribute("title")).toBe(display.title);
 
     render(
       renderStreamGroup([

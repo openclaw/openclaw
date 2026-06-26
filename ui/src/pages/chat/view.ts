@@ -1097,12 +1097,14 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
             ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
               ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
               : html`
-                  <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
-                    <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                    <span class="chat-attachment-file__name"
-                      >${att.fileName ?? "Attached file"}</span
-                    >
-                  </div>
+                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                    <div class="chat-attachment-file">
+                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                      <span class="chat-attachment-file__name"
+                        >${att.fileName ?? "Attached file"}</span
+                      >
+                    </div>
+                  </openclaw-tooltip>
                 `}
             <openclaw-tooltip content="Remove attachment">
               <button
@@ -1130,15 +1132,16 @@ function renderChatGoal(goal: SessionGoal | undefined): TemplateResult | typeof 
     return nothing;
   }
   return html`
-    <div
-      class="agent-chat__goal agent-chat__goal--${goal.status}"
-      role="status"
-      title=${formatGoalDetail(goal)}
-      aria-label=${formatGoalDetail(goal)}
-    >
-      <span class="agent-chat__goal-label">${formatGoalSummary(goal)}</span>
-      <span class="agent-chat__goal-objective">${goal.objective}</span>
-    </div>
+    <openclaw-tooltip .content=${formatGoalDetail(goal)}>
+      <div
+        class="agent-chat__goal agent-chat__goal--${goal.status}"
+        role="status"
+        aria-label=${formatGoalDetail(goal)}
+      >
+        <span class="agent-chat__goal-label">${formatGoalSummary(goal)}</span>
+        <span class="agent-chat__goal-objective">${goal.objective}</span>
+      </div>
+    </openclaw-tooltip>
   `;
 }
 
@@ -1284,7 +1287,6 @@ function renderSessionWorkspaceRail(
                     ? "chat-workspace-rail__file--active"
                     : ""}"
                   role="listitem"
-                  title=${file.path || file.name}
                 >
                   <button
                     class="chat-workspace-rail__file-open"
@@ -1293,7 +1295,11 @@ function renderSessionWorkspaceRail(
                   >
                     <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
                     <span class="chat-workspace-rail__file-main">
-                      <span class="chat-workspace-rail__file-name">${file.path || file.name}</span>
+                      <openclaw-tooltip .content=${file.path || file.name}>
+                        <span class="chat-workspace-rail__file-name"
+                          >${file.path || file.name}</span
+                        >
+                      </openclaw-tooltip>
                       ${size
                         ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
                         : nothing}
@@ -1422,7 +1428,6 @@ function renderSessionWorkspaceRail(
                       ? "chat-workspace-rail__file--directory"
                       : ""} ${isActive ? "chat-workspace-rail__file--active" : ""}"
                     role="listitem"
-                    title=${entry.path || entry.name}
                   >
                     <button
                       class="chat-workspace-rail__file-open"
@@ -1439,7 +1444,9 @@ function renderSessionWorkspaceRail(
                         >${entry.kind === "directory" ? icons.folder : icons.fileText}</span
                       >
                       <span class="chat-workspace-rail__file-main">
-                        <span class="chat-workspace-rail__file-name">${entry.name}</span>
+                        <openclaw-tooltip .content=${entry.path || entry.name}>
+                          <span class="chat-workspace-rail__file-name">${entry.name}</span>
+                        </openclaw-tooltip>
                         <span class="chat-workspace-rail__file-meta">
                           ${entry.kind === "directory"
                             ? entry.path || t("chat.workspaceFiles.root")
@@ -1479,7 +1486,6 @@ function renderSessionWorkspaceRail(
                     ? "chat-workspace-rail__file--active"
                     : ""}"
                   role="listitem"
-                  title=${artifact.title}
                 >
                   <button
                     class="chat-workspace-rail__file-open"
@@ -1490,7 +1496,9 @@ function renderSessionWorkspaceRail(
                       >${isImage ? icons.image : icons.paperclip}</span
                     >
                     <span class="chat-workspace-rail__file-main">
-                      <span class="chat-workspace-rail__file-name">${artifact.title}</span>
+                      <openclaw-tooltip .content=${artifact.title}>
+                        <span class="chat-workspace-rail__file-name">${artifact.title}</span>
+                      </openclaw-tooltip>
                       ${size || artifact.mimeType
                         ? html`<span class="chat-workspace-rail__file-meta"
                             >${[artifact.mimeType, size].filter(Boolean).join(" / ")}</span
@@ -1553,9 +1561,11 @@ function renderSessionWorkspaceRail(
         </div>
       </div>
       ${sessionWorkspace.list?.root
-        ? html`<div class="chat-workspace-rail__path" title=${sessionWorkspace.list.root}>
-            ${sessionWorkspace.list.root}
-          </div>`
+        ? html`
+            <openclaw-tooltip .content=${sessionWorkspace.list.root}>
+              <div class="chat-workspace-rail__path">${sessionWorkspace.list.root}</div>
+            </openclaw-tooltip>
+          `
         : nothing}
       ${renderSessionSummary()}
       ${sessionWorkspace.error

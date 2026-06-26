@@ -184,7 +184,8 @@ export function renderRouteNavItem(
       routePreloadTimers.delete(target);
     }
   };
-  return html`
+  const routeTitle = titleForRoute(routeId);
+  const navItem = html`
     <a
       href=${href}
       class="nav-item ${isActive ? "nav-item--active" : ""}"
@@ -216,14 +217,16 @@ export function renderRouteNavItem(
         }
         opts?.onNavigate?.(routeId);
       }}
-      title=${titleForRoute(routeId)}
     >
       <span class="nav-item__icon" aria-hidden="true"
         >${icons[navigationIconForRoute(routeId)]}</span
       >
-      ${!collapsed ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>` : nothing}
+      ${!collapsed ? html`<span class="nav-item__text">${routeTitle}</span>` : nothing}
     </a>
   `;
+  return collapsed
+    ? html`<openclaw-tooltip .content=${routeTitle}>${navItem}</openclaw-tooltip>`
+    : navItem;
 }
 
 function renderCronFilterIcon(hiddenCount: number) {

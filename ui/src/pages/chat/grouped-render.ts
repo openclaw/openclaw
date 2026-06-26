@@ -886,7 +886,7 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   return html`
     <details class="msg-meta">
-      <summary class="msg-meta__summary" title="Show message context details">
+      <summary class="msg-meta__summary">
         <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
         <span>Context</span>
       </summary>
@@ -2116,7 +2116,6 @@ function renderGroupedMessage(
         ? html`<div
             class="chat-duplicate-count"
             aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
-            title=${`${duplicateCount} consecutive identical messages collapsed`}
           >
             ×${duplicateCount}
           </div>`

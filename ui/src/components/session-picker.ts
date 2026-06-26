@@ -370,7 +370,6 @@ export class SessionPicker extends LitElement {
                   data-session-key=${row.key}
                   role="option"
                   aria-selected=${selected ? "true" : "false"}
-                  title=${label}
                   type="button"
                   @click=${() => {
                     this.close({ restoreFocus: true });

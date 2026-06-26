@@ -413,6 +413,9 @@ export class AppSidebar extends LitElement {
   }
 
   override render() {
+    const gatewayStatus = t("chat.gatewayStatus", {
+      status: this.connected ? t("common.online") : t("common.offline"),
+    });
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
@@ -506,19 +509,16 @@ export class AppSidebar extends LitElement {
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </div>
               <div class="sidebar-status">
-                <span
-                  class="sidebar-status__dot ${this.connected
-                    ? "sidebar-connection-status--online"
-                    : "sidebar-connection-status--offline"}"
-                  role="img"
-                  aria-live="polite"
-                  aria-label=${t("chat.gatewayStatus", {
-                    status: this.connected ? t("common.online") : t("common.offline"),
-                  })}
-                  title=${t("chat.gatewayStatus", {
-                    status: this.connected ? t("common.online") : t("common.offline"),
-                  })}
-                ></span>
+                <openclaw-tooltip .content=${gatewayStatus}>
+                  <span
+                    class="sidebar-status__dot ${this.connected
+                      ? "sidebar-connection-status--online"
+                      : "sidebar-connection-status--offline"}"
+                    role="img"
+                    aria-live="polite"
+                    aria-label=${gatewayStatus}
+                  ></span>
+                </openclaw-tooltip>
                 ${this.collapsed
                   ? nothing
                   : html`<span class="sidebar-status__text"

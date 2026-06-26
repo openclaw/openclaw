@@ -40,7 +40,6 @@ function renderSettingsSectionNav(
               event.preventDefault();
               navigate(routeId);
             }}
-            title=${titleForRoute(routeId)}
           >
             <span class="settings-section-nav__icon" aria-hidden="true"
               >${icons[navigationIconForRoute(routeId)]}</span
