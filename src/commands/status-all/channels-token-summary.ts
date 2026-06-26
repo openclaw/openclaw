@@ -52,12 +52,19 @@ export function summarizeTokenConfig(params: {
   accounts: ChannelAccountTokenSummaryRow[];
   showSecrets: boolean;
 }): { state: "ok" | "setup" | "warn" | null; detail: string | null } {
-  const enabled = params.accounts.filter((a) => a.enabled);
+  const enabled: ChannelAccountTokenSummaryRow[] = [];
+  const accountRecs: Record<string, unknown>[] = [];
+  for (const account of params.accounts) {
+    if (!account.enabled) {
+      continue;
+    }
+    enabled.push(account);
+    accountRecs.push(asRecord(account.account));
+  }
   if (enabled.length === 0) {
     return { state: null, detail: null };
   }
 
-  const accountRecs = enabled.map((a) => asRecord(a.account));
   // Token field names are plugin-owned; infer the credential mode from the fields the plugin exposes.
   const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
   const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
