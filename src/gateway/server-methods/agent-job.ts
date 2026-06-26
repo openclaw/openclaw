@@ -3,7 +3,6 @@
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
-  isHardAgentRunTimeoutPhase,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
@@ -485,14 +484,13 @@ export async function waitForAgentJob(params: {
         return;
       }
       const pendingTimeout = getPendingAgentRunTimeout(runId);
-      // Mirror the terminal-outcome hard-timeout contract: forward when the
-      // phase is hard (preflight / provider / post_turn) OR when the snapshot
-      // reached provider-started with a timeout status.
+      // Forward only canonical hard timeouts. Reuse the shared terminal-outcome
+      // classifier (which excludes restart-cancelled and soft queue/draining
+      // snapshots) instead of rederiving the hard/soft gate here, so those stay
+      // correctable via retry grace.
       if (
         pendingTimeout &&
-        (isHardAgentRunTimeoutPhase(pendingTimeout.snapshot.timeoutPhase) ||
-          (pendingTimeout.snapshot.status === "timeout" &&
-            pendingTimeout.snapshot.providerStarted === true))
+        terminalOutcomeFromSnapshot(pendingTimeout.snapshot)?.reason === "hard_timeout"
       ) {
         finish(pendingTimeout.snapshot);
         return;

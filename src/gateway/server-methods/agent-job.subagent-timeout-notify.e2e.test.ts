@@ -7,6 +7,7 @@
 // This drives the real in-process agent event bus and the real waitForAgentJob
 // (the function agent.wait races for the parent) rather than mocking either.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { waitForAgentJob } from "./agent-job.js";
 
@@ -62,4 +63,38 @@ describe("subagent hard-timeout parent notification (#89095)", () => {
       expect(result?.endedAt).toBe(1_100);
     });
   }
+
+  it("does not forward a restart-cancelled provider-started timeout as a hard timeout", async () => {
+    const runId = uniqueRunId("restart-cancelled");
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    // Reached the provider with a timeout-shaped abort, but the run was killed by
+    // a restart (stopReason "restart"). The shared terminal-outcome contract
+    // classifies this as cancelled, not a hard timeout, so the wait fallback must
+    // leave it to retry grace instead of forwarding a false hard-timeout to the
+    // parent. A hand-rolled `status === "timeout" && providerStarted` gate would
+    // forward it here; reusing the canonical classifier excludes it.
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        providerStarted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const result = await waitPromise;
+    expect(result).toBeNull();
+  });
 });
