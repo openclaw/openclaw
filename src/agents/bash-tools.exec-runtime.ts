@@ -213,10 +213,7 @@ export function isRequestedExecTargetAllowed(params: {
     return true;
   }
   if (params.configuredTarget === "auto") {
-    if (
-      params.sandboxAvailable &&
-      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
-    ) {
+    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
       return false;
     }
     return true;

@@ -191,16 +191,20 @@ describe("resolveExecTarget", () => {
     );
   });
 
-  it("rejects per-call host=node override from auto when sandbox is available", () => {
-    expect(() =>
+  it("allows per-call host=node override from auto when sandbox is available", () => {
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toThrow(
-      "exec host not allowed (requested node; configured host is auto; set tools.exec.host=node to allow this override).",
+      {
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
     );
   });
 
@@ -358,6 +362,36 @@ describe("resolveExecTarget", () => {
       }),
     ).toThrow(
       "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+    );
+  });
+
+  it("rejects per-call host=gateway override from auto when sandbox is available (negative control)", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway to allow this override).",
+    );
+  });
+
+  it("allows per-call host=node override from auto when sandbox is available (regression: #61009)", () => {
+    expectExecTarget(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+      {
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        selectedTarget: "node",
+        effectiveHost: "node",
+      },
     );
   });
 });
