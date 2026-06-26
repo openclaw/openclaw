@@ -8,6 +8,10 @@ import type {
 const INLINE_REASONING_MIN_PREFIX_CHARS = 80;
 const INLINE_REASONING_MAX_PENDING_CHARS = 512;
 const INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
+const MARKERLESS_REASONING_BOUNDARY_RE = /\n\s*\n/u;
+const MARKERLESS_REASONING_PREFIX_RE =
+  /^The user is\b(?=[\s\S]*\b(?:(?:my|[A-Za-z]+(?:'s|')?) previous response|conversation history|previous message)\b)/iu;
+const MARKERLESS_REASONING_PLANNING_RE = /\bI should\b/iu;
 
 type InlineReasoningVisibleTextResolution =
   | { kind: "visible"; text: string; bypassInlineReasoning?: boolean }
@@ -27,6 +31,11 @@ function resolveInlineReasoningVisibleText(params: {
 }): InlineReasoningVisibleTextResolution {
   const match = INLINE_REASONING_BOUNDARY_RE.exec(params.text);
   if (!match) {
+    const markerlessResolution = resolveMarkerlessReasoningVisibleText(params.text);
+    if (markerlessResolution) {
+      return markerlessResolution;
+    }
+
     if (!params.final && params.text.length <= INLINE_REASONING_MAX_PENDING_CHARS) {
       return { kind: "pending" };
     }
@@ -47,6 +56,43 @@ function resolveInlineReasoningVisibleText(params: {
   }
 
   return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
+}
+
+function resolveMarkerlessReasoningVisibleText(
+  text: string,
+): InlineReasoningVisibleTextResolution | undefined {
+  const match = MARKERLESS_REASONING_BOUNDARY_RE.exec(text);
+  if (!match) {
+    return undefined;
+  }
+
+  const prefix = text.slice(0, match.index).trim();
+  const answer = text.slice(match.index + match[0].length).trim();
+  if (
+    prefix.length < INLINE_REASONING_MIN_PREFIX_CHARS ||
+    !MARKERLESS_REASONING_PREFIX_RE.test(prefix) ||
+    !containsUnquotedMarkerlessPlanningPhrase(prefix)
+  ) {
+    return undefined;
+  }
+
+  return { kind: "visible", text: answer };
+}
+
+function containsUnquotedMarkerlessPlanningPhrase(text: string): boolean {
+  let quoted = false;
+  let candidate = "";
+  for (const char of text) {
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) {
+      continue;
+    }
+    candidate += char;
+  }
+  return MARKERLESS_REASONING_PLANNING_RE.test(candidate);
 }
 
 export function createKimiInlineReasoningSanitizer(): OllamaVisibleContentSanitizer {
