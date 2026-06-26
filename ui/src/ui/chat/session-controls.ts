@@ -568,7 +568,7 @@ function updateChatSessionPickerCachedLabel(
       }
       return Object.assign({}, row, {
         label: label ?? undefined,
-        displayName: label === null ? undefined : row.displayName,
+        displayName: row.displayName,
       });
     }),
   };
@@ -579,12 +579,8 @@ function resolveChatSessionRenameButtonLabel(label: string): string {
 }
 
 function resolveChatSessionRenameCurrentLabel(state: AppViewState, key: string): string | null {
-  return (
-    normalizeOptionalString(
-      state.chatSessionPickerResult?.sessions.find((row) => row.key === key)?.label ??
-        state.sessionsResult?.sessions.find((row) => row.key === key)?.label,
-    ) ?? null
-  );
+  const row = resolveChatSessionRow(state, key);
+  return normalizeOptionalString(row?.label ?? row?.displayName) ?? null;
 }
 
 function chatSessionRenameIsNoop(state: AppViewState, key: string, label: string | null): boolean {
@@ -600,6 +596,19 @@ function chatSessionRenameIsNoop(state: AppViewState, key: string, label: string
     resolveChatSessionPickerRows(state, result).find((entry) => entry.row.key === key)?.label ??
     resolveSessionDisplayName(key, resolveChatSessionRow(state, key));
   return label === normalizeOptionalString(visibleLabel);
+}
+
+function resolveChatSessionEditableLabel(
+  state: AppViewState,
+  key: string,
+  fallbackLabel: string,
+): string {
+  const row = resolveChatSessionRow(state, key);
+  return (
+    normalizeOptionalString(row?.label) ??
+    normalizeOptionalString(row?.displayName) ??
+    fallbackLabel
+  );
 }
 
 function resolveChatSessionRow(
@@ -729,7 +738,7 @@ function focusChatSessionRenameInput(state: AppViewState) {
 function beginChatSessionRename(state: AppViewState, key: string, label: string) {
   state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
   state.chatSessionPickerRenameKey = key;
-  state.chatSessionPickerRenameDraft = label;
+  state.chatSessionPickerRenameDraft = resolveChatSessionEditableLabel(state, key, label);
   focusChatSessionRenameInput(state);
 }
 
@@ -802,20 +811,15 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
   if (!requestIsCurrent) {
     if (state.chatSessionPickerOpen) {
       updateChatSessionPickerCachedLabel(state, key, label);
-      if (
-        state.chatSessionPickerAppliedQuery ||
-        normalizeOptionalString(state.chatSessionPickerQuery)
-      ) {
-        const reloadLimit = resolveChatSessionPickerReloadLimit(state.chatSessionPickerResult);
-        const reloadQuery = resolveChatSessionPickerReloadQuery(state);
-        clearChatSessionPickerSearchTimer(state);
-        invalidateChatSessionPickerSearchRequests(state);
-        await loadChatSessionPickerPage(state, {
-          limit: reloadLimit,
-          preserveError: true,
-          query: reloadQuery,
-        });
-      }
+      const reloadLimit = resolveChatSessionPickerReloadLimit(state.chatSessionPickerResult);
+      const reloadQuery = resolveChatSessionPickerReloadQuery(state);
+      clearChatSessionPickerSearchTimer(state);
+      invalidateChatSessionPickerSearchRequests(state);
+      await loadChatSessionPickerPage(state, {
+        limit: reloadLimit,
+        preserveError: true,
+        query: reloadQuery,
+      });
     } else {
       invalidateChatSessionPickerSearchRequests(state);
       state.chatSessionPickerResult = null;
