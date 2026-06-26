@@ -840,6 +840,7 @@ export async function getReplyFromConfig(
       cfg,
       command,
       sessionKey,
+      storePath,
       sessionEntry,
       previousSessionEntry,
       workspaceDir,
