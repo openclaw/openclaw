@@ -6,6 +6,10 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import {
+  createReplyOperation,
+  testing as replyRunRegistryTesting,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createActiveRun,
@@ -190,6 +194,7 @@ afterAll(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  replyRunRegistryTesting.resetReplyRunRegistry();
 });
 
 describe("chat abort transcript persistence", () => {
@@ -533,6 +538,60 @@ describe("chat abort transcript persistence", () => {
     expectAbortPayload(payload, { runIds: ["run-hidden-wechat"] });
     expect(active.controller.signal.aborted).toBe(true);
     expect(context.chatAbortControllers.has("run-hidden-wechat")).toBe(false);
+  });
+
+  it("main chat.abort aborts the only hidden channel run for that agent", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const active = createActiveRun(sessionKey, { controlUiVisible: false });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-hidden-wechat-abort", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey,
+        clientRunId: "run-hidden-wechat-abort",
+      }),
+    });
+
+    await chatHandlers["chat.abort"]({
+      params: {
+        sessionKey: "agent:main",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-hidden-wechat-abort"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-hidden-wechat-abort")).toBe(false);
+  });
+
+  it("admin chat.abort aborts an active channel reply operation without a chat abort controller", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId: "reply-session",
+      resetTriggered: false,
+    });
+    const context = createChatAbortContext();
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey },
+      respond,
+      client: { connect: { scopes: ["operator.admin"] } },
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [`reply:${sessionKey}`] });
+    expect(operation.abortSignal.aborted).toBe(true);
   });
 
   it("plain stop sent to main does not abort another agent's hidden channel run", async () => {

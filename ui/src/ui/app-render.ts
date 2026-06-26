@@ -3825,7 +3825,7 @@ export function renderApp(state: AppViewState) {
                   onSlashIntent: () => refreshChatCommands(state).finally(requestHostUpdate),
                   attachments: state.chatAttachments,
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
-                  onSend: () => void state.handleSendChat(),
+                  onSend: (messageOverride?: string) => void state.handleSendChat(messageOverride),
                   onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;

@@ -3270,6 +3270,30 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("routes typed stop to a running channel session even when hasActiveRun is stale false", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: false, status: "running" }),
+        row("agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat", {
+          hasActiveRun: false,
+          status: "running",
+        }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat",
+    });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("routes typed stop to active channel sessions without direct or group markers", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
     const host = makeHost({

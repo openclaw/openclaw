@@ -55,6 +55,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   stageSandboxMedia,
   type StageSandboxMediaResult,
@@ -2515,7 +2516,19 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   });
-  if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
+  const abortedReplyRunKeys: string[] = [];
+  if (params.requester.isAdmin) {
+    for (const sessionKey of sessionKeys) {
+      if (replyRunRegistry.abort(sessionKey)) {
+        abortedReplyRunKeys.push(sessionKey);
+      }
+    }
+  }
+  if (
+    authorizedRuns.length === 0 &&
+    authorizedPendingAgentRuns.length === 0 &&
+    abortedReplyRunKeys.length === 0
+  ) {
     return {
       aborted: false,
       runIds: [],
@@ -2553,6 +2566,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     });
     runIds.push(runId);
   }
+  runIds.push(...abortedReplyRunKeys.map((sessionKey) => `reply:${sessionKey}`));
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
     await persistAbortedPartials({
@@ -3321,11 +3335,25 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
+      const canUseHiddenChannelFallback =
+        !isExplicitChannelScopedSessionKey(rawSessionKey) &&
+        !isExplicitChannelScopedSessionKey(canonicalAbortSessionKey);
+      const fallbackChannelSessionKey = canUseHiddenChannelFallback
+        ? resolveUniqueHiddenChannelAbortFallbackSessionKey({
+            context,
+            agentId: abortAgentId,
+            defaultAgentId,
+          })
+        : undefined;
+      const sessionKeyAliases = uniqueStrings([
+        ...(canonicalAbortSessionKey === rawSessionKey ? [] : [rawSessionKey]),
+        ...(fallbackChannelSessionKey ? [fallbackChannelSessionKey] : []),
+      ]);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: canonicalAbortSessionKey,
-        sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
+        sessionKeyAliases: sessionKeyAliases.length > 0 ? sessionKeyAliases : undefined,
         agentId: abortAgentId,
         defaultAgentId,
         abortOrigin: "rpc",

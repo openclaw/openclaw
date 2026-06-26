@@ -266,6 +266,10 @@ export function hasAbortableSessionRun(host: {
   );
 }
 
+function isSessionAbortTargetActive(session: GatewaySessionRow): boolean {
+  return isSessionRunActive(session) || session.status === "running";
+}
+
 const CHANNEL_AGNOSTIC_ABORT_SCOPES = new Set([
   "agent",
   "global",
@@ -319,7 +323,7 @@ function resolveAbortTarget(host: ChatHost): ChatAbortTarget {
       ? []
       : (host.sessionsResult?.sessions.filter(
           (session) =>
-            isSessionRunActive(session) &&
+            isSessionAbortTargetActive(session) &&
             isExplicitChannelScopedSessionKey(session.key) &&
             sessionBelongsToAbortFallbackAgent(session.key, fallbackAgentId),
         ) ?? []);
