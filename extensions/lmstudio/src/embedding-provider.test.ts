@@ -60,7 +60,9 @@ function buildConfig(overrides?: Record<string, unknown>) {
 
 function requireMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string) {
   const call = mock.mock.calls[0];
-  if (!call) throw new Error(`expected ${label} call`);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
   return call;
 }
 
