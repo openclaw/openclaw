@@ -341,7 +341,28 @@ export function resolveSubagentConfiguredModelSelection(params: {
  * a fully qualified `provider/model` string.  If the value is already qualified
  * or not a known alias, returns it unchanged.
  */
-function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+function hasExactConfiguredProviderModelRef(cfg: OpenClawConfig, raw: string): boolean {
+  if (!hasExplicitProviderModelRef(raw)) {
+    return false;
+  }
+  const providerRaw = raw.slice(0, raw.indexOf("/")).trim();
+  if (!providerRaw || !cfg.models?.providers) {
+    return false;
+  }
+  const providerKey = normalizeLowercaseStringOrEmpty(providerRaw);
+  return Object.keys(cfg.models.providers).some(
+    (key) => normalizeLowercaseStringOrEmpty(key) === providerKey,
+  );
+}
+
+function resolveModelThroughAliases(
+  value: string,
+  aliasIndex: ModelAliasIndex,
+  cfg: OpenClawConfig,
+): string {
+  if (hasExactConfiguredProviderModelRef(cfg, value)) {
+    return value;
+  }
   const aliasKey = normalizeLowercaseStringOrEmpty(value);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
@@ -377,7 +398,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     defaultProvider: runtimeDefault.provider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return resolveModelThroughAliases(raw, aliasIndex, params.cfg);
 }
 
 export function resolveConfiguredSubagentSpawnModelSelection(params: {
@@ -407,7 +428,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return resolveModelThroughAliases(raw, aliasIndex, params.cfg);
 }
 
 export function buildAllowedModelSet(
