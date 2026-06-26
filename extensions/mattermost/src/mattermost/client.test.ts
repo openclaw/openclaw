@@ -244,6 +244,25 @@ describe("createMattermostClient", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API /users/me: text response exceeds 65536 bytes",
+    );
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("releases guarded Mattermost responses when upstream body reads fail", async () => {
     const release = vi.fn(async () => {});
     const stream = new ReadableStream<Uint8Array>({

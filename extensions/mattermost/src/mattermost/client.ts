@@ -4,6 +4,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -92,6 +93,14 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
   }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
+}
+
+async function readMattermostSuccessText(res: Response, path: string): Promise<string> {
+  const bytes = await readResponseWithLimit(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Mattermost API ${path}: text response exceeds ${maxBytes} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 export async function readMattermostError(res: Response): Promise<string> {
@@ -226,7 +235,7 @@ export function createMattermostClient(params: {
     if (contentType.includes("application/json")) {
       return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
     }
-    return (await readResponseTextLimited(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES)) as T;
+    return (await readMattermostSuccessText(res, path)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
