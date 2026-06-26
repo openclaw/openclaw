@@ -40,6 +40,7 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
 import {
@@ -48,7 +49,6 @@ import {
   rewriteDiscordKnownMentions,
 } from "../mentions.js";
 import { removeReactionDiscord } from "../send.js";
-import { chunkDiscordTextWithMode } from "../chunk.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
@@ -1138,6 +1138,12 @@ async function processDiscordMessageInner(
           shouldYieldDraftProgress = isActive;
         },
         onReasoningStream: async (payload) => {
+          if (
+            payload?.requiresReasoningProgressOptIn === true &&
+            !draftPreview.nonStreamReasoningProgressEnabled
+          ) {
+            return;
+          }
           if (payload?.text) {
             windowReasoningOpen = true;
           }
@@ -1146,7 +1152,7 @@ async function processDiscordMessageInner(
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
-        streamReasoningInNonStreamModes: draftPreview.reasoningProgressEnabled,
+        streamReasoningInNonStreamModes: draftPreview.nonStreamReasoningProgressEnabled,
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;

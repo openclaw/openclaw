@@ -1203,6 +1203,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
       void params.onReasoningStream({
         text: trimmed,
+        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
       });
     }
   };

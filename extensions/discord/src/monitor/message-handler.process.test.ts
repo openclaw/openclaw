@@ -132,6 +132,7 @@ type DispatchInboundParams = {
     onReasoningStream?: (payload?: {
       text?: string;
       isReasoningSnapshot?: boolean;
+      requiresReasoningProgressOptIn?: boolean;
     }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
@@ -3291,7 +3292,6 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: "Clawing...",
-            thinking: true,
           },
         },
       },
@@ -3305,6 +3305,38 @@ describe("processDiscordMessage draft streaming", () => {
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Reasoning");
     expect(updates.join("\n")).not.toContain("Thinking\n");
+  });
+
+  it("hides non-stream reasoning progress until Discord thinking progress is enabled", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Private planning",
+        requiresReasoningProgressOptIn: true,
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done");
+    expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
+      "Private planning",
+    );
   });
 
   it("accumulates reasoning deltas in Discord progress drafts", async () => {

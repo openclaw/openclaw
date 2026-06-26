@@ -940,7 +940,10 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     if (params.expected) {
-      expect(onReasoningStream).toHaveBeenCalledWith({ text: "Checking files" });
+      expect(onReasoningStream).toHaveBeenCalledWith({
+        text: "Checking files",
+        ...(params.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      });
     } else {
       expect(onReasoningStream).not.toHaveBeenCalled();
     }

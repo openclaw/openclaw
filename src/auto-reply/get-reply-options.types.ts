@@ -53,6 +53,13 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   replace?: true;
 };
 
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
+
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
@@ -118,7 +125,7 @@ export type GetReplyOptions = {
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
-  onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;

@@ -24,14 +24,13 @@ import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
 /**
- * Discord progress config. `thinking` (render the 🧠 reasoning lane in the
- * progress draft) is currently enforced only on Discord, so the key is scoped
- * here rather than in the shared base — it intentionally does NOT validate for
- * channels that don't yet enforce it. Widen to the base schema when other
- * channels adopt reasoning-progress enforcement.
+ * Discord progress config. `thinking` opts non-stream reasoning modes into the
+ * progress draft. Explicit reasoning stream mode already renders through the
+ * shared reasoning stream contract. The key is currently enforced only on
+ * Discord, so it is scoped here rather than in the shared base.
  */
 export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Include assistant reasoning/thinking text in the progress draft. Default: false. */
+  /** Include non-stream assistant reasoning/thinking text in the progress draft. */
   thinking?: boolean;
 };
 export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {

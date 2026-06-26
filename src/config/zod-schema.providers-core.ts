@@ -103,17 +103,15 @@ const ChannelStreamingProgressSchema = z
     commentary: z.boolean().optional(),
   })
   .strict();
-// `thinking` (render the 🧠 reasoning lane in the progress draft) is currently
-// enforced only on Discord, so it lives on a Discord-scoped schema rather than
-// the shared base — it must not validate for channels that don't yet enforce
-// it (avoids a misleading/unsafe config contract on sibling channels). Widen to
-// the base when other channels adopt reasoning-progress enforcement.
+// `thinking` opts non-stream reasoning modes into the progress draft. Explicit
+// reasoning stream mode already renders through the shared reasoning stream
+// contract. The key is Discord-scoped until sibling channels enforce it.
 const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   thinking: z
     .boolean()
     .optional()
     .describe(
-      "Render the assistant's reasoning (🧠 thinking) lane in the Discord progress draft, interleaved with tool calls. Default: false (operator opt-in). Discord-only; reasoning is omitted from the progress draft on channels that do not enforce this key.",
+      "Render non-stream assistant reasoning (🧠 thinking) in the Discord progress draft, interleaved with tool calls. Explicit reasoning stream mode still renders without this key. Default: false.",
     ),
 }).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({

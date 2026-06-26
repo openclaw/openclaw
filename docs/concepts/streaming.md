@@ -216,10 +216,10 @@ Supported surfaces:
 
 ### Reasoning and commentary progress lanes
 
-Beyond tool-progress, the compact progress renderer can surface two more lanes in the draft, each behind its own opt-in flag (both default **off**):
+Beyond tool-progress, the compact progress renderer can surface two more lanes in the draft:
 
 - **`streaming.progress.commentary`** — render the model's pre-tool **commentary** (💬) — short "I'll check… then…" narration — interleaved with tool lines in the progress draft.
-- **`streaming.progress.thinking`** — render the model's **reasoning** (🧠) in the progress draft.
+- **`streaming.progress.thinking`** — render **non-stream** model reasoning (🧠) in the progress draft. Explicit `/reasoning stream` mode still renders reasoning through the existing reasoning-stream control.
 
 ```json
 {
@@ -231,7 +231,7 @@ Beyond tool-progress, the compact progress renderer can surface two more lanes i
 }
 ```
 
-> **Scope of `progress.thinking` (current):** the reasoning-progress lane is **enforced on Discord only** today, so the `thinking` key is accepted **only under `channels.discord.…`** — it is intentionally rejected on other channels rather than silently accepted-and-ignored. This is a deliberate sequencing choice (the config validates exactly where it is enforced); the key is intended to widen to the shared schema as other channels adopt reasoning-progress enforcement. `commentary` is already enforced across the shared progress renderer.
+> **Scope of `progress.thinking` (current):** the non-stream reasoning-progress opt-in is **enforced on Discord only** today, so the `thinking` key is accepted **only under `channels.discord.…`** — it is intentionally rejected on other channels rather than silently accepted-and-ignored. This is a deliberate sequencing choice (the config validates exactly where it is enforced); the key is intended to widen to the shared schema as other channels adopt reasoning-progress enforcement. `commentary` is already enforced across the shared progress renderer.
 
 Keep progress lines visible but hide raw command/exec text:
 

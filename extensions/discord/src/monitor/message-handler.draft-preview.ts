@@ -87,8 +87,9 @@ export function createDiscordDraftPreviewController(params: {
       previewToolProgressEnabled,
     });
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
-  // One gate drives both rendering and subscriber side effects.
-  const reasoningProgressEnabled = resolveChannelStreamingProgressThinking(params.discordConfig);
+  const nonStreamReasoningProgressEnabled = resolveChannelStreamingProgressThinking(
+    params.discordConfig,
+  );
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
     mode: discordStreamMode,
@@ -96,7 +97,6 @@ export function createDiscordDraftPreviewController(params: {
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
-    reasoningGate: reasoningProgressEnabled,
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -137,7 +137,7 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
-    reasoningProgressEnabled,
+    nonStreamReasoningProgressEnabled,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
